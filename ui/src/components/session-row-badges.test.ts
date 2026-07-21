@@ -74,14 +74,37 @@ describe("session row placement badges", () => {
     render(
       renderSessionRowBadges({
         hasAutomation: false,
-        hasOpenPullRequest: true,
+        pullRequest: { numbers: [111532], state: "open" },
       }),
       container,
     );
 
     const badge = container.querySelector(".session-row-badge--pull-request");
-    expect(badge?.getAttribute("aria-label")).toBe("Open PR");
+    expect(badge?.getAttribute("aria-label")).toBe("#111532 · Open");
+    expect(badge?.getAttribute("title")).toBe("#111532 · Open");
+    expect(badge?.getAttribute("data-pull-request-state")).toBe("open");
     expect(badge?.querySelector("svg")).not.toBeNull();
+  });
+
+  it.each([
+    { state: "draft" as const, label: "#107302 · Draft" },
+    { state: "merged" as const, label: "#111751, #111772 · Merged" },
+  ])("renders catalog pull request metadata for $state threads", ({ state, label }) => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: false,
+        pullRequest: {
+          numbers: state === "draft" ? [107302] : [111751, 111772],
+          state,
+        },
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--pull-request");
+    expect(badge?.getAttribute("aria-label")).toBe(label);
+    expect(badge?.getAttribute("title")).toBe(label);
+    expect(badge?.getAttribute("data-pull-request-state")).toBe(state);
   });
 
   it("renders a warning-colored approval-needed indicator", () => {
@@ -103,7 +126,7 @@ describe("session row placement badges", () => {
       renderSessionRowBadges({
         isChild: true,
         hasAutomation: true,
-        hasOpenPullRequest: true,
+        pullRequest: { numbers: [111532], state: "open" },
         hasApproval: true,
         placementState: "active",
       }),

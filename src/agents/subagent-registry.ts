@@ -89,6 +89,8 @@ import {
 } from "./subagent-registry-run-manager.js";
 import {
   clearSubagentRunsReadCacheForTest,
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   persistSubagentRunsToDisk,
   persistSubagentRunsToDiskOrThrow,
@@ -142,6 +144,8 @@ type SubagentRegistryDeps = {
   getGatewayRecoveryRuntime: () => GatewayRecoveryRuntime | undefined;
   captureSubagentCompletionReply: SubagentAnnounceModule["captureSubagentCompletionReply"];
   cleanupBrowserSessionsForLifecycleEnd: typeof cleanupBrowserSessionsForLifecycleEnd;
+  getSubagentRunsSnapshotForChildSession: typeof getSubagentRunsSnapshotForChildSession;
+  getSubagentRunsSnapshotForController: typeof getSubagentRunsSnapshotForController;
   getSubagentRunsSnapshotForRead: typeof getSubagentRunsSnapshotForRead;
   getRuntimeConfig: typeof getRuntimeConfig;
   onAgentEvent: typeof onAgentEvent;
@@ -185,6 +189,8 @@ const defaultSubagentRegistryDeps: SubagentRegistryDeps = {
     (await loadSubagentAnnounceModule()).captureSubagentCompletionReply(sessionKey, options),
   cleanupBrowserSessionsForLifecycleEnd: async (params) =>
     (await loadCleanupBrowserSessionsForLifecycleEnd())(params),
+  getSubagentRunsSnapshotForChildSession,
+  getSubagentRunsSnapshotForController,
   getSubagentRunsSnapshotForRead,
   getRuntimeConfig,
   onAgentEvent,
@@ -2440,7 +2446,7 @@ export { prependAgentSteeringPrompt };
 
 export function listSubagentRunsForController(controllerSessionKey: string): SubagentRunRecord[] {
   return listRunsForControllerFromRuns(
-    subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
+    subagentRegistryDeps.getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
     controllerSessionKey,
   );
 }
@@ -2597,7 +2603,9 @@ export function getLatestSubagentRunByChildSessionKey(
   }
 
   let latest: SubagentRunRecord | null = null;
-  for (const entry of subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns).values()) {
+  for (const entry of subagentRegistryDeps
+    .getSubagentRunsSnapshotForChildSession(subagentRuns, key)
+    .values()) {
     if (entry.childSessionKey !== key) {
       continue;
     }

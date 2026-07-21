@@ -760,7 +760,7 @@ describe("prepared model runtime snapshots", () => {
       .mockImplementationOnce(async () => await new Promise<never>(() => {}));
 
     await expect(
-      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true }),
+      refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true, catalogMode: "static" }),
     ).resolves.toBeUndefined();
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
   });

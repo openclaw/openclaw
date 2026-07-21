@@ -6,6 +6,7 @@ import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
+  createPreparedModelRuntimeOwner,
   createPreparedModelRuntimeReplacement,
   effectiveEnvironmentFingerprint,
   hasConfiguredOwnerMatching,
@@ -22,6 +23,8 @@ import {
   toError,
   type PreparedModelRuntimeOwner,
   type PreparedModelRuntimeInput,
+  type PreparedModelRuntimePublicationOptions,
+  type PreparedModelRuntimeRefreshOptions,
   type PreparedModelRuntimeLease,
   type PreparedModelRuntimeReplacement,
   type PreparedModelRuntimeReplacementGateId,
@@ -142,10 +145,7 @@ export function getPreparedModelRuntimeSnapshot(
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */
 export async function publishPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
-  options: {
-    force?: boolean;
-    provenance?: PreparedModelRuntimeOwner["provenance"];
-  } = {},
+  options: PreparedModelRuntimePublicationOptions = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const existing = owners.get(ownerKey(input));
@@ -160,6 +160,7 @@ export async function publishPreparedModelRuntimeSnapshot(
       modelRuntimeBuildTimeoutMs,
       existing,
       options.provenance,
+      options.catalogMode,
     );
   }
   if (existing?.buildCompletion) {
@@ -183,6 +184,7 @@ export async function publishPreparedModelRuntimeSnapshot(
     modelRuntimeBuildTimeoutMs,
     existing,
     options.provenance,
+    options.catalogMode,
   );
 }
 
@@ -486,8 +488,9 @@ export function rejectPendingPreparedModelRuntimeReplacement(
 /** Rebuilds active owners after config/plugin runtime publication. */
 async function refreshPreparedModelRuntimeSnapshotsNow(
   config: OpenClawConfig,
-  options: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string } = {},
+  options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
+  const catalogMode = options.catalogMode ?? "live";
   if (options.gatewayLifecycle) {
     gatewayLifecycleActive = true;
   }
@@ -535,18 +538,13 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
   const candidates = entries.map(({ owner: existing, input }) => {
     // Dynamic and standalone owners have different lifetime contracts. A configured publication
     // must replace them so an older lease release cannot remove the committed generation.
-    const owner: PreparedModelRuntimeOwner =
+    const owner =
       existing?.provenance === "configured"
         ? existing
-        : {
-            input,
-            environmentFingerprint: effectiveEnvironmentFingerprint(input),
-            provenance: "configured",
-            generation: 0,
-            needsRefresh: true,
-          };
+        : createPreparedModelRuntimeOwner(input, "configured", catalogMode);
     owner.input = input;
     owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
+    owner.catalogMode = catalogMode;
     owner.provenance = "configured";
     owner.generation += 1;
     owner.needsRefresh = true;
@@ -556,6 +554,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
       input,
       agentBuildCompletions,
       modelRuntimeBuildTimeoutMs,
+      catalogMode,
     );
     owner.buildCompletion = build.completion;
     owners.set(ownerKey(input), owner);
@@ -603,7 +602,7 @@ async function refreshPreparedModelRuntimeSnapshotsNow(
 /** Serializes config/plugin publications so only the latest completed refresh retires owners. */
 export function refreshPreparedModelRuntimeSnapshots(
   config: OpenClawConfig,
-  options: { gatewayLifecycle?: boolean; defaultWorkspaceDir?: string } = {},
+  options: PreparedModelRuntimeRefreshOptions = {},
 ): Promise<void> {
   // Stale synchronously. Queued publication must never leave the prior generation request-visible.
   markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });

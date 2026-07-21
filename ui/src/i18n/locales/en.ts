@@ -1589,6 +1589,7 @@ export const en: TranslationMap = {
     pages: "Pages",
     customize: "Edit pinned items",
     customizeReset: "Reset pinned items",
+    workboardGroup: "WorkBoard",
   },
   terminal: {
     title: "Terminal",
@@ -3811,6 +3812,11 @@ export const en: TranslationMap = {
       snapping: "Snapping",
       surfacing: "Surfacing",
     },
+    turnRecap: {
+      doneIn: "Done in {duration}",
+      tokens: "{count} tokens",
+      tokensOne: "1 token",
+    },
     commands: {
       arguments: "Command arguments",
       menu: "Slash commands",
@@ -3925,6 +3931,7 @@ export const en: TranslationMap = {
     },
     messages: {
       activity: "Activity",
+      copySelection: "Copy",
       forkFromHere: "Fork from here",
       hide: "Hide",
       hideConfirm: "Hide this message in this browser? The agent still sees it.",
@@ -4435,6 +4442,7 @@ export const en: TranslationMap = {
       repeatInterval: "Interval",
       repeatOnce: "Once",
       repeatOnExit: "On exit",
+      repeatStream: "Stream source",
       onExitHelp: "Runs when a watched command exits. The schedule cannot be edited here.",
       every: "Every",
       at: "At",
@@ -4471,6 +4479,9 @@ export const en: TranslationMap = {
       wakeModeHelp: "Now triggers immediately. Next heartbeat waits for the next cycle.",
       action: "Action",
       command: "Command",
+      script: "Script",
+      readOnlyPayloadHelp:
+        "This payload was created outside Control UI. Its contents stay read-only and are preserved when you save other changes.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Sends your text to the gateway main timeline (good for reminders).",

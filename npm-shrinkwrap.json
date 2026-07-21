@@ -24,7 +24,7 @@
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.4.4",
-        "@openclaw/proxyline": "0.3.3",
+        "@openclaw/proxyline": "0.3.4",
         "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
@@ -447,15 +447,15 @@
       }
     },
     "node_modules/@openclaw/proxyline": {
-      "version": "0.3.3",
-      "resolved": "https://registry.npmjs.org/@openclaw/proxyline/-/proxyline-0.3.3.tgz",
-      "integrity": "sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==",
+      "version": "0.3.4",
+      "resolved": "https://registry.npmjs.org/@openclaw/proxyline/-/proxyline-0.3.4.tgz",
+      "integrity": "sha512-WuLE282PW7vLienDNFTjdSI/BCYDAepvr5siOTYABQhqFo8qbP9MgmJzZnwmskUqiYugGzle6gvaRbJTkwbZ8A==",
       "license": "MIT",
       "engines": {
         "node": ">=22.19.0"
       },
       "peerDependencies": {
-        "undici": ">=8.3.0 <9"
+        "undici": ">=8.5.0 <9"
       }
     },
     "node_modules/@opentelemetry/semantic-conventions": {
@@ -1477,9 +1477,9 @@
       }
     },
     "node_modules/fast-uri": {
-      "version": "3.1.2",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.2.tgz",
-      "integrity": "sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==",
+      "version": "3.1.4",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.4.tgz",
+      "integrity": "sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==",
       "funding": [
         {
           "type": "github",

@@ -173,7 +173,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
             : undefined,
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
-        hasOpenPullRequest: context?.sessions.hasOpenPullRequest?.(row.key) === true,
+        pullRequest: context?.sessions.pullRequestSummary(row.key),
         unread: row.unread === true,
         attention: this.resolveSessionAttention(row),
         agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
@@ -267,10 +267,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       pinnedRows,
       SIDEBAR_NAV_ROUTES,
       knownUnpinnedKeys,
+      this.workboardBoards,
+      this.enabledRouteIds?.includes("workboard") ?? true,
+      this.workboardBoardsReady,
     );
     return {
       ...reconciled,
       sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+      workboardRows: new Map(this.workboardBoards.map((board) => [board.id, board])),
     };
   }
 
