@@ -504,6 +504,97 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
+    let resolveWait!: (result: {
+      reason: "manual-cancel";
+      exitCode: null;
+      exitSignal: null;
+      durationMs: number;
+      stdout: string;
+      stderr: string;
+      timedOut: false;
+      noOutputTimedOut: false;
+    }) => void;
+    const wait = new Promise<Parameters<typeof resolveWait>[0]>((resolve) => {
+      resolveWait = resolve;
+    });
+    const cancel = vi.fn(() =>
+      resolveWait({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: null,
+        durationMs: 1,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const detachOutput = vi.fn();
+    const spawn = vi.fn(async () => ({
+      runId: "run-stale-snapshot",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput,
+      wait: () => wait,
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-stale-snapshot");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      // Gate reconcile's first list call: capture the pre-add (empty) snapshot,
+      // hold it while the add's direct route starts the owner, then release the
+      // stale snapshot. The revision fence must re-list instead of stopping the
+      // freshly started owner as "removed".
+      const originalList = state.cron.list.bind(state.cron);
+      let releaseStaleList!: () => void;
+      const staleListGate = new Promise<void>((resolve) => {
+        releaseStaleList = resolve;
+      });
+      let armed = true;
+      state.cron.list = async (opts?: Parameters<typeof originalList>[0]) => {
+        if (!armed) {
+          return await originalList(opts);
+        }
+        armed = false;
+        const snapshot = await originalList(opts);
+        await staleListGate;
+        return snapshot;
+      };
+
+      const reconciling = state.reconcileStreamWatchers?.();
+      const added = await state.cron.add({
+        name: "stale snapshot stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      const streamJob = "job" in added ? added.job : added;
+      const sourceIdentity = streamJob.state.streamSourceIdentity;
+      expect(spawn).toHaveBeenCalledOnce();
+      releaseStaleList();
+      await reconciling;
+
+      expect(cancel).not.toHaveBeenCalled();
+      expect(detachOutput).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(state.cron.getJob(streamJob.id)?.state.streamSourceIdentity).toBe(sourceIdentity);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
     const cancel = vi.fn();
     let resolveWait!: () => void;

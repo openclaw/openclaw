@@ -430,6 +430,9 @@ export function buildGatewayCronService(params: {
   let streamWatcherReconciliations = 0;
   let exitWatcherGeneration = 0;
   let streamWatcherGeneration = 0;
+  // Bumped when a direct watcher route begins; fences reconcile's async list
+  // snapshot against mutations that commit inside the list await.
+  let streamWatcherMutationRevision = 0;
   let streamWatchersStopped = false;
   const reconcileExitWatchers = async () => {
     const generation = exitWatcherGeneration;
@@ -462,16 +465,32 @@ export function buildGatewayCronService(params: {
       if (!watchers || streamWatchersStopped) {
         return;
       }
-      const result = await cron.list({ includeDisabled: true });
-      if (generation !== streamWatcherGeneration || streamWatchersStopped) {
+      // The list snapshot is captured across an await; a direct mutation route
+      // that commits inside that window makes it stale, and reconciling a
+      // stale snapshot could stop a just-added owner as "removed" and retire
+      // its durable identity. Re-list until no route interleaved. Bounded:
+      // under pathological mutation churn we skip this sweep (every mutation
+      // was already routed directly) rather than loop forever.
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const revision = streamWatcherMutationRevision;
+        const result = await cron.list({ includeDisabled: true });
+        if (generation !== streamWatcherGeneration || streamWatchersStopped) {
+          return;
+        }
+        if (revision !== streamWatcherMutationRevision) {
+          continue;
+        }
+        const jobs: CronJob[] = Array.isArray(result)
+          ? result
+          : (result as { jobs: CronJob[] }).jobs;
+        await watchers.reconcile(
+          jobs,
+          cronEnabled && params.cfg.cron?.triggers?.enabled === true,
+          params.cfg.cron?.triggers?.enabled === true,
+        );
         return;
       }
-      const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
-      await watchers.reconcile(
-        jobs,
-        cronEnabled && params.cfg.cron?.triggers?.enabled === true,
-        params.cfg.cron?.triggers?.enabled === true,
-      );
+      cronLogger.warn({}, "cron-stream: reconcile skipped after repeated concurrent mutations");
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-stream: reconcile failed");
     } finally {
@@ -488,6 +507,7 @@ export function buildGatewayCronService(params: {
     if (!watchers || streamWatchersStopped) {
       return;
     }
+    streamWatcherMutationRevision += 1;
     streamWatcherReconciliations += 1;
     try {
       if (action === "removed") {
@@ -1232,7 +1252,10 @@ export function buildGatewayCronService(params: {
     stopCron();
     stopExitWatchers();
     void stopStreamWatchers().catch((err: unknown) => {
-      cronLogger.warn({ err: formatErrorMessage(err) }, "cron-stream: asynchronous teardown failed");
+      cronLogger.warn(
+        { err: formatErrorMessage(err) },
+        "cron-stream: asynchronous teardown failed",
+      );
     });
     // Session rows must stop reporting automation from a stopped scheduler,
     // but a reload's replacement service may already own the registration.
