@@ -7,6 +7,7 @@ import type {
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import * as openClawStateDb from "../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,7 +17,6 @@ import {
   resetPluginConversationBindingStateForTest,
   seedPluginConversationBindingApprovalForTest,
 } from "./conversation-binding.test-fixtures.js";
-import * as openClawStateDb from "../state/openclaw-state-db.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
