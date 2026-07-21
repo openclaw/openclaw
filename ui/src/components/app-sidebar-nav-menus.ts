@@ -105,12 +105,10 @@ export function renderSidebarPluginTab(params: {
   active: boolean;
   onNavigate: (search: string) => void;
 }) {
-  const ref = { pluginId: params.tab.pluginId, id: params.tab.id };
-  const search = pluginTabSearch(ref);
-  const iconName =
-    params.tab.icon && Object.hasOwn(icons, params.tab.icon)
-      ? (params.tab.icon as IconName)
-      : "puzzle";
+  const search = pluginTabSearch({ pluginId: params.tab.pluginId, id: params.tab.id });
+  const iconName = Object.hasOwn(icons, params.tab.icon!)
+    ? (params.tab.icon as IconName)
+    : "puzzle";
   return html`
     <a
       href=${`${pathForRoute("plugin", params.basePath)}${search}`}

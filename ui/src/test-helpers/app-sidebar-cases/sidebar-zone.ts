@@ -217,44 +217,6 @@ describe("AppSidebar interleaved zone", () => {
     expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
   });
 
-  it("animates a newly inserted sidebar entry", async () => {
-    const { sidebar } = await mountZone();
-    await sidebar.updateComplete;
-    const animate = vi.fn();
-    const originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
-    const originalMatchMedia = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
-    Object.defineProperty(HTMLElement.prototype, "animate", {
-      configurable: true,
-      value: animate,
-    });
-
-    try {
-      sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks"];
-      await sidebar.updateComplete;
-      expect(animate).toHaveBeenCalledOnce();
-      expect(animate.mock.calls[0]?.[1]).toMatchObject({ duration: 180 });
-
-      Object.defineProperty(globalThis, "matchMedia", {
-        configurable: true,
-        value: () => ({ matches: true }),
-      });
-      sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks", "route:sessions"];
-      await sidebar.updateComplete;
-      expect(animate).toHaveBeenCalledOnce();
-    } finally {
-      if (originalAnimate) {
-        Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
-      } else {
-        delete (HTMLElement.prototype as { animate?: unknown }).animate;
-      }
-      if (originalMatchMedia) {
-        Object.defineProperty(globalThis, "matchMedia", originalMatchMedia);
-      } else {
-        delete (globalThis as { matchMedia?: unknown }).matchMedia;
-      }
-    }
-  });
-
   it("writes reordered entries after a route drop", async () => {
     const { sidebar } = await mountZone();
     sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks"];

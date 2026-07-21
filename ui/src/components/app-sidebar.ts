@@ -89,7 +89,6 @@ class AppSidebar extends AppSidebarSessionListElement {
   @state() private debouncedDisconnected = false;
 
   private offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private renderedSidebarEntries: ReadonlySet<string> | null = null;
 
   constructor() {
     super();
@@ -148,27 +147,8 @@ class AppSidebar extends AppSidebarSessionListElement {
     }
   }
 
-  override updated(changed: PropertyValues<this>) {
-    super.updated(changed);
-    const entries = [...this.querySelectorAll<HTMLElement>("[data-sidebar-entry]")];
-    const next = new Set(entries.flatMap((entry) => entry.dataset.sidebarEntry ?? []));
-    const previous = this.renderedSidebarEntries;
-    this.renderedSidebarEntries = next;
-    if (!previous || globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
-      return;
-    }
-    for (const entry of entries) {
-      const key = entry.dataset.sidebarEntry;
-      if (key && !previous.has(key)) {
-        entry.animate?.(
-          [
-            { opacity: 0, transform: "translateX(-8px) scale(0.98)" },
-            { opacity: 1, transform: "translateX(0) scale(1)" },
-          ],
-          { duration: 180, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
-        );
-      }
-    }
+  protected override firstUpdated() {
+    requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
   }
 
   private syncOfflineIndicator(schedule = !this.connected) {
