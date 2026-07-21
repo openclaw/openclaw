@@ -145,14 +145,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
-      4721,
+      // +4: two ingress settlement helpers mirrored by the deprecated channel-message entrypoint.
+      4725,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
-      2879,
+      // +4: two ingress settlement helpers mirrored by the deprecated channel-message entrypoint.
+      2883,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

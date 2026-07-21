@@ -35,7 +35,7 @@ export type DispatchTelegramMessageParams = {
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
     onBackpressured?: (error: Error) => void | Promise<void>;
-    onAbandoned?: () => void;
+    onAbandoned?: () => void | Promise<void>;
     abortSignal?: AbortSignal;
   };
 };

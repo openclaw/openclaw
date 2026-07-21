@@ -27,7 +27,7 @@ export function isIngressAdoptionLostError(error: unknown): error is IngressAdop
   return error instanceof IngressAdoptionLostError;
 }
 
-export type ChannelIngressBackpressureParticipant = {
+type ChannelIngressBackpressureParticipant = {
   onBackpressured?: (error: Error) => void | Promise<void>;
   onAbandoned?: () => void | Promise<void>;
 };

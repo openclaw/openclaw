@@ -59,7 +59,7 @@ export class FollowupRunDeferredError extends Error {
   }
 }
 
-export type FollowupQueueBackpressureReason = "exclusive-capacity";
+type FollowupQueueBackpressureReason = "exclusive-capacity";
 
 const INGRESS_RETRY_WITHOUT_PENALTY = Symbol.for("openclaw.ingressRetryWithoutPenalty");
 
