@@ -28,6 +28,7 @@ import { qqbotChannelConfigSchema } from "./config-schema.js";
 import { qqbotDoctor } from "./doctor.js";
 import { loadCredentialBackup, saveCredentialBackup } from "./engine/config/credential-backup.js";
 import { clearAccountCredentials } from "./engine/config/credentials.js";
+import { normalizeOptionalString } from "./engine/utils/string-normalize.js";
 import { chunkQQBotMarkdownText } from "./engine/messaging/markdown-table-chunking.js";
 import type { OutboundMediaAccessContext } from "./engine/messaging/outbound-types.js";
 import {
@@ -438,7 +439,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
 
       const resolved = resolveQQBotAccount((changed ? nextCfg : cfg) as OpenClawConfig, accountId);
       const loggedOut = resolved.secretSource === "none";
-      const envToken = Boolean(process.env.QQBOT_CLIENT_SECRET);
+      const envToken = Boolean(normalizeOptionalString(process.env.QQBOT_CLIENT_SECRET));
 
       return { ok: true, cleared, envToken, loggedOut };
     },
