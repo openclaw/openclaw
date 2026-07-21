@@ -1,0 +1,50 @@
+package ai.openclaw.wear
+
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
+
+@RunWith(RobolectricTestRunner::class)
+@Config(application = WearApplication::class, sdk = [35])
+class WearViewModelLifecycleTest {
+  @Test
+  fun recreatedViewModelGetsALiveTalkClientAfterThePreviousOneClears() {
+    val app = RuntimeEnvironment.getApplication() as WearApplication
+    val firstViewModel = WearViewModel(app)
+    val firstClient = firstViewModel.realtimeTalkClientForTest()
+    val firstStore = ViewModelStore().apply { put("wear", firstViewModel) }
+
+    firstStore.clear()
+
+    val reopenedViewModel = WearViewModel(app)
+    val reopenedClient = reopenedViewModel.realtimeTalkClientForTest()
+    val reopenedStore = ViewModelStore().apply { put("wear", reopenedViewModel) }
+    try {
+      assertFalse(firstClient.scopeForTest().coroutineContext[Job]?.isActive == true)
+      assertNotSame(firstClient, reopenedClient)
+      assertTrue(reopenedClient.scopeForTest().coroutineContext[Job]?.isActive == true)
+    } finally {
+      reopenedStore.clear()
+    }
+  }
+
+  private fun WearViewModel.realtimeTalkClientForTest(): WearRealtimeTalkClient =
+    javaClass.getDeclaredField("realtimeTalkClient").run {
+      isAccessible = true
+      get(this@realtimeTalkClientForTest) as WearRealtimeTalkClient
+    }
+
+  private fun WearRealtimeTalkClient.scopeForTest(): CoroutineScope =
+    javaClass.getDeclaredField("scope").run {
+      isAccessible = true
+      get(this@scopeForTest) as CoroutineScope
+    }
+}
