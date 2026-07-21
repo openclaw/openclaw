@@ -43,6 +43,11 @@ export {
 } from "./mutations.ts";
 export { startWorkboardCard, stopWorkboardCard } from "./execution.ts";
 export {
+  acquireWorkboardSessionCardLookup,
+  type WorkboardSessionCardLookupLease,
+  type WorkboardSessionCardMatch,
+} from "./session-card-lookup.ts";
+export {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
   workboardHasActiveWrites,

@@ -7,6 +7,7 @@ import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/pro
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type { WorkboardSessionCardMatch } from "../../lib/workboard/index.ts";
 
 export type BoardChatDockSize = {
   height: number;
@@ -26,6 +27,8 @@ type BoardSessionSurfaceProps = {
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
+  workboardCard?: WorkboardSessionCardMatch | null;
+  workboardHref?: string;
   onDockChange: (dock: BoardTab["chatDock"]) => void;
 };
 
@@ -135,6 +138,26 @@ export function renderBoardDockMenu(
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
+      ${props.workboardCard && props.workboardHref
+        ? html`
+            <a
+              class="board-session-surface__workboard-chip"
+              href=${props.workboardHref}
+              aria-label=${t("chat.board.workboardCard", {
+                title: props.workboardCard.title,
+                status: t(`workboard.status.${props.workboardCard.status}`),
+              })}
+            >
+              ${icons.kanban}
+              <span class="board-session-surface__workboard-title"
+                >${props.workboardCard.title}</span
+              >
+              <span class="board-session-surface__workboard-status">
+                ${t(`workboard.status.${props.workboardCard.status}`)}
+              </span>
+            </a>
+          `
+        : nothing}
       <openclaw-board-view
         .snapshot=${props.snapshot}
         .activeTabId=${props.activeTabId}

@@ -27,6 +27,7 @@ import type {
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { pathForRoute } from "../../app-route-paths.ts";
 import { findInlineApproval } from "../../app/approval-presentation.ts";
 import {
   applicationContext,
@@ -91,6 +92,7 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   announceCatalogSessionContinued,
@@ -114,6 +116,11 @@ import {
   uiSessionEventMatches,
 } from "../../lib/sessions/session-key.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
+import {
+  acquireWorkboardSessionCardLookup,
+  type WorkboardSessionCardLookupLease,
+  type WorkboardSessionCardMatch,
+} from "../../lib/workboard/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -403,6 +410,12 @@ class ChatPane extends OpenClawLightDomElement {
   private connectedClient: GatewayBrowserClient | null = null;
   private boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
   private boardProviderLifecycleConnected = false;
+  private workboardLookupLease:
+    | (WorkboardSessionCardLookupLease & { client: GatewayBrowserClient })
+    | undefined;
+  private workboardLookupUnsubscribe: (() => void) | undefined;
+  private workboardLookupSessionKey = "";
+  @litState() private workboardCardMatch: WorkboardSessionCardMatch | null = null;
   private connectionGeneration = 0;
   @litState() private headerEditing = false;
   @litState() private headerRenameValue = "";
@@ -445,6 +458,10 @@ class ChatPane extends OpenClawLightDomElement {
             }
             notify();
           }),
+      )
+      .watch(
+        () => this.context?.runtimeConfig,
+        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
       )
       .watch(
         () => this.resolveBoardProvider(),
@@ -1606,6 +1623,46 @@ class ChatPane extends OpenClawLightDomElement {
     this.boardProviderLease = undefined;
   }
 
+  private synchronizeWorkboardCardLookup(sessionKey: string | null): void {
+    const gateway = this.context?.gateway.snapshot;
+    const enabled = isWorkboardEnabledInConfigSnapshot(
+      this.context?.runtimeConfig?.state.configSnapshot,
+    );
+    const client = gateway?.client;
+    if (!sessionKey || !enabled || !gateway?.connected || !client) {
+      this.releaseWorkboardCardLookup();
+      return;
+    }
+    if (this.workboardLookupLease?.client !== client) {
+      this.releaseWorkboardCardLookup();
+      this.workboardLookupLease = {
+        ...acquireWorkboardSessionCardLookup(client),
+        client,
+      };
+    }
+    if (this.workboardLookupSessionKey === sessionKey) {
+      return;
+    }
+    this.workboardLookupUnsubscribe?.();
+    this.workboardLookupSessionKey = sessionKey;
+    this.workboardCardMatch = null;
+    const lookup = this.workboardLookupLease;
+    this.workboardLookupUnsubscribe = lookup.subscribe(sessionKey, (match) => {
+      if (this.workboardLookupLease === lookup && this.workboardLookupSessionKey === sessionKey) {
+        this.workboardCardMatch = match;
+      }
+    });
+  }
+
+  private releaseWorkboardCardLookup(): void {
+    this.workboardLookupUnsubscribe?.();
+    this.workboardLookupUnsubscribe = undefined;
+    this.workboardLookupLease?.release();
+    this.workboardLookupLease = undefined;
+    this.workboardLookupSessionKey = "";
+    this.workboardCardMatch = null;
+  }
+
   private resolveBoardSessionKey(snapshotSessionKey = ""): string {
     const resolved = resolveSessionKey(
       snapshotSessionKey || this.state?.sessionKey || this.sessionKey,
@@ -2311,6 +2368,11 @@ class ChatPane extends OpenClawLightDomElement {
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
+    this.synchronizeWorkboardCardLookup(
+      board.hasBoard && board.face === "dashboard"
+        ? this.resolveBoardSessionKey(board.snapshot.sessionKey)
+        : null,
+    );
     if (
       board.hasBoard &&
       board.face === "dashboard" &&
@@ -2327,6 +2389,7 @@ class ChatPane extends OpenClawLightDomElement {
   override disconnectedCallback() {
     this.boardProviderLifecycleConnected = false;
     this.releaseBoardProviderLease();
+    this.releaseWorkboardCardLookup();
     this.settleResetConfirmation(false);
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
@@ -3500,6 +3563,16 @@ class ChatPane extends OpenClawLightDomElement {
                 board.provider.refreshWidgetAppView(name, revision),
             } satisfies BoardViewCallbacks,
             widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
+            workboardCard:
+              this.workboardLookupSessionKey ===
+              this.resolveBoardSessionKey(board.snapshot.sessionKey)
+                ? this.workboardCardMatch
+                : null,
+            workboardHref: this.workboardCardMatch
+              ? `${pathForRoute("workboard", state.basePath)}?${new URLSearchParams({
+                  board: this.workboardCardMatch.boardId,
+                })}`
+              : undefined,
             onDockChange: (dock) => this.handleBoardDockChange(dock),
           })
         : chat;

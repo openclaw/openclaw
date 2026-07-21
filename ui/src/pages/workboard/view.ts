@@ -61,12 +61,14 @@ import {
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "./board-filter.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
+import "./workboard-card-dashboard.ts";
 
 type WorkboardProps = {
   host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
   canWrite?: boolean;
+  canGrant?: boolean;
   canModelOverride?: boolean;
   pluginEnabled: boolean | null;
   pluginEnablementError?: string | null;
@@ -1515,6 +1517,17 @@ function renderCardDetailsPanel(props: WorkboardProps) {
                   <h3>${t("workboard.fieldNotes")}</h3>
                   <p>${card.notes}</p>
                 </section>
+              `
+            : nothing}
+          ${linkedSessionKey
+            ? html`
+                <openclaw-workboard-card-dashboard
+                  .sessionKey=${linkedSessionKey}
+                  .client=${props.client}
+                  .connected=${props.connected}
+                  .canMutate=${props.canWrite !== false}
+                  .canGrant=${props.canGrant === true}
+                ></openclaw-workboard-card-dashboard>
               `
             : nothing}
           ${renderDependencyDetailList(dependencies)}
