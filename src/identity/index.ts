@@ -101,3 +101,16 @@ export type {
   IdentityServiceOptions,
   ProductInfo,
 } from './identity-service.js';
+
+// Export PathResolver
+export {
+  PathResolver,
+  getPathResolver,
+  resetPathResolver,
+} from './path-resolver.js';
+
+// Export PathResolver types
+export type {
+  PathResolverOptions,
+  PathResolutionResult,
+} from './path-resolver.js';
