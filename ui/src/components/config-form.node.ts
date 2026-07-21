@@ -13,6 +13,7 @@ import {
   type ConfigSearchCriteria,
 } from "./config-form.search.ts";
 import {
+  coerceConfigFormNumberString,
   defaultValue,
   hasSensitiveConfigData,
   hintForPath,
@@ -514,12 +515,7 @@ function renderTextInput(params: {
         }
         const raw = (e.target as HTMLInputElement).value;
         if (inputType === "number") {
-          if (raw.trim() === "") {
-            onPatch(path, undefined);
-            return;
-          }
-          const parsed = Number(raw);
-          onPatch(path, Number.isNaN(parsed) ? raw : parsed);
+          onPatch(path, coerceConfigFormNumberString(raw, false));
           return;
         }
         onPatch(path, raw);
@@ -606,9 +602,11 @@ function renderNumberInput(params: {
       .value=${formatUnknownText(displayValue)}
       ?disabled=${disabled}
       @input=${(e: Event) => {
+        // The HTML number grammar allows 1e5-style spellings; keep the typed
+        // text unless it is a plain decimal so schema validation — not a bare
+        // Number() reinterpretation — decides what gets persisted.
         const raw = (e.target as HTMLInputElement).value;
-        const parsed = raw === "" ? undefined : Number(raw);
-        onPatch(path, parsed);
+        onPatch(path, coerceConfigFormNumberString(raw, schemaType(schema) === "integer"));
       }}
     />
     <button

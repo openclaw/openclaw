@@ -57,6 +57,42 @@ export function defaultValue(schema?: JsonSchema): unknown {
   }
 }
 
+// openclaw.json stores plain decimals; a bare Number() would also reinterpret
+// 0x10/0b1010/1_000-style radix or JS-only spellings and silently persist a
+// value that differs from the typed text. The grammar mirrors the HTML valid
+// floating-point number grammar (including scientific notation like 1e5), so
+// anything a real number input can hold coerces exactly as Number() reads it.
+// Non-matches stay strings so schema validation rejects them.
+const CONFIG_FORM_DECIMAL_NUMBER_RE = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * Normalizes numeric config input text at the earliest boundary (the input
+ * handler, before any bare Number() conversion). Returns undefined for empty
+ * text, a number for plain decimal or scientific spellings, and the original
+ * text otherwise so the gateway's schema validation — not silent
+ * reinterpretation — decides.
+ */
+export function coerceConfigFormNumberString(
+  value: string,
+  integer: boolean,
+): number | undefined | string {
+  const trimmed = value.trim();
+  if (trimmed === "") {
+    return undefined;
+  }
+  if (!CONFIG_FORM_DECIMAL_NUMBER_RE.test(trimmed)) {
+    return value;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+  if (integer && !Number.isInteger(parsed)) {
+    return value;
+  }
+  return parsed;
+}
+
 export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }

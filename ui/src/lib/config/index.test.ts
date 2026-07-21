@@ -199,6 +199,127 @@ describe("createRuntimeConfigCapability", () => {
     runtimeConfig.dispose();
   });
 
+  it.each(["0x10", "0b1010", "0o17", "+5", "1_000", "Infinity", "NaN", "1e", "e5"])(
+    "keeps nondecimal spelling %s as a string instead of coercing",
+    async (spelling) => {
+      const submitted: Array<{ method: string; params: unknown }> = [];
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.get") {
+          return { config: { count: 1, retries: 2 }, hash: "hash-1", valid: true, issues: [] };
+        }
+        if (method === "config.schema") {
+          return {
+            schema: {
+              type: "object",
+              properties: {
+                count: { type: "number" },
+                retries: { type: "integer" },
+              },
+            },
+            uiHints: {},
+          };
+        }
+        submitted.push({ method, params });
+        return { hash: "hash-2" };
+      });
+      const client = { request } as unknown as GatewayBrowserClient;
+      const { gateway } = createGatewayHarness(client);
+      const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+      await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+      runtimeConfig.patchForm(["count"], spelling);
+      runtimeConfig.patchForm(["retries"], spelling);
+
+      await expect(runtimeConfig.save()).resolves.toBe(true);
+      const submission = submitted.find((entry) => entry.method === "config.set");
+      const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+      expect(typeof raw).toBe("string");
+      // The typed text is submitted verbatim so the gateway's schema validation
+      // rejects it, instead of silently persisting a reinterpreted number.
+      expect(JSON.parse(raw as string)).toEqual({ count: spelling, retries: spelling });
+      runtimeConfig.dispose();
+    },
+  );
+
+  it.each([
+    ["42.5", 42.5],
+    ["-7", -7],
+    [".5", 0.5],
+    ["1e3", 1000],
+    ["1e5", 100000],
+    [".5e2", 50],
+    ["-2.5E-3", -0.0025],
+  ])("still coerces decimal or scientific spelling %s to %s", async (spelling, expected) => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return { config: { count: 1 }, hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: { type: "object", properties: { count: { type: "number" } } },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.patchForm(["count"], spelling);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    expect(JSON.parse(raw as string)).toEqual({ count: expected });
+    runtimeConfig.dispose();
+  });
+
+  it.each([
+    ["1e5", 100000],
+    ["0x10", "0x10"],
+    ["42", 42],
+  ])("string-or-number union field keeps typed spelling %s as %s", async (spelling, expected) => {
+    const submitted: Array<{ method: string; params: unknown }> = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "config.get") {
+        return { config: { threshold: 1 }, hash: "hash-1", valid: true, issues: [] };
+      }
+      if (method === "config.schema") {
+        return {
+          schema: {
+            type: "object",
+            properties: {
+              threshold: { anyOf: [{ type: "integer" }, { type: "string" }] },
+            },
+          },
+          uiHints: {},
+        };
+      }
+      submitted.push({ method, params });
+      return { hash: "hash-2" };
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const { gateway } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+
+    await Promise.all([runtimeConfig.ensureLoaded(), runtimeConfig.ensureSchemaLoaded()]);
+    runtimeConfig.patchForm(["threshold"], spelling);
+
+    await expect(runtimeConfig.save()).resolves.toBe(true);
+    const submission = submitted.find((entry) => entry.method === "config.set");
+    const raw = (submission?.params as { raw?: unknown } | undefined)?.raw;
+    expect(typeof raw).toBe("string");
+    // Radix spellings stay strings (a string variant accepts them verbatim);
+    // decimal and scientific spellings coerce to numbers.
+    expect(JSON.parse(raw as string)).toEqual({ threshold: expected });
+    runtimeConfig.dispose();
+  });
+
   it("stages inherited agent overrides and the default through the public capability", async () => {
     const request = vi.fn(async (method: string) =>
       method === "config.get"

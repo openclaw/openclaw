@@ -124,6 +124,62 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
 
+  it("coerces decimal and scientific spellings typed into plain number inputs", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        port: { type: "integer" },
+        ratio: { type: "number" },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    const numberInputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input.settings-input[type="number"]'),
+    );
+    expect(numberInputs.length).toBe(2);
+    const portInput = expectElement(numberInputs[0], "integer field input");
+    const ratioInput = expectElement(numberInputs[1], "number field input");
+
+    // Scientific notation is part of the HTML number grammar and the standard
+    // Number() spelling, so it coerces like any plain decimal.
+    portInput.value = "1e5";
+    portInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["port"], 100000);
+
+    portInput.value = "42";
+    portInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["port"], 42);
+
+    // Integer fields also hold back decimal spellings for schema validation.
+    portInput.value = "42.5";
+    portInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["port"], "42.5");
+
+    ratioInput.value = "42.5";
+    ratioInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["ratio"], 42.5);
+
+    ratioInput.value = "-2.5E-3";
+    ratioInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["ratio"], -0.0025);
+
+    ratioInput.value = "";
+    ratioInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["ratio"], undefined);
+  });
+
   it("renders subsection labels exactly once", () => {
     const container = document.createElement("div");
     render(
