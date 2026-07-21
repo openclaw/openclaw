@@ -289,7 +289,6 @@ function createOtelContext(
     internalDiagnostics: {
       emit: emitTrustedDiagnosticEventWithPrivateData,
       onEvent: onTrustedInternalDiagnosticEvent,
-      onAISafetyEvent: () => () => {},
     },
   };
 }

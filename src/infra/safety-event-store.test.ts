@@ -6,10 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  emitAuthorizedAISafetyEvent,
-  emitTrustedAISafetyEvent,
-} from "./diagnostic-ai-safety-events.js";
+import { emitTrustedAISafetyDiagnosticEvent } from "./diagnostic-events.js";
 import { ensureSafetyEventStoreBridge, querySafetyEvents } from "./safety-event-store.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -54,7 +51,7 @@ describe("safety event store", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     ensureSafetyEventStoreBridge();
 
-    emitTrustedAISafetyEvent({
+    emitTrustedAISafetyDiagnosticEvent({
       type: "ai_safety.external_content.consumed",
       sessionId: "session-durable",
       sourceType: "web_fetch",
@@ -78,14 +75,14 @@ describe("safety event store", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     ensureSafetyEventStoreBridge();
 
-    emitAuthorizedAISafetyEvent(
+    emitTrustedAISafetyDiagnosticEvent(
       {
         type: "ai_safety.external_content.consumed",
         sessionId: "session-provenance",
         sourceType: "mcp_tool",
         trusted: false,
       },
-      { pluginId: "third-party-plugin" },
+      { pluginId: "third-party-plugin", trusted: false },
     );
 
     const [event] = querySafetyEvents({ sessionId: "session-provenance" }).events;
@@ -101,7 +98,7 @@ describe("safety event store", () => {
     ensureSafetyEventStoreBridge();
 
     const bearerCredential = "abcdef1234567890ghijklmn";
-    emitTrustedAISafetyEvent({
+    emitTrustedAISafetyDiagnosticEvent({
       type: "ai_safety.tool_policy.decision",
       sessionId: "session-reason",
       toolName: "exec",
@@ -127,7 +124,7 @@ describe("safety event store", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     ensureSafetyEventStoreBridge();
 
-    emitTrustedAISafetyEvent({
+    emitTrustedAISafetyDiagnosticEvent({
       type: "ai_safety.tool_policy.decision",
       sessionId: "session-noreason",
       toolName: "exec",
@@ -164,7 +161,7 @@ describe("safety event store", () => {
       FROM generated
     `);
 
-    emitTrustedAISafetyEvent({
+    emitTrustedAISafetyDiagnosticEvent({
       type: "ai_safety.eval.result",
       sessionId: "session-retention",
       evalName: "retention-proof",

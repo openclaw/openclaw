@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   onAISafetyDiagnosticEvent,
   type DiagnosticAISafetyEventPayload,
-} from "../infra/diagnostic-ai-safety-events.js";
+} from "../infra/diagnostic-events.js";
 import {
   buildSafeExternalPrompt,
   detectSuspiciousPatterns,

@@ -17,7 +17,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
-import { onAISafetyDiagnosticEvent } from "../infra/diagnostic-ai-safety-events.js";
+import { onAISafetyDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -151,40 +151,27 @@ describe("startPluginServices", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it("forwards manifest-declared safety event permissions to an external service", async () => {
-    const observed: Array<{ type: string; trusted: boolean }> = [];
-    const unsubscribe = onAISafetyDiagnosticEvent((event, metadata) => {
-      observed.push({ type: event.type, trusted: metadata.trusted });
-    });
-    try {
-      await startPluginServices({
-        registry: createRegistry(
-          [
-            {
-              id: "safety-emitter",
-              start: (ctx) => {
-                expect(
-                  ctx.safetyDiagnostics?.emit({
-                    type: "ai_safety.external_content.consumed",
-                    sessionId: "session-test",
-                    sourceType: "api",
-                    trusted: false,
-                  }),
-                ).toEqual({ ok: true });
-              },
+  it("does not expose safetyDiagnostics emit on plugin service context (deferred to follow-up PR)", async () => {
+    let capturedCtx: OpenClawPluginServiceContext | undefined;
+    await startPluginServices({
+      registry: createRegistry(
+        [
+          {
+            id: "safety-emitter",
+            start: (ctx) => {
+              capturedCtx = ctx;
             },
-          ],
-          "external-safety-plugin",
-          "workspace",
-          false,
-          ["ai_safety.external_content.consumed"],
-        ),
-        config: createServiceConfig(),
-      });
-    } finally {
-      unsubscribe();
-    }
-    expect(observed).toEqual([{ type: "ai_safety.external_content.consumed", trusted: false }]);
+          },
+        ],
+        "external-safety-plugin",
+        "workspace",
+        false,
+        ["ai_safety.external_content.consumed"],
+      ),
+      config: createServiceConfig(),
+    });
+    expect(capturedCtx).toBeDefined();
+    expect(capturedCtx!.safetyDiagnostics).toBeUndefined();
   });
 
   it("starts services and stops them in reverse order", async () => {
