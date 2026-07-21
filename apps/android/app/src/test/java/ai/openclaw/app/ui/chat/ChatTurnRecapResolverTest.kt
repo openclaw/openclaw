@@ -171,6 +171,19 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
+  fun leavingTheSessionAbandonsOnlyAnActiveWatch() {
+    val resolver = TurnRecapResolver()
+    resolver.resolve(session, true, done(previousEndedAt))
+    resolver.abandonActiveWatch(session)
+    assertNull(resolver.resolve(session, false, done(runEndedAt)))
+
+    resolver.resolve(session, true, done(previousEndedAt))
+    val settled = resolver.resolve(session, false, done(runEndedAt))
+    resolver.abandonActiveWatch(session)
+    assertEquals(settled, resolver.resolve(session, false, done(runEndedAt + 1_000L)))
+  }
+
+  @Test
   fun everyNonDoneTerminalConsumesQuietly() {
     listOf("failed", "killed", "timeout").forEach { status ->
       val resolver = TurnRecapResolver()

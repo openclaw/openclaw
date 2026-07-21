@@ -56,6 +56,12 @@ internal class TurnRecapResolver(
 ) {
   private val watches = mutableMapOf<String, TurnRecapWatch>()
 
+  /** Leaving mid-watch destroys attribution; settled recaps remain sticky across navigation. */
+  fun abandonActiveWatch(sessionKey: String) {
+    val watch = watches[sessionKey] ?: return
+    if (watch.watching && watch.settled == null) watches.remove(sessionKey)
+  }
+
   /**
    * Watches while the indicator is visible, then resolves the first fresh terminal row. Only a
    * clean `done` with runtime data produces a recap; every other fresh terminal consumes quietly.

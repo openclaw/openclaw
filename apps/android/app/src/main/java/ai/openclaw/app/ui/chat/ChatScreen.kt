@@ -1174,6 +1174,9 @@ private fun ChatMessageList(
   val workingRun = workingRunTracker.resolve(indicatorVisible, session, System.currentTimeMillis())
   val turnRecapResolver = remember { TurnRecapResolver() }
   val turnRecap = turnRecapResolver.resolve(sessionKey, indicatorVisible, session)
+  DisposableEffect(sessionKey, turnRecapResolver) {
+    onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
+  }
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
