@@ -118,6 +118,7 @@ public struct OpenClawChatView: View {
     @State private var isAtLiveEdge = true
     @State private var isUserScrolling = false
     @State private var isKeyboardVisible = false
+    @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
@@ -485,6 +486,14 @@ public struct OpenClawChatView: View {
             showsAssistantAvatar: self.showsAssistantAvatars,
             isClean: self.composerChrome == .clean,
             contextWindowTokens: contextWindowTokens,
+            userMessageExpanded: self.expandedUserMessageIDs.contains(msg.id),
+            onToggleUserMessageExpanded: {
+                if self.expandedUserMessageIDs.contains(msg.id) {
+                    self.expandedUserMessageIDs.remove(msg.id)
+                } else {
+                    self.expandedUserMessageIDs.insert(msg.id)
+                }
+            },
             inlineWidgetResolverReady: self.viewModel.healthOK,
             inlineWidgetResourceResolver: { [weak viewModel] path, failedResource in
                 await viewModel?.resolveInlineWidgetResource(path: path, replacing: failedResource)

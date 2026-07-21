@@ -26,6 +26,7 @@ import {
 } from "./agent.js";
 import {
   AuthProbeStatusSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsCreateParamsSchema,
   AgentsCreateResultSchema,
@@ -43,6 +44,8 @@ import {
   AgentsUpdateParamsSchema,
   AgentsUpdateResultSchema,
   ModelChoiceSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   ModelsListResultSchema,
   ModelsProbeParamsSchema,
@@ -152,15 +155,18 @@ import {
 } from "./audit-activity.js";
 import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
+  BoardActionParamsSchema,
   BoardCanvasDocumentSourceSchema,
   BoardChangedEventSchema,
   BoardCommandEventSchema,
   BoardCommandSchema,
+  BoardDataReadParamsSchema,
   BoardEventParamsSchema,
   BoardFocusTabCommandSchema,
   BoardGetParamsSchema,
   BoardMcpAppDescriptorSchema,
   BoardOpSchema,
+  BoardPromptAuthorizeParamsSchema,
   BoardSetChatDockCommandSchema,
   BoardSnapshotSchema,
   BoardTabCreateOpSchema,
@@ -181,6 +187,7 @@ import {
   BoardWidgetPutParamsSchema,
   BoardWidgetRemoveOpSchema,
   BoardWidgetResizeOpSchema,
+  BoardWidgetDeclaredSchema,
   BoardWidgetSchema,
 } from "./board.js";
 import {
@@ -287,6 +294,7 @@ import {
   GatewayErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
+  UnknownAgentIdErrorDetailsSchema,
 } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -597,6 +605,7 @@ import {
 export const ProtocolSchemas = {
   BoardTab: BoardTabSchema,
   BoardWidget: BoardWidgetSchema,
+  BoardWidgetDeclared: BoardWidgetDeclaredSchema,
   BoardSnapshot: BoardSnapshotSchema,
   BoardTabCreateOp: BoardTabCreateOpSchema,
   BoardTabUpdateOp: BoardTabUpdateOpSchema,
@@ -620,6 +629,9 @@ export const ProtocolSchemas = {
   BoardWidgetAppViewParams: BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResult: BoardWidgetAppViewResultSchema,
   BoardEventParams: BoardEventParamsSchema,
+  BoardPromptAuthorizeParams: BoardPromptAuthorizeParamsSchema,
+  BoardDataReadParams: BoardDataReadParamsSchema,
+  BoardActionParams: BoardActionParamsSchema,
   BoardChangedEvent: BoardChangedEventSchema,
   BoardFocusTabCommand: BoardFocusTabCommandSchema,
   BoardSetChatDockCommand: BoardSetChatDockCommandSchema,
@@ -640,6 +652,7 @@ export const ProtocolSchemas = {
   ErrorShape: ErrorShapeSchema,
   MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
+  UnknownAgentIdErrorDetails: UnknownAgentIdErrorDetailsSchema,
   GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
@@ -935,6 +948,7 @@ export const ProtocolSchemas = {
   WebLoginWaitParams: WebLoginWaitParamsSchema,
 
   // Agent files, artifacts, model catalogs, commands, tools, and skill workshop.
+  AgentKind: AgentKindSchema,
   AgentSummary: AgentSummarySchema,
   AgentsCreateParams: AgentsCreateParamsSchema,
   AgentsCreateResult: AgentsCreateResultSchema,
@@ -965,6 +979,8 @@ export const ProtocolSchemas = {
   AgentsListParams: AgentsListParamsSchema,
   AgentsListResult: AgentsListResultSchema,
   ModelChoice: ModelChoiceSchema,
+  ModelsAuthLogoutParams: ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParams: ModelsAuthStatusParamsSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
   ModelsProbeParams: ModelsProbeParamsSchema,

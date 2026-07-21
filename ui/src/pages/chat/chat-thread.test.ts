@@ -8,6 +8,7 @@ import {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  getExpandedUserMessages,
   persistedMessageEntryId,
   resetChatThreadState,
   syncToolCardExpansionState,
@@ -2341,6 +2342,36 @@ describe("buildCachedChatItems", () => {
     expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
   });
 
+  it("hides a pending send after history accepts its idempotency key", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "accepted prompt",
+          timestamp: 1,
+          __openclaw: { idempotencyKey: "accepted-run:user", seq: 1 },
+        },
+      ],
+      queue: [
+        {
+          id: "pending-send-1",
+          text: "accepted prompt",
+          createdAt: 2,
+          sendRunId: "accepted-run",
+          sendSubmittedAtMs: 10,
+          sendState: "sending",
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groupAt(groups, 0).messages).toHaveLength(1);
+    expect(messageRecord(groupAt(groups, 0))["__openclaw"]).toMatchObject({
+      idempotencyKey: "accepted-run:user",
+      seq: 1,
+    });
+  });
+
   it("keeps failed queued sends out of the thread", () => {
     const groups = messageGroups({
       queue: [
@@ -2846,6 +2877,20 @@ describe("tool expansion state", () => {
     syncToolCardExpansionState("tool-name-session", [group], true);
 
     expect(getExpandedToolCards("tool-name-session").get("toolmsg:tool-name-result")).toBe(true);
+  });
+});
+
+describe("user message expansion state", () => {
+  it("keeps disclosure state per session and clears it with thread state", () => {
+    resetChatThreadState();
+    getExpandedUserMessages("main").set("user-message:one", true);
+
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("agent:main:main").get("user-message:one")).toBe(true);
+    expect(getExpandedUserMessages("other").get("user-message:one")).toBeUndefined();
+
+    resetChatThreadState();
+    expect(getExpandedUserMessages("main").get("user-message:one")).toBeUndefined();
   });
 });
 
