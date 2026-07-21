@@ -341,6 +341,15 @@ describe("agent defaults schema", () => {
     ).toBe(false);
   });
 
+  it("accepts compaction.enabled", () => {
+    const result = AgentDefaultsSchema.parse({
+      compaction: {
+        enabled: false,
+      },
+    })!;
+    expect(result.compaction?.enabled).toBe(false);
+  });
+
   it("accepts compaction.midTurnPrecheck.enabled", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
