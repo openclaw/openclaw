@@ -1332,7 +1332,7 @@ function renderChatThreadContents(
     props.embedSandboxMode ?? "scripts",
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
-    Boolean(props.onSetReply),
+    props.onSetReply,
   ]);
   const transcriptContents =
     showLoadingSkeleton || isEmpty

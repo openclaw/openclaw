@@ -1177,6 +1177,80 @@ describe("chat code-block copy", () => {
 });
 
 describe("chat transcript rendering", () => {
+  it("refreshes cached inline reply handlers when the callback identity changes", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const firstReply = vi.fn();
+    const currentReply = vi.fn();
+    const message = { role: "assistant", content: "Reply target", timestamp: 1 };
+    const messages = [message];
+    const stableChatItems = [
+      {
+        kind: "group",
+        key: "group:assistant:reply-callback-cache",
+        role: "assistant",
+        messages: [{ key: "message:reply-callback-cache", message }],
+        timestamp: 1,
+        isStreaming: false,
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>;
+    const defaultBuildChatItems = buildChatItemsMock.getMockImplementation();
+    const defaultRenderMessageGroup = renderMessageGroupMock.getMockImplementation();
+    buildChatItemsMock.mockReturnValue(stableChatItems);
+    renderMessageGroupMock.mockImplementation(
+      (
+        ...[_group, opts]: Parameters<typeof chatMessage.renderMessageGroup>
+      ): ReturnType<typeof chatMessage.renderMessageGroup> => html`
+        <button
+          aria-label="Reply to message"
+          @click=${() =>
+            opts.onReply?.({
+              messageId: "assistant-message",
+              senderLabel: "Val",
+              text: "Reply target",
+            })}
+        >
+          Reply
+        </button>
+      `,
+    );
+    const container = document.createElement("div");
+    const renderWithReply = (onSetReply: typeof firstReply) => {
+      render(
+        renderChat(
+          createChatProps({
+            paneId: "reply-callback-cache",
+            transcript,
+            messages,
+            onSetReply,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderWithReply(firstReply);
+    renderWithReply(currentReply);
+    requireElement(
+      container,
+      '[aria-label="Reply to message"]',
+      "inline reply button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (defaultRenderMessageGroup) {
+      renderMessageGroupMock.mockImplementation(defaultRenderMessageGroup);
+    }
+    if (defaultBuildChatItems) {
+      buildChatItemsMock.mockImplementation(defaultBuildChatItems);
+    }
+
+    expect(firstReply).not.toHaveBeenCalled();
+    expect(currentReply).toHaveBeenCalledOnce();
+  });
+
   it("passes the full loaded history to one render path and leaves scroll ownership to the pane", () => {
     const messages = Array.from({ length: 80 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
