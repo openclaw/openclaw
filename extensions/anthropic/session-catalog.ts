@@ -769,12 +769,8 @@ export async function readLocalClaudeTranscriptPage(
       );
       position -= size;
       const chunk = Buffer.allocUnsafe(size);
-      // Positional reads can return fewer bytes than requested even inside a
-      // stat'd, unchanged file, so fill the whole window across short reads
-      // (mirrors the forward metadata scan above). Advance both the buffer
-      // offset and the file position each retry. A zero-byte read before the
-      // window is filled is a genuine premature EOF = the transcript was
-      // truncated mid-read, which stays a hard error.
+      // Positional reads may return short, so complete the bounded window.
+      // A zero-byte read before it fills means the file changed after stat.
       let filled = 0;
       while (filled < size) {
         const { bytesRead } = await handle.read(chunk, filled, size - filled, position + filled);
