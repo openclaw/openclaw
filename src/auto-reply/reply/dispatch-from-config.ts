@@ -814,12 +814,11 @@ async function dispatchReplyFromConfigInner(
           : undefined,
       },
     );
-    const deliverEffectiveAbortSignal = getDispatchAbortSignal();
-    if (deliverEffectiveAbortSignal?.aborted) {
+    if (params.replyOptions?.abortSignal?.aborted) {
       return false;
     }
     const result = await routeReplyToOriginating(bindingPayload, {
-      abortSignal: deliverEffectiveAbortSignal,
+      abortSignal: params.replyOptions?.abortSignal,
       kind: mode === "terminal" ? "final" : "tool",
       sessionKey: transcriptOwner?.sessionKey,
     });
@@ -831,7 +830,7 @@ async function dispatchReplyFromConfigInner(
       }
       return result.ok;
     }
-    if (deliverEffectiveAbortSignal?.aborted) {
+    if (params.replyOptions?.abortSignal?.aborted) {
       return false;
     }
     markInboundDedupeReplayUnsafe();
@@ -1256,7 +1255,7 @@ async function dispatchReplyFromConfigInner(
         // Routed delivery owns its destination-scoped prefix. Direct dispatchers already own
         // their prefix, so seed that live context only when no cross-channel route is used.
         const result = await routeReplyToOriginating(payload, {
-          abortSignal: getDispatchAbortSignal(),
+          abortSignal: params.replyOptions?.abortSignal,
           responsePrefixContext,
         });
         if (result) {
@@ -1272,7 +1271,7 @@ async function dispatchReplyFromConfigInner(
         } else {
           markInboundDedupeReplayUnsafe();
           params.replyOptions?.onModelSelected?.(modelSelection);
-          if (!getDispatchAbortSignal()?.aborted) {
+          if (!params.replyOptions?.abortSignal?.aborted) {
             queuedFinal = dispatcher.sendFinalReply(payload);
           }
         }

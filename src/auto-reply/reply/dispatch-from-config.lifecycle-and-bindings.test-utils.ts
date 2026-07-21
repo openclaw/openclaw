@@ -1839,6 +1839,7 @@ describe("dispatchReplyFromConfig", () => {
       AccountId: "default",
       SenderId: "user-9",
       SenderUsername: "ada",
+      MessageThreadId: 77,
       CommandAuthorized: true,
       WasMentioned: false,
       CommandBody: "who are you",
