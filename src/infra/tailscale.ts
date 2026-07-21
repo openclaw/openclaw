@@ -60,6 +60,7 @@ function isTransientTailscaleStatusError(error: unknown): boolean {
   return (
     record?.timedOut === true ||
     detail.includes("failed to connect to local tailscale daemon") ||
+    detail.includes("failed to connect to local tailscale service") ||
     detail.includes("connection refused") ||
     detail.includes("503 service unavailable")
   );

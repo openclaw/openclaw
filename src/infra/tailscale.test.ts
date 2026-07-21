@@ -78,6 +78,7 @@ describe("tailscale helpers", () => {
 
   it.each([
     [new Error("Failed to connect to local Tailscale daemon; not running?")],
+    [new Error("failed to connect to local Tailscale service; is Tailscale running?")],
     [Object.assign(new Error("Command timed out"), { timedOut: true, signal: "SIGTERM" })],
   ])("retries post-Serve status after a transient failure", async (failure) => {
     vi.useFakeTimers();
