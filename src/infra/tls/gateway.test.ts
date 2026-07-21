@@ -110,6 +110,115 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("rejects oversized cert files before loading TLS options", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "oversized-cert.pem");
+    const keyPath = path.join(dir, "ok-key.pem");
+    await writeFile(certPath, "x".repeat(64 * 1024 + 1), "utf8");
+    await writeFile(keyPath, KEY_PEM, "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.required).toBe(true);
+    expect(result.error).toContain("cert file exceeds");
+    expect(result.error).toContain(String(64 * 1024));
+  });
+
+  it("rejects oversized key files before loading TLS options", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "ok-cert.pem");
+    const keyPath = path.join(dir, "oversized-key.pem");
+    await writeFile(certPath, CERT_PEM, "utf8");
+    await writeFile(keyPath, "x".repeat(64 * 1024 + 1), "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.required).toBe(true);
+    expect(result.error).toContain("key file exceeds");
+    expect(result.error).toContain(String(64 * 1024));
+  });
+
+  it("allows a CA bundle larger than the cert/key limit but under the CA cap", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "ok-cert.pem");
+    const keyPath = path.join(dir, "ok-key.pem");
+    const caPath = path.join(dir, "large-ca.pem");
+    await writeFile(certPath, CERT_PEM, "utf8");
+    await writeFile(keyPath, KEY_PEM, "utf8");
+    // Upgrade-safe: previously unbounded CA bundles between 64 KiB and 256 KiB must still load.
+    await writeFile(caPath, `${CERT_PEM}${"x".repeat(64 * 1024)}`, "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      caPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.error).toBeUndefined();
+    expect(result.tlsOptions?.ca).toContain("BEGIN CERTIFICATE");
+  });
+
+  it("rejects oversized ca files before loading TLS options", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "ok-cert.pem");
+    const keyPath = path.join(dir, "ok-key.pem");
+    const caPath = path.join(dir, "oversized-ca.pem");
+    await writeFile(certPath, CERT_PEM, "utf8");
+    await writeFile(keyPath, KEY_PEM, "utf8");
+    await writeFile(caPath, "x".repeat(256 * 1024 + 1), "utf8");
+
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      caPath,
+      autoGenerate: false,
+    });
+
+    expect(result.enabled).toBe(false);
+    expect(result.required).toBe(true);
+    expect(result.error).toContain("ca file exceeds");
+    expect(result.error).toContain(String(256 * 1024));
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects non-regular cert paths before loading",
+    async () => {
+      const dir = await createTempDir();
+      const certPath = path.join(dir, "fifo-cert.pem");
+      const keyPath = path.join(dir, "ok-key.pem");
+      await writeFile(keyPath, KEY_PEM, "utf8");
+      const { execFileSync } = await import("node:child_process");
+      execFileSync("mkfifo", [certPath]);
+
+      const result = await loadGatewayTlsRuntime({
+        enabled: true,
+        certPath,
+        keyPath,
+        autoGenerate: false,
+      });
+
+      expect(result.enabled).toBe(false);
+      expect(result.required).toBe(true);
+      expect(result.error).toMatch(/gateway tls: failed to load cert/);
+    },
+  );
+
   it("fails closed when cert/key are missing and auto generation is disabled", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "missing-cert.pem");
