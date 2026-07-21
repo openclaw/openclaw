@@ -39,7 +39,7 @@ describe("matrix scenario environment", () => {
       runtimeEnv: {},
       tempRoot: "/tmp/matrix-qa",
       workspaceDir: "/tmp/matrix-qa/workspace",
-      call: vi.fn(async (method: string) => {
+      call: vi.fn(async (method: string, _params?: unknown, _options?: unknown) => {
         callOrder.push(method);
         if (method === "config.get") {
           configReadCount += 1;
