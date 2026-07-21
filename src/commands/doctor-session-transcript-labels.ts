@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentIds } from "../agents/agent-scope.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
   readSqliteTranscriptSnapshot,
@@ -9,13 +8,14 @@ import {
 import type { ResolvedTranscriptScope } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { replaceSqliteTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { listSqliteSessionTranscriptInstances } from "../config/sessions/session-accessor.sqlite.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   openOpenClawAgentDatabase,
-  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 
 const NOTE_TITLE = "Session transcript labels";
 
@@ -125,17 +125,29 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let repairedSessions = 0;
   let repairedEvents = 0;
 
-  for (const agentId of listAgentIds(params.cfg)) {
-    const databaseOptions = { agentId, env };
-    const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-    if (!fs.existsSync(databasePath)) {
+  const targetsBySqlitePath = new Map<string, { agentId: string; storePath: string }>();
+  for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+    const sqlitePath = resolveTargetSqlitePath(target);
+    if (!targetsBySqlitePath.has(sqlitePath)) {
+      targetsBySqlitePath.set(sqlitePath, target);
+    }
+  }
+
+  for (const [sqlitePath, target] of targetsBySqlitePath) {
+    if (!fs.existsSync(sqlitePath)) {
       continue;
     }
 
+    const { agentId } = target;
+    const databaseOptions = { agentId, env, path: sqlitePath };
     try {
       const database = openOpenClawAgentDatabase(databaseOptions);
       const plans: SessionLabelRewritePlan[] = [];
-      for (const instance of listSqliteSessionTranscriptInstances(databaseOptions)) {
+      for (const instance of listSqliteSessionTranscriptInstances({
+        agentId,
+        env,
+        storePath: target.storePath,
+      })) {
         const snapshot = readSqliteTranscriptSnapshot(database, instance.sessionId);
         const changedEvents = snapshot.events.reduce(
           (count, event) => count + (normalizeLegacyInboundContextLabels(event) ? 1 : 0),
@@ -150,6 +162,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
           scope: {
             agentId,
             env,
+            path: sqlitePath,
             sessionId: instance.sessionId,
             sessionKey: instance.sessionKey,
           },
@@ -182,7 +195,10 @@ export async function noteSessionTranscriptLabelHealth(params: {
       }
     } catch (error) {
       const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-      note(`- Failed to inspect or rewrite labels for agent "${agentId}": ${detail}`, NOTE_TITLE);
+      note(
+        `- Failed to inspect or rewrite labels for ${agentId} (${sqlitePath}): ${detail}`,
+        NOTE_TITLE,
+      );
     }
   }
 
