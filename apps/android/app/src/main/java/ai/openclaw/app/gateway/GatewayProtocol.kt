@@ -480,6 +480,7 @@ enum class GatewayMethod(
   BoardPromptAuthorize("board.prompt.authorize"),
   BoardDataRead("board.data.read"),
   BoardAction("board.action"),
+  SessionsObserverAsk("sessions.observer.ask"),
 }
 
 enum class GatewayEvent(

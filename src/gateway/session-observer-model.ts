@@ -30,6 +30,8 @@ const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
+export const SESSION_OBSERVER_ASK_MODEL_MAX_TOKENS = 400;
+export const SESSION_OBSERVER_ASK_ANSWER_MAX_CHARS = 600;
 type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
 type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
 export type PreparedModel = Awaited<ReturnType<PrepareModel>>;
@@ -229,6 +231,12 @@ export const SESSION_OBSERVER_SYSTEM_PROMPT = [
   'Return strict JSON only, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
 ].join(" ");
 
+export const SESSION_OBSERVER_ASK_SYSTEM_PROMPT = [
+  "You answer operator questions about a running AI agent session using only the supplied observation digest and notes.",
+  "Do not infer details that are absent from the observations; plainly say when you cannot know.",
+  "Return only a concise plain-text answer in American English, with no markdown or JSON wrapper.",
+].join(" ");
+
 const ModelDigestSchema = z
   .strictObject({
     headline: z.string().min(1),
@@ -244,7 +252,7 @@ const ModelDigestSchema = z
   })
   .strict();
 
-function normalizeModelString(value: string, maxChars: number): string {
+export function sanitizeSessionObserverModelText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
@@ -423,6 +431,18 @@ export function buildSessionObserverPrompt(
   });
 }
 
+export function buildSessionObserverAskPrompt(params: {
+  digest?: SessionObserverDigest;
+  notes: readonly string[];
+  question: string;
+}): string {
+  return JSON.stringify({
+    digest: params.digest ?? null,
+    notes: params.notes,
+    question: params.question,
+  });
+}
+
 /** Validates strict model JSON and applies the protocol's hard string caps. */
 export function normalizeSessionObserverModelOutput(text: string): {
   headline: string;
@@ -440,9 +460,9 @@ export function normalizeSessionObserverModelOutput(text: string): {
   if (!result.success) {
     return null;
   }
-  const headline = normalizeModelString(result.data.headline, HEADLINE_MAX_CHARS);
+  const headline = sanitizeSessionObserverModelText(result.data.headline, HEADLINE_MAX_CHARS);
   const assessment = result.data.assessment
-    ? normalizeModelString(result.data.assessment, ASSESSMENT_MAX_CHARS)
+    ? sanitizeSessionObserverModelText(result.data.assessment, ASSESSMENT_MAX_CHARS)
     : undefined;
   if (!headline || (result.data.assessment && !assessment)) {
     return null;

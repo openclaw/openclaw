@@ -1,8 +1,14 @@
+/* @vitest-environment jsdom */
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveChatPaneObserverRunId } from "../../lib/observer-digest.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ChatObserverHudState, type ObserverHudInput } from "./components/chat-observer-hud.ts";
+import {
+  ChatObserverAskState,
+  ChatObserverHudState,
+  type ObserverHudInput,
+} from "./components/chat-observer-hud.ts";
 
 function digest(health: SessionObserverDigest["health"] = "on-track"): SessionObserverDigest {
   return {
@@ -131,5 +137,68 @@ describe("observer hud auto-expand latch", () => {
     expect(
       state.mode({ running: true, activeRunId: "r1", digest: benign, sideChatOpen: false }),
     ).toBe("pill");
+  });
+});
+
+describe("ChatObserverAskState", () => {
+  it("moves a submitted question through pending to an answer", async () => {
+    let resolveAnswer!: (value: { answer: string }) => void;
+    const ask = vi.fn(
+      () =>
+        new Promise<{ answer: string }>((resolve) => {
+          resolveAnswer = resolve;
+        }),
+    );
+    const state = new ChatObserverAskState();
+    state.switchSession("agent:main:one");
+
+    const pending = state.submit(" Why is it rerunning that test? ", ask);
+    expect(state.pending).toBe(true);
+    expect(state.exchanges).toEqual([{ question: "Why is it rerunning that test?" }]);
+    expect(ask).toHaveBeenCalledWith("agent:main:one", "Why is it rerunning that test?");
+
+    resolveAnswer({ answer: "It is verifying the same fix against the focused regression." });
+    await pending;
+    expect(state.pending).toBe(false);
+    expect(state.exchanges).toEqual([
+      {
+        question: "Why is it rerunning that test?",
+        answer: "It is verifying the same fix against the focused regression.",
+      },
+    ]);
+  });
+
+  it("maps the typed busy error to a muted hint", async () => {
+    const state = new ChatObserverAskState();
+    state.switchSession("agent:main:one");
+
+    await state.submit("Is it stuck?", async () => {
+      throw {
+        gatewayCode: "UNAVAILABLE",
+        details: { code: "SESSION_OBSERVER_BUSY" },
+      };
+    });
+
+    expect(state.exchanges).toEqual([{ question: "Is it stuck?", hint: "busy" }]);
+  });
+
+  it("clears the thread on session switch and ignores the old answer", async () => {
+    let resolveAnswer!: (value: { answer: string }) => void;
+    const state = new ChatObserverAskState();
+    state.switchSession("agent:main:one");
+    const pending = state.submit(
+      "What is it doing?",
+      () =>
+        new Promise<{ answer: string }>((resolve) => {
+          resolveAnswer = resolve;
+        }),
+    );
+
+    state.switchSession("agent:main:two");
+    expect(state.pending).toBe(false);
+    expect(state.exchanges).toEqual([]);
+    resolveAnswer({ answer: "An answer for the previous session." });
+    await pending;
+    expect(state.exchanges).toEqual([]);
   });
 });

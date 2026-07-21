@@ -1973,6 +1973,77 @@
   animation: chat-side-chat-pending-pulse 1.4s ease-in-out infinite;
 }
 
+.chat-observer-hud__ask-thread {
+  display: grid;
+  gap: 8px;
+  max-height: 168px;
+  margin-top: 10px;
+  padding-top: 10px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+
+.chat-observer-hud__ask-exchange {
+  display: grid;
+  gap: 4px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.chat-observer-hud__ask-question {
+  justify-self: end;
+  max-width: 88%;
+  padding: 5px 8px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+
+.chat-observer-hud__ask-answer {
+  color: var(--text);
+}
+
+.chat-observer-hud__ask-hint {
+  color: var(--muted);
+}
+
+.chat-observer-hud__ask-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-observer-hud__ask-field {
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-observer-hud__ask-input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.chat-observer-hud__ask-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.chat-observer-hud__ask-submit {
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
 @media (max-width: 768px) {
   .chat-side-chat {
     position: fixed;
