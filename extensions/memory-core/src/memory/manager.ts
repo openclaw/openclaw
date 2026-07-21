@@ -764,7 +764,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       providerKeyKnown: this.providerInitialized,
     });
     if (indexIdentity.status !== "valid") {
-      return [];
+      const shouldRepairMissingMeta =
+        indexIdentity.status === "missing" && indexIdentity.reason === "index metadata is missing";
+      if (shouldRepairMissingMeta && this.settings.sync.onSearch) {
+        try {
+          await this.sync({ reason: "search", force: true });
+        } catch (err) {
+          log.warn(`memory sync failed (search-identity-repair): ${String(err)}`);
+        }
+      }
+      const repairedIdentity = shouldRepairMissingMeta
+        ? this.refreshIndexIdentityDirty({
+            providerKeyKnown: this.providerInitialized,
+          })
+        : indexIdentity;
+      if (repairedIdentity.status !== "valid") {
+        return [];
+      }
     }
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
