@@ -144,6 +144,8 @@ export type UserTurnTranscriptRecorder = {
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnExpectedState;
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
+    /** Allow a later explicit persistence attempt when this attempt appends nothing. */
+    retryIfUnpersisted?: boolean;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistBlocked: (
     message: PersistedUserTurnMessage,

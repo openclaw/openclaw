@@ -45,7 +45,8 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
-import { getOrCreateSessionCacheValue } from "./session-cache.ts";
+import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
+import { chatMessagesContainQueuedSend } from "./steer-lifecycle.ts";
 import type { PlanStatus } from "./tool-stream.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -62,6 +63,7 @@ type BuildChatItemsProps = {
   streamStartedAt: number | null;
   queue?: ChatQueueItem[];
   showToolCalls: boolean;
+  persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
   /** Keeps the status row visible while a running tool is parked for approval. */
@@ -98,6 +100,7 @@ type StreamRunRenderItem = {
 
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
+const expandedUserMessagesBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
@@ -109,6 +112,7 @@ export function resetChatThreadState(paneId?: string): void {
   chatItemsByPane.clear();
   resetWorkingProgress();
   expandedToolCardsBySession.clear();
+  expandedUserMessagesBySession.clear();
   initializedToolCardsBySession.clear();
   lastAutoExpandPrefBySession.clear();
 }
@@ -382,6 +386,15 @@ function findCanvasInsertionIndex(items: ChatItem[], toolTimestamp: number | nul
   return items.length;
 }
 
+function isKeyedAssistantStreamFallbackMessage(message: unknown): boolean {
+  const record = asRecord(message);
+  if (normalizeLowercaseStringOrEmpty(record?.role) !== "assistant") {
+    return false;
+  }
+  const fallback = asRecord(record?.openclawStreamFallback);
+  return typeof fallback?.itemId === "string" && fallback.itemId.trim().length > 0;
+}
+
 function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
   const result: Array<ChatItem | MessageGroup> = [];
   let currentGroup: MessageGroup | null = null;
@@ -407,11 +420,17 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
     const shouldSplitBySender = role.toLowerCase() === "user" || role.toLowerCase() === "assistant";
     const startsProjectedTurn =
       asRecord(asRecord(item.message)?.["__openclaw"])?.turnBoundary === true;
+    const splitsAssistantCommentary =
+      role.toLowerCase() === "assistant" &&
+      currentGroup?.role.toLowerCase() === "assistant" &&
+      isKeyedAssistantStreamFallbackMessage(currentGroup.messages[0]?.message) !==
+        isKeyedAssistantStreamFallbackMessage(item.message);
 
     if (
       !currentGroup ||
       startsProjectedTurn ||
       currentGroup.role !== role ||
+      splitsAssistantCommentary ||
       (shouldSplitBySender &&
         (currentGroup.senderLabel !== senderLabel ||
           senderIdentityKey(currentGroup.sender) !== senderIdentityKey(sender)))
@@ -1199,7 +1218,9 @@ function sortChatItemsByVisibleTime(
 function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
-    (message) => !isAssistantHeartbeatAckForDisplay(message),
+    (message) =>
+      !isAssistantHeartbeatAckForDisplay(message) &&
+      (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
   );
   const tools = Array.isArray(props.toolMessages)
     ? props.toolMessages.filter((message) => asRecord(message) !== null)
@@ -1273,8 +1294,17 @@ function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGro
     });
   }
   const queuedSends = Array.isArray(props.queue) ? props.queue : [];
-  const activeRunQueuedSends = queuedSends.filter((queued) => queued.sendState === "waiting-model");
-  const futureQueuedSends = queuedSends.filter((queued) => !activeRunQueuedSends.includes(queued));
+  // Once authoritative history carries the send id, that message owns the bubble.
+  // Keep the queue row for run progress and delivery retirement, but do not render both copies.
+  const threadQueuedSends = queuedSends.filter(
+    (queued) => !chatMessagesContainQueuedSend(history, queued, true),
+  );
+  const activeRunQueuedSends = threadQueuedSends.filter(
+    (queued) => queued.sendState === "waiting-model",
+  );
+  const futureQueuedSends = threadQueuedSends.filter(
+    (queued) => !activeRunQueuedSends.includes(queued),
+  );
   const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
     (earliest, queued) =>
       earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
@@ -1708,6 +1738,7 @@ function sameChatItemsStructuralInput(
     previous.streamStartedAt === next.streamStartedAt &&
     previous.queue === next.queue &&
     previous.showToolCalls === next.showToolCalls &&
+    previous.persistCommentary === next.persistCommentary &&
     previous.runWorking === next.runWorking &&
     previous.waitingApproval === next.waitingApproval &&
     previous.runActive === next.runActive &&
@@ -1931,11 +1962,20 @@ function workGroupHasError(groups: MessageGroup[]): boolean {
  */
 export function collapseCompletedTurnWork(
   items: TurnRenderItem[],
-  opts: { runWorking: boolean; searchActive?: boolean },
+  opts: { sessionKey: string; runWorking: boolean; searchActive?: boolean },
 ): Array<TurnRenderItem | WorkGroupRenderItem> {
-  // Chat search filters the thread to matching messages; folding a match into
-  // a collapsed rollup would hide the very row the query found.
-  if (opts.searchActive) {
+  const [scope, agentId, kind, sessionId, ...extraParts] = normalizeLowercaseStringOrEmpty(
+    opts.sessionKey,
+  ).split(":");
+  const isDashboardSession =
+    scope === "agent" &&
+    Boolean(agentId) &&
+    kind === "dashboard" &&
+    Boolean(sessionId) &&
+    extraParts.length === 0;
+  // Channel sessions can also be opened in the Control UI, but their full
+  // transcript remains the canonical presentation on message surfaces.
+  if (!isDashboardSession || opts.searchActive) {
     return items;
   }
   const turns: TurnRenderItem[][] = [];
@@ -2039,6 +2079,19 @@ export function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>):
 
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
   return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
+}
+
+export function getExpandedUserMessages(sessionKey: string): Map<string, boolean> {
+  for (const [cachedKey, state] of expandedUserMessagesBySession) {
+    if (areUiSessionKeysEquivalent(cachedKey, sessionKey)) {
+      if (cachedKey !== sessionKey) {
+        expandedUserMessagesBySession.delete(cachedKey);
+        setSessionCacheValue(expandedUserMessagesBySession, sessionKey, state);
+      }
+      return state;
+    }
+  }
+  return getOrCreateSessionCacheValue(expandedUserMessagesBySession, sessionKey, () => new Map());
 }
 
 function getInitializedToolCards(sessionKey: string): Set<string> {

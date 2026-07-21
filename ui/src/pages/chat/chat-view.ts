@@ -62,6 +62,7 @@ import {
   resetChatThreadPresentationState,
   toggleChatThreadSearch,
 } from "./components/chat-thread.ts";
+import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkCameraDevice } from "./realtime-talk-input.ts";
@@ -69,6 +70,7 @@ import type { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import type { CompactionStatus, FallbackStatus, PlanStatus } from "./tool-stream.ts";
+import type { WorkspaceResultConflict } from "./workspace-conflict.ts";
 import "../../components/resizable-divider.ts";
 
 export type ChatProps = {
@@ -80,6 +82,7 @@ export type ChatProps = {
   thinkingLevel: string | null;
   showThinking: boolean;
   showToolCalls: boolean;
+  persistCommentary?: boolean;
   loading: boolean;
   sending: boolean;
   canAbort?: boolean;
@@ -130,6 +133,8 @@ export type ChatProps = {
   approvalErrors?: ReadonlyMap<string, string>;
   approvalNowMs?: number;
   onApprovalDecision?: (approvalId: string, decision: ExecApprovalDecision) => void | Promise<void>;
+  workspaceConflict?: WorkspaceResultConflict;
+  onDismissWorkspaceConflict?: () => void;
   sessions: SessionsListResult | null;
   /** Host context resolving global-alias session keys (scope=global fleets). */
   sessionHost?: UiSessionDefaultsHost | null;
@@ -153,9 +158,9 @@ export type ChatProps = {
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   assistantAvatar: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
-  attributedIdentity?: boolean;
   localMediaPreviewRoots?: string[];
   assistantAttachmentAuthToken?: string | null;
   autoExpandToolCalls?: boolean;
@@ -247,9 +252,9 @@ export type ChatProps = {
   onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
 };
 
-export function resetChatViewState(paneId?: string) {
+export function resetChatViewState(paneId?: string, owner?: ParentNode) {
   resetChatComposerState(paneId);
-  resetChatThreadPresentationState(paneId);
+  resetChatThreadPresentationState(paneId, owner);
 }
 
 export function renderChatResizableDivider(props: {
@@ -335,6 +340,7 @@ export function renderChat(props: ChatProps) {
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,
+      persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
       waitingApproval: props.waitingApproval,
@@ -347,9 +353,9 @@ export function renderChat(props: ChatProps) {
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,
+      userId: props.userId,
       userName: props.userName,
       userAvatar: props.userAvatar,
-      attributedIdentity: props.attributedIdentity,
       basePath: props.basePath,
       fullMessageAgentId: props.fullMessageAgentId,
       localMediaPreviewRoots: props.localMediaPreviewRoots,
@@ -534,13 +540,14 @@ export function renderChat(props: ChatProps) {
     >
       ${props.error
         ? html`
-            <div class="callout danger callout--dismissible" role="alert">
-              <span class="callout__content">${props.error}</span>
+            <div class="chat-error" role="alert">
+              <span class="chat-error__dot" aria-hidden="true"></span>
+              <span class="chat-error__content">${props.error}</span>
               ${props.onDismissError
                 ? html`
                     <openclaw-tooltip .content=${t("chat.actions.dismissError")}>
                       <button
-                        class="callout__dismiss"
+                        class="chat-error__dismiss"
                         type="button"
                         @click=${props.onDismissError}
                         aria-label=${t("chat.actions.dismissError")}
@@ -553,6 +560,10 @@ export function renderChat(props: ChatProps) {
             </div>
           `
         : nothing}
+      ${renderWorkspaceConflictNotice({
+        conflict: props.workspaceConflict,
+        onDismiss: props.onDismissWorkspaceConflict,
+      })}
       ${props.focusMode && props.onToggleFocusMode
         ? html`
             <openclaw-tooltip .content=${t("chat.actions.exitFocusMode")}>

@@ -92,6 +92,13 @@
   background: var(--accent-2-subtle);
 }
 
+.profile-identity-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+}
+
 /* Stat strip (escape hatch inside one settings group) */
 
 .profile-stats {

@@ -195,12 +195,14 @@ export type OpenClawConfig = {
       chatShowThinking?: boolean;
       /** Show tool call cards in chat. */
       chatShowToolCalls?: boolean;
-      /** Keep model commentary visible in the transcript after a run. */
+      /** Keep model commentary in Control UI transcripts after a run. */
       chatPersistCommentary?: boolean;
       /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
       chatSendShortcut?: "enter" | "modifier-enter";
       /** Follow-up handling while a run is active; unset uses the server queue mode. */
       chatFollowUpMode?: "steer" | "queue";
+      /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
+      sidebarEntries?: string[];
       /** Show live agent activity beneath running Control UI sidebar sessions. */
       sidebarLiveActivity?: boolean;
     };

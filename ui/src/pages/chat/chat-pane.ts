@@ -33,7 +33,11 @@ import {
   type ApplicationContext,
   type ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
-import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
+import {
+  hasOperatorAdminAccess,
+  hasOperatorApprovalsAccess,
+  hasOperatorWriteAccess,
+} from "../../app/operator-access.ts";
 import {
   cancelQuestionPrompt,
   createQuestionPromptState,
@@ -61,9 +65,12 @@ import { isCloudWorkerPlacementState } from "../../components/session-row-badges
 import { t } from "../../i18n/index.ts";
 import { resolveBoardChatLayoutWidth } from "../../lib/board/chat-layout.ts";
 import {
+  acquireBoardProviderForSession,
+  boardProviderCacheKey,
   boardProviderForSession,
   type BoardCommandEvent,
   type BoardProvider,
+  type BoardProviderLease,
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
 import {
@@ -84,6 +91,7 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   announceCatalogSessionContinued,
@@ -112,10 +120,12 @@ import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
   ensureBoardViewElement,
+  ensureWorkboardCardChipElement,
   renderBoardDockMenu,
   renderBoardFaceToggle,
   renderBoardSessionSurface,
   type BoardChatDockSize,
+  type WorkboardCardChipProps,
 } from "./board-session-surface.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
@@ -203,7 +213,10 @@ import {
   type SidebarContent,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import {
+  ChatTranscriptController,
+  resetChatThreadPresentationState,
+} from "./components/chat-thread.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
@@ -213,6 +226,7 @@ import {
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
+import { admitInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   hasAbortableSessionRun,
   reconcileStaleChatRunAfterSessionStatePublication,
@@ -225,6 +239,7 @@ import {
 } from "./session-message-cache.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream.ts";
 import { configureToolTitleFetcher } from "./tool-titles.ts";
+import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
 
 type ChatPageContext = ApplicationContext;
 type PaneSessionChangeOptions = { replace?: boolean };
@@ -312,7 +327,7 @@ type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -393,6 +408,8 @@ class ChatPane extends OpenClawLightDomElement {
   @litState() private paneWidth = Number.POSITIVE_INFINITY;
   private paneResizeObserver: ResizeObserver | null = null;
   private connectedClient: GatewayBrowserClient | null = null;
+  private boardProviderLease: (BoardProviderLease & { sessionKey: string }) | undefined;
+  private boardProviderLifecycleConnected = false;
   private connectionGeneration = 0;
   @litState() private headerEditing = false;
   @litState() private headerRenameValue = "";
@@ -437,6 +454,10 @@ class ChatPane extends OpenClawLightDomElement {
           }),
       )
       .watch(
+        () => this.context?.runtimeConfig,
+        (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
+      )
+      .watch(
         () => this.resolveBoardProvider(),
         (provider, notify) =>
           provider.snapshot$.subscribe(() => {
@@ -470,6 +491,7 @@ class ChatPane extends OpenClawLightDomElement {
   private sessionPullRequestsRequestVersion = 0;
   private sessionPullRequestsExpanded = false;
   private dismissedSessionPullRequestIds: ReadonlySet<string> = new Set();
+  private readonly dismissedWorkspaceConflictRefs = new Map<string, string>();
   @litState() private catalogMessages: unknown[] = [];
   @litState() private catalogLoading = false;
   @litState() private loadingOlder = false;
@@ -591,7 +613,7 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
-  private async refreshSessionPullRequests(): Promise<void> {
+  private async refreshSessionPullRequests(options: { refresh?: boolean } = {}): Promise<void> {
     const requestVersion = ++this.sessionPullRequestsRequestVersion;
     const scope = this.captureConnectionScope();
     if (
@@ -612,10 +634,15 @@ class ChatPane extends OpenClawLightDomElement {
       this.requestUpdate();
       return;
     }
+    const openPullRequestEpoch = scope.context.sessions.captureOpenPullRequestEpoch(sessionKey);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequests>(
         "controlUi.sessionPullRequests",
-        { sessionKey, ...scopedAgentParamsForSession(scope.state, sessionKey) },
+        {
+          sessionKey,
+          ...scopedAgentParamsForSession(scope.state, sessionKey),
+          ...(options.refresh ? { refresh: true } : {}),
+        },
       );
       if (
         requestVersion !== this.sessionPullRequestsRequestVersion ||
@@ -625,6 +652,13 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       this.sessionPullRequests = result.pullRequests;
+      if (!result.rateLimited || result.pullRequests.length > 0) {
+        scope.context.sessions.setOpenPullRequest(
+          sessionKey,
+          result.pullRequests.some((item) => item.state === "open" || item.state === "draft"),
+          openPullRequestEpoch,
+        );
+      }
       this.sessionPullRequestsBranch = result.branch;
       this.sessionPullRequestsRateLimited = result.rateLimited;
       this.dismissedSessionPullRequestIds = listDismissedChatPullRequests(sessionKey);
@@ -850,6 +884,9 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
+    // Close old-session portals and listener-owning popovers before the next
+    // render detaches their DOM and makes owner-scoped cleanup impossible.
+    resetChatThreadPresentationState(this.paneId, this);
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
@@ -1518,18 +1555,90 @@ class ChatPane extends OpenClawLightDomElement {
       this.context?.gateway.snapshot.hello,
     );
     if (this.boardProvider) {
+      this.releaseBoardProviderLease();
       return this.boardProvider;
     }
     const gateway = this.context?.gateway.snapshot;
+    const available = !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false;
+    const canMutate = !gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null);
+    const canGrant = !gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null);
+    const canPinWidgets =
+      canMutate &&
+      (!gateway ||
+        isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
+          true);
+    const canPinMcpApps =
+      canMutate &&
+      (!gateway ||
+        (isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
+          isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
+    const client = gateway?.client;
+    if (this.boardProviderLifecycleConnected && client && available) {
+      const key = boardProviderCacheKey(sessionKey);
+      if (this.boardProviderLease?.sessionKey !== key) {
+        this.releaseBoardProviderLease();
+        this.boardProviderLease = {
+          ...acquireBoardProviderForSession(
+            key,
+            client,
+            gateway.connected,
+            canPinWidgets,
+            canPinMcpApps,
+            canMutate,
+            canGrant,
+          ),
+          sessionKey: key,
+        };
+      } else {
+        boardProviderForSession(
+          key,
+          client,
+          true,
+          gateway.connected,
+          canPinWidgets,
+          canPinMcpApps,
+          canMutate,
+          canGrant,
+        );
+      }
+      return this.boardProviderLease.provider;
+    }
+    this.releaseBoardProviderLease();
     return boardProviderForSession(
       sessionKey,
-      gateway?.client,
-      !gateway || isGatewayMethodAdvertised(gateway, "board.get") !== false,
+      client,
+      available,
       gateway?.connected ?? false,
-      !gateway ||
-        isGatewayCapabilityAdvertised(gateway, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
-          true,
+      canPinWidgets,
+      canPinMcpApps,
+      canMutate,
+      canGrant,
     );
+  }
+
+  private releaseBoardProviderLease(): void {
+    this.boardProviderLease?.release();
+    this.boardProviderLease = undefined;
+  }
+
+  private resolveWorkboardCardChip(board: ResolvedBoardView): WorkboardCardChipProps | null {
+    const gateway = this.context?.gateway.snapshot;
+    const enabled = isWorkboardEnabledInConfigSnapshot(
+      this.context?.runtimeConfig?.state.configSnapshot,
+    );
+    if (!board.hasBoard || board.face !== "dashboard" || !enabled || !gateway?.connected) {
+      return null;
+    }
+    const client = gateway.client;
+    const state = this.state;
+    if (!client || !state) {
+      return null;
+    }
+    return {
+      basePath: state.basePath,
+      client,
+      sessionKey: this.resolveBoardSessionKey(board.snapshot.sessionKey),
+    };
   }
 
   private resolveBoardSessionKey(snapshotSessionKey = ""): string {
@@ -1675,7 +1784,7 @@ class ChatPane extends OpenClawLightDomElement {
 
   private handleBoardDockChange(dock: BoardTab["chatDock"]): void {
     const board = this.resolveBoardView();
-    if (!board.activeTabId || board.activeTabReadOnly) {
+    if (!board.activeTabId || board.activeTabReadOnly || !board.provider.canMutate) {
       return;
     }
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
@@ -2083,7 +2192,9 @@ class ChatPane extends OpenClawLightDomElement {
   };
 
   override connectedCallback() {
+    this.boardProviderLifecycleConnected = true;
     super.connectedCallback();
+    this.requestUpdate();
     if (typeof ResizeObserver === "function") {
       this.paneResizeObserver = new ResizeObserver((entries) => {
         const width = entries.at(-1)?.contentRect.width;
@@ -2124,6 +2235,7 @@ class ChatPane extends OpenClawLightDomElement {
       await refreshPageChat(pageState);
       pageState.requestUpdate?.();
     };
+    pageState.refreshSessionPullRequests = (options) => this.refreshSessionPullRequests(options);
     this.state = pageState;
     if (this.sessionKey) {
       const initialSessionKey = this.setPaneSessionKey(this.sessionKey);
@@ -2136,6 +2248,7 @@ class ChatPane extends OpenClawLightDomElement {
           pageState.chatHistoryPagination = snapshot.pagination;
           pageState.currentSessionId = snapshot.sessionId;
         }
+        admitInitialUserMessageHandoff(pageState.initialUserMessage, pageState, initialSessionKey);
       }
     }
     chatState.attach(pageState);
@@ -2233,6 +2346,9 @@ class ChatPane extends OpenClawLightDomElement {
     this.cancelResetConfirmationForSessionChange();
     this.syncHistoryObserver();
     const board = this.resolveBoardView();
+    if (this.resolveWorkboardCardChip(board)) {
+      void ensureWorkboardCardChipElement().catch(() => undefined);
+    }
     if (
       board.hasBoard &&
       board.face === "dashboard" &&
@@ -2247,6 +2363,8 @@ class ChatPane extends OpenClawLightDomElement {
   }
 
   override disconnectedCallback() {
+    this.boardProviderLifecycleConnected = false;
+    this.releaseBoardProviderLease();
     this.settleResetConfirmation(false);
     this.paneResizeObserver?.disconnect();
     this.paneResizeObserver = null;
@@ -2266,7 +2384,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId);
+    resetChatViewState(this.paneId, this);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
@@ -2387,6 +2505,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.taskSuggestionBusyIds.clear();
       this.taskSuggestionOperations.clear();
       this.sessionDiscussionStates.clear();
+      this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
       state.chatLoading = false;
     }
@@ -2402,8 +2521,11 @@ class ChatPane extends OpenClawLightDomElement {
     }
     if (sourceChanged && snapshot.connected && state.sessionKey) {
       // Reconnects clear the probed states above; re-probe the active session
-      // so the Discussion action reappears without a manual session switch.
+      // so source-owned affordances reappear without a manual session switch.
       void this.probeSessionDiscussion(state.sessionKey);
+      if (!clientChanged) {
+        void this.refreshSessionPullRequests();
+      }
     }
     state.terminalAvailable =
       this.context.config.current.terminalEnabled &&
@@ -2754,6 +2876,7 @@ class ChatPane extends OpenClawLightDomElement {
         return;
       }
       this.sessionDiscussionStates.set(sessionKey, info.state);
+      this.maybeAutoShowSessionDiscussion(sessionKey, info.state);
       this.requestUpdate();
     } catch {
       // Leave unprobed: the action stays hidden and a later switch retries.
@@ -2771,19 +2894,38 @@ class ChatPane extends OpenClawLightDomElement {
     }
   }
 
-  private renderSessionDiscussionAction() {
+  // An "open" probe result means this session already has a bound discussion;
+  // surface it immediately instead of hiding live chat behind the toggle.
+  // Probe resolution is the only hook needed: willUpdate deletes the target
+  // key's cached state on every session switch (and reconnect clears all), so
+  // each activation resolves a fresh probe and reaches this. Within one
+  // activation the cache dedupes — closing the sidebar sticks, and an
+  // already-open sidebar is never stolen.
+  private maybeAutoShowSessionDiscussion(
+    sessionKey: string,
+    discussionState: SessionDiscussionState,
+  ) {
     const state = this.state;
-    const sessionKey = state?.sessionKey.trim() ?? "";
-    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
     if (
-      !state?.connected ||
-      !state.client ||
-      !sessionKey ||
-      known === undefined ||
-      known === "none" ||
-      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+      discussionState !== "open" ||
+      !state ||
+      state.sessionKey.trim() !== sessionKey ||
+      state.sidebarOpen
     ) {
-      return nothing;
+      return;
+    }
+    const content = this.buildSessionDiscussionContent(state, sessionKey);
+    if (content) {
+      state.handleOpenSidebar(content);
+    }
+  }
+
+  private buildSessionDiscussionContent(
+    state: NonNullable<typeof this.state>,
+    sessionKey: string,
+  ): SidebarContent | null {
+    if (!state.connected || !state.client) {
+      return null;
     }
     const canOpen =
       hasOperatorWriteAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
@@ -2828,6 +2970,27 @@ class ChatPane extends OpenClawLightDomElement {
         state.requestUpdate();
       },
     };
+    return content;
+  }
+
+  private renderSessionDiscussionAction() {
+    const state = this.state;
+    const sessionKey = state?.sessionKey.trim() ?? "";
+    const known = sessionKey ? this.sessionDiscussionStates.get(sessionKey) : undefined;
+    if (
+      !state?.connected ||
+      !state.client ||
+      !sessionKey ||
+      known === undefined ||
+      known === "none" ||
+      isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.discussion.info") !== true
+    ) {
+      return nothing;
+    }
+    const content = this.buildSessionDiscussionContent(state, sessionKey);
+    if (!content) {
+      return nothing;
+    }
     const active =
       state.sidebarOpen &&
       state.sidebarContent?.kind === "session-discussion" &&
@@ -2929,7 +3092,7 @@ class ChatPane extends OpenClawLightDomElement {
         this.persistBoardSessionView({ face });
       }),
       boardDockAction: renderBoardDockMenu(
-        board.hasBoard && !board.activeTabReadOnly,
+        board.hasBoard && !board.activeTabReadOnly && board.provider.canMutate,
         board.face,
         board.dock,
         (dock) => this.handleBoardDockChange(dock),
@@ -2966,6 +3129,13 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
+    const visibleWorkspaceConflict =
+      workspaceConflict &&
+      this.dismissedWorkspaceConflictRefs.get(selectedSession?.key ?? state.sessionKey) !==
+        workspaceConflict.stagedResultRef
+        ? workspaceConflict
+        : undefined;
     const board = this.resolveBoardView();
     const runtimeConfigState = this.context.runtimeConfig.state;
     const configSnapshot = runtimeConfigState.configSnapshot;
@@ -3056,6 +3226,7 @@ class ChatPane extends OpenClawLightDomElement {
       autoExpandToolCalls: state.chatVerboseLevel === "full",
       showThinking: state.settings.chatShowThinking,
       showToolCalls: state.settings.chatShowToolCalls,
+      persistCommentary: state.settings.chatPersistCommentary !== false,
       loading: catalogKey ? this.catalogLoading : state.chatLoading,
       sending: state.chatSending,
       canAbort: hasAbortableSessionRun(state),
@@ -3121,6 +3292,17 @@ class ChatPane extends OpenClawLightDomElement {
       onApprovalDecision: overlays
         ? (approvalId, decision) => overlays.decideApproval(decision, approvalId)
         : undefined,
+      workspaceConflict: visibleWorkspaceConflict,
+      onDismissWorkspaceConflict:
+        visibleWorkspaceConflict && selectedSession
+          ? () => {
+              this.dismissedWorkspaceConflictRefs.set(
+                selectedSession.key,
+                visibleWorkspaceConflict.stagedResultRef,
+              );
+              this.requestUpdate();
+            }
+          : undefined,
       sessions: state.sessionsResult,
       sessionHost: {
         assistantAgentId: state.assistantAgentId,
@@ -3334,9 +3516,9 @@ class ChatPane extends OpenClawLightDomElement {
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
-      userName: state.userName,
-      userAvatar: state.userAvatar,
-      attributedIdentity: Boolean(this.context.gateway.snapshot.selfUser),
+      userId: this.context.gateway.snapshot.selfUser?.id ?? null,
+      userName: this.context.gateway.snapshot.selfUser?.name ?? state.userName,
+      userAvatar: this.context.gateway.snapshot.selfUser?.avatarUrl ?? state.userAvatar,
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,
@@ -3346,6 +3528,7 @@ class ChatPane extends OpenClawLightDomElement {
       gatewayUrl: state.settings.gatewayUrl,
     };
     const chat = renderChat(props);
+    const workboardCardChip = this.resolveWorkboardCardChip(board);
     const content =
       board.hasBoard && board.face === "dashboard"
         ? renderBoardSessionSurface({
@@ -3359,6 +3542,8 @@ class ChatPane extends OpenClawLightDomElement {
             divider: this.renderBoardDivider(
               board.dock === "hidden" ? board.reopenDock : board.dock,
             ),
+            canMutate: board.provider.canMutate,
+            canGrant: board.provider.canGrant,
             callbacks: {
               applyOps: (ops) => board.provider.applyOps(ops),
               grant: (name, decision) => board.provider.grant(name, decision),
@@ -3372,6 +3557,7 @@ class ChatPane extends OpenClawLightDomElement {
                 board.provider.refreshWidgetAppView(name, revision),
             } satisfies BoardViewCallbacks,
             widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
+            workboardCardChip,
             onDockChange: (dock) => this.handleBoardDockChange(dock),
           })
         : chat;

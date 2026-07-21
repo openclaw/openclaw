@@ -824,7 +824,13 @@
 }
 
 .chat-tool-card__preview-panel {
-  padding: 12px;
+  padding: var(--widget-frame-inset);
+}
+
+/* Full-bleed and frameless pins render edge-to-edge here too, so the same
+   authored document meets identical geometry in chat and on the board. */
+.chat-tool-card__preview-panel[data-bleed] {
+  padding: 0;
 }
 
 .chat-tool-card__preview-frame {

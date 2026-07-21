@@ -66,6 +66,17 @@ export type ControlUiMockGatewayScenario = {
   methodResponses?: Record<string, unknown>;
   /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
   inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
+  /** Online users included in the connect snapshot's presence list. The entry
+   * flagged `self` adopts the connecting client's instanceId so presence
+   * surfaces (footer facepile, who's-online roster) resolve "you". */
+  presenceUsers?: Array<{
+    self?: boolean;
+    id: string;
+    name?: string;
+    email?: string;
+    avatarUrl?: string;
+    watchedSessions?: string[];
+  }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
     events: Array<{ event: "agent" | "session.tool"; payload: unknown }>;
@@ -85,6 +96,7 @@ export type ControlUiMockGatewayScenario = {
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
+  workspace?: string;
   workspaceGit?: boolean;
 };
 
@@ -268,6 +280,7 @@ function normalizeScenario(
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     inFlightRun: scenario.inFlightRun ?? null,
+    presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
     repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
@@ -275,6 +288,7 @@ function normalizeScenario(
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
+    workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
   };
 }
@@ -583,6 +597,33 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  /** Presence slice of the connect snapshot. The self-flagged entry adopts the
+   * connecting client's instanceId so presence surfaces resolve "you". */
+  function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
+    if (scenario.presenceUsers.length === 0) {
+      return {};
+    }
+    const client = isRecord(connectParams) ? connectParams.client : undefined;
+    const selfInstanceId =
+      isRecord(client) && typeof client.instanceId === "string"
+        ? client.instanceId
+        : "e2e-self-instance";
+    return {
+      presence: scenario.presenceUsers.map((user, index) => ({
+        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
+        mode: "webchat",
+        reason: "connect",
+        user: {
+          id: user.id,
+          name: user.name ?? null,
+          email: user.email ?? null,
+          avatarUrl: user.avatarUrl ?? null,
+        },
+        watchedSessions: user.watchedSessions ?? [],
+      })),
+    };
+  }
+
   function recordSessionPatch(params: unknown): void {
     if (!isRecord(params) || typeof params.key !== "string") {
       return;
@@ -809,6 +850,7 @@ function installControlUiMockGateway(input: {
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
+            ...presenceSnapshot(params),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
@@ -832,6 +874,7 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
               workspaceGit: scenario.workspaceGit,
             },
           ],
@@ -883,6 +926,7 @@ function installControlUiMockGateway(input: {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
                 name: scenario.assistantName,
+                ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
                 workspaceGit: scenario.workspaceGit,
               },
             ],

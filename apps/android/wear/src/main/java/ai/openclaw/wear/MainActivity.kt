@@ -6,6 +6,7 @@ import android.app.Activity
 import android.app.RemoteInput
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -40,25 +41,38 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
+  private var screenshotScene: WearScreenshotScene? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+      screenshotScene = parseWearScreenshotModeIntent(intent)
+    }
     setContent {
-      OpenClawWearApp(
-        viewModel = viewModel,
-        settingsStore = remember { WearSettingsStore(applicationContext) },
-        speaker = remember { WearReplySpeaker(applicationContext) },
-      )
+      val scene = screenshotScene
+      if (scene == null) {
+        OpenClawWearApp(
+          viewModel = viewModel,
+          settingsStore = remember { WearSettingsStore(applicationContext) },
+          speaker = remember { WearReplySpeaker(applicationContext) },
+        )
+      } else {
+        OpenClawWearScreenshotApp(scene)
+      }
     }
   }
 
   override fun onStart() {
     super.onStart()
-    (application as WearApplication).onActivityStarted()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStarted()
+    }
   }
 
   override fun onStop() {
-    (application as WearApplication).onActivityStopped()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStopped()
+    }
     super.onStop()
   }
 }
@@ -292,6 +306,7 @@ internal fun OpenClawWearApp(
         speaking = speaking,
         realtimeCapturing = state.realtimeCapturing,
         realtimePlaying = state.realtimePlaying,
+        realtimeMouthLevel = state.realtimeMouthLevel,
         realtimePlaybackFailed = state.realtimePlaybackFailed,
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =

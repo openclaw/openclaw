@@ -68,8 +68,10 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
+  workspaceConflictCount?: number;
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
+  hasOpenPullRequest: boolean;
   unread: boolean;
   attention: SidebarSessionAttention;
   agentStatusNote?: string;

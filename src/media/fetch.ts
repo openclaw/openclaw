@@ -129,6 +129,14 @@ function stripQuotes(value: string): string {
   return value.replace(/^["']|["']$/g, "");
 }
 
+function decodeRemoteFileNameComponent(value: string): string {
+  try {
+    return decodeURIComponent(value).replace(/[\\/]/g, "_");
+  } catch {
+    return value;
+  }
+}
+
 function parseContentDispositionFileName(header?: string | null): string | undefined {
   if (!header) {
     return undefined;
@@ -137,11 +145,7 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   if (starMatch?.[1]) {
     const cleaned = stripQuotes(starMatch[1].trim());
     const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return basenameFromAnyPath(decodeURIComponent(encoded));
-    } catch {
-      return basenameFromAnyPath(encoded);
-    }
+    return basenameFromAnyPath(decodeRemoteFileNameComponent(encoded));
   }
   const match = /filename\s*=\s*([^;]+)/i.exec(header);
   if (match?.[1]) {
@@ -155,11 +159,7 @@ function basenameFromUrlPathname(pathname: string): string {
   if (!base) {
     return "";
   }
-  try {
-    return decodeURIComponent(base).replace(/[\\/]/g, "_");
-  } catch {
-    return base;
-  }
+  return decodeRemoteFileNameComponent(base);
 }
 
 async function readErrorBodySnippet(

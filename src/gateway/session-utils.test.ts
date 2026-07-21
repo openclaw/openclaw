@@ -2093,6 +2093,31 @@ describe("gateway session utils", () => {
     });
   });
 
+  test("listAgentsForGateway preserves canonical roster kinds", async () => {
+    await withStateDirEnv("openclaw-agent-list-kinds-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
+      fs.mkdirSync(path.join(stateDir, "agents", "research"), { recursive: true });
+
+      const result = listAgentsForGateway({}, undefined, { includeSystem: true });
+
+      expect(result.agents.map(({ id, kind }) => ({ id, kind }))).toEqual([
+        { id: "main", kind: "agent" },
+        { id: "openclaw", kind: "system" },
+        { id: "research", kind: "agent" },
+      ]);
+    });
+  });
+
+  test("listAgentsForGateway keeps system agents out of the legacy response", async () => {
+    await withStateDirEnv("openclaw-agent-list-legacy-", async ({ stateDir }) => {
+      fs.mkdirSync(path.join(stateDir, "agents", "openclaw"), { recursive: true });
+
+      const agents = listAgentsForGateway({}).agents;
+      expect(agents.map((agent) => agent.id)).toEqual(["main"]);
+      expect(agents[0]).not.toHaveProperty("kind");
+    });
+  });
+
   test("listAgentsForGateway includes effective workspace + model for default agent", () => {
     const cfg = {
       session: { mainKey: "main" },

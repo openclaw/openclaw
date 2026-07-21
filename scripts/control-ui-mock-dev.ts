@@ -1045,13 +1045,18 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       pinned: true,
       icon: "name:spark",
     }),
-    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000),
+    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000, {
+      execCwd: "/Users/peter/Projects/clawdbot",
+    }),
     sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      execCwd: "/Users/peter/Projects/openclaw",
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
+      execCwd: "/Users/peter/Projects",
+      execNode: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
       pinned: true,
       icon: "🛠️",
     }),
@@ -1128,8 +1133,91 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "sessions.files.set",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
+    // Lights up the footer facepile and who's-online roster; the email-only
+    // entry keeps the roster's no-display-name row exercised.
+    presenceUsers: [
+      { self: true, id: "presence-riley", name: "Riley", email: "riley@example.com" },
+      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
+      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+    ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      "fs.listDir": {
+        cases: [
+          {
+            match: { path: "/Users/peter/Projects/openclaw" },
+            response: {
+              path: "/Users/peter/Projects/openclaw",
+              parent: "/Users/peter/Projects",
+              home: "/Users/peter",
+              entries: [
+                { name: "ui", path: "/Users/peter/Projects/openclaw/ui" },
+                { name: "src", path: "/Users/peter/Projects/openclaw/src" },
+                { name: "docs", path: "/Users/peter/Projects/openclaw/docs" },
+                { name: "packages", path: "/Users/peter/Projects/openclaw/packages" },
+              ],
+            },
+          },
+          {
+            match: { path: "/Users/peter/Projects" },
+            response: {
+              path: "/Users/peter/Projects",
+              parent: "/Users/peter",
+              home: "/Users/peter",
+              entries: [
+                { name: "openclaw", path: "/Users/peter/Projects/openclaw" },
+                { name: "clawdbot", path: "/Users/peter/Projects/clawdbot" },
+                { name: "sweetistics", path: "/Users/peter/Projects/sweetistics" },
+                { name: "Peekaboo", path: "/Users/peter/Projects/Peekaboo" },
+              ],
+            },
+          },
+          {
+            match: {},
+            response: {
+              path: "/Users/peter",
+              parent: "/Users",
+              home: "/Users/peter",
+              entries: [
+                { name: "Projects", path: "/Users/peter/Projects" },
+                { name: "Downloads", path: "/Users/peter/Downloads" },
+                { name: ".config", path: "/Users/peter/.config", hidden: true },
+              ],
+            },
+          },
+        ],
+      },
+      "worktrees.branches": {
+        cases: [
+          {
+            match: { repoRoot: "/Users/peter/Projects/openclaw" },
+            response: {
+              repoRoot: "/Users/peter/Projects/openclaw",
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "steipete/place-picker" },
+              ],
+              defaultBranch: "main",
+              headBranch: "main",
+            },
+          },
+          {
+            match: { repoRoot: "/Users/peter/Projects/clawdbot" },
+            response: {
+              repoRoot: "/Users/peter/Projects/clawdbot",
+              branches: [
+                { kind: "local", name: "main" },
+                { kind: "local", name: "steipete/storage-selector-design" },
+              ],
+              defaultBranch: "main",
+              headBranch: "main",
+            },
+          },
+        ],
+      },
+      "environments.list": {
+        profiles: [{ id: "aws", providerId: "aws" }],
+      },
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
@@ -1544,6 +1632,8 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     },
     sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
+    workspace: "/Users/peter/Projects/openclaw",
+    workspaceGit: true,
   };
 }
 

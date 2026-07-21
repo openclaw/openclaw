@@ -361,6 +361,9 @@ const config = {
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],
+    // Greeting cache/fact contracts (hash, alert text, store shapes) are
+    // asserted by the focused greeting unit tests, not by another prod module.
+    "src/system-agent/greeting.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {
@@ -369,6 +372,7 @@ const config = {
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
+        "openai",
         "cross-spawn",
         "file-type",
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its

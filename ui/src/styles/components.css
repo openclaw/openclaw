@@ -1400,7 +1400,8 @@
   position: relative;
 }
 
-.callout--dismissible {
+.callout--dismissible,
+.callout--action {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -2670,6 +2671,24 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+/* Reconnect rows mirror the connection pill's amber status dot so the queue
+   reads as quiet auto-retry status, not a failure needing action. */
+.chat-queue__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin: 0 3.5px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+.chat-queue__item--reconnect .chat-queue__badge {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+}
+
 .chat-queue__badge {
   flex-shrink: 0;
   padding: 1px 7px;
@@ -3600,11 +3619,6 @@ td.data-table-key-col {
 
 .field textarea.agent-file-textarea {
   min-height: clamp(320px, 56vh, 720px);
-  transition: filter var(--duration-fast) ease;
-}
-
-.field textarea.agent-file-textarea:not(:focus) {
-  filter: blur(6px);
 }
 
 .agent-file-header {
@@ -5184,7 +5198,7 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* Attribute badges (worktree fork, attached automation, cloud placement):
+/* Attribute badges (attached automation, approval, cloud placement):
    muted metadata that sits after the title inside the row link, outside the
    trail/action overlap cell, so touch devices (which hide the trail) and
    hovered rows keep them. */
@@ -5201,6 +5215,7 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
+.session-row-badge--pull-request,
 .session-row-badge--cloud[data-placement-state="active"] {
   color: var(--ok);
 }
@@ -5232,6 +5247,10 @@ td.data-table-key-col {
   [data-placement-state="reconciling"]
 ) {
   color: var(--accent);
+}
+
+.session-row-badge--cloud[data-workspace-conflicts] {
+  color: var(--warn);
 }
 
 .session-row-badge svg {
