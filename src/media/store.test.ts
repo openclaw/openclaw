@@ -1041,36 +1041,9 @@ describe("media store", () => {
         expectUuidOnly: true,
       },
       {
-        name: "strips CR / LF control characters from original filename",
-        originalFilename: "evil\r\nname.txt",
-        expectedIdPattern: /^evilname---[a-f0-9-]{36}\.txt$/,
-      },
-      {
-        name: "strips C0 control characters (tab, FF, ESC, NUL) from original filename",
-        originalFilename: "weird\t\f\x1b\x00name.txt",
-        expectedIdPattern: /^weirdname---[a-f0-9-]{36}\.txt$/,
-      },
-      {
-        name: "strips DEL (0x7f) from original filename",
-        originalFilename: "deletes\x7fme.txt",
-        expectedIdPattern: /^deletesme---[a-f0-9-]{36}\.txt$/,
-      },
-      {
-        name: "neutralizes Unicode bidi override (RLO) into underscore",
-        // U+202E (RIGHT-TO-LEFT OVERRIDE) is used in extension-spoofing attacks
-        // such as `report<RLO>fdp.exe` — visually rendered as `reportexe.pdf`.
-        // The bidi char is not in [\p{L}\p{N}._-] so the sanitizer must replace
-        // it with an underscore separator rather than letting it through.
-        // The stored extension is driven by the buffer/header MIME (here .txt),
-        // not by the spoofed filename suffix, so the on-disk name cannot carry
-        // a deceptive extension.
-        originalFilename: "report\u202efdp.exe",
-        expectedIdPattern: /^report_fdp---[a-f0-9-]{36}\.txt$/,
-      },
-      {
-        name: "neutralizes zero-width space and byte-order mark",
-        originalFilename: "ze\u200bro\ufeffwidth.txt",
-        expectedIdPattern: /^ze_ro_width---[a-f0-9-]{36}\.txt$/,
+        name: "strips controls and neutralizes bidi/zero-width formatting",
+        originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
+        expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
       },
     ] as const)("$name", async (testCase) => {
       await expectSavedOriginalFilenameCase(testCase);
