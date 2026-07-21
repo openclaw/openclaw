@@ -71,6 +71,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
+  "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
@@ -86,7 +87,12 @@ const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.rou
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
 // authoritative registry key, including malformed/sessionless agent events.
-const SESSION_SUBSCRIPTION_EVENTS = new Set(["agent", "chat", "chat.side_result"]);
+const SESSION_SUBSCRIPTION_EVENTS = new Set([
+  "agent",
+  "chat",
+  "chat.side_result",
+  "session.observer",
+]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
   // Serialize one field through JSON.stringify so embedded values keep JSON

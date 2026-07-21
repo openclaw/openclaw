@@ -80,6 +80,16 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum SessionObserverHealth: String, Codable, Sendable {
+    case onTrack = "on-track"
+    case grinding = "grinding"
+    case stuck = "stuck"
+    case waitingOnUser = "waiting-on-user"
+    case wrappingUp = "wrapping-up"
+    case done = "done"
+    case failed = "failed"
+}
+
 public enum SessionPlacementState: String, Codable, Sendable {
     case local = "local"
     case requested = "requested"
@@ -4688,6 +4698,66 @@ public struct SessionOperationEvent: Codable, Sendable {
         case ts
         case completed
         case reason
+    }
+}
+
+public struct SessionObserverPlanProgress: Codable, Sendable {
+    public let completed: Int
+    public let total: Int
+
+    public init(
+        completed: Int,
+        total: Int)
+    {
+        self.completed = completed
+        self.total = total
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case completed
+        case total
+    }
+}
+
+public struct SessionObserverDigest: Codable, Sendable {
+    public let sessionkey: String
+    public let runid: String?
+    public let revision: Int
+    public let updatedat: Int
+    public let headline: String
+    public let assessment: String?
+    public let health: SessionObserverHealth
+    public let planprogress: SessionObserverPlanProgress?
+
+    public init(
+        sessionkey: String,
+        runid: String? = nil,
+        revision: Int,
+        updatedat: Int,
+        headline: String,
+        assessment: String? = nil,
+        health: SessionObserverHealth,
+        planprogress: SessionObserverPlanProgress? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.revision = revision
+        self.updatedat = updatedat
+        self.headline = headline
+        self.assessment = assessment
+        self.health = health
+        self.planprogress = planprogress
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case revision
+        case updatedat = "updatedAt"
+        case headline
+        case assessment
+        case health
+        case planprogress = "planProgress"
     }
 }
 

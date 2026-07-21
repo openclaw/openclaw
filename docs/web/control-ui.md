@@ -14,6 +14,8 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+While you watch a running session, the Gateway can use that agent's utility model to produce a compact status digest for session status surfaces. The latest digest stays with the session after the run becomes idle. Session observation is enabled by default; set `gateway.controlUi.sessionObserver: false` to disable it gateway-wide, or set `agents.defaults.utilityModel: ""` to disable utility-model tasks for agents that do not override that setting.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
