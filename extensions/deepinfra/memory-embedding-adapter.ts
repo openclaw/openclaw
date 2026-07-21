@@ -1,5 +1,6 @@
 // Deepinfra plugin module implements memory embedding adapter behavior.
 import {
+  buildEmbeddingEndpointCacheIdentity,
   isMissingEmbeddingApiKeyError,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -7,6 +8,7 @@ import {
   createDeepInfraEmbeddingProvider,
   DEFAULT_DEEPINFRA_EMBEDDING_MODEL,
 } from "./embedding-provider.js";
+import { DEEPINFRA_BASE_URL } from "./media-models.js";
 import type { DeepInfraSurfaceModel } from "./provider-models.js";
 
 // First entry of embedModels becomes the default embedding model.
@@ -35,6 +37,11 @@ export function buildDeepInfraMemoryEmbeddingAdapter(options?: {
           id: "deepinfra",
           cacheKeyData: {
             provider: "deepinfra",
+            ...buildEmbeddingEndpointCacheIdentity({
+              baseUrl: client.baseUrl,
+              defaultBaseUrl: DEEPINFRA_BASE_URL,
+              headers: client.headers,
+            }),
             model: client.model,
           },
         },
