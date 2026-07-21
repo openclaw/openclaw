@@ -108,6 +108,92 @@ describe("parseTelegramTarget", () => {
       chatType: "group",
     });
   });
+
+  it("rejects multi-colon targets via colon guard", () => {
+    // "chatId:topic:42:99" — topic regex ^(.+?):topic:(\d+)$ doesn't match
+    // (doesn't end with :topic: preceded by a non-greedy chatId segment).
+    // Colon regex greedily splits as chatId="chatId:topic:42", threadId=99.
+    // The guard sees an unexpected colon → full-string fallback.
+    expect(parseTelegramTarget("chatId:topic:42:99")).toEqual({
+      chatId: "chatId:topic:42:99",
+      chatType: "unknown",
+    });
+  });
+
+  it("rejects multi-colon targets with :topic: embedded in chatId segment", () => {
+    // "a:b:topic:42" — non-greedy (.+?) matches "a:b", topicMatch succeeds,
+    // but the guard rejects chatId "a:b" (has unexpected colon, not t.me).
+    expect(parseTelegramTarget("a:b:topic:42")).toEqual({
+      chatId: "a:b:topic:42",
+      chatType: "unknown",
+    });
+  });
+
+  it("rejects deeply nested multi-colon targets via colon guard", () => {
+    // "a:b:c:d:e:42" — the colon-regex left side "a:b:c:d:e" contains ":"
+    // and is not a valid t.me URL, so the guard falls back to full-string.
+    expect(parseTelegramTarget("a:b:c:d:e:42")).toEqual({
+      chatId: "a:b:c:d:e:42",
+      chatType: "unknown",
+    });
+  });
+
+  it("preserves t.me URL-form targets with all thread suffix forms", () => {
+    // URL-form targets like "https://t.me/mychannel:9" and "t.me/...:topic:9"
+    // must keep working; the colon is part of the URL scheme, not a sign of
+    // a malformed multi-colon input.
+    expect(parseTelegramTarget("t.me/mychannel:99")).toEqual({
+      chatId: "t.me/mychannel",
+      messageThreadId: 99,
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("https://t.me/mychannel:77")).toEqual({
+      chatId: "https://t.me/mychannel",
+      messageThreadId: 77,
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("t.me/mychannel:topic:88")).toEqual({
+      chatId: "t.me/mychannel",
+      messageThreadId: 88,
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("https://t.me/mychannel:topic:55")).toEqual({
+      chatId: "https://t.me/mychannel",
+      messageThreadId: 55,
+      chatType: "unknown",
+    });
+  });
+
+  it("rejects malformed t.me-looking URLs with unexpected colons", () => {
+    // "https://t.me/foo:bar:9" — greedy colon regex extracts
+    // chatId="https://t.me/foo:bar", which is not a valid t.me lookup
+    // target (handle "foo:bar" contains an extra colon). The tightened
+    // guard must reject this.
+    expect(parseTelegramTarget("https://t.me/foo:bar:9")).toEqual({
+      chatId: "https://t.me/foo:bar:9",
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("t.me/foo:bar:9")).toEqual({
+      chatId: "t.me/foo:bar:9",
+      chatType: "unknown",
+    });
+  });
+
+  it("regression: chatId:topic:N still works", () => {
+    expect(parseTelegramTarget("-1001234567890:topic:456")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 456,
+      chatType: "group",
+    });
+  });
+
+  it("regression: chatId:N (colon format) still works", () => {
+    expect(parseTelegramTarget("-1001234567890:99")).toEqual({
+      chatId: "-1001234567890",
+      messageThreadId: 99,
+      chatType: "group",
+    });
+  });
 });
 
 describe("telegram numeric target normalization", () => {
