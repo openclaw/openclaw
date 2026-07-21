@@ -55,6 +55,7 @@ const detail = {
   stateChangedAt: 1,
   recoveryAttempt: 1,
   maxRecoveryAttempts: 2,
+  launch: { phase: "claimed", attempt: 1, claimedAt: 1 },
   history: [],
 } satisfies TaskReviewDetail;
 
@@ -75,6 +76,14 @@ describe("task reviewer runtime", () => {
         childSessionKey: "agent:reviewer:subagent:child",
       },
     );
+    await expect(taskReviewerRuntime.launch({ task, detail, recoveryAttempt: 1 })).resolves.toEqual(
+      {
+        ok: true,
+        reviewerRunId: "reviewer-run",
+        childSessionKey: "agent:reviewer:subagent:child",
+      },
+    );
+    expect(mocks.spawnSubagentDirect).toHaveBeenCalledTimes(2);
     expect(mocks.spawnSubagentDirect).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "reviewer",

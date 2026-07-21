@@ -76,7 +76,6 @@ import {
   listStaleTaskReviewIds,
   parseTaskReviewDetail,
   reconcileTaskReviewRuntime,
-  reconcileStaleTaskReviews,
   type TaskReviewerRuntime,
 } from "./task-review-lifecycle.js";
 import { taskReviewerRuntime } from "./task-reviewer-runtime.js";
@@ -1033,7 +1032,11 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
   let cleanupStamped = 0;
   let pruned = 0;
   const tasks = taskRegistryMaintenanceRuntime.listTaskRecords();
-  const reviewReconciliation = reconcileStaleTaskReviews({ tasks, now });
+  const staleReviewTaskIds = listStaleTaskReviewIds({ tasks, now });
+  const reviewReconciliation = {
+    escalated: staleReviewTaskIds.length,
+    taskIds: staleReviewTaskIds,
+  };
   const reconciledReviewTaskIds = new Set(reviewReconciliation.taskIds);
   reconciled += reviewReconciliation.escalated;
   for (const snapshot of tasks) {
