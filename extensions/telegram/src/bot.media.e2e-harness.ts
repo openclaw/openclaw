@@ -43,6 +43,7 @@ async function defaultReadRemoteMediaBuffer(
   }
   const response = await params.fetchImpl(params.url, { redirect: "manual" });
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(
       `Failed to fetch media from ${params.url}: HTTP ${response.status} ${response.statusText}`,
     );
