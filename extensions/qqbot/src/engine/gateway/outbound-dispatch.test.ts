@@ -776,6 +776,99 @@ describe("dispatchOutbound", () => {
     }
   });
 
+  it("logs tool media send failures after a block response instead of swallowing them", async () => {
+    const logError = vi.fn();
+    // outbound.sendMedia catches sender throws into result.error; the old empty
+    // catch around this path swallowed both throws and result.error silently.
+    sendMediaMock.mockRejectedValueOnce(new Error("upload exploded"));
+    const runtime = makeRuntime({
+      onDispatch: async ({ deliver }) => {
+        await deliver({ text: "final answer" }, { kind: "block" });
+        await deliver({ mediaUrl: "https://example.com/tool-image.png" }, { kind: "tool" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, config: { streaming: { mode: "off" } } },
+      log: { error: logError, info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(sendMediaMock).toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("Tool media send error after block response: upload exploded"),
+    );
+  });
+
+  it("keeps agent-scoped media roots on post-block tool media while logging send errors", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-post-block-root-"));
+    try {
+      const filePath = path.join(tmpRoot, "tool-report.docx");
+      await fs.writeFile(filePath, Buffer.from("report"));
+      const realFilePath = await fs.realpath(filePath);
+      const logError = vi.fn();
+      sendMediaMock.mockRejectedValueOnce(new Error("upload exploded"));
+      const runtime = makeRuntime({
+        onDispatch: async ({ deliver }) => {
+          await deliver({ text: "final answer" }, { kind: "block" });
+          await deliver({ mediaUrl: filePath }, { kind: "tool" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: {
+            sessionKey: "qqbot:c2c:user-openid",
+            accountId: "qq-main",
+            agentId: "agent-1",
+          },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: tmpRoot }] } },
+          account: { ...account, config: { streaming: { mode: "off" } } },
+          log: { error: logError, info: vi.fn(), debug: vi.fn(), warn: vi.fn() },
+        },
+      );
+
+      // Real outbound.sendMedia consumes gatewayMediaContext (mediaLocalRoots /
+      // workspaceDir) before calling the sender; a resolved workspace-local
+      // path proves the shared helper still spreads that context.
+      const senderArgs = sendMediaMock.mock.calls[0]?.[0] as {
+        kind?: string;
+        source?: { localPath?: string };
+        target?: { id?: string; type?: string };
+      };
+      const realWorkspaceRoot = await fs.realpath(tmpRoot);
+      const logged = String(logError.mock.calls[0]?.[0] ?? "");
+      // eslint-disable-next-line no-console -- proof artifact for PR Evidence
+      console.log(
+        "qqbot post-block tool-media proof:",
+        JSON.stringify({
+          kind: senderArgs?.kind,
+          localPath: senderArgs?.source?.localPath,
+          underWorkspace: senderArgs?.source?.localPath?.startsWith(`${realWorkspaceRoot}/`),
+          target: senderArgs?.target,
+          logged,
+        }),
+      );
+      expect(sendMediaMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "file",
+          source: { localPath: realFilePath },
+          target: { id: "user-openid", type: "c2c" },
+        }),
+      );
+      expect(senderArgs?.source?.localPath?.startsWith(`${realWorkspaceRoot}/`)).toBe(true);
+      expect(logError).toHaveBeenCalledWith(
+        expect.stringContaining("Tool media send error after block response: upload exploded"),
+      );
+    } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
   it("threads agent scoped media roots through gateway QQBOT_PAYLOAD replies", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-payload-root-"));
     try {
