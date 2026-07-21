@@ -357,7 +357,7 @@ describe("createFeishuClient HTTP timeout", () => {
     await httpInstance.request({
       url: testCase.url,
       method: "POST",
-      headers: { "Content-Type": "multipart/form-data", Authorization: "Bearer token" },
+      headers: { "Content-Type": "multipart/form-data", Authorization: "Bearer test-token" },
       data: testCase.data,
     });
 
@@ -365,7 +365,7 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(delegated.timeout).toBe(FEISHU_HTTP_TIMEOUT_MS);
     expect(delegated.headers).toEqual({
       "Content-Type": "multipart/form-data",
-      Authorization: "Bearer token",
+      Authorization: "Bearer test-token",
     });
     const form = delegated.data as FormData;
     expect(form).toBeInstanceOf(FormData);
