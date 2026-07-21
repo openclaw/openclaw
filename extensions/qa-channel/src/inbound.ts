@@ -207,6 +207,8 @@ export async function handleQaInbound(params: {
   account: ResolvedQaChannelAccount;
   config: CoreConfig;
   message: QaBusMessage;
+  /** External abort signal forwarded into the dispatch replyOptions. */
+  abortSignal?: AbortSignal;
 }) {
   const runtime = getQaChannelRuntime();
   const inbound = params.message;
@@ -385,6 +387,7 @@ export async function handleQaInbound(params: {
       },
     },
     replyOptions: {
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
       allowToolLifecycleWhenProgressHidden: true,
       onPartialReply: async (payload) => {
         await preview.update(payload.text ?? "");
