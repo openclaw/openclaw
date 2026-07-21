@@ -119,8 +119,15 @@ beforeEach(() => {
   harnessRuntimeArtifactState.ownsAuthBootstrap = true;
 });
 
+function modelFactsDeps(model = { id: "gpt-5.5", provider: "openai", api: "openai-responses" }) {
+  return {
+    resolveModelAsync: vi.fn(async () => ({ model })) as never,
+  };
+}
+
 function authDeps(apiKey = "verified-key") {
   return {
+    ...modelFactsDeps(),
     ensureAuthProfileStore: vi.fn(() => ({
       version: 1,
       profiles: { "openai:verified": { ...profile, key: apiKey } },
@@ -331,6 +338,90 @@ describe("verified OpenClaw inference binding", () => {
         },
       }),
     ).rejects.toThrow("active secret unavailable");
+  });
+
+  it("re-resolves the current owner under the route model's transport constraints", async () => {
+    // An env-credential run reports no auth profile. Owner re-resolution must
+    // carry the route model's id/api so credential discovery applies the same
+    // transport gate the run did — without it, profile-first discovery can
+    // select a transport-incompatible credential (e.g. a Codex-imported
+    // ChatGPT OAuth profile for a direct OpenAI platform model).
+    const envConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6",
+          models: { "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(envConfig);
+    if (!route) {
+      throw new Error("missing test route");
+    }
+    const envAuth = {
+      apiKey: "env-key",
+      source: "env: OPENAI_API_KEY",
+      mode: "api-key" as const,
+    };
+    const authFingerprint = fingerprintResolvedProviderAuth(envAuth);
+    if (!authFingerprint) {
+      throw new Error("missing test env fingerprint");
+    }
+    const resolveAuth = vi.fn(async () => envAuth);
+    const binding = await createSystemAgentVerifiedInferenceBinding({
+      configuredRoute: route,
+      executionRoute: route,
+      auth: { authFingerprint, agentHarnessId: "openclaw" },
+      deps: {
+        ...pluginArtifactDeps(),
+        ...modelFactsDeps({ id: "gpt-5.6", provider: "openai", api: "openai-responses" }),
+        resolveApiKeyForProvider: resolveAuth as never,
+      },
+    });
+
+    expect(binding.auth.authFingerprint).toBe(authFingerprint);
+    expect(resolveAuth).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "gpt-5.6", modelApi: "openai-responses" }),
+    );
+  });
+
+  it("fails closed when the route model cannot be resolved for owner re-derivation", async () => {
+    const envConfig = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.6",
+          models: { "openai/gpt-5.6": { agentRuntime: { id: "openclaw" } } },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(envConfig);
+    if (!route) {
+      throw new Error("missing test route");
+    }
+    const envAuth = {
+      apiKey: "env-key",
+      source: "env: OPENAI_API_KEY",
+      mode: "api-key" as const,
+    };
+    const authFingerprint = fingerprintResolvedProviderAuth(envAuth);
+    if (!authFingerprint) {
+      throw new Error("missing test env fingerprint");
+    }
+    const resolveAuth = vi.fn(async () => envAuth);
+
+    await expect(
+      createSystemAgentVerifiedInferenceBinding({
+        configuredRoute: route,
+        executionRoute: route,
+        auth: { authFingerprint, agentHarnessId: "openclaw" },
+        deps: {
+          ...pluginArtifactDeps(),
+          resolveModelAsync: vi.fn(async () => ({ model: undefined })) as never,
+          resolveApiKeyForProvider: resolveAuth as never,
+        },
+      }),
+    ).rejects.toThrow("no longer the active route owner");
+    expect(resolveAuth).not.toHaveBeenCalled();
   });
 
   it("accepts and revalidates an opaque CLI owner emitted after a successful turn", async () => {
@@ -990,6 +1081,7 @@ describe("verified OpenClaw inference binding", () => {
     }));
     const deps = {
       ...pluginArtifactDeps(),
+      ...modelFactsDeps(),
       ensureAuthProfileStore: vi.fn(() => ({
         version: 1,
         profiles: { "openai:verified": profile },

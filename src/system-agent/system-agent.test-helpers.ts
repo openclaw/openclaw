@@ -58,6 +58,13 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
       profiles: profileId ? { [profileId]: credential } : {},
     })) as never,
     resolveApiKeyForProvider: async () => resolvedAuth,
+    resolveModelAsync: (async () => ({
+      model: {
+        id: configuredRoute.model,
+        provider: configuredRoute.provider,
+        api: "openai-responses",
+      },
+    })) as never,
     validateAgentHarnessRuntimeArtifact: async () => true,
     loadPluginRegistrySnapshot: (() => ({
       plugins: testOwnerPluginIds.map((pluginId) => ({
