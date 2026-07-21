@@ -13,7 +13,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 
 export const GatewayConfigSchema = z
   .strictObject({
-    port: z.number().int().positive().optional(),
+    port: z.number().int().min(1).max(65_535).optional(),
     mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
     bind: z
       .union([
@@ -31,6 +31,7 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         root: z.string().optional(),
         toolTitles: z.boolean().optional(),
+        sessionObserver: z.boolean().optional(),
         embedSandbox: z
           .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
           .optional(),

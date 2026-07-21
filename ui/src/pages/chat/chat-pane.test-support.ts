@@ -10,6 +10,7 @@ import type { ControlUiSessionPullRequest } from "../../../../src/gateway/contro
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import "./chat-pane.ts";
@@ -40,6 +41,7 @@ export type TestChatPane = HTMLElement & {
   taskSuggestions: TaskSuggestion[];
   onPaneSessionChange?: (paneId: string, sessionKey: string) => void;
   sessionKey: string;
+  switchPaneSession: (nextSessionKey: string) => void;
   paneTitle: string;
   catalogSession: SessionCatalogSession | null;
   catalogItemMessage: (item: SessionCatalogTranscriptItem) => Record<string, unknown> | null;
@@ -105,6 +107,7 @@ export function createSessionContext(
         terminalEnabled: false,
       },
     },
+    initialUserMessage: createInitialUserMessageHandoff(),
     sessions,
   } as unknown as ApplicationContext;
 }
