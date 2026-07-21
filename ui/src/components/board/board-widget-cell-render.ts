@@ -109,6 +109,26 @@ export function renderBoardWidgetRejected(options: {
   `;
 }
 
+export function renderBoardDisabledPlugin(options: {
+  pluginId: string;
+  disabled: boolean;
+  onRemove: () => void;
+}): TemplateResult {
+  return html`
+    <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
+      <strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>
+      <button
+        class="btn btn--small"
+        type="button"
+        ?disabled=${options.disabled}
+        @click=${options.onRemove}
+      >
+        ${t("board.widget.remove")}
+      </button>
+    </div>
+  `;
+}
+
 export function renderBoardWidgetError(error: unknown): TemplateResult {
   const message = error instanceof Error ? error.message : String(error);
   return html`
