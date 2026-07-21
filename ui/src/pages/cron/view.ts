@@ -35,7 +35,11 @@ import type {
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
+import {
+  formatCronRunningState,
+  formatCronSchedule,
+  isCronJobRunning,
+} from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
 import { renderSegmented } from "./segmented-control.ts";
 import { renderCronStats } from "./stats.ts";
@@ -661,6 +665,7 @@ function renderJobsTable(props: CronProps, hasAnyJobsFilters: boolean) {
 function renderJobRow(job: CronJob, props: CronProps) {
   const nextRunAtMs = job.state?.nextRunAtMs;
   const hasNextRun = typeof nextRunAtMs === "number" && Number.isFinite(nextRunAtMs);
+  const running = isCronJobRunning(job);
   const dotVariant = isCronJobActiveFailure(job)
     ? "cron-table__dot--error"
     : job.enabled
@@ -683,6 +688,12 @@ function renderJobRow(job: CronJob, props: CronProps) {
       <span class="cron-table__name">
         <span class="cron-table__dot ${dotVariant}" aria-hidden="true"></span>
         <span class="cron-table__name-text">${job.name}</span>
+        <span class="muted cron-table__paused-note">${t("cron.jobs.id")}: ${job.id}</span>
+        <span
+          class=${`cron-table__running-note ${running ? "cron-table__running-note--active" : ""}`}
+        >
+          ${formatCronRunningState(job)}
+        </span>
         ${job.enabled
           ? nothing
           : html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`}

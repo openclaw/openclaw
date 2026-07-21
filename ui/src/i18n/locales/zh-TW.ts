@@ -830,6 +830,7 @@ export const zh_TW: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -4068,6 +4069,7 @@ export const zh_TW: TranslationMap = {
       unknown: "無法啟動此自動化。",
     },
     jobs: {
+      id: "ID",
       schedule: "排程",
       lastRun: "上次執行",
       all: "全部",
@@ -4231,6 +4233,8 @@ export const zh_TW: TranslationMap = {
     },
     jobState: {
       next: "下一次",
+      running: "執行中",
+      notRunning: "未執行",
     },
     runEntry: {
       noSummary: "沒有摘要。",

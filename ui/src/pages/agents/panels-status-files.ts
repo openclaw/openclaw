@@ -29,6 +29,7 @@ import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../li
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   formatCronPayload,
+  formatCronRunningState,
   formatCronSchedule,
   formatCronState,
   formatNextRun,
@@ -345,6 +346,8 @@ export function renderAgentCron(params: {
         : jobs.map((job) => {
             const metaParts = [
               job.description,
+              `${t("agents.cronPanel.jobId")}: ${job.id}`,
+              formatCronRunningState(job),
               formatCronSchedule(job),
               job.sessionTarget,
               formatCronState(job),
