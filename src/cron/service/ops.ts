@@ -850,6 +850,7 @@ type ActivatedManualRun = Extract<PreparedManualRun, { ran: true }> & {
   startedAt: number;
   taskRunId?: string;
   activeJobMarker?: CronActiveJobMarker;
+  admittedJob: CronJob;
   executionJob: CronJob;
 };
 
@@ -1229,6 +1230,7 @@ async function activatePreparedManualRun(
     const activeJobMarker = markManualCronJobActive(state, job);
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
+    const admittedJob = structuredClone(job);
     const executionJob = structuredClone(job);
     if (mode === "force" && executionJob.trigger) {
       // Force means run the payload now; strip the gate only from this snapshot
@@ -1244,6 +1246,7 @@ async function activatePreparedManualRun(
       runId: prepared.runId ?? taskRunId,
       taskRunId,
       activeJobMarker,
+      admittedJob,
       executionJob,
     } as const;
   });
@@ -1405,6 +1408,11 @@ async function finishPreparedManualRun(
       if (!job) {
         return;
       }
+      const scheduleOwnership = cronSchedulingInputsEqual(prepared.admittedJob, job)
+        ? "current"
+        : "stale";
+      const scheduleMode =
+        mode === "force" || scheduleOwnership === "stale" ? "preserve" : "advance";
 
       let shouldDelete = false;
       if (coreResult.status === "ok" && coreResult.triggerEval?.fired === false) {
@@ -1418,7 +1426,7 @@ async function finishPreparedManualRun(
             endedAt,
             triggerEval: coreResult.triggerEval,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { scheduleMode },
         );
       } else {
         shouldDelete = applyJobResult(
@@ -1429,13 +1437,17 @@ async function finishPreparedManualRun(
             startedAt,
             endedAt,
           },
-          { scheduleMode: mode === "force" ? "preserve" : "advance" },
+          { scheduleMode, scheduleOwnership },
         );
-        applyTriggerRunResult(job, {
-          status: coreResult.status,
-          endedAt,
-          triggerEval: coreResult.triggerEval,
-        });
+        applyTriggerRunResult(
+          job,
+          {
+            status: coreResult.status,
+            endedAt,
+            triggerEval: coreResult.triggerEval,
+          },
+          { scheduleOwnership },
+        );
         applyScriptRunResult(job, coreResult);
 
         emitCronRunFinished(

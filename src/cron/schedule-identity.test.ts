@@ -88,4 +88,25 @@ describe("tryCronScheduleIdentity", () => {
       cronSchedulingInputsEqual({ schedule }, { schedule, trigger: { script: "return true" } }),
     ).toBe(false);
   });
+
+  it("tracks on-exit command and working-directory changes", () => {
+    expect(
+      cronSchedulingInputsEqual(
+        { schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
+        { schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
+      ),
+    ).toBe(true);
+    expect(
+      cronSchedulingInputsEqual(
+        { schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
+        { schedule: { kind: "on-exit", command: "make test", cwd: "/repo" } },
+      ),
+    ).toBe(false);
+    expect(
+      cronSchedulingInputsEqual(
+        { schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
+        { schedule: { kind: "on-exit", command: "make build", cwd: "/workspace" } },
+      ),
+    ).toBe(false);
+  });
 });

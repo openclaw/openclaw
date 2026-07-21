@@ -161,6 +161,144 @@ describe("CronService read ops while job is running", () => {
     }
   });
 
+  it.each([true, false])(
+    "keeps an active one-shot reschedule after completion and restart (deleteAfterRun=%s)",
+    async (deleteAfterRun) => {
+      vi.useFakeTimers();
+      const startedAt = Date.parse("2025-12-13T00:00:01.000Z");
+      const rescheduledAt = startedAt + 5 * 60_000;
+      vi.setSystemTime(startedAt - 1_000);
+      const store = await makeStorePath();
+      const isolatedRun = createDeferredIsolatedRun();
+      let resolveFinished: (() => void) | undefined;
+      const finished = new Promise<void>((resolve) => {
+        resolveFinished = resolve;
+      });
+      const cron = new CronService({
+        storePath: store.storePath,
+        cronEnabled: true,
+        log: noopLogger,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+        onEvent: (evt) => {
+          if (evt.action === "finished" && evt.status === "ok") {
+            resolveFinished?.();
+          }
+        },
+      });
+      let restartedCron: CronService | undefined;
+
+      try {
+        await cron.start();
+        const job = await cron.add({
+          name: "rescheduled while active",
+          enabled: true,
+          deleteAfterRun,
+          schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "agentTurn", message: "long task" },
+          delivery: { mode: "none" },
+        });
+
+        vi.setSystemTime(startedAt);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await isolatedRun.runStarted;
+
+        await cron.update(job.id, {
+          schedule: { kind: "at", at: new Date(rescheduledAt).toISOString() },
+        });
+        isolatedRun.completeRun({ status: "ok", summary: "done" });
+        await finished;
+        await cron.status();
+
+        const completed = await cron.list({ includeDisabled: true });
+        expect(completed).toHaveLength(1);
+        expect(completed[0]).toMatchObject({
+          id: job.id,
+          enabled: true,
+          schedule: { kind: "at", at: new Date(rescheduledAt).toISOString() },
+          state: { lastStatus: "ok", nextRunAtMs: rescheduledAt },
+        });
+
+        cron.stop();
+        restartedCron = new CronService({
+          storePath: store.storePath,
+          cronEnabled: true,
+          log: noopLogger,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+        });
+        await restartedCron.start();
+
+        const restarted = await restartedCron.list({ includeDisabled: true });
+        expect(restarted).toHaveLength(1);
+        expect(restarted[0]).toMatchObject({
+          id: job.id,
+          enabled: true,
+          schedule: { kind: "at", at: new Date(rescheduledAt).toISOString() },
+          state: { lastStatus: "ok", nextRunAtMs: rescheduledAt },
+        });
+      } finally {
+        cron.stop();
+        restartedCron?.stop();
+        vi.clearAllTimers();
+        vi.useRealTimers();
+        await store.cleanup();
+      }
+    },
+  );
+
+  it("keeps a one-shot rescheduled during an active force run", async () => {
+    const store = await makeStorePath();
+    const isolatedRun = createDeferredIsolatedRun();
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
+    });
+
+    try {
+      await cron.start();
+      const rescheduledAt = Date.parse("2030-01-01T00:05:00.000Z");
+      const job = await cron.add({
+        name: "force run reschedule",
+        enabled: true,
+        deleteAfterRun: true,
+        schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "manual task" },
+        delivery: { mode: "none" },
+      });
+
+      const runPromise = cron.run(job.id, "force");
+      await isolatedRun.runStarted;
+      await cron.update(job.id, {
+        schedule: { kind: "at", at: new Date(rescheduledAt).toISOString() },
+      });
+      isolatedRun.completeRun({ status: "ok", summary: "done" });
+      await expect(runPromise).resolves.toEqual({ ok: true, ran: true });
+
+      const completed = await cron.list({ includeDisabled: true });
+      expect(completed).toHaveLength(1);
+      expect(completed[0]).toMatchObject({
+        id: job.id,
+        enabled: true,
+        schedule: { kind: "at", at: new Date(rescheduledAt).toISOString() },
+        state: { lastStatus: "ok", nextRunAtMs: rescheduledAt },
+      });
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it("keeps list and status responsive during manual cron.run execution", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();

@@ -27,10 +27,13 @@ function schedulePayloadFromRecord(
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
   | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
+  | { kind: "on-exit"; command: string; cwd?: string }
   | undefined {
   const rawKind = readString(schedule, "kind")?.toLowerCase();
   const expr = readString(schedule, "expr");
   const at = readString(schedule, "at");
+  const command = readString(schedule, "command");
+  const cwd = readString(schedule, "cwd");
   const everyMs = readNumber(schedule, "everyMs");
   const anchorMs = readNumber(schedule, "anchorMs");
   const tz = readString(schedule, "tz");
@@ -38,7 +41,7 @@ function schedulePayloadFromRecord(
   const kind =
     // Infer legacy shorthand schedule shapes when kind is missing so timer
     // identity remains stable across old persisted jobs and normalized jobs.
-    rawKind === "at" || rawKind === "every" || rawKind === "cron"
+    rawKind === "at" || rawKind === "every" || rawKind === "cron" || rawKind === "on-exit"
       ? rawKind
       : at
         ? "at"
@@ -56,6 +59,9 @@ function schedulePayloadFromRecord(
   }
   if (kind === "cron" && expr) {
     return { kind: "cron", expr, tz, staggerMs };
+  }
+  if (kind === "on-exit" && command) {
+    return { kind: "on-exit", command, cwd };
   }
   return undefined;
 }
