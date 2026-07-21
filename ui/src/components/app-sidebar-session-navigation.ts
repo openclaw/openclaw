@@ -3,6 +3,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, serializeSidebarEntry } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
   resolveChannelSessionInfo,
@@ -165,6 +166,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         placementState: row.placement?.state,
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
+        hasOpenPullRequest: context?.sessions.hasOpenPullRequest?.(row.key) === true,
         unread: row.unread === true,
         attention: this.resolveSessionAttention(row),
         agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
@@ -415,10 +417,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected activeChipAgent() {
-    const agents = this.context?.agents.state.agentsList?.agents ?? [];
+    const roster = this.context?.agents.state.agentsList?.agents ?? [];
     const activeId = this.expandedAgentId();
-    const agent = agents.find((entry) => normalizeAgentId(entry.id) === activeId);
-    return { activeId, agent, agents };
+    const agent = roster.find((entry) => normalizeAgentId(entry.id) === activeId);
+    return { activeId, agent, agents: listSelectableAgents(roster) };
   }
 
   /** Newest visible session for an agent; the chip menu resumes here. */

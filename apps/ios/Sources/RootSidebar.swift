@@ -15,6 +15,7 @@ struct RootSidebar: View {
 
     let selectedDestination: RootTabs.SidebarDestination
     let isDrawerLayout: Bool
+    let showsDismissButton: Bool
     let selectDestination: (RootTabs.SidebarDestination) -> Void
     let selectSettingsRoute: (SettingsRoute) -> Void
     let hideSidebar: () -> Void
@@ -102,7 +103,7 @@ struct RootSidebar: View {
                 self.selectSidebarDestination(.settings)
             }
 
-            if self.isDrawerLayout {
+            if self.isDrawerLayout, self.showsDismissButton {
                 Button(action: self.dismissSidebar) {
                     Image(systemName: "xmark")
                         .font(OpenClawType.subheadSemiBold)
@@ -152,7 +153,7 @@ struct RootSidebar: View {
 
     /// Selected agent leads; the rest keep the gateway roster order.
     private var orderedAgents: [AgentSummary] {
-        let agents = self.appModel.gatewayAgents
+        let agents = self.appModel.gatewayAgents.filter(\.isSelectableAgent)
         guard let index = agents.firstIndex(where: { $0.id == self.currentAgentID }), index != 0 else {
             return agents
         }
