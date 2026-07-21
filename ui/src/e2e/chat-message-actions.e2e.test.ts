@@ -82,12 +82,24 @@ async function expectHoverTooltip(button: Locator, text: string): Promise<void> 
   expect(bounds.textTopInset).toBeLessThan(12);
 }
 
-async function expectHoverColorChange(button: Locator): Promise<void> {
+async function expectHoverColor(
+  button: Locator,
+  colorVariable: "--accent" | "--danger",
+): Promise<void> {
   const restingColor = await button.evaluate((element) => getComputedStyle(element).color);
+  const hoverColor = await button.evaluate((_, cssVariable) => {
+    const probe = document.createElement("span");
+    probe.style.color = `var(${cssVariable})`;
+    document.body.append(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  }, colorVariable);
+  expect(restingColor).not.toBe(hoverColor);
   await button.hover();
   await expect
     .poll(() => button.evaluate((element) => getComputedStyle(element).color))
-    .not.toBe(restingColor);
+    .toBe(hoverColor);
 }
 
 describeControlUiE2e("Control UI chat message actions", () => {
@@ -153,6 +165,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
+      await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       await expectHoverTooltip(page.getByRole("button", { name: "New thread" }), "New thread");
       await expectHoverTooltip(
         page.getByRole("button", { name: "Open command palette" }),
@@ -222,7 +235,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
         await inlineActions.evaluateAll((buttons) => buttons.map((button) => button.ariaLabel)),
       ).toEqual(["Reply to message", "Hide message", "Open in canvas", "Copy as markdown"]);
       for (const button of await inlineActions.all()) {
-        await expectHoverColorChange(button);
+        const label = await button.getAttribute("aria-label");
+        await expectHoverColor(button, label === "Hide message" ? "--danger" : "--accent");
       }
       const replyButton = group.getByRole("button", { name: "Reply to message" });
       await expectHoverTooltip(replyButton, "Reply");
