@@ -223,6 +223,9 @@ export function createMemoryLanceDbStateMigrations(
     {
       id: "memory-lancedb-legacy-envelope-rows",
       label: "Memory LanceDB legacy envelope contamination",
+      // Row deletion is destructive; gate it behind explicit `doctor --fix` so
+      // startup auto-migration never purges memories without operator intent.
+      doctorOnly: true,
       async detectLegacyState(params: StateMigrationParams) {
         const opened = await openMemoryTable({ ...params, pluginRoot });
         try {

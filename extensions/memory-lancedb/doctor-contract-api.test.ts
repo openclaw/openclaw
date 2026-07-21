@@ -151,6 +151,10 @@ describe("memory-lancedb doctor migration", () => {
       stateMigrations[1],
       "memory-lancedb legacy envelope state migration",
     );
+    // Deletion is destructive: startup auto-migration must skip it, so the
+    // entry must stay doctor-only (collector gating pinned in
+    // src/infra/state-migrations.test.ts).
+    expect(migration.doctorOnly).toBe(true);
 
     await expect(migration.detectLegacyState(params)).resolves.toEqual({
       preview: [
