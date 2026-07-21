@@ -1397,10 +1397,9 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
     modelOverrides: { enabled: true },
     maxTextLength: 4000,
     timeoutMs: 30000,
-    prefsPath: "~/.openclaw/settings/tts.json",
     providers: {
       elevenlabs: {
-        apiKey: "elevenlabs_api_key",
+        apiKey: "example-elevenlabs-api-key",
         baseUrl: "https://api.elevenlabs.io",
         speakerVoiceId: "voice_id",
         modelId: "eleven_multilingual_v2",
@@ -1421,7 +1420,7 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
         outputFormat: "audio-24khz-48kbitrate-mono-mp3",
       },
       openai: {
-        apiKey: "openai_api_key",
+        apiKey: "example-openai-api-key",
         baseUrl: "https://api.openai.com/v1",
         model: "gpt-4o-mini-tts",
         speakerVoice: "coral",
@@ -1430,6 +1429,11 @@ Batches rapid text-only messages from the same sender into a single agent turn. 
   },
 }
 ```
+
+The global preferences path is machine state (default
+`~/.openclaw/settings/tts.json`; override with `OPENCLAW_TTS_PREFS`). Advanced
+multi-agent setups can set `agents.entries.<id>.tts.prefsPath` for distinct
+per-agent preference stores.
 
 - `auto` controls the default auto-TTS mode: `off`, `always`, `inbound`, or `tagged`. `/tts on|off` can override local prefs, and `/tts status` shows the effective state.
 - `summaryModel` overrides `agents.defaults.model.primary` for auto-summary.
