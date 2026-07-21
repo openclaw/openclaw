@@ -129,6 +129,7 @@ type ChatThreadProps = {
   assistantName: string;
   assistantAvatar: string | null;
   assistantAvatarUrl?: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
   /** Gateway resolves authenticated user identities (multi-user attribution). */
@@ -1169,6 +1170,7 @@ function renderChatThreadContents(
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
       assistantName: props.assistantName,
       assistantAvatar: assistantIdentity.avatar,
+      userId: props.userId ?? null,
       userName: props.userName ?? null,
       userAvatar: props.userAvatar ?? null,
       basePath: props.basePath,

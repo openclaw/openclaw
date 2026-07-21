@@ -154,6 +154,7 @@ export type ChatProps = {
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   assistantAvatar: string | null;
+  userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
   attributedIdentity?: boolean;
@@ -349,6 +350,7 @@ export function renderChat(props: ChatProps) {
       assistantName: props.assistantName,
       assistantAvatar: props.assistantAvatar,
       assistantAvatarUrl: props.assistantAvatarUrl,
+      userId: props.userId,
       userName: props.userName,
       userAvatar: props.userAvatar,
       attributedIdentity: props.attributedIdentity,

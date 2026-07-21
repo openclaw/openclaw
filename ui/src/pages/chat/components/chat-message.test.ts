@@ -1282,6 +1282,41 @@ describe("grouped chat rendering", () => {
     });
   });
 
+  it("uses the current profile display name for the signed-in user's historical messages", () => {
+    const container = document.createElement("div");
+    render(
+      renderMessageGroup(
+        {
+          kind: "group",
+          key: "current-user-group",
+          role: "user",
+          senderLabel: "fullerstackd",
+          sender: { id: "profile-1", username: "fullerstackd" },
+          messages: [
+            {
+              key: "current-user-message",
+              message: { role: "user", content: "hello", timestamp: 1000 },
+            },
+          ],
+          timestamp: 1000,
+          isStreaming: false,
+        },
+        {
+          showReasoning: true,
+          showToolCalls: true,
+          assistantName: "OpenClaw",
+          userId: "profile-1",
+          userName: "Fuller Stack",
+        },
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
+    ).toBe("Fuller Stack");
+  });
+
   it("renders an author avatar for a user group with sender identity", async () => {
     const container = document.createElement("div");
     render(
