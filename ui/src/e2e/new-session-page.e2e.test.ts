@@ -538,14 +538,13 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       );
       await page.locator('[data-chat-model-provider="anthropic"]').click();
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      await modelSelect.click();
-      await expect
-        .poll(() =>
-          modelSelect.evaluate(
-            (element) => element.closest("details")?.hasAttribute("open") ?? false,
-          ),
-        )
-        .toBe(false);
+      const pickerOpen = () =>
+        modelSelect.evaluate(
+          (element) => element.closest("details")?.hasAttribute("open") ?? false,
+        );
+      await expect.poll(pickerOpen).toBe(true);
+      await page.mouse.click(8, 8);
+      await expect.poll(pickerOpen).toBe(false);
       await page.locator(".new-session-page__message").fill("use this model");
       await page.getByRole("button", { name: "Start thread" }).click();
 
