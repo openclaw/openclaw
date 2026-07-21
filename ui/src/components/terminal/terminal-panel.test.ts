@@ -317,6 +317,46 @@ describe("OpenClawTerminalPanel", () => {
     ]);
   });
 
+  it("reassembles a UTF-8 scalar split across terminal.open session adoption", async () => {
+    const { createOptions, open, requests } = await startPanelWithPendingOpen();
+    // Production Ghostty onData seam: first two bytes of 中 before bind.
+    createOptions.onData?.(Uint8Array.of(0xe4, 0xb8));
+    expect(requests.some(({ method }) => method === "terminal.input")).toBe(false);
+
+    open.resolve(terminalOpenResult("session-utf8"));
+    await waitForFast(() =>
+      expect(requests.some(({ method }) => method === "terminal.resize")).toBe(true),
+    );
+    // Incomplete scalar must not have flushed as U+FFFD during adoptSession.
+    expect(requests.filter(({ method }) => method === "terminal.input")).toEqual([]);
+
+    // Completing byte after Gateway session id is bound.
+    createOptions.onData?.(Uint8Array.of(0xad));
+    // Trailing emoji also arrives one byte at a time post-bind.
+    for (const byte of new TextEncoder().encode("😀")) {
+      createOptions.onData?.(Uint8Array.of(byte));
+    }
+
+    await waitForFast(() =>
+      expect(requests.filter(({ method }) => method === "terminal.input").length).toBeGreaterThan(
+        0,
+      ),
+    );
+    const inputPayloads = requests
+      .filter(({ method }) => method === "terminal.input")
+      .map(({ params }) => (params as { sessionId: string; data: string }).data);
+    const joined = inputPayloads.join("");
+    console.info(
+      "[terminal-utf8-proof] gateway terminal.input payloads=%j joined=%j hasFFFD=%s",
+      inputPayloads,
+      joined,
+      String(joined.includes("\uFFFD")),
+    );
+    expect(joined).toBe("中😀");
+    expect(joined).not.toContain("\uFFFD");
+    expect(inputPayloads.every((data) => data !== "\uFFFD")).toBe(true);
+  });
+
   it("drops whole startup input chunks beyond the pending-input cap", async () => {
     const { createOptions, open, requests } = await startPanelWithPendingOpen();
     const accepted = "a".repeat(8 * 1024);
