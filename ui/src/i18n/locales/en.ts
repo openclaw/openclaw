@@ -2272,6 +2272,8 @@ export const en: TranslationMap = {
       description: "Your profile on this gateway.",
       loading: "Loading your identity…",
       profileUnavailable: "Your identity profile could not be loaded.",
+      notSet: "Identity is not set.",
+      setIdentity: "Set identity",
       avatar: "Avatar",
       avatarDescription: "PNG, JPEG, or WebP. Images are resized to 256 × 256 or smaller.",
       chooseAvatar: "Choose image",
