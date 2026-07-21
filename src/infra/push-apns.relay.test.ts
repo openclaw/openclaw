@@ -463,7 +463,7 @@ describe("push-apns.relay", () => {
       // treated as absent (status-derived fallback). Corrupted field values must
       // never reach the caller.
       const encoder = new TextEncoder();
-      const prefix = encoder.encode('{"ok":true,"status":200,"apns-id":"test-');
+      const prefix = encoder.encode('{"ok":true,"status":200,"apnsId":"test-');
       const suffix = encoder.encode('1234"}');
       const body = new Uint8Array(prefix.length + 1 + suffix.length);
       body.set(prefix, 0);
