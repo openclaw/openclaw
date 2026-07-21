@@ -129,7 +129,7 @@ export function renderBoardDisabledPlugin(options: {
   `;
 }
 
-export function renderBoardWidgetError(error: unknown): TemplateResult {
+export function renderBoardWidgetError(error: unknown, onRetry?: () => void): TemplateResult {
   const message = error instanceof Error ? error.message : String(error);
   return html`
     <div class="board-widget__error" role="alert" data-test-id="board-widget-error">
@@ -139,6 +139,11 @@ export function renderBoardWidgetError(error: unknown): TemplateResult {
         <summary>${t("board.widget.errorShow")}</summary>
         <code>${message}</code>
       </details>
+      ${onRetry
+        ? html`<button class="btn btn--small" type="button" @click=${onRetry}>
+            ${t("board.widget.retry")}
+          </button>`
+        : nothing}
     </div>
   `;
 }

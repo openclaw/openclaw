@@ -256,7 +256,7 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     }
     if (widget.contentKind === "plugin") {
       if (this.pluginRendererError) {
-        return renderBoardWidgetError(this.pluginRendererError);
+        return renderBoardWidgetError(this.pluginRendererError, () => this.retryPluginRenderer());
       }
       if (this.pluginRenderer) {
         return this.pluginRenderer({
@@ -322,6 +322,11 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
     this.pluginRendererLabel = "";
     this.pluginRenderer = null;
     this.pluginRendererError = "";
+  }
+
+  private retryPluginRenderer(): void {
+    this.resetPluginRenderer();
+    this.requestUpdate();
   }
 
   private handleKeyDown(
