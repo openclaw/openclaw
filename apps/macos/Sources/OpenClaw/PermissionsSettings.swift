@@ -4,7 +4,7 @@ import OpenClawKit
 import SwiftUI
 
 struct PermissionsSettings: View {
-    let status: [Capability: Bool]
+    let status: [Capability: CapabilityAuthorizationStatus]
     let refresh: () async -> Void
     let showOnboarding: () -> Void
 
@@ -42,7 +42,7 @@ struct PermissionsSettings: View {
     }
 
     private var permissionSummaryPanel: some View {
-        let granted = self.status.values.filter(\.self).count
+        let granted = self.status.values.filter(\.isGranted).count
         let total = Capability.allCases.count
         let complete = granted == total
 
@@ -169,7 +169,7 @@ extension Capability {
 
     var permissionDisplayName: String {
         switch self {
-        case .appleScript: "Automation (AppleScript)"
+        case .appleScript: "Automation (Terminal)"
         case .notifications: "Notifications"
         case .accessibility: "Accessibility"
         case .screenRecording: "Screen Recording"
@@ -182,7 +182,7 @@ extension Capability {
 }
 
 struct PermissionStatusList: View {
-    let status: [Capability: Bool]
+    let status: [Capability: CapabilityAuthorizationStatus]
     let refresh: () async -> Void
     @State private var pendingCapability: Capability?
 
@@ -191,7 +191,7 @@ struct PermissionStatusList: View {
             ForEach(Array(Capability.importanceOrdered.enumerated()), id: \.element) { index, cap in
                 PermissionRow(
                     capability: cap,
-                    status: self.status[cap] ?? false,
+                    status: self.status[cap] ?? .notGranted,
                     isPending: self.pendingCapability == cap,
                     showsDivider: index != Capability.importanceOrdered.count - 1)
                 {
@@ -241,7 +241,7 @@ struct PermissionStatusList: View {
 
 struct PermissionRow: View {
     let capability: Capability
-    let status: Bool
+    let status: CapabilityAuthorizationStatus
     let isPending: Bool
     let compact: Bool
     let showsDivider: Bool
@@ -249,7 +249,7 @@ struct PermissionRow: View {
 
     init(
         capability: Capability,
-        status: Bool,
+        status: CapabilityAuthorizationStatus,
         isPending: Bool = false,
         compact: Bool = false,
         showsDivider: Bool = false,
@@ -267,10 +267,10 @@ struct PermissionRow: View {
         VStack(spacing: 0) {
             HStack(spacing: self.compact ? 10 : 12) {
                 ZStack {
-                    Circle().fill(self.status ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
+                    Circle().fill(self.status.isGranted ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
                         .frame(width: self.iconSize, height: self.iconSize)
                     Image(systemName: self.icon)
-                        .foregroundStyle(self.status ? Color.green : Color.secondary)
+                        .foregroundStyle(self.status.isGranted ? Color.green : Color.secondary)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.capability.permissionDisplayName).font(.body.weight(.semibold))
@@ -282,7 +282,7 @@ struct PermissionRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .layoutPriority(1)
                 VStack(alignment: .trailing, spacing: 4) {
-                    if self.status {
+                    if self.status.isGranted {
                         Label("Granted", systemImage: "checkmark.circle.fill")
                             .labelStyle(.iconOnly)
                             .foregroundStyle(.green)
@@ -293,7 +293,7 @@ struct PermissionRow: View {
                             .controlSize(.small)
                             .frame(width: 78)
                     } else {
-                        Button("Grant") { self.action() }
+                        Button(self.status == .unknown ? "Check" : "Grant") { self.action() }
                             .buttonStyle(.bordered)
                             .controlSize(self.compact ? .small : .regular)
                             .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
@@ -302,7 +302,7 @@ struct PermissionRow: View {
                     // Compact rows (onboarding) skip the caption so the full
                     // permission list fits the fixed page without scrolling.
                     if !self.compact {
-                        if self.status {
+                        if self.status.isGranted {
                             Text("Granted")
                                 .font(.caption.weight(.medium))
                                 .foregroundStyle(.green)
@@ -311,7 +311,7 @@ struct PermissionRow: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("Request access")
+                            Text(self.status == .unknown ? "Status unavailable" : "Request access")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -339,7 +339,7 @@ struct PermissionRow: View {
     private var subtitle: String {
         switch self.capability {
         case .appleScript:
-            "Control other apps (e.g. Terminal) for automation actions"
+            "Control Terminal for automation actions; other apps request access separately"
         case .notifications: "Show desktop alerts for agent activity"
         case .accessibility: "Control UI elements when an action requires it"
         case .screenRecording: "Capture the screen for context or screenshots"
@@ -369,12 +369,12 @@ struct PermissionsSettings_Previews: PreviewProvider {
     static var previews: some View {
         PermissionsSettings(
             status: [
-                .appleScript: true,
-                .notifications: true,
-                .accessibility: false,
-                .screenRecording: false,
-                .microphone: true,
-                .speechRecognition: false,
+                .appleScript: .granted,
+                .notifications: .granted,
+                .accessibility: .notGranted,
+                .screenRecording: .notGranted,
+                .microphone: .granted,
+                .speechRecognition: .notGranted,
             ],
             refresh: {},
             showOnboarding: {})

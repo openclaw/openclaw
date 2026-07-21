@@ -836,7 +836,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func currentPermissions() async -> [String: Bool] {
-        let statuses = await PermissionManager.status()
+        let statuses = await PermissionManager.grantedStatus()
         return Dictionary(uniqueKeysWithValues: statuses.map { ($0.key.rawValue, $0.value) })
     }
 

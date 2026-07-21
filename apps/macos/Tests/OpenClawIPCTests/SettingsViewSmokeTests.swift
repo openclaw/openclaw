@@ -196,8 +196,8 @@ struct SettingsViewSmokeTests {
     @Test func `permissions settings builds body`() {
         let view = PermissionsSettings(
             status: [
-                .notifications: true,
-                .screenRecording: false,
+                .notifications: .granted,
+                .screenRecording: .notGranted,
             ],
             refresh: {},
             showOnboarding: {})
