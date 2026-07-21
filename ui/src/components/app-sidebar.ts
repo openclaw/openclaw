@@ -161,6 +161,7 @@ const SIDEBAR_SESSION_SHOW_CRON_STORAGE_KEY = "openclaw:sidebar:sessions:show-cr
 const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
 const SIDEBAR_SESSION_PAGE_SIZE = 10;
 const SIDEBAR_SESSION_SEE_LESS_THRESHOLD = 30;
+const SESSION_CATALOG_POLL_INTERVAL_MS = 120_000;
 const SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY =
   "openclaw:sidebar:sessions:collapsed-sections";
 
@@ -345,6 +346,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   private sessionCatalogGeneration = 0;
   private sessionCatalogRevision = 0;
   private sessionCatalogRequestGeneration: number | null = null;
+  private sessionCatalogInitialRefreshGeneration: number | null = null;
   private readonly sessionCatalogPageDepths = new Map<string, number>();
   private readonly sessionCatalogRevisions = new Map<string, number>();
   private readonly routePreloadTimers = new Map<
@@ -418,16 +420,21 @@ class AppSidebar extends OpenClawLightDomContentsElement {
   override updated() {
     this.syncSessionsScrollObserver();
     const snapshot = this.context?.gateway.snapshot;
-    if (
-      !snapshot?.connected ||
-      !snapshot.client ||
-      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true ||
-      this.sessionCatalogTimer ||
-      this.sessionCatalogRequestGeneration === this.sessionCatalogGeneration
-    ) {
+    if (!this.canRefreshSessionCatalogs(snapshot)) {
       return;
     }
     void this.refreshSessionCatalogs();
+  }
+
+  private canRefreshSessionCatalogs(snapshot: ApplicationContext<RouteId>["gateway"]["snapshot"]) {
+    return (
+      snapshot?.connected &&
+      snapshot.client &&
+      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") === true &&
+      this.sessionCatalogTimer === null &&
+      this.sessionCatalogRequestGeneration !== this.sessionCatalogGeneration &&
+      this.sessionCatalogInitialRefreshGeneration !== this.sessionCatalogGeneration
+    );
   }
 
   private readonly handleCatalogSessionContinued = (
@@ -458,6 +465,9 @@ class AppSidebar extends OpenClawLightDomContentsElement {
       return;
     }
     this.sessionCatalogRequestGeneration = generation;
+    if (this.sessionCatalogInitialRefreshGeneration !== generation) {
+      this.sessionCatalogInitialRefreshGeneration = generation;
+    }
     try {
       const result = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
         limitPerHost: 40,
@@ -503,7 +513,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
         this.sessionCatalogTimer = globalThis.setTimeout(() => {
           this.sessionCatalogTimer = null;
           void this.refreshSessionCatalogs();
-        }, 30_000);
+        }, SESSION_CATALOG_POLL_INTERVAL_MS);
       }
     }
   }
@@ -776,6 +786,7 @@ class AppSidebar extends OpenClawLightDomContentsElement {
     this.clearSessionCache();
     this.sessionCatalogGeneration += 1;
     this.sessionCatalogRevision += 1;
+    this.sessionCatalogInitialRefreshGeneration = null;
     this.gatewaySource = gateway;
     this.gatewayClient = client;
     if (this.sessionCatalogTimer) {

@@ -46,6 +46,47 @@ import {
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
 
+function formatSessionKeySegment(value: string): string {
+  const trimmed = normalizeOptionalString(value) ?? "";
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((part) => (part.length <= 3 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
+    .join(" ");
+}
+
+function resolveFriendlySessionKeyLabel(
+  row: GatewaySessionRow,
+  keyParts: ReturnType<typeof parseSessionKeyParts>,
+): string | null {
+  const key = normalizeOptionalString(row.key);
+  if (!key || !key.startsWith("agent:")) {
+    return null;
+  }
+  const parts = key.split(":").filter(Boolean);
+  const agentId = normalizeOptionalString(parts[1]);
+  const channel = normalizeOptionalString(parts[2]);
+  if (!agentId || !channel) {
+    return null;
+  }
+  const rest = parts.slice(3);
+  if (channel === "subagent" && rest.length === 1) {
+    const subagent = rest[0] ? rest[0].slice(0, 8) : "";
+    return subagent ? `${agentId} / subagent ${subagent}` : `${agentId} / subagent`;
+  }
+  if (keyParts !== null) {
+    return null;
+  }
+  if (rest.length > 0 || channel !== "codex-coord") {
+    return null;
+  }
+  const formattedChannel = formatSessionKeySegment(channel);
+  return formattedChannel ? `${agentId} / ${formattedChannel}` : null;
+}
+
 export type TranscriptSearchState =
   | { status: "idle" }
   | { status: "loading" }
@@ -1409,8 +1450,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const friendlyKeyLabel =
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
-      : null;
-  const keyCellTitle = friendlyKeyLabel ?? row.key;
+      : resolveFriendlySessionKeyLabel(row, keyParts);
+  const keyCellTitle =
+    friendlyKeyLabel && !identityName
+      ? `${friendlyKeyLabel} · ${row.key}`
+      : (friendlyKeyLabel ?? row.key);
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`

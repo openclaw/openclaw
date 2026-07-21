@@ -187,6 +187,35 @@ describe("sessions view", () => {
     expect(onNavigateToChat).toHaveBeenCalledWith("agent:main:launch");
   });
 
+  it("renders service session keys as readable labels while retaining raw-key tooltips", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            { key: "agent:main:codex-coord", kind: "direct", updatedAt: 3 },
+            {
+              key: "agent:main:subagent:4b43a46d-1cc9-48e2-8774-50f89c50ceb4",
+              kind: "direct",
+              updatedAt: 2,
+            },
+          ]),
+        ),
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("main / Codex Coord");
+    expect(container.textContent).toContain("main / subagent 4b43a46d");
+    const tooltips = Array.from(container.querySelectorAll("openclaw-tooltip")) as Array<
+      HTMLElement & { content?: string }
+    >;
+    expect(tooltips.some((tooltip) => tooltip.content?.includes("agent:main:codex-coord"))).toBe(
+      true,
+    );
+  });
+
   it("disables transcript search when the Gateway does not advertise it", async () => {
     const container = document.createElement("div");
     const onTranscriptSearch = vi.fn();

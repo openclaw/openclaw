@@ -722,7 +722,7 @@ describe("AppSidebar session catalog pagination", () => {
       expect(catalogRows()).toHaveLength(2);
       expect(sidebar.textContent).toContain("Stale title");
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         limitPerHost: 40,
@@ -784,7 +784,7 @@ describe("AppSidebar session catalog pagination", () => {
       const loadMore = () =>
         sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]');
       loadMore()?.click();
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Polled");
 
@@ -801,6 +801,41 @@ describe("AppSidebar session catalog pagination", () => {
         cursors: { "gateway:local": "replacement-page" },
       });
       expect(sidebar.textContent).toContain("Replacement");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not restart catalog loading on sidebar rerenders before the poll window", async () => {
+    vi.useFakeTimers();
+    try {
+      const request = vi
+        .fn()
+        .mockResolvedValue(catalogPage([{ threadId: "thread-1", name: "Newest" }]));
+      const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+      gateway.publish({
+        hello: {
+          features: { methods: ["sessions.catalog.list"] },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      const { sidebar } = await mountSidebar(
+        gateway.gateway,
+        createSessions("main", ["agent:main:main"]),
+      );
+      sidebar.connected = true;
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(0);
+      await sidebar.updateComplete;
+
+      sidebar.sessionKey = "agent:main:another";
+      await sidebar.updateComplete;
+      await vi.advanceTimersByTimeAsync(119_000);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await sidebar.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
@@ -834,7 +869,7 @@ describe("AppSidebar session catalog pagination", () => {
       await sidebar.updateComplete;
 
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       await sidebar.updateComplete;
       expect(sidebar.textContent).toContain("Polled");
 
@@ -887,7 +922,7 @@ describe("AppSidebar session catalog pagination", () => {
         await sidebar.updateComplete;
         expect(sidebar.sessionCatalogs[0]?.hosts[0]?.sessions).toHaveLength(2);
 
-        await vi.advanceTimersByTimeAsync(30_000);
+        await vi.advanceTimersByTimeAsync(120_000);
         await sidebar.updateComplete;
         const host = sidebar.sessionCatalogs[0]?.hosts[0];
         expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-1", "thread-2"]);
@@ -944,11 +979,11 @@ describe("AppSidebar session catalog pagination", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       await sidebar.updateComplete;
       expect(sidebar.sessionCatalogs[0]?.hosts).toEqual([]);
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
       await sidebar.updateComplete;
       const host = sidebar.sessionCatalogs[0]?.hosts[0];
       expect(host?.sessions.map((session) => session.threadId)).toEqual(["thread-3"]);
