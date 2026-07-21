@@ -256,7 +256,11 @@ describe("matrix onboarding", () => {
     expect(matrixConfig?.accessToken).toBe("ops-token");
   });
 
-  it.each([
+  it.each<{
+    authMode: string;
+    secretPrompt: string;
+    text: Record<string, string>;
+  }>([
     {
       authMode: "token",
       secretPrompt: "Matrix access token",
@@ -264,7 +268,7 @@ describe("matrix onboarding", () => {
         "Matrix homeserver URL": "https://matrix.example.org",
         "Matrix access token": "test-token",
         "Matrix device name (optional)": "",
-      },
+      } satisfies Record<string, string>,
     },
     {
       authMode: "password",
@@ -274,7 +278,7 @@ describe("matrix onboarding", () => {
         "Matrix user ID": "@test:example.org",
         "Matrix password": "test-password",
         "Matrix device name (optional)": "",
-      },
+      } satisfies Record<string, string>,
     },
   ])("marks the $secretPrompt prompt as sensitive", async ({ authMode, secretPrompt, text }) => {
     installMatrixTestRuntime();
