@@ -748,6 +748,51 @@ describe("runConfigureWizard", () => {
     expect(codexSearch.enabled).toBe(true);
     expect(codexSearch.mode).toBe("cached");
     expect(mocks.setupSearch).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "Web search lets your agent look things up online using the `web_search` tool.",
+        "Codex-capable models can use Codex's built-in hosted search.",
+        "Models without that capability use a separate search provider, such as Brave or DuckDuckGo, which you can configure here.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Web search",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "Codex-capable models can use Codex's built-in hosted search instead of a separate provider.",
+        "Models without that capability need a separate provider, such as Brave or DuckDuckGo.",
+        "If you do not choose one, OpenClaw can auto-detect an API-backed provider from available credentials; otherwise those models may not have web search.",
+      ].join("\n"),
+      "Codex native search",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "`web_fetch` is a separate tool for reading a specific URL.",
+        "It works independently of Codex-hosted search and any separate search provider.",
+        "By default, it fetches pages directly without a search-provider API key.",
+      ].join("\n"),
+      "Web fetch",
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enable the web_search tool?" }),
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Enable Codex-hosted web search for Codex-capable models?",
+      }),
+    );
+    expect(mocks.clackSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Codex-hosted web search mode" }),
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message:
+          "Also configure a separate web search provider for models without Codex-hosted search?",
+      }),
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enable the web_fetch tool?" }),
+    );
   });
 
   it("preserves disabled native Codex search when toggled off", async () => {
