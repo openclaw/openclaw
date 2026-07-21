@@ -11,7 +11,12 @@ import type {
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/realtime-talk.ts";
-import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
+import {
+  ConfigPage,
+  configSelectionFromSearch,
+  supportsQuickAutomation,
+  supportsSystemInfo,
+} from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
@@ -310,5 +315,24 @@ describe("ConfigPage runtime config lifecycle", () => {
     expect(state.configViewState.rawRevealed).toBe(false);
     expect(state.configViewState.envRevealed).toBe(false);
     expect(state.configViewState.revealedSensitivePaths.size).toBe(0);
+  });
+});
+
+describe("supportsQuickAutomation", () => {
+  it("requires both cron.list and skills.status methods", () => {
+    const both = {
+      features: { methods: ["cron.list", "skills.status"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const partial = {
+      features: { methods: ["cron.list"] },
+    } as ApplicationGatewaySnapshot["hello"];
+    const none = {
+      features: { methods: ["health"] },
+    } as ApplicationGatewaySnapshot["hello"];
+
+    expect(supportsQuickAutomation(both)).toBe(true);
+    expect(supportsQuickAutomation(partial)).toBe(false);
+    expect(supportsQuickAutomation(none)).toBe(false);
+    expect(supportsQuickAutomation(null)).toBe(false);
   });
 });

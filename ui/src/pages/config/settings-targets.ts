@@ -1,6 +1,7 @@
 export const GENERAL_SETTINGS_TARGET_IDS = {
   model: "settings-general-model",
   system: "settings-general-system",
+  automations: "settings-general-automations",
 } as const;
 
 export const APPEARANCE_SETTINGS_TARGET_IDS = {

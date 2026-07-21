@@ -32,6 +32,13 @@ import { renderConfigApplyBanner, renderConfigAutoSaveStatus } from "./view.ts";
 
 // ── Types ──
 
+type QuickSettingsAutomation = {
+  cronJobCount: number | null;
+  skillCount: number | null;
+  mcpServerCount: number;
+  unavailable: boolean;
+};
+
 type QuickSettingsProps = {
   // General
   locale: Locale;
@@ -66,6 +73,12 @@ type QuickSettingsProps = {
   connected: boolean;
   assistantName: string;
   version: string;
+
+  // Automations (real Cron / Skills / MCP counts surfaced as a Quick Settings section)
+  automation?: QuickSettingsAutomation;
+  onManageCron?: () => void;
+  onBrowseSkills?: () => void;
+  onConfigureMcp?: () => void;
 };
 
 // The compact General hub intentionally omits "minimal"; the full list stays
@@ -147,6 +160,64 @@ function renderModelSection(props: QuickSettingsProps) {
           },
         }),
       }),
+    ],
+  );
+}
+
+function renderAutomationsSection(props: QuickSettingsProps) {
+  const { cronJobCount, skillCount, mcpServerCount, unavailable } = props.automation!;
+  const automationRow = (title: string, actionLabel: string, onClick?: () => void) =>
+    renderSettingsRow({
+      title,
+      control: html`<button class="btn" @click=${onClick}>${actionLabel}</button>`,
+    });
+  // Counts are null until the gateway inventory loads (and while offline); a
+  // null count renders a neutral placeholder rather than a misleading "0".
+  const automationCountLabel = (
+    count: number | null,
+    singularKey: string,
+    pluralKey: string,
+  ): string => {
+    if (unavailable) {
+      return t("quickSettings.automation.unavailable");
+    }
+    if (count == null) {
+      return "-";
+    }
+    return t(count === 1 ? singularKey : pluralKey, { count: String(count) });
+  };
+  return renderTargetSection(
+    GENERAL_SETTINGS_TARGET_IDS.automations,
+    { title: t("quickSettings.automation.title") },
+    [
+      automationRow(
+        automationCountLabel(
+          cronJobCount,
+          "quickSettings.automation.scheduledTask",
+          "quickSettings.automation.scheduledTasks",
+        ),
+        t("quickSettings.automation.manage"),
+        props.onManageCron,
+      ),
+      automationRow(
+        automationCountLabel(
+          skillCount,
+          "quickSettings.automation.installedSkill",
+          "quickSettings.automation.installedSkills",
+        ),
+        t("quickSettings.automation.browse"),
+        props.onBrowseSkills,
+      ),
+      automationRow(
+        t(
+          mcpServerCount === 1
+            ? "quickSettings.automation.mcpServer"
+            : "quickSettings.automation.mcpServers",
+          { count: String(mcpServerCount) },
+        ),
+        t("quickSettings.automation.configure"),
+        props.onConfigureMcp,
+      ),
     ],
   );
 }
@@ -384,6 +455,6 @@ export function renderQuickSettings(props: QuickSettingsProps) {
       onApply: () => props.onApplyConfig?.(),
     })}
     ${renderModelSection(props)} ${renderGeneralSection(props)} ${renderSystemSection(props)}
-    ${renderConnectionFooter(props)}
+    ${props.automation ? renderAutomationsSection(props) : nothing} ${renderConnectionFooter(props)}
   `);
 }
