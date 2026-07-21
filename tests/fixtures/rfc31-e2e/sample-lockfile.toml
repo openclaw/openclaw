@@ -1,0 +1,29 @@
+# RFC #31 E2E Test — Sample Lockfile
+# Contains 3 agents with various capabilities and constraints
+
+[agents.agent_alpha]
+handle = "alpha"
+role = "researcher"
+capabilities = ["search", "web"]
+allowed_channels = ["1234567890", "9876543210"]
+
+[agents.agent_beta]
+handle = "beta"
+role = "coder"
+capabilities = ["code", "review"]
+allowed_channels = ["1234567890"]
+
+[agents.agent_gamma]
+handle = "gamma"
+role = "helper"
+capabilities = ["chat"]
+allowed_channels = []
+canary = false
+
+[agents.agent_delta]
+handle = "delta"
+role = "canary-bot"
+capabilities = ["experimental"]
+allowed_channels = ["1234567890", "1111111111"]
+canary = true
+canary_percentage = 0.10

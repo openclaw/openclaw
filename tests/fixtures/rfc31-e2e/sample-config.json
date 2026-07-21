@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "bindings": [],
+  "agents": {},
+  "settings": {
+    "logLevel": "info"
+  }
+}

@@ -1,0 +1,50 @@
+[
+  {
+    "name": "bridge_syntax_basic",
+    "description": "Basic bridge syntax: @alpha ask @beta hello world",
+    "content": "@alpha ask @beta hello world",
+    "channel_id": "1234567890",
+    "author_id": "user001",
+    "message_id": "msg_bridge_001"
+  },
+  {
+    "name": "bridge_syntax_asks",
+    "description": "Bridge syntax with 'asks': @alpha asks @beta what is 2+2",
+    "content": "@alpha asks @beta what is 2+2",
+    "channel_id": "1234567890",
+    "author_id": "user001",
+    "message_id": "msg_bridge_002"
+  },
+  {
+    "name": "channel_allowed",
+    "description": "Message from an allowed channel for alpha",
+    "content": "@alpha do something",
+    "channel_id": "1234567890",
+    "author_id": "user002",
+    "message_id": "msg_channel_001"
+  },
+  {
+    "name": "channel_blocked",
+    "description": "Message from a non-allowed channel for alpha",
+    "content": "@alpha do something",
+    "channel_id": "9999999999",
+    "author_id": "user002",
+    "message_id": "msg_channel_002"
+  },
+  {
+    "name": "capability_dispatch",
+    "description": "Capability reference @code should route to beta",
+    "content": "run @code analysis",
+    "channel_id": "1234567890",
+    "author_id": "user003",
+    "message_id": "msg_cap_001"
+  },
+  {
+    "name": "no_match",
+    "description": "Message with no agent or capability references",
+    "content": "just a regular message",
+    "channel_id": "1234567890",
+    "author_id": "user004",
+    "message_id": "msg_nomatch_001"
+  }
+]
