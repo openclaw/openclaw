@@ -1444,6 +1444,10 @@
     "target": "NovitaAI"
   },
   {
+    "source": "LLMTR (Turkey-hosted gateway)",
+    "target": "LLMTR（土耳其托管网关）"
+  },
+  {
     "source": "Onboard",
     "target": "引导设置"
   },

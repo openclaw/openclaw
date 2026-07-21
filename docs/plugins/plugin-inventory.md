@@ -107,6 +107,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[llm-task](/plugins/reference/llm-task)** (`@openclaw/llm-task`) - included in OpenClaw. Generic JSON-only LLM tool for structured tasks callable from workflows.
 
+- **[llmtr](/plugins/reference/llmtr)** (`@openclaw/llmtr-provider`) - included in OpenClaw. Adds Llmtr model provider support to OpenClaw.
+
 - **[lmstudio](/plugins/reference/lmstudio)** (`@openclaw/lmstudio-provider`) - included in OpenClaw. Adds LM Studio model provider support to OpenClaw.
 
 - **[logbook](/plugins/reference/logbook)** (`@openclaw/logbook`) - included in OpenClaw. Automatic work journal: captures periodic screen snapshots from a paired node and turns them into a reviewable timeline of your day.

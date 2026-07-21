@@ -6708,6 +6708,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
 
+## plugins/reference/llmtr.md
+
+- Route: /plugins/reference/llmtr
+- Headings:
+  - H1: Llmtr plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/lmstudio.md
 
 - Route: /plugins/reference/lmstudio
@@ -8164,6 +8173,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Configuration
   - H2: Image generation
   - H2: Advanced
+  - H2: Related
+
+## providers/llmtr.md
+
+- Route: /providers/llmtr
+- Headings:
+  - H2: Setup
+  - H2: Defaults
+  - H2: Bundled model catalog
+  - H2: Using a model that is not bundled
+  - H2: When to choose LLMTR
+  - H2: Troubleshooting
   - H2: Related
 
 ## providers/lmstudio.md

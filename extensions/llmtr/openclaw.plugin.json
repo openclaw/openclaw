@@ -1,0 +1,422 @@
+{
+  "id": "llmtr",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["llmtr"],
+  "providerRequest": {
+    "providers": {
+      "llmtr": {
+        "family": "openai"
+      }
+    }
+  },
+  "modelIdNormalization": {
+    "providers": {
+      "llmtr": {
+        "prefixWhenBare": "llmtr"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "llmtr",
+        "envVars": ["LLMTR_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "llmtr",
+      "method": "api-key",
+      "choiceId": "llmtr-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "LLMTR API key",
+      "choiceHint": "Turkey-hosted OpenAI-compatible AI gateway",
+      "groupId": "llmtr",
+      "groupLabel": "LLMTR",
+      "groupHint": "Turkey-hosted OpenAI-compatible AI gateway",
+      "optionKey": "llmtrApiKey",
+      "cliFlag": "--llmtr-api-key",
+      "cliOption": "--llmtr-api-key <key>",
+      "cliDescription": "LLMTR API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "providers": {
+      "llmtr": {
+        "baseUrl": "https://llmtr.com/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "llmtr/gemma-4",
+            "name": "Gemma 4 (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "llmtr/qwen3-6-35b",
+            "name": "Qwen3.6 35B-A3B (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "llmtr/qwen3-5-4b",
+            "name": "Qwen3.5 4B (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "llmtr/trendyol-7b",
+            "name": "Trendyol 7B (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "llmtr/magibu-11b-v8",
+            "name": "Magibu 11B v8 (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "llmtr/medgemma-4b",
+            "name": "MedGemma 4B (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "llmtr/sincap",
+            "name": "Sincap (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 32768,
+            "maxTokens": 8192,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "anthropic/claude-sonnet-5",
+            "name": "Claude Sonnet 5 (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "anthropic/claude-opus-4.8",
+            "name": "Claude Opus 4.8 (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "anthropic/claude-haiku-4.5",
+            "name": "Claude Haiku 4.5 (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "openai/gpt-5.4",
+            "name": "GPT-5.4 (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "openai/gpt-5.4-mini",
+            "name": "GPT-5.4 mini (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "google/gemini-3.1-pro-preview",
+            "name": "Gemini 3.1 Pro Preview (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "google/gemini-3.5-flash",
+            "name": "Gemini 3.5 Flash (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "deepseek/deepseek-v4-pro",
+            "name": "DeepSeek V4 Pro (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "qwen/qwen3.7-max",
+            "name": "Qwen3.7 Max (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-5.2",
+            "name": "GLM-5.2 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-5.1",
+            "name": "GLM-5.1 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-5",
+            "name": "GLM-5 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-5-turbo",
+            "name": "GLM-5 Turbo (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-4.7",
+            "name": "GLM-4.7 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-4.6",
+            "name": "GLM-4.6 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-4.5-air",
+            "name": "GLM-4.5 Air (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "zai/glm-4.6v",
+            "name": "GLM-4.6V (LLMTR)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "qwen/qwen3.7-plus",
+            "name": "Qwen3.7 Plus (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "qwen/qwen3.6-flash",
+            "name": "Qwen3.6 Flash (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "qwen/qwen3.5-plus",
+            "name": "Qwen3.5 Plus (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "qwen/qwen3-coder-plus",
+            "name": "Qwen3 Coder Plus (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "deepseek/deepseek-v4-flash",
+            "name": "DeepSeek V4 Flash (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "deepseek/deepseek-reasoner",
+            "name": "DeepSeek Reasoner (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "deepseek/deepseek-chat",
+            "name": "DeepSeek Chat (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "moonshot/kimi-k2.7-code",
+            "name": "Kimi K2.7 Code (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "moonshot/kimi-k2.6",
+            "name": "Kimi K2.6 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "minimax/minimax-m3",
+            "name": "MiniMax M3 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "minimax/minimax-m2.7",
+            "name": "MiniMax M2.7 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "stepfun/step-3.7-flash",
+            "name": "Step 3.7 Flash (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 65536,
+            "maxTokens": 16384,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "mimo/mimo-v2.5-pro",
+            "name": "MiMo v2.5 Pro (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "kwaikat/kat-coder-pro-v2.5",
+            "name": "KAT Coder Pro v2.5 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "moonshot/kimi-k3",
+            "name": "Kimi K3 (LLMTR)",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          },
+          {
+            "id": "mistral/mistral-large-latest",
+            "name": "Mistral Large (LLMTR)",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 131072,
+            "maxTokens": 32768,
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          }
+        ]
+      }
+    }
+  }
+}
