@@ -29,7 +29,7 @@ describe("session tool limits", () => {
   });
 
   it("clips oversized chunks to the configured tail bytes", () => {
-    const output = appendBoundedTextTail("ignored", Buffer.from("x".repeat(128)), 16);
+    const output = appendBoundedTextTail("ignored", "x".repeat(128), 16);
 
     expect(output).toBe("x".repeat(16));
     expect(Buffer.byteLength(output, "utf8")).toBe(16);
