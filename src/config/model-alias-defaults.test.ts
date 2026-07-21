@@ -449,6 +449,41 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(16384);
   });
 
+  it("caps explicit mistral maxTokens above the named model limit", () => {
+    const cfg = buildMistralProviderConfig({ maxTokens: 17_000 });
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
+  });
+
+  it.each(["custom-mistral-model", "constructor"])(
+    "preserves explicit maxTokens for custom mistral model %s",
+    (modelId) => {
+      const cfg = buildMistralProviderConfig({
+        modelId,
+        contextWindow: 128_000,
+        maxTokens: 32_000,
+      });
+
+      const next = applyModelDefaults(cfg);
+
+      expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(32_000);
+    },
+  );
+
+  it("keeps the safe fallback for context-sized custom mistral maxTokens", () => {
+    const cfg = buildMistralProviderConfig({
+      modelId: "custom-mistral-model",
+      contextWindow: 128_000,
+      maxTokens: 128_000,
+    });
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(8192);
+  });
+
   it("propagates a provider policy api default to models", () => {
     const cfg = {
       models: {
