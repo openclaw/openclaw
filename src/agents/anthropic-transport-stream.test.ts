@@ -3555,7 +3555,7 @@ describe("anthropic transport stream", () => {
           },
         ],
       } as AnthropicStreamContext,
-      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      { apiKey: "unit-test-anthropic-key-placeholder" } as AnthropicStreamOptions,
     );
 
     const userMessage = findRecord(
