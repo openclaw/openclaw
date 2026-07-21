@@ -786,3 +786,32 @@ openclaw cron add --name pr-triage --cron "*/30 * * * *" \
   --precheck-command 'test "$(gh pr list --repo owner/repo --state open --json number -q "length")" -gt 0 && echo WORK_NEEDED || echo NO_WORK' \
   --message "Review open PRs and post a summary."
 ```
+
+### Cost stats: measure the savings
+
+`openclaw cron stats` rolls up run history into skipped-vs-ran and token totals so you can see the gate paying off:
+
+```bash
+openclaw cron stats                 # fleet-wide, last 200 runs/job
+openclaw cron stats --id <jobId>    # one job
+openclaw cron stats --json          # machine-readable
+```
+
+Output highlights `skipped` (with skip-rate %), `precheckSkipped` (runs the shell gate short-circuited), `modelRuns`, and `tokens`. A healthy poller after adding `precheck` shows a high skip-rate and low `modelRuns`.
+
+### Recipe: convert a poller `agentTurn` into `precheck` + `agentTurn`
+
+Before — always pays for a model turn:
+
+```bash
+openclaw cron add --name pr-triage --cron "*/30 * * * *" \
+  --session isolated --message "Review open PRs and summarize."
+```
+
+After — model only runs when there are open PRs:
+
+```bash
+openclaw cron edit pr-triage \
+  --precheck-command 'test "$(gh pr list --repo owner/repo --state open --json number -q "length")" -gt 0 && echo WORK_NEEDED || echo NO_WORK'
+# verify with: openclaw cron stats --id pr-triage
+```

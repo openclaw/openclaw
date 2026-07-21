@@ -120,6 +120,10 @@ export function registerCronEditCommand(cron: Command) {
       .option("--trigger-script <path|->", "Set condition script from file, or - for stdin")
       .option("--trigger-once", "Disable after the first successful triggered run", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
+      .option("--precheck-command <shell>", "Set zero-token shell precheck gate (see #112371)")
+      .option("--precheck-timeout-ms <n>", "Set precheck timeout in milliseconds")
+      .option("--precheck-cwd <path>", "Set precheck working directory")
+      .option("--clear-precheck", "Remove the precheck gate", false)
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
       .option("--script <file|->", "Set headless script payload from file, or - for stdin")
@@ -319,6 +323,27 @@ export function registerCronEditCommand(cron: Command) {
               ...existing.pacing,
               ...(pacingMin ? { min: pacingMin } : {}),
               ...(pacingMax ? { max: pacingMax } : {}),
+            };
+          }
+
+          const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+          if (opts.clearPrecheck && precheckCommand) {
+            throw new Error("Use --clear-precheck or --precheck-command, not both");
+          }
+          if (opts.clearPrecheck) {
+            patch.precheck = null;
+          } else if (precheckCommand) {
+            const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+            const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+            patch.precheck = {
+              kind: "exec",
+              command: precheckCommand,
+              ...(timeoutMs !== undefined && Number.isFinite(timeoutMs)
+                ? { timeoutMs: Math.floor(timeoutMs) }
+                : {}),
+              ...(normalizeOptionalString(opts.precheckCwd)
+                ? { cwd: normalizeOptionalString(opts.precheckCwd) }
+                : {}),
             };
           }
 
