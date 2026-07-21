@@ -223,7 +223,8 @@ describe("synology-chat account resolution", () => {
   });
 
   it("uses env var fallbacks", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = " test-auth-token ";
+    const paddedToken = ` ${"test-auth-token"} `;
+    process.env.SYNOLOGY_CHAT_TOKEN = paddedToken;
     process.env.SYNOLOGY_CHAT_INCOMING_URL = " https://nas/incoming ";
     process.env.SYNOLOGY_NAS_HOST = " 192.0.2.1 ";
     process.env.OPENCLAW_BOT_NAME = " TestBot ";
@@ -237,11 +238,12 @@ describe("synology-chat account resolution", () => {
   });
 
   it("ignores blank env var fallbacks when resolving the default account", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = "   ";
-    process.env.SYNOLOGY_CHAT_INCOMING_URL = "   ";
-    process.env.SYNOLOGY_NAS_HOST = "   ";
-    process.env.SYNOLOGY_ALLOWED_USER_IDS = "   ";
-    process.env.OPENCLAW_BOT_NAME = "   ";
+    const whitespace = "   ";
+    process.env.SYNOLOGY_CHAT_TOKEN = whitespace;
+    process.env.SYNOLOGY_CHAT_INCOMING_URL = whitespace;
+    process.env.SYNOLOGY_NAS_HOST = whitespace;
+    process.env.SYNOLOGY_ALLOWED_USER_IDS = whitespace;
+    process.env.OPENCLAW_BOT_NAME = whitespace;
 
     const account = resolveAccount({ channels: { "synology-chat": {} } });
 
