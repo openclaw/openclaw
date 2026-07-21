@@ -235,12 +235,14 @@ export function buildOpenAISdkRequestOptions(
   signal?: AbortSignal,
   options?: { stream?: boolean },
   maxRetries?: number,
-): {
-  signal?: AbortSignal;
-  timeout?: number;
-  headers?: Record<string, string>;
-  maxRetries?: number;
-} | undefined {
+):
+  | {
+      signal?: AbortSignal;
+      timeout?: number;
+      headers?: Record<string, string>;
+      maxRetries?: number;
+    }
+  | undefined {
   const timeout = resolveOpenAISdkTimeoutMs(model);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
