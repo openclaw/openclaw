@@ -1926,9 +1926,9 @@ describe("gateway/node-registry", () => {
     ]);
     expect(listConnectedNodePluginTools()).toHaveLength(1);
 
-    expect(
-      registry.invalidateConnectionForPairingChange("conn-1", "device-token-revoked"),
-    ).toBe(true);
+    expect(registry.invalidateConnectionForPairingChange("conn-1", "device-token-revoked")).toBe(
+      true,
+    );
 
     expect(client.invalidated).toBe(true);
     expect(client.invalidatedReason).toBe("device-token-revoked");

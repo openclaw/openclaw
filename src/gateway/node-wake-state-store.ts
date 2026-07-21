@@ -1,13 +1,7 @@
 type StoredNodeWakeAttempt = {
   available: boolean;
   throttled: boolean;
-  path:
-    | "throttled"
-    | "no-registration"
-    | "no-auth"
-    | "sent"
-    | "send-error"
-    | "invalidated";
+  path: "throttled" | "no-registration" | "no-auth" | "sent" | "send-error" | "invalidated";
   durationMs: number;
   apnsStatus?: number;
   apnsReason?: string;

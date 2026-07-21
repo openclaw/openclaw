@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  getNodeWakeStateSnapshot,
-  resetNodeWakeStateForTest,
-} from "./node-wake-state.test-support.js";
-import {
   captureNodeWakeLifecycle,
   clearNodeWakeState,
   invalidateNodeWakeState,
@@ -13,6 +9,10 @@ import {
   runNodeWakeNudgeAttempt,
   type NodeWakeAttempt,
 } from "./node-wake-state.js";
+import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "./node-wake-state.test-support.js";
 
 const sentWake: NodeWakeAttempt = {
   available: true,

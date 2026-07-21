@@ -655,10 +655,7 @@ export class NodeRegistry {
   }
 
   /** Immediately retires one exact transport after its persisted pairing authority changes. */
-  invalidateConnectionForPairingChange(
-    connId: string,
-    reason = "device-pairing-changed",
-  ): boolean {
+  invalidateConnectionForPairingChange(connId: string, reason = "device-pairing-changed"): boolean {
     const nodeId = this.nodesByConn.get(connId);
     const node = nodeId ? this.nodesById.get(nodeId) : undefined;
     if (!node || node.connId !== connId) {

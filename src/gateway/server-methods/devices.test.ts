@@ -10,15 +10,15 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import {
-  getNodeWakeStateSnapshot,
-  resetNodeWakeStateForTest,
-} from "../node-wake-state.test-support.js";
-import {
   captureNodeWakeLifecycle,
   releaseNodeWakeLifecycle,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
 } from "../node-wake-state.js";
+import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "../node-wake-state.test-support.js";
 import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 

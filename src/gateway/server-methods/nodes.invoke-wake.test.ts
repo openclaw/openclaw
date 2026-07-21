@@ -6,14 +6,14 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  getNodeWakeStateSnapshot,
-  resetNodeWakeStateForTest,
-} from "../node-wake-state.test-support.js";
-import {
   captureNodeWakeLifecycle,
   clearNodeWakeState,
   invalidateNodeWakeState,
 } from "../node-wake-state.js";
+import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "../node-wake-state.test-support.js";
 import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 import {
   maybeSendNodeWakeNudge,

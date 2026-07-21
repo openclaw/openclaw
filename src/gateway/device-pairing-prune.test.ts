@@ -13,14 +13,14 @@ import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-pru
 import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
 import { enqueuePendingNodeAction, listPendingNodeActions } from "./node-runtime-state.js";
 import {
-  getNodeWakeStateSnapshot,
-  resetNodeWakeStateForTest,
-} from "./node-wake-state.test-support.js";
-import {
   captureNodeWakeLifecycle,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
 } from "./node-wake-state.js";
+import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "./node-wake-state.test-support.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
 
