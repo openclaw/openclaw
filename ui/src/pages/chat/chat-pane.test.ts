@@ -22,8 +22,10 @@ import {
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { resolveChatPaneObserverRunId } from "./chat-pane.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
+import { ChatObserverHudState } from "./components/chat-observer-hud.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
@@ -98,6 +100,147 @@ function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
     __openclaw: { seq },
   };
 }
+
+describe("chat pane observer HUD", () => {
+  it("shows a projected digest when attaching to an already-running session", () => {
+    const digest = {
+      sessionKey: "agent:main:current",
+      runId: "server-run",
+      revision: 1,
+      updatedAt: 2_000,
+      headline: "Already running",
+      health: "on-track" as const,
+    };
+    const activeRunId = resolveChatPaneObserverRunId({
+      localRunId: null,
+      session: { hasActiveRun: true, activeRunIds: ["server-run"] },
+      digest,
+    });
+
+    expect(activeRunId).toBe("server-run");
+    expect(
+      new ChatObserverHudState(false).mode({
+        running: activeRunId !== null,
+        activeRunId,
+        digest,
+        sideChatOpen: false,
+      }),
+    ).toBe("pill");
+  });
+});
+
+describe("chat pane pull request refresh", () => {
+  it("forwards an explicit refresh and publishes live PR state", async () => {
+    const request = vi.fn().mockResolvedValue({
+      pullRequests: [
+        {
+          number: 111532,
+          owner: "openclaw",
+          repo: "openclaw",
+          branch: "claude/pr-detection",
+          title: "Detect pull requests",
+          url: "https://github.com/openclaw/openclaw/pull/111532",
+          state: "open",
+        },
+      ],
+      rateLimited: false,
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
+    const epoch = Symbol("pr-refresh");
+    const setOpenPullRequest = vi.fn();
+    const sessions = {
+      captureOpenPullRequestEpoch: vi.fn(() => epoch),
+      setOpenPullRequest,
+    } as unknown as SessionCapability;
+    const { pane } = createTestChatPane({ client, sessions });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    await pane.refreshSessionPullRequests({ refresh: true });
+
+    expect(request).toHaveBeenCalledWith(
+      "controlUi.sessionPullRequests",
+      expect.objectContaining({ sessionKey: "agent:main:current", refresh: true }),
+    );
+    expect(setOpenPullRequest).toHaveBeenCalledWith("agent:main:current", true, epoch);
+  });
+
+  it("clears the pane snapshot when the Gateway source disconnects", () => {
+    const client = {} as GatewayBrowserClient;
+    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    pane.sessionPullRequests = [
+      {
+        number: 111532,
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "claude/pr-detection",
+        title: "Detect pull requests",
+        url: "https://github.com/openclaw/openclaw/pull/111532",
+        state: "open",
+      },
+    ];
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      connected: false,
+    });
+
+    expect(pane.sessionPullRequests).toEqual([]);
+  });
+
+  it("preserves shared PR state for an empty rate-limited snapshot", async () => {
+    const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
+    const setOpenPullRequest = vi.fn();
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        captureOpenPullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+        setOpenPullRequest,
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    await pane.refreshSessionPullRequests();
+
+    expect(setOpenPullRequest).not.toHaveBeenCalled();
+  });
+
+  it("clears shared live PR state after the PR settles", async () => {
+    const request = vi.fn().mockResolvedValue({
+      pullRequests: [
+        {
+          number: 111532,
+          owner: "openclaw",
+          repo: "openclaw",
+          branch: "claude/pr-detection",
+          title: "Detect pull requests",
+          url: "https://github.com/openclaw/openclaw/pull/111532",
+          state: "merged",
+        },
+      ],
+      rateLimited: false,
+    });
+    const epoch = Symbol("pr-refresh");
+    const setOpenPullRequest = vi.fn();
+    const { pane } = createTestChatPane({
+      client: { request } as unknown as GatewayBrowserClient,
+      sessions: {
+        captureOpenPullRequestEpoch: vi.fn(() => epoch),
+        setOpenPullRequest,
+      } as unknown as SessionCapability,
+    });
+    pane.context.gateway.snapshot.hello = {
+      features: { methods: ["controlUi.sessionPullRequests"] },
+    } as never;
+
+    await pane.refreshSessionPullRequests();
+
+    expect(setOpenPullRequest).toHaveBeenCalledWith("agent:main:current", false, epoch);
+  });
+});
 
 describe("chat pane header state", () => {
   it("commits a trimmed label and clears with null", async () => {

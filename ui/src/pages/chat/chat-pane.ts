@@ -10,6 +10,7 @@ import {
   type SessionCatalogTranscriptItem,
   type SessionDiscussionInfo,
   type SessionDiscussionState,
+  type SessionObserverDigest,
   type SessionsCatalogContinueResult,
   type SessionsCatalogReadResult,
   type SessionsFilesRevealResult,
@@ -92,6 +93,7 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -255,6 +257,23 @@ type ResolvedBoardView = {
   dock: BoardTab["chatDock"];
   reopenDock: VisibleBoardDock;
 };
+
+export function resolveChatPaneObserverRunId(params: {
+  localRunId: string | null;
+  session: Pick<GatewaySessionRow, "hasActiveRun" | "activeRunIds"> | undefined;
+  digest: SessionObserverDigest | null;
+}): string | null {
+  if (params.localRunId) {
+    return params.localRunId;
+  }
+  if (!params.session?.hasActiveRun) {
+    return null;
+  }
+  const activeRunIds = params.session.activeRunIds ?? [];
+  return params.digest?.runId && activeRunIds.includes(params.digest.runId)
+    ? params.digest.runId
+    : (activeRunIds[0] ?? null);
+}
 
 const boardChatDockLayout = createDockPanelLayout({
   storageKey: "openclaw.control.board-chat-dock.v1",
@@ -438,6 +457,8 @@ class ChatPane extends OpenClawLightDomElement {
   } | null = null;
   @litState() private boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() private resetConfirmationOpen = false;
+  @litState() private observerHudReady = customElements.get("openclaw-chat-observer-hud") != null;
+  private observerHudLoad: Promise<void> | null = null;
   private resetConfirmation:
     | {
         sessionKey: string;
@@ -2376,6 +2397,27 @@ class ChatPane extends OpenClawLightDomElement {
         }
       });
     }
+    const projectedObserverDigest = this.state?.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
+    )?.observerDigest;
+    if (this.state?.observerDigest || projectedObserverDigest) {
+      this.ensureObserverHud();
+    }
+  }
+
+  private ensureObserverHud() {
+    if (this.observerHudReady || this.observerHudLoad) {
+      return;
+    }
+    this.observerHudLoad = import("./components/chat-observer-hud.ts")
+      .then(() => {
+        if (this.isConnected) {
+          this.observerHudReady = true;
+        }
+      })
+      .finally(() => {
+        this.observerHudLoad = null;
+      });
   }
 
   override disconnectedCallback() {
@@ -3145,6 +3187,25 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
+      ? {
+          sessionKey: selectedSession.key,
+          runId: selectedSession.observerDigest.runId,
+          revision: selectedSession.observerDigest.revision,
+          updatedAt: selectedSession.observerDigest.updatedAt,
+          headline: selectedSession.observerDigest.headline,
+          health: selectedSession.observerDigest.health,
+        }
+      : null;
+    const observerDigest = pickFreshestObserverDigest(
+      state.observerDigest,
+      projectedObserverDigest,
+    );
+    const observerRunId = resolveChatPaneObserverRunId({
+      localRunId: state.chatRunId,
+      session: selectedSession,
+      digest: observerDigest,
+    });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
     const visibleWorkspaceConflict =
       workspaceConflict &&
@@ -3251,6 +3312,11 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
+      observerDigest: catalogKey ? null : observerDigest,
+      observerHudReady: !catalogKey && this.observerHudReady,
+      observerRunId: catalogKey ? null : observerRunId,
+      observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+      observerLastReadAt: selectedSession?.lastReadAt,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
