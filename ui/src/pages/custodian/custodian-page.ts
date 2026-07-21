@@ -46,6 +46,7 @@ import {
 
 const SYSTEM_AGENT_CHAT_TIMEOUT_MS = 190_000;
 const SYSTEM_CHANGE_PAGE_SIZE = 50;
+const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;
 
 export class CustodianPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
@@ -429,7 +430,12 @@ export class CustodianPage extends OpenClawLightDomElement {
       this.sensitive = result.sensitive === true;
       this.wizardInputPending = result.wizardInputPending === true;
       this.retryParams = null;
-      this.appendAssistant(result.reply, parseCustodianQuestion(result.question));
+      const question = parseCustodianQuestion(result.question);
+      // Match regular chat: NO_REPLY is a delivery sentinel, not transcript content.
+      const silentReply = SILENT_REPLY_PATTERN.test(result.reply);
+      if (!silentReply || question) {
+        this.appendAssistant(silentReply ? "" : result.reply, question);
+      }
       if (result.action === "open-agent") {
         let sessionKey = this.context.gateway.snapshot.sessionKey?.trim();
         if (result.agentId) {
@@ -546,6 +552,10 @@ export class CustodianPage extends OpenClawLightDomElement {
     if (!question) {
       return;
     }
+    if (question.skipAction === "exit") {
+      this.exitSetup();
+      return;
+    }
     // Closed wizard selects accept cancel; open "other" prompts use their visible free-form reply.
     const outcome = await this.send(
       question.isOther ? t("optionCard.skip") : "cancel",
@@ -654,12 +664,14 @@ export class CustodianPage extends OpenClawLightDomElement {
             const showQuestion =
               message.question !== null && !this.dismissedQuestions.has(questionKey);
             return html`
-              ${renderMessageGroup(toCustodianMessageGroup(message), {
-                showReasoning: false,
-                showToolCalls: false,
-                assistantName: t("custodian.title"),
-                assistantAvatar: "OC",
-              })}
+              ${message.text
+                ? renderMessageGroup(toCustodianMessageGroup(message), {
+                    showReasoning: false,
+                    showToolCalls: false,
+                    assistantName: t("custodian.title"),
+                    assistantAvatar: "OC",
+                  })
+                : nothing}
               ${renderCustodianEarlierDivider(message, this.earlierBoundaryAfterId)}
               ${showQuestion
                 ? renderCustodianQuestionCard({
