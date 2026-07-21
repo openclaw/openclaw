@@ -464,8 +464,6 @@ enum class GatewayMethod(
   BoardPromptAuthorize("board.prompt.authorize"),
   BoardDataRead("board.data.read"),
   BoardAction("board.action"),
-  SafetyEventsList("safety.events.list"),
-  SafetyEventsSummary("safety.events.summary"),
 }
 
 enum class GatewayEvent(

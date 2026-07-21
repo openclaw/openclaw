@@ -70,7 +70,11 @@ describe("listGatewayMethods", () => {
     expect(methods.indexOf("node.pluginTools.update")).toBe(
       methods.indexOf("node.pluginSurface.refresh") + 1,
     );
-    expect(methods.slice(-3)).toEqual(["board.prompt.authorize", "board.data.read", "board.action"]);
+    expect(methods.slice(-3)).toEqual([
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+    ]);
   });
 
   it("advertises ClawHub skill trust methods", () => {

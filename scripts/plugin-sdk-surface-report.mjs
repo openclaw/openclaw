@@ -105,7 +105,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 26,
   "channel-reply-pipeline": 12,
   "interactive-runtime": 13,
-  "infra-runtime": 593,
+  "infra-runtime": 604,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -209,7 +209,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +11: host-observable AI safety taxonomy event and metadata types.
-      4732,
+      4743,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -222,7 +222,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1697,
+      1708,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

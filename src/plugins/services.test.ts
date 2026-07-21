@@ -171,7 +171,9 @@ describe("startPluginServices", () => {
       config: createServiceConfig(),
     });
     expect(capturedCtx).toBeDefined();
-    expect((capturedCtx as unknown as Record<string, unknown>)["safetyDiagnostics"]).toBeUndefined();
+    expect(
+      (capturedCtx as unknown as Record<string, unknown>)["safetyDiagnostics"],
+    ).toBeUndefined();
   });
 
   it("starts services and stops them in reverse order", async () => {

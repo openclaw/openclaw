@@ -311,17 +311,35 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           };
           const { type } = event;
           if (type === "ai_safety.prompt_injection.signal") {
-            recorders.recordPromptInjectionSignal(event as import("../api.js").DiagnosticPromptInjectionSignalEvent, aiMeta);
+            recorders.recordPromptInjectionSignal(
+              event as import("../api.js").DiagnosticPromptInjectionSignalEvent,
+              aiMeta,
+            );
           } else if (type === "ai_safety.tool_policy.decision") {
-            recorders.recordToolPolicyDecision(event as import("../api.js").DiagnosticToolPolicyDecisionEvent, aiMeta);
+            recorders.recordToolPolicyDecision(
+              event as import("../api.js").DiagnosticToolPolicyDecisionEvent,
+              aiMeta,
+            );
           } else if (type === "ai_safety.external_content.consumed") {
-            recorders.recordExternalContentConsumed(event as import("../api.js").DiagnosticExternalContentConsumedEvent, aiMeta);
+            recorders.recordExternalContentConsumed(
+              event as import("../api.js").DiagnosticExternalContentConsumedEvent,
+              aiMeta,
+            );
           } else if (type === "ai_safety.user_feedback.received") {
-            recorders.recordUserFeedbackReceived(event as import("../api.js").DiagnosticUserFeedbackReceivedEvent, aiMeta);
+            recorders.recordUserFeedbackReceived(
+              event as import("../api.js").DiagnosticUserFeedbackReceivedEvent,
+              aiMeta,
+            );
           } else if (type === "ai_safety.memory_context.selected") {
-            recorders.recordMemoryContextSelected(event as import("../api.js").DiagnosticMemoryContextSelectionEvent, aiMeta);
+            recorders.recordMemoryContextSelected(
+              event as import("../api.js").DiagnosticMemoryContextSelectionEvent,
+              aiMeta,
+            );
           } else if (type === "ai_safety.eval.result") {
-            recorders.recordEvalResult(event as import("../api.js").DiagnosticEvalResultEvent, aiMeta);
+            recorders.recordEvalResult(
+              event as import("../api.js").DiagnosticEvalResultEvent,
+              aiMeta,
+            );
           }
         } else {
           baseHandler(event, metadata, privateData);
