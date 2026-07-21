@@ -498,8 +498,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         const result = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
-        // can skip the redundant text delivery that arrives after onIdle closes
-        // the streaming card.
+        // can skip the redundant text delivery that arrives after turn settlement
+        // closes the streaming card.
         if (result.visibleReplySent) {
           markVisibleReplySent();
         }
@@ -887,7 +887,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       }
       await Promise.resolve(typingCallbacks?.onReplyStart?.());
     },
-    onIdle: () => queueIdleSideEffects(),
+    // CardKit owns the final visible content and provider id. The channel-turn kernel awaits
+    // onSettled before releasing the turn; dispatcher onIdle is intentionally fire-and-forget.
+    onSettled: () => queueIdleSideEffects(),
     onCleanup: () => {
       textDeliveryProgressByKey.clear();
       preparedTextDeliveryById.clear();

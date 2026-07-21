@@ -392,7 +392,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         // An aborted run stops emitting payloads; closeout happens on idle.
         break;
       case "idle":
-        await options.onIdle?.();
+        await options.onSettled?.();
         options.onCleanup?.();
         break;
       case "wire-fault":
