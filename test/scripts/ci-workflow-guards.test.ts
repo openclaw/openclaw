@@ -3256,6 +3256,20 @@ describe("ci workflow guards", () => {
     expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
   });
 
+  it("bounds the workflow sanity actionlint downloads", () => {
+    const workflow = readWorkflowSanityWorkflow();
+    const installStep = expectDefined(
+      workflow.jobs.actionlint.steps.find(
+        (step: WorkflowStep) => step.name === "Install actionlint",
+      ),
+      "actionlint install step",
+    );
+
+    expect(installStep.run).toContain("--connect-timeout 10");
+    expect(installStep.run).toContain("--retry-max-time 120");
+    expect(installStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
+  });
+
   it("runs generated baseline drift checks in workflow sanity", () => {
     const workflow = readWorkflowSanityWorkflow();
     const steps = workflow.jobs["generated-doc-baselines"].steps;

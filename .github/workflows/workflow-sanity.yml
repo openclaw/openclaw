@@ -185,6 +185,14 @@ jobs:
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
           # GitHub release downloads occasionally return transient 5xx responses.
           # Retry all curl errors here so workflow-sanity does not fail closed on
+          # a one-off release edge outage. Bound each transfer and the retry
+          # window so a stalled connection cannot hold the job indefinitely.
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
+            --connect-timeout 10 --max-time 60 --retry-max-time 120 \
+            -o "${archive}" "${base_url}/${archive}"
+          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
+            --connect-timeout 10 --max-time 30 --retry-max-time 60 \
+            -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           # a one-off release edge outage.
           curl_args=(
             --connect-timeout 10
