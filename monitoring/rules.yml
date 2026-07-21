@@ -1,0 +1,55 @@
+groups:
+  - name: mythos_performance
+    interval: 30s
+    rules:
+      # Vector search latency percentiles
+      - record: mythos:vector_search:duration_seconds:p95
+        expr: histogram_quantile(0.95, rate(mythos_vector_search_duration_seconds_bucket[5m]))
+        labels:
+          service: mythos-gateway
+
+      - record: mythos:vector_search:duration_seconds:p99
+        expr: histogram_quantile(0.99, rate(mythos_vector_search_duration_seconds_bucket[5m]))
+        labels:
+          service: mythos-gateway
+
+      # Text search latency percentiles
+      - record: mythos:text_search:duration_seconds:p95
+        expr: histogram_quantile(0.95, rate(mythos_text_search_duration_seconds_bucket[5m]))
+        labels:
+          service: mythos-gateway
+
+      - record: mythos:text_search:duration_seconds:p99
+        expr: histogram_quantile(0.99, rate(mythos_text_search_duration_seconds_bucket[5m]))
+        labels:
+          service: mythos-gateway
+
+      # Request rate by agent
+      - record: mythos:agent:requests:rate5m
+        expr: rate(mythos_agent_requests_total[5m])
+        labels:
+          service: mythos-agents
+
+      # Memory usage by engine
+      - record: mythos:memory:usage_bytes
+        expr: sum by (engine) (mythos_memory_usage_bytes)
+        labels:
+          service: mythos-memory
+
+  - name: mythos_availability
+    interval: 1m
+    rules:
+      # Uptime percentage (5m window)
+      - record: mythos:gateway:uptime:ratio5m
+        expr: avg_over_time(up{job="mythos-gateway"}[5m])
+        labels:
+          service: mythos-gateway
+
+      # Error rate
+      - record: mythos:gateway:error_rate:ratio5m
+        expr: |
+          sum(rate(mythos_http_requests_total{status=~"5.."}[5m]))
+          /
+          sum(rate(mythos_http_requests_total[5m]))
+        labels:
+          service: mythos-gateway

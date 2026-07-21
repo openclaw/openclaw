@@ -1,0 +1,134 @@
+groups:
+  - name: mythos_alerts
+    rules:
+      # High latency alerts
+      - alert: HighVectorSearchLatency
+        expr: mythos:vector_search:duration_seconds:p95 > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: mythos-gateway
+        annotations:
+          summary: "High vector search latency (p95 > 100ms)"
+          description: "Vector search p95 latency is {{ $value }}s, expected < 100ms"
+          runbook_url: "https://docs.openclaw.ai/runbooks/high-latency"
+
+      - alert: HighTextSearchLatency
+        expr: mythos:text_search:duration_seconds:p95 > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          service: mythos-gateway
+        annotations:
+          summary: "High text search latency (p95 > 500ms)"
+          description: "Text search p95 latency is {{ $value }}s, expected < 500ms"
+          runbook_url: "https://docs.openclaw.ai/runbooks/high-latency"
+
+      - alert: CriticalVectorSearchLatency
+        expr: mythos:vector_search:duration_seconds:p99 > 1.0
+        for: 2m
+        labels:
+          severity: critical
+          service: mythos-gateway
+        annotations:
+          summary: "Critical vector search latency (p99 > 1s)"
+          description: "Vector search p99 latency is {{ $value }}s, immediate action required"
+          runbook_url: "https://docs.openclaw.ai/runbooks/critical-latency"
+
+      # Error rate alerts
+      - alert: HighErrorRate
+        expr: mythos:gateway:error_rate:ratio5m > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: mythos-gateway
+        annotations:
+          summary: "High error rate (>5%)"
+          description: "Gateway error rate is {{ $value | humanizePercentage }}, expected < 5%"
+          runbook_url: "https://docs.openclaw.ai/runbooks/high-error-rate"
+
+      - alert: CriticalErrorRate
+        expr: mythos:gateway:error_rate:ratio5m > 0.15
+        for: 2m
+        labels:
+          severity: critical
+          service: mythos-gateway
+        annotations:
+          summary: "Critical error rate (>15%)"
+          description: "Gateway error rate is {{ $value | humanizePercentage }}, immediate action required"
+          runbook_url: "https://docs.openclaw.ai/runbooks/critical-error-rate"
+
+      # Availability alerts
+      - alert: GatewayDown
+        expr: up{job="mythos-gateway"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: mythos-gateway
+        annotations:
+          summary: "Gateway is down"
+          description: "Mythos Gateway has been down for more than 1 minute"
+          runbook_url: "https://docs.openclaw.ai/runbooks/gateway-down"
+
+      # Memory alerts
+      - alert: HighMemoryUsage
+        expr: mythos:memory:usage_bytes > 8e9  # 8GB
+        for: 10m
+        labels:
+          severity: warning
+          service: mythos-memory
+        annotations:
+          summary: "High memory usage (>8GB)"
+          description: "Memory usage is {{ $value | humanize1024 }}iB, consider scaling or cleanup"
+          runbook_url: "https://docs.openclaw.ai/runbooks/high-memory"
+
+      - alert: CriticalMemoryUsage
+        expr: mythos:memory:usage_bytes > 12e9  # 12GB
+        for: 5m
+        labels:
+          severity: critical
+          service: mythos-memory
+        annotations:
+          summary: "Critical memory usage (>12GB)"
+          description: "Memory usage is {{ $value | humanize1024 }}iB, immediate action required"
+          runbook_url: "https://docs.openclaw.ai/runbooks/critical-memory"
+
+      # Rust engine alerts
+      - alert: RustEngineFallback
+        expr: mythos_engine_fallback_total > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: rust-engines
+        annotations:
+          summary: "Rust engine fallback active"
+          description: "{{ $value }} fallbacks to JavaScript engines detected in last 5 minutes"
+          runbook_url: "https://docs.openclaw.ai/runbooks/engine-fallback"
+
+      # Agent performance alerts
+      - alert: AgentSlowResponse
+        expr: rate(mythos_agent_response_duration_seconds_sum[5m]) / rate(mythos_agent_response_duration_seconds_count[5m]) > 30
+        for: 5m
+        labels:
+          severity: warning
+          service: mythos-agents
+        annotations:
+          summary: "Slow agent response time (>30s avg)"
+          description: "Average agent response time is {{ $value }}s"
+          runbook_url: "https://docs.openclaw.ai/runbooks/slow-agents"
+
+      # Workflow alerts
+      - alert: WorkflowFailureRate
+        expr: |
+          sum(rate(mythos_workflow_executions_total{status="failed"}[5m]))
+          /
+          sum(rate(mythos_workflow_executions_total[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: mythos-workflows
+        annotations:
+          summary: "High workflow failure rate (>10%)"
+          description: "Workflow failure rate is {{ $value | humanizePercentage }}"
+          runbook_url: "https://docs.openclaw.ai/runbooks/workflow-failures"

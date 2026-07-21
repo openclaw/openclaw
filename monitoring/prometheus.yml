@@ -1,0 +1,82 @@
+# Prometheus Configuration for Mythos
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Mythos Gateway metrics
+  - job_name: 'mythos-gateway'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['gateway:18789']
+        labels:
+          service: 'mythos-gateway'
+          environment: 'production'
+
+  # Mythos Agent metrics
+  - job_name: 'mythos-agents'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['gateway:18789']
+        labels:
+          service: 'mythos-agents'
+          environment: 'production'
+
+  # Memory Core metrics
+  - job_name: 'mythos-memory'
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['gateway:18789']
+        labels:
+          service: 'mythos-memory'
+          environment: 'production'
+
+  # Rust Native Engines metrics
+  - job_name: 'mythos-rust-engines'
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    static_configs:
+      - targets: ['gateway:18789']
+        labels:
+          service: 'rust-engines'
+          environment: 'production'
+
+  # PostgreSQL (if using for advanced memory)
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+        labels:
+          service: 'postgres'
+
+  # Redis (for caching)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+        labels:
+          service: 'redis'
+
+  # Node Exporter (system metrics)
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+# Recording rules for common queries
+rule_files:
+  - "rules.yml"
