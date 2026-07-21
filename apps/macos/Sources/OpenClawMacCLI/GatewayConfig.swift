@@ -1,41 +1,4 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#endif
-
-/// Resolve the openclaw config file URL using the same precedence as the macOS
-/// GUI (`OpenClawPaths.configURL`):
-///   1. `OPENCLAW_CONFIG_PATH` (explicit override)
-///   2. `$OPENCLAW_STATE_DIR/openclaw.json` (custom state dir)
-///   3. `~/.openclaw/openclaw.json` (default)
-func resolveOpenClawConfigURL() -> URL {
-    if let raw = envValue("OPENCLAW_CONFIG_PATH") {
-        return URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath)
-    }
-    if let stateDir = envValue("OPENCLAW_STATE_DIR") {
-        let dir = URL(fileURLWithPath: stateDir, isDirectory: true)
-        let candidate = dir.appendingPathComponent("openclaw.json")
-        if FileManager().isReadableFile(atPath: candidate.path) {
-            return candidate
-        }
-        // Return the candidate even if it doesn't exist yet, so
-        // configure-remote writes into the state dir rather than the
-        // default home location.
-        return candidate
-    }
-    return FileManager().homeDirectoryForCurrentUser
-        .appendingPathComponent(".openclaw/openclaw.json")
-}
-
-private func envValue(_ key: String) -> String? {
-    #if canImport(Darwin)
-    guard let raw = getenv(key) else { return nil }
-    let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
-    return value.isEmpty ? nil : value
-    #else
-    return nil
-    #endif
-}
 
 struct GatewayConfig {
     var mode: String?
@@ -56,9 +19,26 @@ struct GatewayEndpoint {
     let mode: String
 }
 
+/// Keep standalone CLI reads and configure-remote writes on the same profile.
+/// An explicit config path wins; otherwise the selected state directory owns openclaw.json.
+func resolveOpenClawConfigURL() -> URL {
+    if let configPath = openClawEnvironmentPath("OPENCLAW_CONFIG_PATH") {
+        return URL(fileURLWithPath: NSString(string: configPath).expandingTildeInPath)
+    }
+    let stateDir = openClawEnvironmentPath("OPENCLAW_STATE_DIR").map {
+        URL(fileURLWithPath: NSString(string: $0).expandingTildeInPath, isDirectory: true)
+    } ?? FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw", isDirectory: true)
+    return stateDir.appendingPathComponent("openclaw.json")
+}
+
+private func openClawEnvironmentPath(_ key: String) -> String? {
+    guard let raw = ProcessInfo.processInfo.environment[key] else { return nil }
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return value.isEmpty ? nil : value
+}
+
 func loadGatewayConfig() -> GatewayConfig {
-    let url = resolveOpenClawConfigURL()
-    guard let data = try? Data(contentsOf: url) else { return GatewayConfig() }
+    guard let data = try? Data(contentsOf: resolveOpenClawConfigURL()) else { return GatewayConfig() }
     guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         return GatewayConfig()
     }
