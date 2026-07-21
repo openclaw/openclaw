@@ -4,9 +4,11 @@ import { t } from "../../i18n/index.ts";
 import type { BoardViewWidget, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { BoardWidgetSandboxHost } from "../../lib/board/widget-sandbox-host.ts";
 import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-lifetime.ts";
-import { WIDGET_SIZE_MESSAGE_TYPE } from "../../lib/widget-messages.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 
+// Keep in sync with the identical literal in chat widget-card.ts: a shared
+// module is not worth its startup-bundle cost for one string.
+const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const MAX_FRAME_REFRESH_ATTEMPTS = 3;
 const TICKET_REFRESH_LEAD_MS = 15_000;
 const TICKET_REFRESH_MIN_DELAY_MS = 1_000;

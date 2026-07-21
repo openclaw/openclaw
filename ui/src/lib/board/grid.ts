@@ -244,7 +244,7 @@ export function effectiveBoardWidgetRows(
 }
 
 /** Structural sizing inputs so pure grid math stays free of view-type imports. */
-export type BoardWidgetSizingInput = {
+type BoardWidgetSizingInput = {
   contentKind: string;
   heightMode?: "auto" | "fixed";
   presentation?: "card" | "full-bleed" | "frameless";

@@ -22,7 +22,6 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { WIDGET_SIZE_MESSAGE_TYPE } from "../../../lib/widget-messages.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { exportWidget } from "./widget-export.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
@@ -131,6 +130,7 @@ function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
 // preview iframe can fit short/tall widgets. The event source must be one of our
 // preview frames and the height is clamped, so widget code can only resize its
 // own frame within the same bounds the preview contract allows.
+const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
 const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
