@@ -190,6 +190,20 @@
         "cwd": {
           "type": "string"
         },
+        "execution": {
+          "description": "Execution placement request. Only process backends are executable in this release.",
+          "properties": {
+            "backend": {
+              "description": "Backend id; defaults to \"local\".",
+              "type": "string"
+            },
+            "profile": {
+              "description": "Optional backend profile id.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "label": {
           "type": "string"
         },
@@ -230,7 +244,7 @@
           "type": "boolean"
         },
         "visible": {
-          "description": "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+          "description": "Persistent UI session; subagent only; omit execution/mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
           "type": "boolean"
         },
         "worktree": {

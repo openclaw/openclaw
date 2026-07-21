@@ -16,6 +16,31 @@ import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
+export type AgentExecutionBackendType = "process" | "container" | "kubernetes";
+
+export type AgentExecutionBackendProfileConfig = {
+  /** Human-readable profile label for status/config UIs. */
+  label?: string;
+  /** Resource requests/limits or backend-specific profile metadata. */
+  resources?: Record<string, unknown>;
+  /** Backend-specific extension fields reserved for future remote workers. */
+  [key: string]: unknown;
+};
+
+export type AgentExecutionBackendConfig = {
+  /** Execution backend implementation type. The first shipped implementation is local process. */
+  type: AgentExecutionBackendType;
+  /** Named profiles selectable through sessions_spawn.execution.profile. */
+  profiles?: Record<string, AgentExecutionBackendProfileConfig>;
+};
+
+export type AgentExecutionPlacementConfig = {
+  /** Execution backend id. Defaults to the built-in local process backend. */
+  backend?: string;
+  /** Optional profile id within the selected backend. */
+  profile?: string;
+};
+
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
   agent?: string;
@@ -163,5 +188,7 @@ export type AgentConfig = {
 
 export type AgentsConfig = {
   defaults?: AgentDefaultsConfig;
+  /** Spawn execution backends selectable by sessions_spawn.execution. */
+  executionBackends?: Record<string, AgentExecutionBackendConfig>;
   list?: AgentConfig[];
 };

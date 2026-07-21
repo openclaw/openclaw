@@ -21,6 +21,7 @@ import {
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
+import type { AgentExecutionPlacement } from "./execution-backends.js";
 import { removeInternalSessionEffectsSession } from "./internal-session-effects.js";
 import type { AgentRunSessionTarget } from "./run-session-target.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
@@ -226,6 +227,7 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  executionPlacement?: AgentExecutionPlacement;
   collect?: boolean;
   swarmRequesterSessionKey?: string;
   swarmLaunchIdempotencyKey?: string;
@@ -861,6 +863,7 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      executionPlacement: registerParams.executionPlacement,
     });
     params.runs.set(runId, entry);
     const killReconciliationSnapshots = markOlderKillReconciliationsSuperseded(entry);

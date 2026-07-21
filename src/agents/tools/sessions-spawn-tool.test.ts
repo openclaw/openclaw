@@ -89,7 +89,16 @@ describe("sessions_spawn tool", () => {
 
   function requireSchemaProperty(
     properties:
-      | Record<string, { description?: string; enum?: string[]; type?: string } | undefined>
+      | Record<
+          string,
+          | {
+              description?: string;
+              enum?: string[];
+              type?: string;
+              properties?: Record<string, unknown>;
+            }
+          | undefined
+        >
       | undefined,
     name: string,
   ) {
@@ -165,6 +174,7 @@ describe("sessions_spawn tool", () => {
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
+        execution?: { properties?: Record<string, unknown> };
         resumeSessionId?: { description?: string };
         streamTo?: { description?: string };
       };
@@ -174,6 +184,8 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain('runtime="acp"');
     expect(tool.description).toContain('unless ACP `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
+    expect(schema.properties?.execution?.properties).toHaveProperty("backend");
+    expect(schema.properties?.execution?.properties).toHaveProperty("profile");
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
     expect(resumeSessionId.description).toContain("ACP resume id");
@@ -389,7 +401,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+      "Persistent UI session; subagent only; omit execution/mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     );
     expect(tool.description).toContain("`visible=true`: persistent dashboard session");
     expect(tool.description).toContain('no `mode="run"`');
@@ -628,6 +640,11 @@ describe("sessions_spawn tool", () => {
 
   it.each([
     [
+      "execution",
+      { execution: { backend: "k8s" } },
+      "Parameters unavailable with visible=true: execution: execution placement is not wired to the sessions.create path",
+    ],
+    [
       "thinking",
       { thinking: "high" },
       "Parameters unavailable with visible=true: thinking: thinking overrides are not wired to the sessions.create path",
@@ -671,6 +688,7 @@ describe("sessions_spawn tool", () => {
     await expect(
       tool.execute("visible-unsupported-many", {
         task: "inspect",
+        execution: { backend: "k8s" },
         runtime: "acp",
         thinking: "high",
         thread: true,
@@ -681,7 +699,7 @@ describe("sessions_spawn tool", () => {
         visible: true,
       }),
     ).rejects.toThrow(
-      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+      'Parameters unavailable with visible=true: execution: execution placement is not wired to the sessions.create path; runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     );
   });
 
@@ -1615,6 +1633,37 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("resume prior work");
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.resumeSessionId).toBe("7f4a78e0-f6be-43fe-855c-c1c4fd229bc4");
+  });
+
+  it("passes explicit execution placement through to native subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-execution", {
+      task: "run build",
+      execution: { backend: "local", profile: "small" },
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.execution).toEqual({ backend: "local", profile: "small" });
+  });
+
+  it("passes explicit execution placement through to ACP spawns", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-acp-execution", {
+      runtime: "acp",
+      task: "run build",
+      agentId: "codex",
+      execution: { backend: "local", profile: "small" },
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
+    expect(spawnArgs.execution).toEqual({ backend: "local", profile: "small" });
   });
 
   it("ignores ACP-only fields for subagent spawns", async () => {
