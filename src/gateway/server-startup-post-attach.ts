@@ -574,6 +574,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
     await import("../agents/prepared-model-runtime.js");
   await refreshPreparedModelRuntimeSnapshots(params.cfg, {
     gatewayLifecycle: true,
+    catalogMode: "static",
     ...(params.workspaceDir ? { defaultWorkspaceDir: params.workspaceDir } : {}),
   });
 }
@@ -652,8 +653,8 @@ export async function startGatewaySidecars(params: {
   const skipChannels =
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
     isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
-  // Agent RPC remains available when transports are disabled. Publish its mandatory lifecycle
-  // owner before accepting work so request paths can only observe pending or ready snapshots.
+  // Agent RPC remains available when transports are disabled. Publish configured/static facts before
+  // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
   await measureStartup(params.startupTrace, "sidecars.model-runtime", () =>
     publishStartupModelRuntime(
       {

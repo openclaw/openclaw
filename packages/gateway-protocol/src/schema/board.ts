@@ -34,6 +34,7 @@ export const BOARD_CRON_JOB_ID_MAX_LENGTH = 256;
 export const BOARD_CRON_TRIGGER_PREFIX = "cron.trigger:";
 export const BOARD_WIDGET_TOOL_MAX_LENGTH =
   BOARD_CRON_TRIGGER_PREFIX.length + BOARD_CRON_JOB_ID_MAX_LENGTH;
+export const BOARD_DATA_BINDING_ID_MAX_LENGTH = 64;
 
 export const BoardTabSchema = closedObject({
   tabId: BoardTabIdSchema,
@@ -263,7 +264,7 @@ export type BoardPromptAuthorizeParams = Static<typeof BoardPromptAuthorizeParam
 
 export const BoardDataReadParamsSchema = closedObject({
   ticket: BoardViewTicketSchema,
-  bindingId: Type.String({ minLength: 1, maxLength: 64 }),
+  bindingId: Type.String({ minLength: 1, maxLength: BOARD_DATA_BINDING_ID_MAX_LENGTH }),
   params: Type.Optional(
     Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
       maxProperties: 64,
@@ -272,11 +273,24 @@ export const BoardDataReadParamsSchema = closedObject({
 });
 export type BoardDataReadParams = Static<typeof BoardDataReadParamsSchema>;
 
-export const BoardActionParamsSchema = closedObject({
+export const BoardCronActionParamsSchema = closedObject({
   ticket: BoardViewTicketSchema,
   action: Type.Literal("cron.trigger"),
   jobId: Type.String({ minLength: 1, maxLength: BOARD_CRON_JOB_ID_MAX_LENGTH }),
 });
+export const BoardPluginActionParamsSchema = closedObject({
+  ticket: BoardViewTicketSchema,
+  action: Type.String({ minLength: 1, maxLength: BOARD_WIDGET_TOOL_MAX_LENGTH }),
+  params: Type.Optional(
+    Type.Record(Type.String({ minLength: 1, maxLength: 80 }), Type.Unknown(), {
+      maxProperties: 64,
+    }),
+  ),
+});
+export const BoardActionParamsSchema = Type.Union([
+  BoardCronActionParamsSchema,
+  BoardPluginActionParamsSchema,
+]);
 export type BoardActionParams = Static<typeof BoardActionParamsSchema>;
 
 export const BoardChangedEventSchema = closedObject({

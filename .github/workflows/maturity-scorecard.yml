@@ -45,6 +45,12 @@ on:
       OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY:
         description: Optional OpenAI API key used by maturity scorecard agent steps
         required: false
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Optional Convex credential broker URL supplied by qa-live-shared
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Optional Convex CI credential supplied by qa-live-shared
+        required: false
       # Mixed-trigger workflows must declare referenced secrets for actionlint. Reusable calls
       # remain artifact-only because exact caller and job workflow identities gate every use.
       CLAWSWEEPER_APP_PRIVATE_KEY:
@@ -317,6 +323,8 @@ jobs:
       qa_profile: all
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+      OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
 
   publish:
     name: Publish maturity docs PR

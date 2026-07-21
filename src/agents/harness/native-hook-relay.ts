@@ -18,6 +18,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -2138,7 +2139,12 @@ async function waitForNativeHookRelayApprovalDecision(params: {
       "plugin.approval.waitDecision",
       { timeoutMs: params.timeoutMs + 10_000 },
       { id: params.approvalId },
-    );
+    ).catch((error: unknown) => {
+      if (isApprovalNotFoundError(error)) {
+        return undefined;
+      }
+      throw error;
+    });
   if (!params.signal) {
     return waitPromise;
   }

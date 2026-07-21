@@ -641,6 +641,7 @@ describe("executeNodeHostCommand", () => {
 
     const result = await executeNodeHostCommand({
       command: "bun ./script.ts",
+      toolCallId: "tool-node",
       workdir: "/tmp/work",
       env: {},
       security: "full",
@@ -657,7 +658,10 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("approval-pending");
-    expect(requireRegisteredApprovalRequest().systemRunPlan).toEqual(preparedPlan);
+    expect(requireRegisteredApprovalRequest()).toMatchObject({
+      systemRunPlan: preparedPlan,
+      toolCallId: "tool-node",
+    });
 
     await vi.waitFor(() => {
       expect(callGatewayToolMock).toHaveBeenCalledTimes(3);

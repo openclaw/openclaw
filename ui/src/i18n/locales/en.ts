@@ -484,6 +484,7 @@ export const en: TranslationMap = {
     agent: "Agent",
     where: "Where",
     gateway: "Gateway · local",
+    gatewayNamed: "Gateway · {name}",
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRequiresWorktree: "Cloud workers require a managed worktree",
@@ -1674,6 +1675,11 @@ export const en: TranslationMap = {
       outro: "Please look at the marked area and tell me what you make of it.",
     },
   },
+  routeTitles: {
+    modelProviders: "Model Providers",
+    notifications: "Notifications",
+    advanced: "Advanced",
+  },
   tabs: {
     agents: "Agents",
     activity: "Activity",
@@ -1704,11 +1710,8 @@ export const en: TranslationMap = {
     about: "About",
     aiAgents: "Agent Defaults",
     modelSetup: "Model Setup",
-    modelProviders: "Model Providers",
     memoryImport: "Import Memory",
-    notifications: "Notifications",
     security: "Privacy & Security",
-    advanced: "Advanced",
     debug: "Debug",
     logs: "Logs",
     plugin: "Plugin",
@@ -2518,7 +2521,7 @@ export const en: TranslationMap = {
       minutes: "{minutes}m {seconds}s",
     },
   },
-  logsView: {
+  gatewayLogs: {
     title: "Logs",
     subtitle: "Gateway file logs (JSONL).",
     exportButton: "Export {label}",
@@ -3808,6 +3811,11 @@ export const en: TranslationMap = {
       snapping: "Snapping",
       surfacing: "Surfacing",
     },
+    turnRecap: {
+      doneIn: "Done in {duration}",
+      tokens: "{count} tokens",
+      tokensOne: "1 token",
+    },
     commands: {
       arguments: "Command arguments",
       menu: "Slash commands",
@@ -3922,6 +3930,7 @@ export const en: TranslationMap = {
     },
     messages: {
       activity: "Activity",
+      copySelection: "Copy",
       forkFromHere: "Fork from here",
       hide: "Hide",
       hideConfirm: "Hide this message in this browser? The agent still sees it.",
@@ -4468,6 +4477,9 @@ export const en: TranslationMap = {
       wakeModeHelp: "Now triggers immediately. Next heartbeat waits for the next cycle.",
       action: "Action",
       command: "Command",
+      script: "Script",
+      readOnlyPayloadHelp:
+        "This payload was created outside Control UI. Its contents stay read-only and are preserved when you save other changes.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Sends your text to the gateway main timeline (good for reminders).",
