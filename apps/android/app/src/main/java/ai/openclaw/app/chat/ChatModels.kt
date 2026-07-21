@@ -165,6 +165,13 @@ data class ChatSessionEntry(
   val hasContextUsageMetadata: Boolean = totalTokens != null || totalTokensFresh != null || contextTokens != null,
   val hasActiveRun: Boolean? = null,
   val activeRunIds: List<String>? = null,
+  val status: String? = null,
+  val startedAt: Long? = null,
+  val endedAt: Long? = null,
+  val runtimeMs: Long? = null,
+  val outputTokens: Long? = null,
+  val hasRunMetadata: Boolean =
+    status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
 )
 
 /** Local fallback for server-side `sessions.list` search over cached entries. */

@@ -4613,6 +4613,17 @@ class ChatController internal constructor(
         obj["activeRunIds"]
           .asArrayOrNull()
           ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) },
+      status = obj["status"].asStringOrNull()?.trim(),
+      startedAt = obj["startedAt"].asLongOrNull(),
+      endedAt = obj["endedAt"].asLongOrNull(),
+      runtimeMs = obj["runtimeMs"].asLongOrNull(),
+      outputTokens = obj["outputTokens"].asLongOrNull(),
+      hasRunMetadata =
+        "status" in obj ||
+          "startedAt" in obj ||
+          "endedAt" in obj ||
+          "runtimeMs" in obj ||
+          "outputTokens" in obj,
     )
   }
 
@@ -5379,6 +5390,12 @@ internal fun mergeChatSessionEntry(
         preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
         else -> next.hasContextUsageMetadata
       },
+    status = if (next.hasRunMetadata) next.status else existing.status,
+    startedAt = if (next.hasRunMetadata) next.startedAt else existing.startedAt,
+    endedAt = if (next.hasRunMetadata) next.endedAt else existing.endedAt,
+    runtimeMs = if (next.hasRunMetadata) next.runtimeMs else existing.runtimeMs,
+    outputTokens = if (next.hasRunMetadata) next.outputTokens else existing.outputTokens,
+    hasRunMetadata = existing.hasRunMetadata || next.hasRunMetadata,
   )
 }
 

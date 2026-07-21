@@ -76,7 +76,7 @@ internal interface ClientStateControlDao {
 /** Disposable gateway-derived projections. Schema mismatches and corruption rebuild this file. */
 @Database(
   entities = [CachedSessionEntity::class, CachedMessageEntity::class, CachedGatewayOwnerEntity::class],
-  version = 1,
+  version = 2,
   exportSchema = true,
 )
 internal abstract class GatewayCacheDatabase : RoomDatabase() {
