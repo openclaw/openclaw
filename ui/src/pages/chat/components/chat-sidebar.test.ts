@@ -83,6 +83,31 @@ describe("markdown sidebar", () => {
     panel.remove();
   });
 
+  it("opens image artifacts through the shared lightbox callback", async () => {
+    const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
+      content: unknown;
+      onOpenImage?: (item: { src: string; title: string }) => void;
+      updateComplete?: Promise<unknown>;
+    };
+    const onOpenImage = vi.fn();
+    panel.content = {
+      kind: "image",
+      title: "Artifact preview",
+      src: "data:image/png;base64,cG5n",
+    };
+    panel.onOpenImage = onOpenImage;
+    document.body.append(panel);
+    await panel.updateComplete;
+
+    panel.querySelector<HTMLButtonElement>(".chat-tool-card__preview-image-button")?.click();
+
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "data:image/png;base64,cG5n",
+      title: "Artifact preview",
+    });
+    panel.remove();
+  });
+
   it("keeps a canvas scripts ceiling under a trusted global sandbox", async () => {
     const panel = document.createElement("openclaw-chat-detail-panel") as HTMLElement & {
       content: unknown;

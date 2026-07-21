@@ -21,6 +21,7 @@ import {
 } from "../../app/settings.ts";
 import { fireFirstReplyConfetti } from "../../components/confetti.ts";
 import { isGitHubPullRequestLink } from "../../components/github-link-hovercard.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
@@ -28,6 +29,7 @@ import { retirePendingChatSideQuestion, type ChatSideResult } from "../../lib/ch
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
+import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   readSessionChangedEvent,
@@ -178,6 +180,20 @@ type ChatComposerRouteResetResult = {
   restoredStorageFailure: boolean;
 };
 
+function clearImageLightbox(state: Pick<ChatPageHost, "imageLightbox">) {
+  const item = state.imageLightbox;
+  state.imageLightbox = null;
+  item?.release?.();
+}
+
+function invalidateImageLightbox(
+  state: Pick<ChatPageHost, "imageLightbox" | "imageLightboxRequestVersion">,
+) {
+  state.imageLightboxRequestVersion += 1;
+  clearImageLightbox(state);
+  return state.imageLightboxRequestVersion;
+}
+
 export type ChatPageHost = ChatHost &
   ChatState &
   ChatRealtimeState &
@@ -268,6 +284,8 @@ export type ChatPageHost = ChatHost &
     chatScrollToEnd?: (options: { behavior?: ScrollBehavior }) => void;
     sidebarOpen: boolean;
     sidebarContent: SidebarContent | null;
+    imageLightbox: ImageLightboxItem | null;
+    imageLightboxRequestVersion: number;
     splitRatio: number;
     querySelector: (selectors: string) => Element | null;
     renderLifecycle: RenderLifecycle;
@@ -293,6 +311,9 @@ export type ChatPageHost = ChatHost &
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleOpenSidebar: (content: Parameters<SessionWorkspaceHost["handleOpenSidebar"]>[0]) => void;
     handleCloseSidebar: () => void;
+    beginImageOpen: () => number;
+    handleOpenImage: (item: ImageLightboxItem, requestVersion?: number) => void;
+    handleCloseImage: () => void;
     handleSplitRatioChange: (ratio: number) => void;
     announceSessionSwitch?: (sessionKey: string, label: string) => void;
     createChatSession?: () => Promise<boolean>;
@@ -513,6 +534,7 @@ export function resetChatStateForRouteSession(
   if (state.sidebarContent?.kind === "session-discussion") {
     state.sidebarContent = { ...state.sidebarContent, sessionKey };
   }
+  invalidateImageLightbox(state);
   state.selectedChatSessionArchived =
     state.sessionsResult?.sessions.some(
       (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, sessionKey),
@@ -1345,6 +1367,8 @@ export function createPageState(
     chatProgrammaticScrollTarget: 0,
     sidebarOpen: false,
     sidebarContent: null,
+    imageLightbox: null,
+    imageLightboxRequestVersion: 0,
     splitRatio: settings.splitRatio,
     toolStreamById: new Map<string, ToolStreamEntry>(),
     toolStreamOrder: [] as string[],
@@ -1430,6 +1454,27 @@ export function createPageState(
   };
   state.handleCloseSidebar = () => {
     state.sidebarOpen = false;
+    renderLifecycle.invalidate();
+  };
+  state.beginImageOpen = () => invalidateImageLightbox(state);
+  state.handleOpenImage = (item, requestVersion) => {
+    const activeRequestVersion = requestVersion ?? state.beginImageOpen();
+    if (activeRequestVersion !== state.imageLightboxRequestVersion) {
+      item.release?.();
+      return;
+    }
+    const safeSrc = resolveSafeExternalUrl(item.src, window.location.href, {
+      allowDataImage: true,
+    });
+    if (!safeSrc) {
+      item.release?.();
+      return;
+    }
+    state.imageLightbox = { ...item, src: safeSrc };
+    renderLifecycle.invalidate();
+  };
+  state.handleCloseImage = () => {
+    invalidateImageLightbox(state);
     renderLifecycle.invalidate();
   };
   state.handleSplitRatioChange = (ratio) => {
@@ -2029,6 +2074,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     if (state) {
       cancelChatStreamRenderFrame(state);
       cancelChatScroll(state);
+      invalidateImageLightbox(state);
       clearSessionWorkspaceTimers(state);
     }
     state?.realtimeTalkSession?.stop();

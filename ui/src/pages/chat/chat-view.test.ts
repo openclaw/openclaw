@@ -1708,6 +1708,34 @@ describe("chat composer workbench", () => {
     expect(stacked.querySelector("resizable-divider")?.orientation).toBe("horizontal");
   });
 
+  it("opens inline Markdown images and renders the active lightbox", () => {
+    const onOpenImage = vi.fn();
+    const src = "data:image/png;base64,cG5n";
+    const container = renderChatView({ onOpenImage });
+    const trigger = document.createElement("button");
+    trigger.className = "markdown-inline-image-button";
+    const inlineImage = document.createElement("img");
+    inlineImage.className = "markdown-inline-image";
+    inlineImage.src = src;
+    inlineImage.alt = "Markdown preview";
+    trigger.append(inlineImage);
+    container.querySelector(".chat")?.append(trigger);
+
+    trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onOpenImage).toHaveBeenCalledWith({ src, title: "Markdown preview" });
+
+    const onCloseImage = vi.fn();
+    const lightboxContainer = renderChatView({
+      imageLightbox: { src, title: "Artifact preview" },
+      onCloseImage,
+    });
+    const lightbox = lightboxContainer.querySelector("openclaw-image-lightbox");
+    expect(lightbox?.src).toBe(src);
+    expect(lightbox?.title).toBe("Artifact preview");
+    lightbox?.dispatchEvent(new CustomEvent("image-lightbox-close", { bubbles: true }));
+    expect(onCloseImage).toHaveBeenCalledTimes(1);
+  });
+
   it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
     const container = renderChatView({
       sessionWorkspace: {

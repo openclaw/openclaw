@@ -1274,6 +1274,10 @@ installAssistantTranscriptRoleImageRenderer(md, {
   isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
   normalizeLabel: normalizeMarkdownImageLabel,
   assistantLabel: () => t("sessionsView.assistant"),
+  openImageLabel: (alt, hasAlt) =>
+    t("chat.imageLightbox.open", {
+      title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
+    }),
 });
 
 // Override fenced code blocks with copy button + JSON collapse

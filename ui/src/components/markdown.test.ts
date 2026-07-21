@@ -395,8 +395,40 @@ describe("toSanitizedMarkdownHtml", () => {
     it("preserves base64 data URI images (#15437)", () => {
       const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
       expect(html).toBe(
-        '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
+        '<p><button class="markdown-inline-image-button" type="button" aria-label="Open image Chart"><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></button></p>\n',
       );
+    });
+
+    it("keeps linked data images under their authored link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Preview](data:image/png;base64,iVBORw0KGgo=)](https://example.com/full.png)",
+        ),
+      );
+
+      expect(fragment.querySelector("a > img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a > button")).toBeNull();
+    });
+
+    it("keeps data images inside rich Markdown links under the link", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[Before ![Preview](data:image/png;base64,iVBORw0KGgo=) after](https://example.com/full.png)",
+        ),
+      );
+
+      expect(fragment.querySelector("a img.markdown-inline-image")).not.toBeNull();
+      expect(fragment.querySelector("a button")).toBeNull();
+    });
+
+    it("labels unlabeled inline data image buttons", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)"),
+      );
+
+      expect(
+        fragment.querySelector("button.markdown-inline-image-button")?.getAttribute("aria-label"),
+      ).toBe("Open image Image");
     });
 
     it("keeps inline data images while marking assistant-authored role alt text", () => {

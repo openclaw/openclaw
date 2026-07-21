@@ -15,6 +15,19 @@ function renderAssistantTranscriptRoleMarker(
   return `${ROLE_MARKER_OPEN}${escapeHtml(text)}${ROLE_MARKER_CLOSE}`;
 }
 
+function isImageWithinLink(tokens: readonly { type: string }[], index: number): boolean {
+  let linkDepth = 0;
+  for (let tokenIndex = 0; tokenIndex < index; tokenIndex += 1) {
+    const tokenType = tokens[tokenIndex]?.type;
+    if (tokenType === "link_open") {
+      linkDepth += 1;
+    } else if (tokenType === "link_close") {
+      linkDepth = Math.max(0, linkDepth - 1);
+    }
+  }
+  return linkDepth > 0;
+}
+
 function renderAssistantTranscriptRoleImageLabel(
   text: string,
   spans: ReadonlyArray<{ start: number; end: number }>,
@@ -56,6 +69,7 @@ export function installAssistantTranscriptRoleImageRenderer(
     isInlineDataImage: (src: string) => boolean;
     normalizeLabel: (value: string) => string;
     assistantLabel: () => string;
+    openImageLabel: (alt: string, hasAlt: boolean) => string;
   },
 ): void {
   md.renderer.rules.image = (tokens, index) => {
@@ -74,9 +88,13 @@ export function installAssistantTranscriptRoleImageRenderer(
         : options.escapeHtml(alt);
     }
     const image = `<img class="markdown-inline-image" src="${options.escapeHtml(src)}" alt="${options.escapeHtml(alt)}">`;
+    const linkedImage = isImageWithinLink(tokens, index);
+    const interactiveImage = linkedImage
+      ? image
+      : `<button class="markdown-inline-image-button" type="button" aria-label="${options.escapeHtml(options.openImageLabel(alt, token.content.trim().length > 0))}">${image}</button>`;
     return roleMeta
-      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${image}`
-      : image;
+      ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${interactiveImage}`
+      : interactiveImage;
   };
 }
 

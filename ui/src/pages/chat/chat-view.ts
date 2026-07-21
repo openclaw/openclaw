@@ -18,6 +18,7 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -42,6 +43,11 @@ import {
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import {
+  inlineChatImageFromEvent,
+  openInlineChatImage,
+  renderChatImageLightbox,
+} from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
   renderSessionWorkspaceRail,
@@ -184,6 +190,10 @@ export type ChatProps = {
   getAttachments?: () => ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
+  imageLightbox?: ImageLightboxItem | null;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onCloseImage?: () => void;
   showNewMessages?: boolean;
   onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
@@ -298,6 +308,18 @@ export function renderChat(props: ChatProps) {
     pending: props.sideChatPending ?? null,
     hidden: props.sideChatHidden === true,
   };
+  const openImage = props.onOpenImage
+    ? (item: ImageLightboxItem, requestVersion?: number) => {
+        if (requestVersion === undefined) {
+          props.onOpenImage?.(item);
+        } else {
+          props.onOpenImage?.(item, requestVersion);
+        }
+      }
+    : undefined;
+  const openImmediateImage = props.onOpenImage
+    ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
+    : undefined;
   const sideChatVisible = isSideChatPanelVisible(sideChatProps);
   let chatSection: HTMLElement | null = null;
   // Nested dragenter/dragleave events must stay balanced so crossing transcript
@@ -325,7 +347,6 @@ export function renderChat(props: ChatProps) {
       target.removeAttribute("data-attachment-drop-active");
     }
   };
-
   const thread = renderChatThread(
     {
       paneId: props.paneId,
@@ -372,6 +393,8 @@ export function renderChat(props: ChatProps) {
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: openImage,
       onRequestUpdate: requestUpdate,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
@@ -509,6 +532,7 @@ export function renderChat(props: ChatProps) {
       }}
       @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
       @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
+      @click=${(event: Event) => openInlineChatImage(event, openImmediateImage)}
       @dragover=${(event: DragEvent) => {
         if (!isFileDrag(event.dataTransfer)) {
           if (!isEditableDropTarget(event)) {
@@ -525,6 +549,10 @@ export function renderChat(props: ChatProps) {
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
+        if ((event.key === "Enter" || event.key === " ") && inlineChatImageFromEvent(event)) {
+          openInlineChatImage(event, openImmediateImage);
+          return;
+        }
         if (event.key === "Escape" && props.replyTarget && !event.defaultPrevented) {
           event.preventDefault();
           props.onClearReply?.();
@@ -669,12 +697,14 @@ export function renderChat(props: ChatProps) {
                     .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
                     .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
+                    .onOpenImage=${props.onOpenImage ? openImmediateImage : null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
                   ></openclaw-chat-detail-panel> `
               : nothing}
           </div>
         </div>
       </div>
+      ${renderChatImageLightbox(props.imageLightbox, props.onCloseImage)}
     </section>
   `;
 }
