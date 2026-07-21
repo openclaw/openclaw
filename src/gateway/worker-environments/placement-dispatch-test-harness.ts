@@ -31,6 +31,7 @@ export function createHarness(
     reconcileCommitsManifestOnApply?: boolean;
     verifyFails?: boolean;
     leaseFails?: boolean;
+    leaseFailureCount?: number;
     localVerifyFails?: boolean;
     resumeFails?: boolean;
     workspacePath?: string;
@@ -40,6 +41,7 @@ export function createHarness(
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
   let remainingReconcileFailures = options.reconcileFailureCount ?? 0;
+  let remainingLeaseFailures = options.leaseFailureCount ?? 0;
   const log: string[] = [];
   const reportWorkspaceResultConflict = vi.fn(async () => {});
   const fail = (stage: DispatchStage) => {
@@ -153,7 +155,8 @@ export function createHarness(
       return {
         assertActive: vi.fn(async () => {
           log.push("workspace:lease");
-          if (options.leaseFails) {
+          if (options.leaseFails || remainingLeaseFailures > 0) {
+            remainingLeaseFailures -= 1;
             throw new Error("workspace quiescence expired");
           }
         }),
