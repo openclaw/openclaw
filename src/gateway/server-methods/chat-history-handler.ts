@@ -33,6 +33,7 @@ import {
 } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.js";
 import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
@@ -150,7 +151,7 @@ async function buildChatStartupMetadataResult(params: {
   cfg: OpenClawConfig;
   context: GatewayRequestContext;
   agentId: string;
-  modelCatalog: ModelCatalogSnapshot | undefined;
+  modelCatalog: GatewayModelCatalogSnapshot | undefined;
   catalogProjector?: ReturnType<
     (typeof import("./models-list-result.js"))["createGatewayAgentModelCatalogProjector"]
   >;
