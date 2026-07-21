@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
 } from "../agents/cli-credentials.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
@@ -42,6 +43,7 @@ type DetectInferenceBackendsDeps = {
   readClaudeCliCredentials?: () => { type: string } | null;
   readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
+  detectCodexLoginState?: typeof detectCodexLoginState;
   randomInt?: (maxExclusive: number) => number;
 };
 
@@ -175,6 +177,9 @@ export async function detectInferenceBackends(
   const readClaude =
     options.deps?.readClaudeCliCredentials ??
     (() => readClaudeCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
+  const readCodex =
+    options.deps?.readCodexCliCredentials ??
+    (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
   const readGemini =
     options.deps?.readGeminiCliCredentials ??
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
@@ -230,16 +235,19 @@ export async function detectInferenceBackends(
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {
-    const credentials = options.deps?.readCodexCliCredentials
-      ? detectCliCredentialState({
-          probe: codexProbe,
-          hasStoredCredentials: options.deps.readCodexCliCredentials() !== null,
-          platform,
-        })
-      : await detectCodexLoginState(probe, codexProbe.command);
-    // Codex's file reader exposes only ChatGPT OAuth, while production login status
-    // has no credential type; accept a successful status as subscription-backed.
-    if (credentials === true) {
+    const codexCredential = readCodex();
+    const credentials = options.deps?.detectCodexLoginState
+      ? await options.deps.detectCodexLoginState(probe, codexProbe.command)
+      : options.deps?.readCodexCliCredentials
+        ? detectCliCredentialState({
+            probe: codexProbe,
+            hasStoredCredentials: codexCredential !== null,
+            platform,
+          })
+        : await detectCodexLoginState(probe, codexProbe.command);
+    // Promote only prompt-free ChatGPT OAuth tokens. Status-only logins may be metered;
+    // keychain-only ChatGPT users conservatively stay usable in the fallback tier.
+    if (credentials === true && codexCredential?.type === "oauth") {
       subscriptionPromotionEligibleCliKinds.add("codex-cli");
     }
     cliCandidates.push({
