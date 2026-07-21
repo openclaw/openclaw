@@ -16,7 +16,7 @@ export type PluginBoardWidgetRenderer = (props: {
   requestUpdate: () => void;
 }) => TemplateResult;
 
-export type PluginWidgetKindContribution = {
+type PluginWidgetKindContribution = {
   kind: string;
   label: string;
   loader: () => Promise<PluginBoardWidgetRenderer>;

@@ -24,7 +24,7 @@ type ControlUiPluginTab = {
   requiresGatewayAuth?: boolean;
 };
 
-export type ControlUiPluginWidgetKind = {
+type ControlUiPluginWidgetKind = {
   pluginId: string;
   kind: string;
   label: string;
