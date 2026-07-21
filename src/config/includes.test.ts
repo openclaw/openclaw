@@ -10,6 +10,7 @@ import {
   ConfigIncludeError,
   MAX_INCLUDE_DEPTH,
   type IncludeResolver,
+  readConfigIncludeFileWithGuards,
   resolveConfigIncludeWritePath,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -67,6 +68,24 @@ function expectResolveIncludeError(
 }
 
 describe("resolveConfigIncludes", () => {
+  it("preserves reduced injected fs reads while enforcing the byte cap", () => {
+    const ioFs = {
+      readFileSync: () => "virtual include",
+      realpathSync: (value: string) => value,
+    } as unknown as typeof nodeFs;
+    const params = {
+      includePath: "./include.json",
+      resolvedPath: configPath("include.json"),
+      rootRealDir: CONFIG_DIR,
+      ioFs,
+    };
+
+    expect(readConfigIncludeFileWithGuards({ ...params, maxBytes: 15 })).toBe("virtual include");
+    expect(() => readConfigIncludeFileWithGuards({ ...params, maxBytes: 14 })).toThrow(
+      "Include file exceeds 14 bytes",
+    );
+  });
+
   it.each([
     { name: "string", value: "hello", expected: "hello" },
     { name: "number", value: 42, expected: 42 },

@@ -14,7 +14,11 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
+import {
+  canUseRootFileOpen,
+  openRootFileSync,
+  readFileDescriptorBoundedSync,
+} from "../infra/boundary-file-read.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { mergeDeep as mergeDeepValues } from "../infra/deep-merge.js";
 import { isPathInside } from "../security/scan-paths.js";
@@ -427,7 +431,15 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
   if (!canUseRootFileOpen(ioFs)) {
+    // Reduced injected fs shims cannot provide pinned descriptor reads, but
+    // must still preserve their own read behavior and reject oversized data.
     const raw = ioFs.readFileSync(params.resolvedPath, "utf-8");
+    if (Buffer.byteLength(raw, "utf-8") > maxBytes) {
+      throw new ConfigIncludeError(
+        `Include file exceeds ${maxBytes} bytes: ${params.includePath}`,
+        params.includePath,
+      );
+    }
     try {
       params.onResolvedPath?.(path.normalize(ioFs.realpathSync(params.resolvedPath)));
     } catch {
@@ -460,7 +472,16 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
   }
 
   try {
-    const raw = ioFs.readFileSync(opened.fd, "utf-8");
+    const raw =
+      ioFs === fs
+        ? readFileDescriptorBoundedSync(opened.fd, maxBytes).toString("utf-8")
+        : ioFs.readFileSync(opened.fd, "utf-8");
+    if (Buffer.byteLength(raw, "utf-8") > maxBytes) {
+      throw new ConfigIncludeError(
+        `Include file exceeds ${maxBytes} bytes: ${params.includePath}`,
+        params.includePath,
+      );
+    }
     params.onResolvedPath?.(path.normalize(opened.path));
     return raw;
   } finally {
