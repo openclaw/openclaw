@@ -1,5 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -7,11 +9,16 @@ import { isMockBoardEnabled, type BoardViewCallbacks } from "../../lib/board/pro
 import type { BoardFace, BoardVisibleChatDock } from "../../lib/board/settings.ts";
 import type { BoardTab } from "../../lib/board/types.ts";
 import type { BoardViewSnapshot, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
-import type { WorkboardSessionCardMatch } from "../../lib/workboard/index.ts";
 
 export type BoardChatDockSize = {
   height: number;
   width: number;
+};
+
+export type WorkboardCardChipProps = {
+  basePath: string;
+  client: GatewayBrowserClient;
+  sessionKey: string;
 };
 
 type BoardSessionSurfaceProps = {
@@ -27,12 +34,18 @@ type BoardSessionSurfaceProps = {
   canGrant: boolean;
   callbacks: BoardViewCallbacks;
   widgetFrameUrl: BoardWidgetFrameUrl;
-  workboardCard?: WorkboardSessionCardMatch | null;
-  workboardHref?: string;
+  workboardCardChip?: WorkboardCardChipProps | null;
   onDockChange: (dock: BoardTab["chatDock"]) => void;
 };
 
 let boardViewLoad: Promise<unknown> | null = null;
+
+export function ensureWorkboardCardChipElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-workboard-card-chip",
+    () => import("./workboard-card-chip.runtime.ts"),
+  );
+}
 
 export async function ensureBoardViewElement(): Promise<boolean> {
   if (customElements.get("openclaw-board-view")) {
@@ -138,24 +151,13 @@ export function renderBoardDockMenu(
 function renderBoardView(props: BoardSessionSurfaceProps) {
   return html`
     <div class="board-session-surface__board">
-      ${props.workboardCard && props.workboardHref
+      ${props.workboardCardChip
         ? html`
-            <a
-              class="board-session-surface__workboard-chip"
-              href=${props.workboardHref}
-              aria-label=${t("chat.board.workboardCard", {
-                title: props.workboardCard.title,
-                status: t(`workboard.status.${props.workboardCard.status}`),
-              })}
-            >
-              ${icons.kanban}
-              <span class="board-session-surface__workboard-title"
-                >${props.workboardCard.title}</span
-              >
-              <span class="board-session-surface__workboard-status">
-                ${t(`workboard.status.${props.workboardCard.status}`)}
-              </span>
-            </a>
+            <openclaw-workboard-card-chip
+              .basePath=${props.workboardCardChip.basePath}
+              .client=${props.workboardCardChip.client}
+              .sessionKey=${props.workboardCardChip.sessionKey}
+            ></openclaw-workboard-card-chip>
           `
         : nothing}
       <openclaw-board-view

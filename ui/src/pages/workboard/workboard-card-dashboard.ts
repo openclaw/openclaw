@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import "../../components/board/board-view.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -16,6 +16,13 @@ import {
 } from "../../lib/board/provider.ts";
 import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
+
+function ensureBoardViewElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-board-view",
+    () => import("../../components/board/board-view.ts"),
+  );
+}
 
 class WorkboardCardDashboard extends OpenClawLightDomElement {
   @property({ attribute: false }) sessionKey = "";
@@ -34,6 +41,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
   private expansionInitialized = false;
 
   override updated(): void {
+    void ensureBoardViewElement().catch(() => undefined);
     this.synchronizeProvider();
   }
 

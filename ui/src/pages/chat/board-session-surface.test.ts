@@ -26,10 +26,14 @@ beforeEach(() => {
 });
 
 describe("board session shell", () => {
-  it("links a dispatched session dashboard back to its Workboard card", () => {
+  it("delegates the optional Workboard chip to its lazy element", () => {
     const linked = createContainer();
     const unlinked = createContainer();
     const provider = boardProviderForSession("agent:main:workboard-link");
+    const client = {
+      request: vi.fn(async () => ({ cards: [] })),
+      addEventListener: vi.fn(() => () => {}),
+    } as never;
     const props = {
       snapshot: provider.snapshot$.value,
       sessions: [],
@@ -53,23 +57,22 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         ...props,
-        workboardCard: {
-          cardId: "card-1",
-          title: "Ship dashboard stitch",
-          status: "review",
-          boardId: "platform",
+        workboardCardChip: {
+          basePath: "",
+          client,
+          sessionKey: "agent:main:workboard-link",
         },
-        workboardHref: "/workboard?board=platform",
       }),
       linked,
     );
     render(renderBoardSessionSurface(props), unlinked);
 
-    const chip = linked.querySelector<HTMLAnchorElement>(".board-session-surface__workboard-chip");
-    expect(chip?.getAttribute("href")).toBe("/workboard?board=platform");
-    expect(chip?.textContent).toContain("Ship dashboard stitch");
-    expect(chip?.textContent).toContain("Review");
-    expect(unlinked.querySelector(".board-session-surface__workboard-chip")).toBeNull();
+    const chip = linked.querySelector<HTMLElementTagNameMap["openclaw-workboard-card-chip"]>(
+      "openclaw-workboard-card-chip",
+    );
+    expect(chip?.sessionKey).toBe("agent:main:workboard-link");
+    expect(chip?.client).toBe(client);
+    expect(unlinked.querySelector("openclaw-workboard-card-chip")).toBeNull();
   });
 
   it("shows the face toggle only when a board exists", () => {

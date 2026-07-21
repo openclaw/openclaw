@@ -4,6 +4,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
+import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -61,7 +62,13 @@ import {
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "./board-filter.ts";
 import { renderWorkboardSelect, type WorkboardSelectOption } from "./workboard-select.ts";
-import "./workboard-card-dashboard.ts";
+
+function ensureWorkboardCardDashboardElement(): Promise<void> {
+  return ensureCustomElementDefined(
+    "openclaw-workboard-card-dashboard",
+    () => import("./workboard-card-dashboard.ts"),
+  );
+}
 
 type WorkboardProps = {
   host: object;
@@ -1435,6 +1442,9 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const cardActions = getCardActionState(props, card);
   const { task, busy, activeTask, live, linkedSessionKey, writable, showStartControls, archived } =
     cardActions;
+  if (linkedSessionKey) {
+    void ensureWorkboardCardDashboardElement().catch(() => undefined);
+  }
   const lifecycle = getWorkboardLifecycle(card, props.sessions, task);
   const formatted = formatLifecycle(lifecycle);
   const taskIsAuthoritative = task ? taskMatchesLifecycle(task, lifecycle) : false;

@@ -76,6 +76,10 @@
   overflow: hidden;
 }
 
+openclaw-workboard-card-chip {
+  display: contents;
+}
+
 .board-session-surface__workboard-chip {
   display: inline-flex;
   flex: 0 1 auto;
