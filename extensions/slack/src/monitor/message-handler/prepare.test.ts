@@ -1173,6 +1173,90 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.BodyForAgent).toContain(fullText);
   });
 
+  it("preserves a pasted table from a non-forwarded attachment", async () => {
+    const sentence = "<@U_BOT> please check whether these are wired up correctly";
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: sentence,
+        blocks: [
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [
+                  { type: "user", user_id: "U_BOT" },
+                  { type: "text", text: " please check whether these are wired up correctly" },
+                ],
+              },
+            ],
+          },
+        ],
+        attachments: [
+          {
+            fallback: "[no preview available]",
+            blocks: [
+              {
+                type: "table",
+                rows: [
+                  [
+                    {
+                      type: "rich_text",
+                      elements: [
+                        {
+                          type: "rich_text_section",
+                          elements: [{ type: "text", text: "ID" }],
+                        },
+                      ],
+                    },
+                    {
+                      type: "rich_text",
+                      elements: [
+                        {
+                          type: "rich_text_section",
+                          elements: [{ type: "text", text: "Name" }],
+                        },
+                      ],
+                    },
+                    {
+                      type: "rich_text",
+                      elements: [
+                        {
+                          type: "rich_text_section",
+                          elements: [{ type: "text", text: "Status" }],
+                        },
+                      ],
+                    },
+                  ],
+                  [
+                    { type: "raw_text", text: "12345" },
+                    { type: "raw_text", text: "Example A" },
+                    { type: "raw_text", text: "enabled" },
+                  ],
+                  [
+                    { type: "raw_text", text: "12346" },
+                    { type: "raw_text", text: "Example B" },
+                    { type: "raw_text", text: "enabled" },
+                  ],
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.RawBody).toContain(
+      ["ID\tName\tStatus", "12345\tExample A\tenabled", "12346\tExample B\tenabled"].join("\n"),
+    );
+    expect(prepared.ctxPayload.RawBody).toContain(
+      "please check whether these are wired up correctly",
+    );
+    expect(prepared.ctxPayload.RawBody).not.toContain("[no preview available]");
+    expect(prepared.ctxPayload.BodyForAgent).toContain("12346\tExample B\tenabled");
+  });
+
   it("ignores non-forward attachments when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
@@ -3736,8 +3820,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     let downloadedPath: string | undefined;
     let downloadedPaths: string[] = [];
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
-        downloadedPath = ctx.MediaPaths[0];
+      async ({ ctx }: { ctx: { media: Array<{ path: string; contentType?: string }> } }) => {
+        downloadedPath = ctx.media.find((entry) => entry.contentType?.startsWith("audio/"))?.path;
         return "Bill /new please review this";
       },
     );
@@ -3861,8 +3945,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     slackCtx.historyLimit = 5;
     let downloadedPath: string | undefined;
     transcribeFirstAudioMock.mockImplementation(
-      async ({ ctx }: { ctx: { MediaPaths: string[] } }) => {
-        downloadedPath = ctx.MediaPaths[0];
+      async ({ ctx }: { ctx: { media: Array<{ path: string; contentType?: string }> } }) => {
+        downloadedPath = ctx.media.find((entry) => entry.contentType?.startsWith("audio/"))?.path;
         return "please review this";
       },
     );
