@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 // Covers exec approvals store socket interactions.
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -300,6 +301,164 @@ describe("exec approvals store helpers", () => {
         await once(child, "exit");
       }
     }
+  });
+
+  it("releases sync locks across descriptor and pathname identity drift", () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    const realLstatSync = fs.lstatSync.bind(fs);
+    let identityDriftObserved = false;
+    vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+      const stat = realLstatSync(...args);
+      if (String(args[0]) !== lockPath) {
+        return stat;
+      }
+      identityDriftObserved = true;
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+        ino: typeof stat.ino === "bigint" ? stat.ino + 1n : stat.ino + 1,
+      }) as fs.Stats;
+    });
+
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {},
+    });
+
+    expect(identityDriftObserved).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(loadExecApprovals().defaults?.security).toBe("allowlist");
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(loadExecApprovals().defaults?.security).toBe("allowlist");
+    expect(fs.existsSync(lockPath)).toBe(false);
+  });
+
+  it("keeps a replacement sync sidecar after the owner descriptor closes", () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    let lockDescriptor: number | undefined;
+    let replacementRaw: string | undefined;
+    const realWriteFileSync = fs.writeFileSync.bind(fs);
+    vi.spyOn(fs, "writeFileSync").mockImplementation(
+      (...args: Parameters<typeof fs.writeFileSync>) => {
+        const [target, contents] = args;
+        if (
+          typeof target === "number" &&
+          typeof contents === "string" &&
+          contents.includes('"nonce"')
+        ) {
+          lockDescriptor = target;
+        }
+        return realWriteFileSync(...args);
+      },
+    );
+    const realCloseSync = fs.closeSync.bind(fs);
+    vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
+      realCloseSync(descriptor);
+      if (descriptor === lockDescriptor) {
+        const current = JSON.parse(fs.readFileSync(lockPath, "utf8")) as Record<string, unknown>;
+        replacementRaw = `${JSON.stringify({ ...current, nonce: crypto.randomUUID() }, null, 2)}\n`;
+        fs.rmSync(lockPath, { force: true });
+        fs.writeFileSync(lockPath, replacementRaw, "utf8");
+      }
+    });
+
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist" },
+      agents: {},
+    });
+
+    expect(lockDescriptor).toBeDefined();
+    expect(replacementRaw).toBeDefined();
+    expect(fs.readFileSync(lockPath, "utf8")).toBe(replacementRaw);
+    fs.rmSync(lockPath, { force: true });
+  });
+
+  it("retains a partial sync sidecar when failed-write identity cannot be proven", () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    const realLstatSync = fs.lstatSync.bind(fs);
+    let identityDriftObserved = false;
+    vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
+      const stat = realLstatSync(...args);
+      if (String(args[0]) !== lockPath) {
+        return stat;
+      }
+      identityDriftObserved = true;
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+        ino: typeof stat.ino === "bigint" ? stat.ino + 1n : stat.ino + 1,
+      }) as fs.Stats;
+    });
+    const realWriteFileSync = fs.writeFileSync.bind(fs);
+    let failedLockWrite = false;
+    vi.spyOn(fs, "writeFileSync").mockImplementation(
+      (...args: Parameters<typeof fs.writeFileSync>) => {
+        const [target, contents] = args;
+        if (
+          !failedLockWrite &&
+          typeof target === "number" &&
+          typeof contents === "string" &&
+          contents.includes('"nonce"')
+        ) {
+          failedLockWrite = true;
+          realWriteFileSync(target, '{"pid":', "utf8");
+          throw Object.assign(new Error("injected partial lock write"), { code: "EIO" });
+        }
+        return realWriteFileSync(...args);
+      },
+    );
+
+    expect(() =>
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist" },
+        agents: {},
+      }),
+    ).toThrow("injected partial lock write");
+
+    expect(failedLockWrite).toBe(true);
+    expect(identityDriftObserved).toBe(true);
+    expect(fs.readFileSync(lockPath, "utf8")).toBe('{"pid":');
+    expect(loadExecApprovals().defaults?.security).toBe("deny");
+    expect(fs.existsSync(lockPath)).toBe(true);
+    fs.rmSync(lockPath, { force: true });
+  });
+
+  it("releases async locks across descriptor and pathname identity drift", async () => {
+    const dir = createHomeDir();
+    ensureExecApprovals();
+    const lockPath = `${approvalsFilePath(dir)}.lock`;
+    const realLstat = fsp.lstat.bind(fsp);
+    let identityDriftObserved = false;
+    const lstatSpy = vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
+      const stat = await realLstat(...args);
+      if (String(args[0]) !== lockPath) {
+        return stat;
+      }
+      identityDriftObserved = true;
+      return Object.assign(Object.create(Object.getPrototypeOf(stat)), stat, {
+        ino: typeof stat.ino === "bigint" ? stat.ino + 1n : stat.ino + 1,
+      });
+    });
+
+    try {
+      await updateExecApprovals({
+        update: (file) => ({
+          ...file,
+          defaults: { ...file.defaults, security: "allowlist" },
+        }),
+      });
+    } finally {
+      lstatSpy.mockRestore();
+    }
+
+    expect(identityDriftObserved).toBe(true);
+    expect(fs.existsSync(lockPath)).toBe(false);
+    expect(loadExecApprovals().defaults?.security).toBe("allowlist");
   });
 
   it("keeps custom-state approvals independent from the default state", async () => {

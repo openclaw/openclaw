@@ -93,11 +93,13 @@ function removeOwnedExecApprovalsLock(
 ): void {
   try {
     const current = fs.lstatSync(lock.lockPath);
-    if (
-      current.dev === lock.device &&
-      current.ino === lock.inode &&
-      (!options.requirePayloadMatch || fs.readFileSync(lock.lockPath, "utf8") === lock.raw)
-    ) {
+    // Normal release uses the per-acquisition nonce in the exact payload, so
+    // fd/path identity drift cannot strand a lock. Failed-write cleanup keeps
+    // the stricter identity check because the expected payload may be partial.
+    const stillOwned = options.requirePayloadMatch
+      ? current.isFile() && fs.readFileSync(lock.lockPath, "utf8") === lock.raw
+      : current.dev === lock.device && current.ino === lock.inode;
+    if (stillOwned) {
       fs.rmSync(lock.lockPath, { force: true });
     }
   } catch {
