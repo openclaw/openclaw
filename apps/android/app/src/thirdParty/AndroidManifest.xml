@@ -17,6 +17,7 @@
     <application>
         <service
             android:name=".accessibility.OpenClawAccessibilityService"
+            android:enabled="false"
             android:exported="true"
             android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
@@ -31,6 +32,7 @@
 
         <activity
             android:name=".accessibility.AccessibilityDevActivity"
+            android:enabled="false"
             android:excludeFromRecents="true"
             android:exported="true"
             android:label="@string/accessibility_dev_activity_label"
