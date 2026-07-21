@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { ManagedWorktreeService } from "./service.js";
 
 const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function git(cwd: string, ...args: string[]): Promise<void> {
   await execFileAsync("git", ["-C", cwd, ...args]);
@@ -19,9 +21,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   let service: ManagedWorktreeService;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(
-      path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-branches-"),
-    );
+    root = tempDirs.make("openclaw-worktree-branches-", await fs.realpath(os.tmpdir()));
     const template = path.join(root, "git-template");
     repo = path.join(root, "repo");
     await fs.mkdir(path.join(template, "hooks"), { recursive: true });

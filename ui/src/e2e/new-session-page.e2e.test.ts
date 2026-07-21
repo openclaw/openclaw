@@ -720,17 +720,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await expect
         .poll(async () => (await gateway.getRequests("worktrees.branches")).at(-1)?.params)
         .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
-      await expect.poll(() => trigger.locator(".new-session-page__trigger-label").textContent()).toBe(
-        "home · Gateway · local",
-      );
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("home · Gateway · local");
 
       await trigger.click();
       expect(await place.getByRole("button", { name: "Worktree" }).count()).toBe(0);
       const cloud = place.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe(
-        "Cloud workers require a managed worktree",
-      );
+      expect(await cloud.getAttribute("title")).toBe("Cloud workers require a managed worktree");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");
@@ -1030,6 +1028,11 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
           path: WORKSPACE,
           home: WORKSPACE,
           entries: [],
+        },
+        "worktrees.branches": {
+          branches: [{ kind: "local", name: "main" }],
+          defaultBranch: "main",
+          repositoryStatus: "git",
         },
       },
     });
