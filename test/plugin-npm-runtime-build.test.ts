@@ -231,4 +231,14 @@ describe("plugin npm runtime build planning", () => {
       "openclaw/plugin-sdk/not-exported-from-require",
     ]);
   });
+
+  it("does not require host metadata when the runtime has no host imports", () => {
+    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-synthetic-repo-");
+    const outDir = tempDirs.make("openclaw-plugin-runtime-no-host-import-");
+    writeFileSync(path.join(outDir, "index.js"), "export default {};\n");
+
+    expect(listMissingPluginNpmRuntimeHostExports({ repoRoot: syntheticRepoRoot, outDir })).toEqual(
+      [],
+    );
+  });
 });

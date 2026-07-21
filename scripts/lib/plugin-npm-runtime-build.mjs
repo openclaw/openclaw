@@ -111,20 +111,25 @@ function listRuntimeJavaScriptFiles(rootDir) {
 
 /** List host SDK imports emitted by a built plugin runtime but absent from package exports. */
 export function listMissingPluginNpmRuntimeHostExports(plan) {
-  const hostPackageJson = readJsonFile(path.join(plan.repoRoot, "package.json"));
-  const hostExports = new Set(Object.keys(hostPackageJson.exports ?? {}));
-  const missing = new Set();
+  const hostImports = new Set();
   for (const runtimePath of listRuntimeJavaScriptFiles(plan.outDir)) {
     const source = fs.readFileSync(runtimePath, "utf8");
     for (const match of source.matchAll(HOST_PLUGIN_SDK_IMPORT_RE)) {
       const specifier = match[1];
-      const exportKey = specifier?.replace(/^openclaw/u, ".");
-      if (exportKey && !hostExports.has(exportKey)) {
-        missing.add(specifier);
+      if (specifier) {
+        hostImports.add(specifier);
       }
     }
   }
-  return [...missing].toSorted((left, right) => left.localeCompare(right));
+  if (hostImports.size === 0) {
+    return [];
+  }
+
+  const hostPackageJson = readJsonFile(path.join(plan.repoRoot, "package.json"));
+  const hostExports = new Set(Object.keys(hostPackageJson.exports ?? {}));
+  return [...hostImports]
+    .filter((specifier) => !hostExports.has(specifier.replace(/^openclaw/u, ".")))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function packageEntryKey(entry) {
