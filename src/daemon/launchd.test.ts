@@ -2,6 +2,7 @@
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PortListener } from "../infra/ports-types.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
@@ -2325,110 +2326,131 @@ describe("launchd install", () => {
     expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
-  it("protects and allows the managed LaunchAgent that owns the gateway port", async () => {
-    const env = {
-      ...createDefaultLaunchdEnv(),
-      OPENCLAW_GATEWAY_PORT: "19002",
-    };
-    inspectPortUsage.mockResolvedValue({
-      port: 19002,
-      status: "busy",
+  it.each([
+    {
+      name: "managed dual-stack ownership",
+      managedPidAfterCleanup: 4242,
       listeners: [
-        {
-          pid: 4242,
-          command: "node",
-          commandLine: "node openclaw.mjs gateway --port 19002",
-          address: "TCP 127.0.0.1:19002 (LISTEN)",
-        },
-        {
-          pid: 4242,
-          command: "node",
-          commandLine: "node openclaw.mjs gateway --port 19002",
-          address: "TCP [::1]:19002 (LISTEN)",
-        },
+        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+        { pid: 4242, address: "TCP [::1]:19002 (LISTEN)" },
       ],
-      hints: [],
-    });
+    },
+    {
+      name: "a changed launchd PID",
+      managedPidAfterCleanup: 4343,
+      listeners: [{ pid: 4343, address: "TCP 127.0.0.1:19002 (LISTEN)" }],
+    },
+  ] satisfies Array<{
+    name: string;
+    managedPidAfterCleanup: number;
+    listeners: PortListener[];
+  }>)(
+    "protects the current service and allows $name",
+    async ({ managedPidAfterCleanup, listeners }) => {
+      const env = {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_GATEWAY_PORT: "19002",
+      };
+      if (managedPidAfterCleanup !== 4242) {
+        cleanStaleGatewayProcessesSync.mockImplementationOnce(() => {
+          state.printOutput = ["state = running", `pid = ${managedPidAfterCleanup}`].join("\n");
+          return [];
+        });
+      }
+      inspectPortUsage.mockResolvedValue({
+        port: 19002,
+        status: "busy",
+        listeners,
+        hints: [],
+      });
 
-    const result = await restartLaunchAgent({
-      env,
-      stdout: new PassThrough(),
-    });
+      const result = await restartLaunchAgent({ env, stdout: new PassThrough() });
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const serviceId = `${domain}/ai.openclaw.gateway`;
-    expect(result).toEqual({ outcome: "completed" });
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002, {
-      protectedPid: 4242,
-    });
-    expect(inspectPortUsage).toHaveBeenCalledWith(19002);
-    expect(state.launchctlCalls).toEqual([
-      ["print", serviceId],
-      ["print", serviceId],
-      ["enable", serviceId],
-      ["kickstart", "-k", serviceId],
-    ]);
-  });
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const serviceId = `${domain}/ai.openclaw.gateway`;
+      expect(result).toEqual({ outcome: "completed" });
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002, {
+        protectedPid: 4242,
+      });
+      expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+      expect(state.launchctlCalls).toEqual([
+        ["print", serviceId],
+        ["print", serviceId],
+        ["enable", serviceId],
+        ["kickstart", "-k", serviceId],
+      ]);
+    },
+  );
 
-  it("rejects an unrelated gateway port owner before mutating the LaunchAgent", async () => {
-    const env = {
-      ...createDefaultLaunchdEnv(),
-      OPENCLAW_GATEWAY_PORT: "19002",
-    };
-    setLaunchAgentPlist({
-      env,
-      label: "ai.openclaw.gateway",
-      programArguments: ["node", "gateway.js"],
-    });
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const originalPlist = state.files.get(plistPath);
-    inspectPortUsage.mockResolvedValue({
-      port: 19002,
-      status: "busy",
+  it.each([
+    {
+      name: "unrelated",
+      listeners: [{ pid: 5151, address: "TCP 127.0.0.1:19002 (LISTEN)" }],
+    },
+    {
+      name: "mixed",
       listeners: [
-        {
-          pid: 5151,
-          command: "python3",
-          commandLine: "python3 -m http.server 19002",
-          address: "TCP 127.0.0.1:19002 (LISTEN)",
-        },
+        { pid: 4242, address: "TCP 127.0.0.1:19002 (LISTEN)" },
+        { pid: 5151, address: "TCP [::1]:19002 (LISTEN)" },
       ],
-      hints: ["Another process is listening on this port."],
-    });
-    formatPortDiagnostics.mockReturnValue([
-      "Port 19002 is already in use.",
-      "- pid 5151: python3 -m http.server 19002",
-    ]);
-
-    await expect(
-      restartLaunchAgent({
+    },
+    {
+      name: "missing-PID",
+      listeners: [{ address: "TCP 127.0.0.1:19002 (LISTEN)" }],
+    },
+    {
+      name: "unattributed",
+      listeners: [],
+    },
+  ] satisfies Array<{ name: string; listeners: PortListener[] }>)(
+    "rejects $name gateway port ownership before mutating launchd",
+    async ({ listeners }) => {
+      const env = {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_GATEWAY_PORT: "19002",
+      };
+      setLaunchAgentPlist({
         env,
-        stdout: new PassThrough(),
-      }),
-    ).rejects.toThrow(
-      [
-        "gateway port 19002 is busy but is not verifiably owned by LaunchAgent ai.openclaw.gateway",
-        "Port 19002 is already in use.",
-        "- pid 5151: python3 -m http.server 19002",
-      ].join("\n"),
-    );
+        label: "ai.openclaw.gateway",
+        programArguments: ["node", "gateway.js"],
+      });
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const originalPlist = state.files.get(plistPath);
+      inspectPortUsage.mockResolvedValue({
+        port: 19002,
+        status: "busy",
+        listeners,
+        hints: ["Another process is listening on this port."],
+      });
+      formatPortDiagnostics.mockReturnValue(["Port 19002 is already in use."]);
 
-    const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const serviceId = `${domain}/ai.openclaw.gateway`;
-    expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002, {
-      protectedPid: 4242,
-    });
-    expect(inspectPortUsage).toHaveBeenCalledWith(19002);
-    expect(state.launchctlCalls).toEqual([
-      ["print", serviceId],
-      ["print", serviceId],
-    ]);
-    expect(state.files.get(plistPath)).toBe(originalPlist);
-    expect(state.fileWrites).toHaveLength(0);
-    expect(launchctlCommandNames()).not.toContain("enable");
-    expect(launchctlCommandNames()).not.toContain("bootout");
-    expect(launchctlCommandNames()).not.toContain("kickstart");
-  });
+      await expect(
+        restartLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+        }),
+      ).rejects.toThrow(
+        "gateway port 19002 is busy but is not verifiably owned by LaunchAgent ai.openclaw.gateway",
+      );
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      const serviceId = `${domain}/ai.openclaw.gateway`;
+      expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002, {
+        protectedPid: 4242,
+      });
+      expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+      expect(state.launchctlCalls).toEqual([
+        ["print", serviceId],
+        ["print", serviceId],
+      ]);
+      expect(state.files.get(plistPath)).toBe(originalPlist);
+      expect(state.fileWrites).toHaveLength(0);
+      expect(launchctlCommandNames()).not.toContain("enable");
+      expect(launchctlCommandNames()).not.toContain("bootout");
+      expect(launchctlCommandNames()).not.toContain("bootstrap");
+      expect(launchctlCommandNames()).not.toContain("kickstart");
+    },
+  );
 
   it("skips stale cleanup when no explicit launch agent port can be resolved", async () => {
     const env = createDefaultLaunchdEnv();

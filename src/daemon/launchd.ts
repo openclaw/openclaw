@@ -854,7 +854,7 @@ export async function uninstallLaunchAgent({
   }
 }
 
-function isLaunchctlNotLoaded(res: { stdout: string; stderr: string; code: number }): boolean {
+export function isLaunchctlNotLoaded(res: { stdout: string; stderr: string }): boolean {
   const detail = normalizeLowercaseStringOrEmpty(res.stderr || res.stdout);
   return (
     detail.includes("no such process") ||
