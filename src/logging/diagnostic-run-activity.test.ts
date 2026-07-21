@@ -147,6 +147,42 @@ describe("diagnostic run activity retention", () => {
     );
   });
 
+  it("evicts completed model calls without a run lifecycle", async () => {
+    startDiagnosticRunActivityTracking();
+    const synthetic = {
+      runId: "synthetic-model-run",
+      sessionId: "synthetic-model-session",
+      sessionKey: "agent:main:synthetic-model",
+      callId: "synthetic-model-call",
+      provider: "openai",
+      model: "gpt-5.5",
+    };
+    emitTrustedDiagnosticEvent({ type: "model.call.started", ...synthetic });
+    emitTrustedDiagnosticEvent({
+      type: "model.call.completed",
+      ...synthetic,
+      durationMs: 1,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    for (let index = 0; index <= 2_000; index += 1) {
+      const runId = `post-model-run-${index}`;
+      const sessionId = `post-model-session-${index}`;
+      const sessionKey = `agent:main:post-model-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(synthetic)).toEqual({});
+  });
+
   it("evicts run ownership retired by stuck-session recovery", () => {
     startDiagnosticRunActivityTracking();
     const recovered = {

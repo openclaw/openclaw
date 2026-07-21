@@ -311,7 +311,6 @@ function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
     sessionActivityRefs.prune(activity);
     return;
   }
-  registerActiveRun(activity, event);
   activity.activeModelCalls.set(diagnosticModelCallActivityKey(event), {
     runId: event.runId,
     sessionId: event.sessionId,
