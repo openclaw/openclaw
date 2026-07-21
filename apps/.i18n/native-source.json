@@ -1579,7 +1579,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 8730,
+      "line": 8731,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/NodeRuntime.kt",
       "source": "Dream",
       "surface": "android",

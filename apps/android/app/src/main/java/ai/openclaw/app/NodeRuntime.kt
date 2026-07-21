@@ -8258,10 +8258,11 @@ internal fun backgroundGatewayFleetPlan(
   val desiredSet = desiredStableIds.toSet()
   val entriesByStableId = entries.associateBy(GatewayRegistryEntry::stableId)
   val resolvedEndpoints =
-    desiredStableIds.mapNotNull { stableId ->
-      val entry = entriesByStableId[stableId] ?: return@mapNotNull null
-      resolveEndpoint(entry)?.let { stableId to it }
-    }.toMap()
+    desiredStableIds
+      .mapNotNull { stableId ->
+        val entry = entriesByStableId[stableId] ?: return@mapNotNull null
+        resolveEndpoint(entry)?.let { stableId to it }
+      }.toMap()
 
   // Discovery gaps remove the current route from resolvedEndpoints, but the desired ID remains.
   // Disconnect only when the user disables, forgets, or focuses the gateway.
