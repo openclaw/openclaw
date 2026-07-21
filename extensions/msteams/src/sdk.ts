@@ -1,11 +1,15 @@
 // Msteams plugin module implements sdk behavior.
-import * as fs from "node:fs";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
+
+// Bound the federated certificate file read so a misconfigured or oversized
+// path cannot trigger an unbounded read at credential-load time.
+const MSTEAMS_CERTIFICATE_MAX_BYTES = 1024 * 1024;
 
 type MSTeamsHttpServerAdapter =
   import("@microsoft/teams.apps/dist/http/adapter.js").IHttpServerAdapter;
@@ -319,12 +323,21 @@ function createFederatedApp(
 
   let privateKey: string;
   try {
-    privateKey = fs.readFileSync(creds.certificatePath, "utf-8");
+    privateKey =
+      tryReadSecretFileSync(creds.certificatePath, "MS Teams federated certificate", {
+        maxBytes: MSTEAMS_CERTIFICATE_MAX_BYTES,
+        rejectHardlinks: false,
+      }) ?? "";
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to read certificate file at '${creds.certificatePath}': ${msg}`, {
       cause: err,
     });
+  }
+  if (!privateKey) {
+    throw new Error(
+      `Failed to read certificate file at '${creds.certificatePath}': file is empty or missing`,
+    );
   }
 
   return createCertificateApp(creds, privateKey, App, appOptions);

@@ -1,5 +1,4 @@
 // Msteams tests cover sdk plugin behavior.
-import * as fs from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
@@ -13,6 +12,15 @@ vi.mock("node:fs", async (importOriginal) => {
     ),
   };
 });
+
+const { tryReadSecretFileSyncMock } = vi.hoisted(() => ({
+  tryReadSecretFileSyncMock: vi.fn<
+    (filePath: string, label: string, options: unknown) => string | undefined
+  >(() => "-----BEGIN RSA PRIVATE KEY-----\nfake-key\n-----END RSA PRIVATE KEY-----"),
+}));
+vi.mock("openclaw/plugin-sdk/secret-file-runtime", () => ({
+  tryReadSecretFileSync: tryReadSecretFileSyncMock,
+}));
 
 const { mockGetToken } = vi.hoisted(() => {
   const mockGetTokenLocal = vi.fn().mockResolvedValue({ token: "mock-managed-token" });
@@ -76,13 +84,15 @@ describe("createMSTeamsApp", () => {
 
     const app = await createMSTeamsApp(creds);
     expect(app).toBeDefined();
-    expect(fs.readFileSync).toHaveBeenCalledWith("/path/to/cert.pem", "utf-8");
+    expect(tryReadSecretFileSyncMock).toHaveBeenCalledWith(
+      "/path/to/cert.pem",
+      "MS Teams federated certificate",
+      expect.objectContaining({ maxBytes: 1024 * 1024 }),
+    );
   });
 
   it("throws when certificate file is missing", async () => {
-    vi.mocked(fs.readFileSync).mockImplementation(() => {
-      throw new Error("ENOENT: no such file");
-    });
+    tryReadSecretFileSyncMock.mockReturnValueOnce(undefined);
 
     const creds: MSTeamsFederatedCredentials = {
       type: "federated",
@@ -92,6 +102,26 @@ describe("createMSTeamsApp", () => {
     };
 
     await expect(createMSTeamsApp(creds)).rejects.toThrow("Failed to read certificate file");
+  });
+
+  it("throws when the certificate file exceeds the size bound", async () => {
+    // tryReadSecretFileSync returns undefined for an oversized file (its own
+    // maxBytes guard rejects it); the load path must surface that as a failure.
+    tryReadSecretFileSyncMock.mockReturnValueOnce(undefined);
+
+    const creds: MSTeamsFederatedCredentials = {
+      type: "federated",
+      appId: "test-app-id",
+      tenantId: "test-tenant",
+      certificatePath: "/path/to/huge.pem",
+    };
+
+    await expect(createMSTeamsApp(creds)).rejects.toThrow("Failed to read certificate file");
+    expect(tryReadSecretFileSyncMock).toHaveBeenCalledWith(
+      "/path/to/huge.pem",
+      "MS Teams federated certificate",
+      expect.objectContaining({ maxBytes: 1024 * 1024 }),
+    );
   });
 
   it("creates app with managed identity credentials", async () => {
