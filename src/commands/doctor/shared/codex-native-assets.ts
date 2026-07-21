@@ -1,3 +1,4 @@
+// Doctor scan for personal Codex CLI assets that native Codex-mode agents do not auto-load.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,8 +8,10 @@ import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/n
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
-export type CodexNativeAssetHit = {
+type CodexNativeAssetHit = {
+  /** Native Codex asset category discovered under Codex or personal agent homes. */
   kind: "skill" | "plugin" | "config" | "hooks";
+  /** Absolute path to the asset or asset container. */
   path: string;
 };
 
@@ -68,6 +71,7 @@ async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
       return;
     }
     if (depth === 1 && path.basename(dir) === ".system") {
+      // Built-in Codex system skills are not user assets that migration should promote.
       return;
     }
     if (await exists(path.join(dir, "SKILL.md"))) {
@@ -131,7 +135,8 @@ function shouldScanCodexNativeAssets(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   return isCodexRuntimeConfigured(cfg, env) || isCodexPluginConfigured(cfg);
 }
 
-export async function scanCodexNativeAssets(params: {
+/** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */
+async function scanCodexNativeAssets(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<CodexNativeAssetHit[]> {
@@ -175,6 +180,7 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+/** Build an informational doctor note when personal Codex CLI assets need migration review. */
 export async function collectCodexNativeAssetInfoNotes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -192,10 +198,14 @@ export async function collectCodexNativeAssetInfoNotes(params: {
   ];
   return [
     [
-      "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
-      `- Sources: ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)} (${counts.join(", ")}).`,
-      "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
-      "- If the Codex plugin is not installed, run `openclaw plugins install npm:@openclaw/codex` first. Then run `openclaw migrate plan codex` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+      `- Personal Codex CLI assets found (${counts.join(", ")}) in ${resolveCodexHome(env)} and ${resolvePersonalAgentSkillsDir(env)}; native Codex-mode agents use isolated per-agent homes and will not load them.`,
+      "- To review or promote them: install the Codex plugin (openclaw plugins install npm:@openclaw/codex), then run openclaw migrate plan codex.",
     ].join("\n"),
   ];
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.codexNativeAssetsTestApi")] = {
+    scanCodexNativeAssets,
+  };
 }

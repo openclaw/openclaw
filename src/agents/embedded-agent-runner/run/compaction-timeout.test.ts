@@ -1,10 +1,11 @@
+// Coverage for timeout decisions and snapshots during compaction.
 import { describe, expect, it } from "vitest";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   resolveRunTimeoutDuringCompaction,
-  resolveRunTimeoutWithCompactionGraceMs,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
+  trimToContinuableTail,
 } from "./compaction-timeout.js";
 
 function expectSelectedSnapshot(params: {
@@ -19,6 +20,8 @@ function expectSelectedSnapshot(params: {
   >[0]["preCompactionSnapshot"];
   timedOutDuringCompaction: boolean;
 }) {
+  // Snapshot selection determines what can be replayed after compaction timeout,
+  // so tests assert source, session id, and messages together.
   const selected = selectCompactionTimeoutSnapshot({
     timedOutDuringCompaction: params.timedOutDuringCompaction,
     preCompactionSnapshot: params.preCompactionSnapshot,
@@ -87,15 +90,6 @@ describe("compaction-timeout helpers", () => {
     ).toBe("abort");
   });
 
-  it("adds one compaction grace window to the run timeout budget", () => {
-    expect(
-      resolveRunTimeoutWithCompactionGraceMs({
-        runTimeoutMs: 600_000,
-        compactionTimeoutMs: 900_000,
-      }),
-    ).toBe(1_500_000);
-  });
-
   it("uses pre-compaction snapshot when compaction timeout occurs", () => {
     const pre = [castAgentMessage({ role: "user", content: "pre" })] as const;
     const current = [castAgentMessage({ role: "assistant", content: "current" })] as const;
@@ -112,6 +106,8 @@ describe("compaction-timeout helpers", () => {
   });
 
   it("trims assistant-tailed pre-compaction snapshots after compaction timeout", () => {
+    // Assistant tails are not continuable after compaction timeout; keep the
+    // latest safe user/tool boundary instead.
     const user = castAgentMessage({ role: "user", content: "pre-user" });
     const pre = [user, castAgentMessage({ role: "assistant", content: "pre-assistant" })] as const;
     const current = [
@@ -215,5 +211,56 @@ describe("compaction-timeout helpers", () => {
       expectedSessionIdUsed: "session-current",
       expectedSnapshot: current,
     });
+  });
+
+  it.each([
+    {
+      name: "assistant tail",
+      tail: castAgentMessage({ role: "assistant", content: "partial" }),
+      expectedLength: 1,
+    },
+    {
+      name: "excluded bash tail",
+      tail: castAgentMessage({
+        role: "bashExecution",
+        command: "echo hi",
+        output: "hi\n",
+        exitCode: 0,
+        cancelled: false,
+        truncated: false,
+        excludeFromContext: true,
+      }),
+      expectedLength: 1,
+    },
+    {
+      name: "tool result tail",
+      tail: castAgentMessage({
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "lookup",
+        content: [{ type: "text", text: "result" }],
+        isError: false,
+        timestamp: 2,
+      }),
+      expectedLength: 2,
+    },
+    {
+      name: "summary tail",
+      tail: castAgentMessage({
+        role: "compactionSummary",
+        summary: "older work",
+        tokensBefore: 100,
+        timestamp: 2,
+      }),
+      expectedLength: 2,
+    },
+  ])("normalizes $name for compaction recovery exits", ({ tail, expectedLength }) => {
+    const normalized = trimToContinuableTail([
+      castAgentMessage({ role: "user", content: "safe" }),
+      tail,
+    ]);
+
+    expect(normalized).toHaveLength(expectedLength);
+    expect(normalized?.at(-1)?.role).not.toBe("assistant");
   });
 });

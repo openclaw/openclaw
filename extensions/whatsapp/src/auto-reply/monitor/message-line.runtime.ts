@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements message line behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export {
@@ -27,7 +28,7 @@ export function resolveMessagePrefix(
   agentId: string,
   opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
 ): string {
-  const configured = opts?.configured ?? cfg.messages?.messagePrefix;
+  const configured = opts?.configured;
   if (configured !== undefined) {
     return configured;
   }

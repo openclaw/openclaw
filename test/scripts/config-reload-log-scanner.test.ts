@@ -1,3 +1,4 @@
+// Config Reload Log Scanner tests cover config reload log scanner script behavior.
 import { appendFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -56,16 +57,15 @@ describe("config reload log scanner", () => {
     writeFileSync(logPath, "config change detected");
     expect(scanner.scan().reloadLines).toEqual([]);
 
-    appendFileSync(logPath, "; evaluating reload: gateway.channelHealthCheckMinutes\n");
+    appendFileSync(logPath, "; evaluating reload: ui.seamColor\n");
     expect(scanner.scan().reloadLines).toEqual([
-      "config change detected; evaluating reload: gateway.channelHealthCheckMinutes",
+      "config change detected; evaluating reload: ui.seamColor",
     ]);
   });
 
   it("starts from a bounded tail of oversized logs", () => {
     const logPath = path.join(makeTempRoot(), "gateway.log");
-    const reloadLine =
-      "config change detected; evaluating reload: gateway.channelHealthCheckMinutes\n";
+    const reloadLine = "config change detected; evaluating reload: ui.seamColor\n";
     writeFileSync(logPath, `${"x".repeat(4096)}\n${reloadLine}`);
 
     const scanner = createConfigReloadLogScanner(logPath, {
@@ -74,7 +74,7 @@ describe("config reload log scanner", () => {
     });
 
     expect(scanner.scan().reloadLines).toEqual([
-      "config change detected; evaluating reload: gateway.channelHealthCheckMinutes",
+      "config change detected; evaluating reload: ui.seamColor",
     ]);
   });
 
@@ -94,5 +94,29 @@ describe("config reload log scanner", () => {
     const result = scanner.scan();
     expect(result.reloadLines).toEqual([]);
     expect(result.restartLines).toEqual(["config change requires gateway restart: new.path"]);
+  });
+
+  it("resets accumulated matches when a rotated log keeps the same size", () => {
+    const logPath = path.join(makeTempRoot(), "gateway.log");
+    const scanner = createConfigReloadLogScanner(logPath, {
+      maxReadBytes: 1024,
+      tailLineLimit: 4,
+    });
+    const oldText = "config change detected; evaluating reload: old.path with enough padding\n";
+    const restartLine = "config change requires gateway restart: new.path";
+    const restartText = `${restartLine}${" ".repeat(oldText.length - restartLine.length - 1)}\n`;
+
+    expect(Buffer.byteLength(restartText)).toBe(Buffer.byteLength(oldText));
+    writeFileSync(logPath, oldText);
+    expect(scanner.scan().reloadLines).toEqual([
+      "config change detected; evaluating reload: old.path with enough padding",
+    ]);
+
+    rmSync(logPath, { force: true });
+    writeFileSync(logPath, restartText);
+
+    const result = scanner.scan();
+    expect(result.reloadLines).toEqual([]);
+    expect(result.restartLines).toEqual([restartText.replace(/\n$/u, "")]);
   });
 });

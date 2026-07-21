@@ -1,3 +1,4 @@
+// Extension Package Boundary script supports OpenClaw repository automation.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join, posix, resolve } from "node:path";
 import { privateLocalOnlyPluginSdkEntrypoints } from "./plugin-sdk-entries.mjs";
@@ -20,9 +21,39 @@ const privateLocalOnlyPluginSdkPackageDtsPaths = Object.fromEntries(
   ]),
 ) as Record<string, readonly string[]>;
 
+function buildPackageBoundaryDtsPaths(params: {
+  packageName: string;
+  packageDir: string;
+}): Record<string, readonly string[]> {
+  const packageJson = JSON.parse(
+    readFileSync(join("packages", params.packageDir, "package.json"), "utf8"),
+  ) as { exports?: Record<string, unknown> };
+  return Object.fromEntries(
+    Object.entries(packageJson.exports ?? {}).flatMap(([exportKey, value]) => {
+      const subpath =
+        exportKey === "." ? "" : exportKey.startsWith("./") ? exportKey.slice(2) : null;
+      const importPath =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>).import
+          : value;
+      if (subpath === null || subpath.includes("..") || typeof importPath !== "string") {
+        return [];
+      }
+      if (!importPath.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+        return [];
+      }
+      const specifier = subpath ? `${params.packageName}/${subpath}` : params.packageName;
+      return [
+        [
+          specifier,
+          [`../dist/plugin-sdk/packages/${params.packageDir}/src/${subpath || "index"}.d.ts`],
+        ],
+      ];
+    }),
+  );
+}
+
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
-  "openclaw/extension-api": ["../src/extensionAPI.ts"],
-  "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
   "openclaw/plugin-sdk/*": ["../dist/plugin-sdk/*.d.ts"],
   ...privateLocalOnlyPluginSdkPackageDtsPaths,
   "openclaw/plugin-sdk/account-id": ["../dist/plugin-sdk/account-id.d.ts"],
@@ -34,21 +65,23 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/channel-secret-basic-runtime.d.ts",
   ],
   "openclaw/plugin-sdk/channel-secret-runtime": ["../dist/plugin-sdk/channel-secret-runtime.d.ts"],
-  "openclaw/plugin-sdk/channel-secret-tts-runtime": [
-    "../dist/plugin-sdk/channel-secret-tts-runtime.d.ts",
-  ],
   "openclaw/plugin-sdk/channel-streaming": ["../dist/plugin-sdk/channel-streaming.d.ts"],
   "openclaw/plugin-sdk/error-runtime": ["../dist/plugin-sdk/error-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../dist/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-entry": ["../dist/plugin-sdk/provider-entry.d.ts"],
   "openclaw/plugin-sdk/secret-ref-runtime": ["../dist/plugin-sdk/secret-ref-runtime.d.ts"],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/ssrf-runtime.d.ts"],
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
+  "@openclaw/matrix/test-api.js": ["../dist/plugin-sdk/extensions/matrix/test-api.d.ts"],
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
+  "@openclaw/telegram/api.js": ["../dist/plugin-sdk/extensions/telegram/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/ai": ["../dist/plugin-sdk/packages/ai/src/index.d.ts"],
+  "@openclaw/ai/diagnostics": ["../dist/plugin-sdk/packages/ai/src/utils/diagnostics.d.ts"],
+  "@openclaw/ai/event-stream": ["../dist/plugin-sdk/packages/ai/src/utils/event-stream.d.ts"],
+  "@openclaw/ai/providers": ["../dist/plugin-sdk/packages/ai/src/providers.d.ts"],
+  "@openclaw/ai/types": ["../dist/plugin-sdk/packages/ai/src/types.d.ts"],
+  "@openclaw/ai/validation": ["../dist/plugin-sdk/packages/ai/src/validation.d.ts"],
+  "@openclaw/ai/internal/*": ["../dist/plugin-sdk/packages/ai/src/internal/*.d.ts"],
   "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
   "@openclaw/llm-core/diagnostics": [
     "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
@@ -116,6 +149,41 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/media-generation-core/*": [
     "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
   ],
+  "@openclaw/media-core": ["../dist/plugin-sdk/packages/media-core/src/index.d.ts"],
+  "@openclaw/media-core/base64": ["../dist/plugin-sdk/packages/media-core/src/base64.d.ts"],
+  "@openclaw/media-core/constants": ["../dist/plugin-sdk/packages/media-core/src/constants.d.ts"],
+  "@openclaw/media-core/content-length": [
+    "../dist/plugin-sdk/packages/media-core/src/content-length.d.ts",
+  ],
+  "@openclaw/media-core/file-name": ["../dist/plugin-sdk/packages/media-core/src/file-name.d.ts"],
+  "@openclaw/media-core/inbound-path-policy": [
+    "../dist/plugin-sdk/packages/media-core/src/inbound-path-policy.d.ts",
+  ],
+  "@openclaw/media-core/inline-image-data-url": [
+    "../dist/plugin-sdk/packages/media-core/src/inline-image-data-url.d.ts",
+  ],
+  "@openclaw/media-core/media-source-url": [
+    "../dist/plugin-sdk/packages/media-core/src/media-source-url.d.ts",
+  ],
+  "@openclaw/media-core/mime": ["../dist/plugin-sdk/packages/media-core/src/mime.d.ts"],
+  "@openclaw/media-core/read-byte-stream-with-limit": [
+    "../dist/plugin-sdk/packages/media-core/src/read-byte-stream-with-limit.d.ts",
+  ],
+  "@openclaw/media-core/*": ["../dist/plugin-sdk/packages/media-core/src/*.d.ts"],
+  "@openclaw/normalization-core/record-coerce": [
+    "../dist/plugin-sdk/packages/normalization-core/src/record-coerce.d.ts",
+  ],
+  "@openclaw/normalization-core/string-coerce": [
+    "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
+  ],
+  "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
+  "@openclaw/retry": ["../dist/plugin-sdk/packages/retry/src/index.d.ts"],
+  "@openclaw/workboard-contract": ["../packages/workboard-contract/src/index.ts"],
+  ...buildPackageBoundaryDtsPaths({
+    packageName: "@openclaw/acp-core",
+    packageDir: "acp-core",
+  }),
+  "@openclaw/acp-core/*": ["../dist/plugin-sdk/packages/acp-core/src/*.d.ts"],
   "@openclaw/terminal-core": ["../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"],
   "@openclaw/terminal-core/ansi": ["../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"],
   "@openclaw/terminal-core/decorative-emoji": [
@@ -177,16 +245,25 @@ function prefixExtensionPackageBoundaryPaths(
   );
 }
 
+function omitExtensionPackageBoundaryPaths(
+  paths: Record<string, readonly string[]>,
+  omittedKeys: readonly string[],
+): Record<string, readonly string[]> {
+  const omitted = new Set(omittedKeys);
+  return Object.fromEntries(Object.entries(paths).filter(([key]) => !omitted.has(key)));
+}
+
 export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ...prefixExtensionPackageBoundaryPaths(
-    (({
-      "openclaw/plugin-sdk/channel-secret-basic-runtime": _omitBasic,
-      "openclaw/plugin-sdk/channel-secret-tts-runtime": _omitTts,
-      "@openclaw/discord/api.js": _omitDiscord,
-      "@openclaw/slack/api.js": _omitSlack,
-      "@openclaw/whatsapp/api.js": _omitWhatsApp,
-      ...rest
-    }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
+    omitExtensionPackageBoundaryPaths(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS, [
+      "openclaw/plugin-sdk/channel-secret-basic-runtime",
+      "openclaw/plugin-sdk/channel-secret-tts-runtime",
+      "@openclaw/matrix/test-api.js",
+      "@openclaw/discord/api.js",
+      "@openclaw/slack/api.js",
+      "@openclaw/telegram/api.js",
+      "@openclaw/whatsapp/api.js",
+    ]),
     "../",
   ),
   "openclaw/plugin-sdk/channel-entry-contract": [
@@ -194,15 +271,6 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
   ],
   "openclaw/plugin-sdk/browser-maintenance": [
     "../../dist/plugin-sdk/src/plugin-sdk/browser-maintenance.d.ts",
-  ],
-  "openclaw/plugin-sdk/cli-runtime": ["../../dist/plugin-sdk/cli-runtime.d.ts"],
-  "openclaw/plugin-sdk/provider-catalog-shared": [
-    "../../dist/plugin-sdk/provider-catalog-shared.d.ts",
-  ],
-  "openclaw/plugin-sdk/provider-env-vars": ["../../dist/plugin-sdk/provider-env-vars.d.ts"],
-  "openclaw/plugin-sdk/provider-entry": ["../../dist/plugin-sdk/provider-entry.d.ts"],
-  "openclaw/plugin-sdk/provider-web-search-contract": [
-    "../../dist/plugin-sdk/provider-web-search-contract.d.ts",
   ],
   "@openclaw/qa-channel/api.js": ["../../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/*.js": ["../../packages/plugin-sdk/dist/extensions/*.d.ts", "../*"],
@@ -228,9 +296,8 @@ type ExtensionPackageBoundaryPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Boundary helper lets callers ascribe JSON file shape.
-function readJsonFile<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
 function collectBundledExtensionIds(rootDir = resolve(".")): string[] {
@@ -252,18 +319,18 @@ export function readExtensionPackageBoundaryTsconfig(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryTsConfigJson {
-  return readJsonFile<ExtensionPackageBoundaryTsConfigJson>(
+  return readJsonFile(
     resolveExtensionTsconfigPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryTsConfigJson;
 }
 
 export function readExtensionPackageBoundaryPackageJson(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryPackageJson {
-  return readJsonFile<ExtensionPackageBoundaryPackageJson>(
+  return readJsonFile(
     resolveExtensionPackageJsonPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryPackageJson;
 }
 
 export function isOptInExtensionPackageBoundaryTsconfig(

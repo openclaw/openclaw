@@ -1,3 +1,5 @@
+// Sandbox filesystem path tests cover bind parsing, host/container path mapping,
+// and writable-root detection.
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -5,7 +7,6 @@ import {
   buildSandboxFsMounts,
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
-  parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
   resolveWritableSandboxBindHostRoots,
 } from "./fs-paths.js";
@@ -16,41 +17,7 @@ function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({ overrides });
 }
 
-describe("parseSandboxBindMount", () => {
-  it("parses bind mode and writeability", () => {
-    expect(parseSandboxBindMount("/tmp/a:/workspace-a:ro")).toEqual({
-      hostRoot: path.resolve("/tmp/a"),
-      containerRoot: "/workspace-a",
-      writable: false,
-    });
-    expect(parseSandboxBindMount("/tmp/b:/workspace-b:rw")).toEqual({
-      hostRoot: path.resolve("/tmp/b"),
-      containerRoot: "/workspace-b",
-      writable: true,
-    });
-  });
-
-  it("parses Windows drive-letter host paths", () => {
-    expect(parseSandboxBindMount("C:\\Users\\kai\\workspace:/workspace:ro")).toEqual({
-      hostRoot: path.resolve("C:\\Users\\kai\\workspace"),
-      containerRoot: "/workspace",
-      writable: false,
-    });
-    expect(parseSandboxBindMount("D:/data:/workspace-data:rw")).toEqual({
-      hostRoot: path.resolve("D:/data"),
-      containerRoot: "/workspace-data",
-      writable: true,
-    });
-  });
-
-  it("parses UNC-style host paths", () => {
-    expect(parseSandboxBindMount("//server/share:/workspace:ro")).toEqual({
-      hostRoot: path.resolve("//server/share"),
-      containerRoot: "/workspace",
-      writable: false,
-    });
-  });
-
+describe("sandbox bind mounts", () => {
   it("returns only unique writable bind host roots", () => {
     expect(
       resolveWritableSandboxBindHostRoots([
@@ -58,12 +25,22 @@ describe("parseSandboxBindMount", () => {
         "/tmp/read-only:/read-only:ro",
         "/tmp/default-write:/default-write",
         "/tmp/data:/data-two:rw",
+        "C:\\Users\\kai\\workspace:/windows-read-only:ro",
+        "D:/data:/windows-data:rw",
+        "//server/share:/unc-share:rw",
         "invalid-bind",
       ]),
-    ).toEqual([path.resolve("/tmp/data"), path.resolve("/tmp/default-write")]);
+    ).toEqual([
+      path.resolve("/tmp/data"),
+      path.resolve("/tmp/default-write"),
+      path.resolve("D:/data"),
+      path.resolve("//server/share"),
+    ]);
   });
 
   it("omits writable bind roots that contain read-only host shadows", () => {
+    // A writable parent with a read-only child is unsafe for generic host writes;
+    // callers must route through mount-aware path resolution instead.
     expect(
       resolveWritableSandboxBindHostRoots([
         "/tmp/data:/tmp/data:rw",
@@ -176,6 +153,8 @@ describe("resolveSandboxFsPathWithMounts", () => {
   });
 
   it("includes container workspace hint without exposing a full home workspace root", () => {
+    // Error messages should guide users toward container paths without printing
+    // the host home directory.
     const workspaceDir = path.join(os.homedir(), "workspace-coder");
     const sandbox = createSandbox({
       workspaceDir,

@@ -1,3 +1,4 @@
+// Smoke coverage for session-history sanitization policy wiring.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSanitizeSessionHistoryHelpersMock,
@@ -12,11 +13,10 @@ import {
 } from "./embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-vi.mock(
-  "./embedded-agent-helpers.js",
-  async () => await createSanitizeSessionHistoryHelpersMock({ isGoogleModelApi: vi.fn() }),
-);
+vi.mock("./embedded-agent-helpers.js", async () => await createSanitizeSessionHistoryHelpersMock());
 
+// Provider runtime mocks keep this file focused on high-level policy routing
+// while deeper replay-history behavior is covered in the main test suite.
 vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
@@ -45,8 +45,6 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   });
 
   it("passes simple user-only history through for google model APIs", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
-
     const result = await sanitizeSessionHistory({
       messages: mockMessages,
       modelApi: "google-generative-ai",
@@ -59,8 +57,6 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   });
 
   it("passes simple user-only history through for openai-responses", async () => {
-    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(false);
-
     const result = await sanitizeWithOpenAIResponses({
       sanitizeSessionHistory,
       messages: mockMessages,
@@ -71,6 +67,8 @@ describe("sanitizeSessionHistory e2e smoke", () => {
   });
 
   it("downgrades openai reasoning blocks when the model snapshot changed", async () => {
+    // Snapshot changes are the public safety boundary: reasoning that was valid
+    // for one provider must be replayed as text-only when the model family moves.
     const result = await sanitizeSnapshotChangedOpenAIReasoning({
       sanitizeSessionHistory,
     });

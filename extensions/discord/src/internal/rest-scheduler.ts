@@ -1,4 +1,5 @@
-import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+// Discord plugin module implements rest scheduler behavior.
+import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { RateLimitError, readRetryAfter } from "./rest-errors.js";
 import {
   createBucketKey,
@@ -38,13 +39,13 @@ type BucketState<TData> = {
   routeKeys: Set<string>;
 };
 
-export type RestSchedulerLaneOptions = {
+type RestSchedulerLaneOptions = {
   maxQueueSize: number;
   staleAfterMs?: number;
   weight: number;
 };
 
-export type RestSchedulerOptions = {
+type RestSchedulerOptions = {
   lanes: Record<RequestPriority, RestSchedulerLaneOptions>;
   maxConcurrency: number;
   maxQueueSize: number;
@@ -390,7 +391,7 @@ export class RestScheduler<TData> {
         this.drainTimer = undefined;
         this.drainQueues();
       },
-      Math.max(0, delayMs),
+      resolveTimerTimeoutMs(delayMs, 0, 0),
     );
     this.drainTimer.unref?.();
   }

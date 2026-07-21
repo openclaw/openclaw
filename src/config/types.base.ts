@@ -1,15 +1,27 @@
+// Defines base configuration types shared by multiple config sections.
 import type { ChatType } from "../channels/chat-type.js";
 
+/** Reply handling mode for chat command surfaces. */
 export type ReplyMode = "text" | "command";
+/** Typing indicator timing policy shared by channel configs. */
 export type TypingMode = "never" | "instant" | "thinking" | "message";
+/** Session-key ownership model for inbound messages. */
 export type SessionScope = "per-sender" | "global";
+/** DM session-key granularity across peers, channels, and accounts. */
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+/** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = "off" | "first" | "all" | "batched";
+/** Group-chat admission policy for channels with allowlists. */
 export type GroupPolicy = "open" | "disabled" | "allowlist";
+/** Direct-message admission policy for channels with pairing/allowlists. */
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+/** How much non-allowlisted context is visible to an agent. */
 export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
+/** Text splitting strategy for outbound channel delivery. */
 export type TextChunkMode = "length" | "newline";
+/** Preview/progress delivery mode while an agent response is still streaming. */
 export type StreamingMode = "off" | "partial" | "block" | "progress";
+/** How command text is represented in streaming progress previews. */
 export type ChannelStreamingCommandTextMode = "raw" | "status";
 
 export type OutboundRetryConfig = {
@@ -24,14 +36,20 @@ export type OutboundRetryConfig = {
 };
 
 export type BlockStreamingCoalesceConfig = {
+  /** Minimum buffered characters before coalesced block delivery. */
   minChars?: number;
+  /** Maximum buffered characters before a block must be flushed. */
   maxChars?: number;
+  /** Idle time in ms before flushing a partial coalesced block. */
   idleMs?: number;
 };
 
 export type BlockStreamingChunkConfig = {
+  /** Minimum preview chunk size before sending another draft update. */
   minChars?: number;
+  /** Maximum preview chunk size before forcing a draft update. */
   maxChars?: number;
+  /** Preferred natural boundary when splitting preview chunks. */
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
@@ -50,6 +68,14 @@ export type ChannelStreamingProgressConfig = {
   toolProgress?: boolean;
   /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
+  /**
+   * Replace tool lines with a short utility-model narration of what the agent
+   * is doing. Runs when a utility model resolves (explicit `utilityModel` or
+   * the primary provider's declared default). Default: true.
+   */
+  narration?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {
@@ -95,6 +121,7 @@ export type ChannelStreamingConfig = {
 
 export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunkMode" | "block">;
 
+/** Streaming subset used by channels that render visible preview/progress replies. */
 export type ChannelPreviewStreamingConfig = Pick<
   ChannelStreamingConfig,
   "mode" | "chunkMode" | "preview" | "progress" | "block"
@@ -118,7 +145,9 @@ export type HumanDelayConfig = {
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
+  /** Channel/provider id match. */
   channel?: string;
+  /** Direct/group/thread classification when the caller has channel metadata. */
   chatType?: ChatType;
   /**
    * Session key prefix match.
@@ -129,15 +158,19 @@ export type SessionSendPolicyMatch = {
   rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
+  /** Action applied when match criteria select this rule. */
   action: SessionSendPolicyAction;
+  /** Optional match filter; omitted match behaves as a catch-all rule. */
   match?: SessionSendPolicyMatch;
 };
 export type SessionSendPolicyConfig = {
+  /** Fallback action when no send-policy rule matches. */
   default?: SessionSendPolicyAction;
+  /** Ordered allow/deny rules; first matching rule wins. */
   rules?: SessionSendPolicyRule[];
 };
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "none" | "daily" | "idle";
 export type SessionResetConfig = {
   mode?: SessionResetMode;
   /** Local hour (0-23) for the daily reset boundary. */
@@ -147,8 +180,6 @@ export type SessionResetConfig = {
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;
-  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-  dm?: SessionResetConfig;
   group?: SessionResetConfig;
   thread?: SessionResetConfig;
 };
@@ -195,54 +226,37 @@ export type SessionConfig = {
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
-  typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
-  /** Session transcript write-lock acquisition policy. */
-  writeLock?: SessionWriteLockConfig;
-  agentToAgent?: {
-    /** Max ping-pong turns between requester/target (0-20). Default: 5. */
-    maxPingPongTurns?: number;
-  };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };
 
-export type SessionWriteLockConfig = {
-  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
-  acquireTimeoutMs?: number;
-  /** When an existing lock can be treated as stale and reclaimed. Default: 1800000. */
-  staleMs?: number;
-  /** Maximum in-process hold time before the watchdog releases the lock. Default: 300000. */
-  maxHoldMs?: number;
-};
-
 export type SessionMaintenanceMode = "enforce" | "warn";
 
+/** Session-store cleanup policy for transcript count, age, archives, and disk budget. */
 export type SessionMaintenanceConfig = {
-  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  /** Whether to enforce maintenance or warn only. Default: "enforce". */
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
-  /** @deprecated Use pruneAfter instead. */
-  pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
-  rotateBytes?: number | string;
   /**
-   * Retention for archived reset transcripts (`*.reset.<timestamp>`).
-   * Set `false` to disable reset-archive cleanup. Default: same as `pruneAfter` (30d).
+   * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
+   * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
+   * disk budget evicts them oldest-first; a duration opts into deletion.
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
+   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
+   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
+   * (mode=enforce). Set `false` to disable the budget entirely.
    */
-  maxDiskBytes?: number | string;
+  maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
    * Default: 80% of maxDiskBytes.
@@ -275,6 +289,8 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  /** Log export sink: OTLP by default, stdout JSONL, or both. */
+  logsExporter?: "otlp" | "stdout" | "both";
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */
@@ -298,50 +314,45 @@ export type DiagnosticsOtelConfig = {
 };
 
 export type DiagnosticsCacheTraceConfig = {
+  /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
+  /** Optional output path for cache trace artifacts. */
   filePath?: string;
+  /** Include normalized messages in cache trace output. */
   includeMessages?: boolean;
+  /** Include prompt payload text in cache trace output. */
   includePrompt?: boolean;
+  /** Include system-message content in cache trace output. */
   includeSystem?: boolean;
+};
+
+export type AuditConfig = {
+  /**
+   * Record metadata-only run, tool, and enabled message lifecycle events into
+   * the shared state database. Content is never stored. Default: true. This is
+   * startup-scoped; disabling stops new event inserts after restart while retained
+   * records stay readable until they expire.
+   */
+  enabled?: boolean;
+  /**
+   * Record content-free message lifecycle metadata. `direct` records only
+   * known direct conversations; `all` also records group, channel, and
+   * unknown conversation kinds. Default: `off`.
+   */
+  messages?: "off" | "direct" | "all";
 };
 
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
   flags?: string[];
-  /** Threshold in ms before a processing session with no observed progress logs diagnostics. */
-  stuckSessionWarnMs?: number;
-  /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
-  stuckSessionAbortMs?: number;
-  /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
-  memoryPressureSnapshot?: boolean;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
-};
-
-export type WebReconnectConfig = {
-  initialMs?: number;
-  maxMs?: number;
-  factor?: number;
-  jitter?: number;
-  maxAttempts?: number; // 0 = unlimited
-};
-
-export type WebWhatsAppConfig = {
-  /** Baileys application ping interval in milliseconds. Default: 25000. */
-  keepAliveIntervalMs?: number;
-  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
-  connectTimeoutMs?: number;
-  /** Baileys query timeout in milliseconds. Default: 60000. */
-  defaultQueryTimeoutMs?: number;
 };
 
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
-  heartbeatSeconds?: number;
-  reconnect?: WebReconnectConfig;
-  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

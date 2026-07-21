@@ -1,3 +1,4 @@
+// Telegram plugin module implements polling lease behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
@@ -15,7 +16,7 @@ type TelegramPollingLeaseEntry = {
 
 type TelegramPollingLeaseRegistry = Map<string, TelegramPollingLeaseEntry>;
 
-export type TelegramPollingLease = {
+type TelegramPollingLease = {
   tokenFingerprint: string;
   waitedForPrevious: boolean;
   replacedStoppingPrevious: boolean;
@@ -220,8 +221,4 @@ export async function releaseStoppedTelegramPollingLease(
   registry.delete(fingerprint);
   existing.resolveDone();
   return true;
-}
-
-export function resetTelegramPollingLeasesForTests(): void {
-  pollingLeaseRegistry().clear();
 }

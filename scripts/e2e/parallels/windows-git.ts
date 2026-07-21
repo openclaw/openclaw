@@ -1,3 +1,4 @@
+// Windows Git script supports OpenClaw repository automation.
 import path from "node:path";
 import type { WindowsGuest } from "./guest-transports.ts";
 import { die, run, say } from "./host-command.ts";
@@ -81,17 +82,30 @@ print(best["browser_download_url"])`,
   }
   const zipPath = path.join(tgzDir, name);
   say(`Download ${name}`);
-  run("curl", [
-    "--retry",
-    "5",
-    "--retry-delay",
-    "3",
-    "--retry-all-errors",
-    "-fsSL",
-    url,
-    "-o",
-    zipPath,
-  ]);
+  run(
+    "curl",
+    [
+      "--retry",
+      "5",
+      "--retry-delay",
+      "3",
+      "--retry-all-errors",
+      "--connect-timeout",
+      "10",
+      "--max-time",
+      "120",
+      "--retry-max-time",
+      "120",
+      "-fsSL",
+      url,
+      "-o",
+      zipPath,
+    ],
+    {
+      // curl can start one final 120s transfer at the retry-window edge.
+      timeoutMs: 270_000,
+    },
+  );
   return zipPath;
 }
 
@@ -124,7 +138,7 @@ if (Test-Path $portableGit) {
   Remove-Item $portableGit -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path $portableGit | Out-Null
-curl.exe -fsSL ${psSingleQuote(minGitUrl)} -o $archive
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(minGitUrl)} -o $archive
 tar.exe -xf $archive -C $portableGit
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"

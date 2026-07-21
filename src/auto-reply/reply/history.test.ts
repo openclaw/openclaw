@@ -1,3 +1,4 @@
+// Tests reply history loading, trimming, and rendering for prompt context.
 import { describe, expect, it } from "vitest";
 import { normalizeHistoryMediaEntries, recordPendingHistoryEntryWithMedia } from "./history.js";
 import type { HistoryEntry } from "./history.types.js";
@@ -19,6 +20,22 @@ describe("history media recording", () => {
     ).toEqual([
       { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
       { path: "C:\\tmp\\d.jpg", kind: "image", messageId: "msg-1" },
+    ]);
+  });
+
+  it("preserves native sticker classification for local sticker images", () => {
+    expect(
+      normalizeHistoryMediaEntries({
+        messageId: "msg-sticker",
+        media: [{ path: "/tmp/sticker.png", contentType: "image/png", kind: "sticker" }],
+      }),
+    ).toEqual([
+      {
+        path: "/tmp/sticker.png",
+        contentType: "image/png",
+        kind: "sticker",
+        messageId: "msg-sticker",
+      },
     ]);
   });
 

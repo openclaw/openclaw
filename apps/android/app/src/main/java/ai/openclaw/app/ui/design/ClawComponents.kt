@@ -45,6 +45,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,10 +58,12 @@ internal enum class ClawStatus {
   Danger,
 }
 
+/** Full-screen mobile scaffold that applies OpenClaw safe-area and canvas tokens. */
 @Composable
 internal fun ClawScaffold(
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.lg, vertical = ClawTheme.spacing.lg),
+  contentWindowInsets: WindowInsets = WindowInsets.safeDrawing,
   content: @Composable () -> Unit,
 ) {
   Box(
@@ -67,13 +71,14 @@ internal fun ClawScaffold(
       modifier
         .fillMaxSize()
         .background(ClawTheme.colors.canvas)
-        .windowInsetsPadding(WindowInsets.safeDrawing)
+        .windowInsetsPadding(contentWindowInsets)
         .padding(contentPadding),
   ) {
     content()
   }
 }
 
+/** Section title row with an optional trailing action slot. */
 @Composable
 internal fun ClawSectionHeader(
   title: String,
@@ -94,6 +99,7 @@ internal fun ClawSectionHeader(
   }
 }
 
+/** Primary call-to-action button using the mobile design token set. */
 @Composable
 internal fun ClawPrimaryButton(
   text: String,
@@ -125,6 +131,7 @@ internal fun ClawPrimaryButton(
   }
 }
 
+/** Secondary action button for non-default commands. */
 @Composable
 internal fun ClawSecondaryButton(
   text: String,
@@ -156,6 +163,7 @@ internal fun ClawSecondaryButton(
   }
 }
 
+/** Fixed-size circular icon button for toolbar actions. */
 @Composable
 internal fun ClawIconButton(
   icon: ImageVector,
@@ -179,6 +187,54 @@ internal fun ClawIconButton(
   }
 }
 
+/** Transparent circular icon button for low-emphasis toolbar actions. */
+@Composable
+internal fun ClawPlainIconButton(
+  icon: ImageVector,
+  contentDescription: String,
+  onClick: () -> Unit,
+) {
+  Surface(
+    onClick = onClick,
+    modifier = Modifier.size(ClawTheme.spacing.touchTarget),
+    shape = CircleShape,
+    color = Color.Transparent,
+    contentColor = ClawTheme.colors.text,
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
+    }
+  }
+}
+
+/** Compact label/value row for health and readiness summaries. */
+@Composable
+internal fun ClawStatusRow(
+  title: String,
+  value: String,
+  healthy: Boolean,
+  modifier: Modifier = Modifier,
+) {
+  Row(
+    modifier = modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(9.dp),
+  ) {
+    Text(
+      text = title,
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.text,
+      modifier = Modifier.weight(1f),
+      maxLines = 1,
+    )
+    ClawStatusPill(
+      text = value,
+      status = if (healthy) ClawStatus.Success else ClawStatus.Warning,
+    )
+  }
+}
+
+/** Compact status chip with a semantic color dot. */
 @Composable
 internal fun ClawStatusPill(
   text: String,
@@ -217,6 +273,7 @@ internal fun ClawStatusPill(
   }
 }
 
+/** Small optional-selectable pill used for filters and metadata chips. */
 @Composable
 internal fun ClawPill(
   text: String,
@@ -248,6 +305,7 @@ internal fun ClawPill(
   }
 }
 
+/** Panel wrapper for homogeneous lists with standard row separators. */
 @Composable
 internal fun <T> ClawListPanel(
   items: List<T>,
@@ -259,6 +317,7 @@ internal fun <T> ClawListPanel(
   }
 }
 
+/** Column helper that inserts standard dividers between rendered rows. */
 @Composable
 internal fun <T> ClawSeparatedColumn(
   items: List<T>,
@@ -275,6 +334,7 @@ internal fun <T> ClawSeparatedColumn(
   }
 }
 
+/** Two-line settings/detail row with caller-provided leading and trailing slots. */
 @Composable
 internal fun ClawDetailRow(
   title: String,
@@ -301,6 +361,7 @@ internal fun ClawDetailRow(
   }
 }
 
+/** Circular text badge used for compact numeric or initials-style row marks. */
 @Composable
 internal fun ClawTextBadge(
   text: String,
@@ -319,6 +380,7 @@ internal fun ClawTextBadge(
   }
 }
 
+/** Circular icon badge used as a neutral leading marker in list rows. */
 @Composable
 internal fun ClawIconBadge(
   icon: ImageVector,
@@ -337,6 +399,7 @@ internal fun ClawIconBadge(
   }
 }
 
+/** Reusable one-line list row with optional subtitle, metadata, slots, and click handling. */
 @Composable
 internal fun ClawListItem(
   title: String,
@@ -390,45 +453,83 @@ internal fun ClawListItem(
   }
 }
 
+/** Keeps segmented options on one row unless a caller explicitly opts into wrapping. */
+internal fun segmentedControlRows(
+  options: List<String>,
+  maxOptionsPerRow: Int? = null,
+): List<List<String>> {
+  if (options.isEmpty()) return emptyList()
+  if (maxOptionsPerRow == null || options.size <= maxOptionsPerRow) return listOf(options)
+  require(maxOptionsPerRow > 0) { "maxOptionsPerRow must be positive" }
+
+  val rowCount = (options.size + maxOptionsPerRow - 1) / maxOptionsPerRow
+  val minimumRowSize = options.size / rowCount
+  val largerRowCount = options.size % rowCount
+  var startIndex = 0
+  return List(rowCount) { rowIndex ->
+    val rowSize = minimumRowSize + if (rowIndex < largerRowCount) 1 else 0
+    options.subList(startIndex, startIndex + rowSize).toList().also {
+      startIndex += rowSize
+    }
+  }
+}
+
+/** Equal-width segmented control with caller-controlled wrapping. */
 @Composable
 internal fun ClawSegmentedControl(
   options: List<String>,
   selected: String,
   onSelect: (String) -> Unit,
   modifier: Modifier = Modifier,
+  enabledOptions: Set<String> = options.toSet(),
+  maxOptionsPerRow: Int? = null,
 ) {
-  Row(
+  Column(
     modifier =
       modifier
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(2.dp),
-    horizontalArrangement = Arrangement.spacedBy(2.dp),
+    verticalArrangement = Arrangement.spacedBy(2.dp),
   ) {
-    options.forEach { option ->
-      val active = option == selected
-      Box(
-        modifier =
-          Modifier
-            .weight(1f)
-            .clip(RoundedCornerShape(ClawTheme.radii.control))
-            .background(if (active) ClawTheme.colors.primary else Color.Transparent)
-            .clickable { onSelect(option) }
-            .padding(horizontal = 9.dp, vertical = 7.dp),
-        contentAlignment = Alignment.Center,
+    segmentedControlRows(options, maxOptionsPerRow).forEach { rowOptions ->
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
       ) {
-        Text(
-          text = option,
-          style = ClawTheme.type.caption,
-          color = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
+        rowOptions.forEach { option ->
+          val active = option == selected
+          val enabled = option in enabledOptions
+          Box(
+            modifier =
+              Modifier
+                .weight(1f)
+                .clip(RoundedCornerShape(ClawTheme.radii.control))
+                .background(if (active) ClawTheme.colors.primary else Color.Transparent)
+                .clickable(enabled = enabled) { onSelect(option) }
+                .padding(horizontal = 9.dp, vertical = 7.dp),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = option,
+              style = ClawTheme.type.caption,
+              color =
+                when {
+                  active -> ClawTheme.colors.primaryText
+                  enabled -> ClawTheme.colors.textMuted
+                  else -> ClawTheme.colors.textSubtle
+                },
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
+          }
+        }
       }
     }
   }
 }
 
+/** Token-styled text field used by settings and prototype screens. */
 @Composable
 internal fun ClawTextField(
   value: String,
@@ -436,31 +537,45 @@ internal fun ClawTextField(
   placeholder: String,
   modifier: Modifier = Modifier,
   minLines: Int = 1,
+  label: String? = null,
+  enabled: Boolean = true,
 ) {
+  val fieldModifier =
+    if (label == null) modifier else modifier.semantics { contentDescription = label }
   BasicTextField(
     value = value,
     onValueChange = onValueChange,
+    enabled = enabled,
     modifier =
-      modifier
+      fieldModifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(ClawTheme.radii.control))
         .background(ClawTheme.colors.surfaceRaised)
         .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(horizontal = 11.dp, vertical = 8.dp),
-    textStyle = ClawTheme.type.body.copy(color = ClawTheme.colors.text),
+    textStyle =
+      ClawTheme.type.body.copy(
+        color = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
+      ),
     cursorBrush = SolidColor(ClawTheme.colors.primary),
     minLines = minLines,
     decorationBox = { innerTextField ->
-      Box(modifier = Modifier.fillMaxWidth()) {
-        if (value.isEmpty()) {
-          Text(text = placeholder, style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+      Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        label?.let {
+          Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
         }
-        innerTextField()
+        Box(modifier = Modifier.fillMaxWidth()) {
+          if (value.isEmpty()) {
+            Text(text = placeholder, style = ClawTheme.type.body, color = ClawTheme.colors.textSubtle)
+          }
+          innerTextField()
+        }
       }
     },
   )
 }
 
+/** Local design-system preview surface for visual smoke checks. */
 @Composable
 internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
   var selected by rememberSaveable { mutableStateOf("Chat") }
@@ -490,14 +605,14 @@ internal fun ClawComponentShowcase(modifier: Modifier = Modifier) {
       }
 
       ClawSegmentedControl(
-        options = listOf("Chat", "Voice", "Sessions"),
+        options = listOf("Chat", "Voice", "Threads"),
         selected = selected,
         onSelect = { selected = it },
         modifier = Modifier.fillMaxWidth(),
       )
 
       Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        ClawSectionHeader(title = "Sessions")
+        ClawSectionHeader(title = "Threads")
         ClawListItem(
           title = "Testing testing 1 2 3",
           subtitle = "14 messages · Android",

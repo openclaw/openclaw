@@ -1,3 +1,8 @@
+/**
+ * Application keybinding definitions and user-config migration helpers.
+ *
+ * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -8,9 +13,11 @@ import {
   TUI_KEYBINDINGS,
   KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAgentDir } from "../config.js";
 
-export interface AppKeybindings {
+/** OpenClaw-specific key ids added to the shared pi-tui keybinding registry. */
+interface AppKeybindings {
   "app.interrupt": true;
   "app.clear": true;
   "app.exit": true;
@@ -54,13 +61,12 @@ export interface AppKeybindings {
   "app.tree.filter.cycleBackward": true;
 }
 
-export type AppKeybinding = keyof AppKeybindings;
-
 declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
 }
 
-export const KEYBINDINGS = {
+/** Complete keybinding definition map consumed by the TUI keybinding manager. */
+const KEYBINDINGS = {
   ...TUI_KEYBINDINGS,
   "app.interrupt": { defaultKeys: "escape", description: "Cancel or abort" },
   "app.clear": { defaultKeys: "ctrl+c", description: "Clear editor" },
@@ -263,10 +269,6 @@ const KEYBINDING_NAME_MIGRATIONS = {
   deleteSessionNoninvasive: "app.session.deleteNoninvasive",
 } as const satisfies Record<string, Keybinding>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
   return key in KEYBINDING_NAME_MIGRATIONS;
 }
@@ -289,7 +291,8 @@ function toKeybindingsConfig(value: unknown): KeybindingsConfig {
   return config;
 }
 
-export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
+/** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
+function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
   config: Record<string, unknown>;
   migrated: boolean;
 } {
@@ -302,6 +305,7 @@ export function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): {
       migrated = true;
     }
     if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
+      // New names win when both legacy and migrated keys are present.
       migrated = true;
       continue;
     }
@@ -341,6 +345,7 @@ function loadRawConfig(path: string): Record<string, unknown> | undefined {
   }
 }
 
+/** Keybinding manager that loads OpenClaw defaults plus optional user overrides. */
 export class KeybindingsManager extends TuiKeybindingsManager {
   private configPath: string | undefined;
 
@@ -349,12 +354,14 @@ export class KeybindingsManager extends TuiKeybindingsManager {
     this.configPath = configPath;
   }
 
+  /** Creates a manager from the agent keybindings.json file. */
   static create(agentDir: string = getAgentDir()): KeybindingsManager {
     const configPath = join(agentDir, "keybindings.json");
     const userBindings = KeybindingsManager.loadFromFile(configPath);
     return new KeybindingsManager(userBindings, configPath);
   }
 
+  /** Reloads user overrides from disk when this manager was created with a config path. */
   reload(): void {
     if (!this.configPath) {
       return;
@@ -362,6 +369,7 @@ export class KeybindingsManager extends TuiKeybindingsManager {
     this.setUserBindings(KeybindingsManager.loadFromFile(this.configPath));
   }
 
+  /** Returns the currently resolved keybinding map after defaults and overrides. */
   getEffectiveConfig(): KeybindingsConfig {
     return this.getResolvedBindings();
   }
@@ -375,4 +383,4 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 }
 
-export type { Keybinding, KeyId, KeybindingsConfig };
+export type { KeybindingsConfig };

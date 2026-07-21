@@ -1,3 +1,4 @@
+// Matrix plugin module implements thread bindings behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -27,9 +28,7 @@ import {
   resolveBindingKey,
   resolveEffectiveBindingExpiry,
   setBindingRecord,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingManagerEntry,
-  setMatrixThreadBindingMaxAgeBySessionKey,
   toMatrixBindingTargetKind,
   toSessionBindingRecord,
   type MatrixThreadBindingManager,
@@ -192,7 +191,8 @@ async function loadBindingsFromPluginState(params: {
 }
 
 function toPluginJsonValue<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
 }
 
 async function persistBindingsSnapshot(params: {
@@ -367,7 +367,7 @@ export async function createMatrixThreadBindingManager(params: {
   };
   const persist = async () => await enqueuePersist();
   const persistSafely = (reason: string, bindings?: MatrixThreadBindingRecord[]) => {
-    void enqueuePersist(bindings).catch((err) => {
+    void enqueuePersist(bindings).catch((err: unknown) => {
       params.logVerboseMessage?.(
         `matrix: failed persisting thread bindings account=${params.accountId} action=${reason}: ${String(err)}`,
       );
@@ -382,7 +382,7 @@ export async function createMatrixThreadBindingManager(params: {
       await persist();
     }
     await migrationStore.register(legacyImportKey, { importedAt: Date.now() });
-    await fs.rm(legacyFilePath, { force: true }).catch((err) => {
+    await fs.rm(legacyFilePath, { force: true }).catch((err: unknown) => {
       params.logVerboseMessage?.(
         `matrix: failed removing migrated legacy thread bindings account=${params.accountId}: ${String(err)}`,
       );
@@ -692,7 +692,7 @@ export async function createMatrixThreadBindingManager(params: {
         await sendFarewellMessages(removed, (record) =>
           reasonByBindingKey.get(resolveBindingKey(record)),
         );
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         params.logVerboseMessage?.(
           `matrix: failed auto-unbinding expired bindings account=${params.accountId}: ${String(err)}`,
         );
@@ -707,9 +707,4 @@ export async function createMatrixThreadBindingManager(params: {
   });
   return manager;
 }
-export {
-  getMatrixThreadBindingManager,
-  resetMatrixThreadBindingsForTests,
-  setMatrixThreadBindingIdleTimeoutBySessionKey,
-  setMatrixThreadBindingMaxAgeBySessionKey,
-};
+export { getMatrixThreadBindingManager, resetMatrixThreadBindingsForTests };

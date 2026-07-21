@@ -1,3 +1,4 @@
+// Verifies node command security audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -125,7 +126,7 @@ describe("security audit node command findings", () => {
         cfg: {
           gateway: {
             bind: "loopback",
-            nodes: { allowCommands: ["camera.snap", "screen.record"] },
+            nodes: { allowCommands: ["camera.snap", "screen.record", "health.summary"] },
           },
         } satisfies OpenClawConfig,
         expectedSeverity: "warn" as const,
@@ -135,7 +136,7 @@ describe("security audit node command findings", () => {
         cfg: {
           gateway: {
             bind: "lan",
-            nodes: { allowCommands: ["camera.snap", "screen.record"] },
+            nodes: { allowCommands: ["camera.snap", "screen.record", "health.summary"] },
           },
         } satisfies OpenClawConfig,
         expectedSeverity: "critical" as const,
@@ -172,7 +173,7 @@ describe("security audit node command findings", () => {
       expectDetailText({
         detail: dangerousFinding.detail,
         name: testCase.name,
-        includes: ["camera.snap", "screen.record"],
+        includes: ["camera.snap", "screen.record", "health.summary"],
       });
     }
   });

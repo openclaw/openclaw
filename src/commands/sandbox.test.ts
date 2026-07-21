@@ -1,3 +1,4 @@
+// Sandbox command tests cover browser/container status formatting and sandbox diagnostics.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SandboxBrowserInfo, SandboxContainerInfo } from "../agents/sandbox.js";
 
@@ -286,7 +287,7 @@ describe("sandboxRecreateCommand", () => {
     });
 
     it("should cancel on clack cancel symbol", async () => {
-      await runCancelledConfirmation(Symbol.for("clack:cancel"));
+      await runCancelledConfirmation(Symbol("clack:cancel"));
 
       expect(runtime.log).toHaveBeenCalledWith("Cancelled.");
       expect(mocks.removeSandboxContainer).not.toHaveBeenCalled();

@@ -1,3 +1,4 @@
+// Video generation types describe requests, providers, and normalized media output.
 import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -155,6 +156,12 @@ export type VideoGenerationProviderCapabilities = VideoGenerationModeCapabilitie
   videoToVideo?: VideoGenerationTransformCapabilities;
 };
 
+/** Static catalog metadata that overrides provider defaults for one video model. */
+export type VideoGenerationCatalogModelEntry = {
+  capabilities?: VideoGenerationProviderCapabilities;
+  modes?: readonly VideoGenerationMode[];
+};
+
 export type VideoGenerationNormalization = {
   size?: MediaNormalizationEntry<string>;
   aspectRatio?: MediaNormalizationEntry<string>;
@@ -171,6 +178,7 @@ export type VideoGenerationProvider = {
   defaultTimeoutMs?: number;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
+  catalogByModel?: Readonly<Record<string, VideoGenerationCatalogModelEntry>>;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;
   resolveModelCapabilities?: (
     ctx: VideoGenerationModelCapabilitiesContext,

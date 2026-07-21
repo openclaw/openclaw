@@ -1,19 +1,15 @@
+/** Auto-reply status/help message builders for commands, status, and tool inventory output. */
 import { describeToolForVerbose } from "../agents/tool-description-summary.js";
 import { normalizeToolName } from "../agents/tool-policy-shared.js";
 import type { EffectiveToolInventoryResult } from "../agents/tools-effective-inventory.types.js";
+
 export {
   buildCommandsMessage,
   buildCommandsMessagePaginated,
   buildHelpMessage,
-  type CommandsMessageOptions,
-  type CommandsMessageResult,
 } from "./command-status-builders.js";
-export {
-  buildStatusMessage,
-  formatContextUsageShort,
-  formatTokenCount,
-  type StatusArgs,
-} from "../status/status-message.js";
+export { formatContextUsageShort } from "../status/status-message.js";
+export { formatTokenCount } from "../utils/usage-format.js";
 
 type ToolsMessageItem = {
   id: string;
@@ -46,6 +42,7 @@ function formatVerboseToolDescription(tool: ToolsMessageItem): string {
   });
 }
 
+/** Formats the effective tool inventory shown by /tools. */
 export function buildToolsMessage(
   result: EffectiveToolInventoryResult,
   options?: { verbose?: boolean },

@@ -1,3 +1,8 @@
+/**
+ * Status-safe channel account projection helpers for CLI, status APIs, and plugin SDK callers.
+ * This file is the redaction boundary between runtime account objects and public snapshots.
+ */
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { stripUrlUserInfo } from "@openclaw/net-policy/url-userinfo";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -6,9 +11,11 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
-// Read-only status commands project a safe subset of account fields into snapshots
-// so renderers can preserve "configured but unavailable" state without touching
-// strict runtime-only credential helpers.
+type CredentialUnavailableDiagnostic = {
+  code: "CREDENTIAL_FILE_UNAVAILABLE";
+  path: string;
+  reason: string;
+};
 
 const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
@@ -19,6 +26,24 @@ const CREDENTIAL_STATUS_KEYS = [
 ] as const;
 
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
+
+/** Redacts a plugin-provided base URL after status hooks have produced their final record. */
+export function redactChannelStatusSummaryBaseUrl<T>(summary: T): T {
+  if (!isRecord(summary) || typeof summary.baseUrl !== "string" || !summary.baseUrl) {
+    return summary;
+  }
+  const redactedBaseUrl = stripUrlUserInfo(redactSensitiveUrlLikeString(summary.baseUrl));
+  return redactedBaseUrl === summary.baseUrl
+    ? summary
+    : ({ ...summary, baseUrl: redactedBaseUrl } as T);
+}
+
+/** Redacts a plugin-provided base URL at the public account-snapshot boundary. */
+export function redactChannelAccountSnapshotBaseUrl<T extends Partial<ChannelAccountSnapshot>>(
+  snapshot: T,
+): T {
+  return redactChannelStatusSummaryBaseUrl(snapshot);
+}
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
   return asBoolean(record[key]);
@@ -57,6 +82,12 @@ function readCredentialStatus(record: Record<string, unknown>, key: CredentialSt
     : undefined;
 }
 
+/**
+ * Infers whether any known credential status makes an account configured.
+ *
+ * Status commands need this metadata for "configured but unavailable" accounts without reading
+ * raw credentials from runtime-only helpers.
+ */
 export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -76,6 +107,7 @@ export function resolveConfiguredFromCredentialStatuses(account: unknown): boole
   return sawCredentialStatus ? false : undefined;
 }
 
+/** Infers configured state only from the credential status keys required by a channel. */
 export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
@@ -98,6 +130,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
   return sawCredentialStatus ? true : undefined;
 }
 
+/** Returns true when a credential exists but cannot be resolved at status-render time. */
 export function hasConfiguredUnavailableCredentialStatus(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -108,6 +141,29 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
   );
 }
 
+/** Reads typed, redacted credential diagnostics from a resolved channel account. */
+export function getCredentialUnavailableDiagnostics(
+  account: unknown,
+): CredentialUnavailableDiagnostic[] {
+  const record = isRecord(account) ? account : null;
+  if (!record || !Array.isArray(record.credentialDiagnostics)) {
+    return [];
+  }
+  const diagnostics: CredentialUnavailableDiagnostic[] = [];
+  for (const value of record.credentialDiagnostics) {
+    if (!isRecord(value) || value.code !== "CREDENTIAL_FILE_UNAVAILABLE") {
+      continue;
+    }
+    const path = normalizeOptionalString(value.path);
+    const reason = normalizeOptionalString(value.reason);
+    if (path && reason) {
+      diagnostics.push({ code: value.code, path, reason });
+    }
+  }
+  return diagnostics;
+}
+
+/** Returns true when account data contains a resolved credential value or available status. */
 export function hasResolvedCredentialValue(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -120,6 +176,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
   );
 }
 
+/** Projects credential source/status metadata while omitting raw credential values. */
 export function projectCredentialSnapshotFields(
   account: unknown,
 ): Pick<
@@ -143,6 +200,8 @@ export function projectCredentialSnapshotFields(
   const appTokenSource = normalizeOptionalString(record.appTokenSource);
   const signingSecretSource = normalizeOptionalString(record.signingSecretSource);
 
+  // Only project source/status fields. Token-like values stay out of account snapshots even when
+  // callers pass full runtime account objects.
   return {
     ...(tokenSource ? { tokenSource } : {}),
     ...(botTokenSource ? { botTokenSource } : {}),
@@ -166,6 +225,12 @@ export function projectCredentialSnapshotFields(
   };
 }
 
+/**
+ * Projects status-safe account fields for read-only channel/account snapshots.
+ *
+ * This is the boundary between runtime account objects and status renderers; keep it explicit so
+ * new channel fields do not accidentally expose webhook URLs, public keys, or raw credentials.
+ */
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
 ): Partial<ChannelAccountSnapshot> {
@@ -219,6 +284,9 @@ export function projectSafeChannelAccountSnapshotFields(
       : {}),
     ...(statusState ? { statusState } : {}),
     ...(healthState ? { healthState } : {}),
+    ...(readBoolean(record, "terminalDisconnect") !== undefined
+      ? { terminalDisconnect: readBoolean(record, "terminalDisconnect") }
+      : {}),
     ...(readBoolean(record, "busy") !== undefined ? { busy: readBoolean(record, "busy") } : {}),
     ...(readNumber(record, "activeRuns") !== undefined
       ? { activeRuns: readNumber(record, "activeRuns") }
@@ -226,13 +294,17 @@ export function projectSafeChannelAccountSnapshotFields(
     ...(readNullableNumber(record, "lastRunActivityAt") !== undefined
       ? { lastRunActivityAt: readNullableNumber(record, "lastRunActivityAt") }
       : {}),
+    ...(readNullableNumber(record, "activeRunStartedAt") !== undefined
+      ? { activeRunStartedAt: readNullableNumber(record, "activeRunStartedAt") }
+      : {}),
     ...(mode ? { mode } : {}),
     ...(dmPolicy ? { dmPolicy } : {}),
     ...(readStringArray(record, "allowFrom")
       ? { allowFrom: readStringArray(record, "allowFrom") }
       : {}),
     ...projectCredentialSnapshotFields(account),
-    ...(baseUrl ? { baseUrl: stripUrlUserInfo(baseUrl) } : {}),
+    // Base URLs are useful diagnostics, but embedded credentials must not cross this boundary.
+    ...(baseUrl ? { baseUrl: stripUrlUserInfo(redactSensitiveUrlLikeString(baseUrl)) } : {}),
     ...(readBoolean(record, "allowUnmentionedGroups") !== undefined
       ? { allowUnmentionedGroups: readBoolean(record, "allowUnmentionedGroups") }
       : {}),

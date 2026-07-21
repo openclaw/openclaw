@@ -1,9 +1,15 @@
+/** Converts auth-profile credentials into agent runtime credential maps. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles.js";
+import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 
+// Converts auth-profile credentials into the compact credential map consumed by
+// agent runtimes. Secret refs can be represented by markers without reading
+// secret values.
 type AgentApiKeyCredential = { type: "api_key"; key: string };
 type AgentOAuthCredential = {
   type: "oauth";
@@ -12,11 +18,13 @@ type AgentOAuthCredential = {
   expires: number;
 };
 
-export type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
+/** Credential value shape consumed by agent runtimes after auth-profile normalization. */
+type AgentCredential = AgentApiKeyCredential | AgentOAuthCredential;
 export type AgentCredentialMap = Record<string, AgentCredential>;
 
-export type ResolveAgentCredentialMapOptions = {
+type ResolveAgentCredentialMapOptions = {
   includeSecretRefPlaceholders?: boolean;
+  config?: OpenClawConfig;
 };
 
 const AGENT_SECRET_REF_CONFIGURED_MARKER = "openclaw-secret-ref-configured";
@@ -41,6 +49,8 @@ function convertAuthProfileCredentialToAgent(
   if (cred.type === "api_key") {
     const key = normalizeOptionalString(cred.key) ?? "";
     if (!key) {
+      // A configured secret ref proves the credential exists, but this converter
+      // must not resolve or leak the actual secret value.
       return hasConfiguredSecretRef(cred.keyRef) ? secretRefPlaceholder(options) : null;
     }
     return { type: "api_key", key };
@@ -78,6 +88,7 @@ function convertAuthProfileCredentialToAgent(
   return null;
 }
 
+/** Build one canonically selected credential per normalized provider. */
 export function resolveAgentCredentialMapFromStore(
   store: AuthProfileStore,
   options?: ResolveAgentCredentialMapOptions,
@@ -85,32 +96,31 @@ export function resolveAgentCredentialMapFromStore(
   const credentials: AgentCredentialMap = {};
   for (const credential of Object.values(store.profiles)) {
     const provider = normalizeProviderId(credential.provider ?? "");
-    if (!provider || credentials[provider]) {
+    if (!provider) {
       continue;
     }
-    const converted = convertAuthProfileCredentialToAgent(credential, options);
-    if (converted) {
-      credentials[provider] = converted;
+    if (credentials[provider]) {
+      continue;
+    }
+    // Discovery must not grow a second auth policy: explicit order, provider
+    // aliases, eligibility, and automatic preference all belong to this resolver.
+    const profileIds = resolveAuthProfileOrder({
+      cfg: options?.config,
+      store,
+      provider,
+      ...(options?.includeSecretRefPlaceholders === true ? { readinessMode: "read-only" } : {}),
+    });
+    for (const profileId of profileIds) {
+      const profile = store.profiles[profileId];
+      if (!profile) {
+        continue;
+      }
+      const converted = convertAuthProfileCredentialToAgent(profile, options);
+      if (converted) {
+        credentials[provider] = converted;
+        break;
+      }
     }
   }
   return credentials;
-}
-
-export function agentCredentialsEqual(a: AgentCredential | undefined, b: AgentCredential): boolean {
-  if (!a || typeof a !== "object") {
-    return false;
-  }
-  if (a.type !== b.type) {
-    return false;
-  }
-
-  if (a.type === "api_key" && b.type === "api_key") {
-    return a.key === b.key;
-  }
-
-  if (a.type === "oauth" && b.type === "oauth") {
-    return a.access === b.access && a.refresh === b.refresh && a.expires === b.expires;
-  }
-
-  return false;
 }

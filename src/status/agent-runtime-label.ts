@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Agent runtime label helpers format provider, model, and runtime labels.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -7,6 +9,8 @@ import { isCliProvider } from "../agents/model-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+// Status runtime labels turn harness/provider/session state into a short
+// operator-facing name, sanitizing any persisted ACP/backend text.
 const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
   openclaw: "OpenClaw Default",
   codex: "OpenAI Codex",
@@ -26,6 +30,8 @@ export function resolveAgentRuntimeLabel(args: {
 }): string {
   const acpAgentRaw = normalizeOptionalString(args.sessionEntry?.acp?.agent);
   const acpAgent = acpAgentRaw ? sanitizeTerminalText(acpAgentRaw) : undefined;
+  // ACP sessions own their displayed runtime because the backend can differ
+  // from the normal model/provider selection path.
   if (acpAgent) {
     const backendRaw = normalizeOptionalString(args.sessionEntry?.acp?.backend);
     const backend = backendRaw ? sanitizeTerminalText(backendRaw) : undefined;
@@ -50,5 +56,5 @@ export function resolveAgentRuntimeLabel(args: {
     );
   }
 
-  return AGENT_RUNTIME_LABELS.openclaw;
+  return expectDefined(AGENT_RUNTIME_LABELS.openclaw, "OpenClaw runtime label");
 }

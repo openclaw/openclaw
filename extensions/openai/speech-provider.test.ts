@@ -1,3 +1,4 @@
+// Openai tests cover speech provider plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
@@ -57,6 +58,7 @@ describe("buildOpenAISpeechProvider", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
 
@@ -190,6 +192,251 @@ describe("buildOpenAISpeechProvider", () => {
     ).toEqual({
       handled: false,
     });
+  });
+
+  it("parses preferred-OpenAI speed directive within the supported range", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 1.5 },
+    });
+  });
+
+  it("parses explicit openai_speed alias", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "openai_speed",
+        value: "0.75",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 0.75 },
+    });
+  });
+
+  it("ignores OpenAI speed directives when allowVoiceSettings is disabled", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: false,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+    });
+  });
+
+  it("warns on non-numeric OpenAI speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "fast",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid OpenAI speed "fast" (0.25-4.0)'],
+    });
+  });
+
+  it("warns on partial OpenAI speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "1.5abc",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid OpenAI speed "1.5abc" (0.25-4.0)'],
+    });
+  });
+
+  it("warns on OpenAI speed values outside the supported 0.25..4 range", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://api.openai.com/v1/",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid OpenAI speed "5" (0.25-4.0)'],
+    });
+  });
+
+  it("passes custom endpoint OpenAI-compatible speed directives through", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "4.5",
+        policy: {
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+        },
+        providerConfig: {
+          baseUrl: "https://tts.example.com/v1",
+        },
+      } as never),
+    ).toEqual({
+      handled: true,
+      overrides: { speed: 4.5 },
+    });
+  });
+
+  it("uses OPENAI_TTS_BASE_URL when parsing OpenAI-compatible speed directives", () => {
+    const previousBaseUrl = process.env.OPENAI_TTS_BASE_URL;
+    process.env.OPENAI_TTS_BASE_URL = "https://tts.example.com/v1";
+    try {
+      const provider = buildOpenAISpeechProvider();
+
+      expect(
+        provider.parseDirectiveToken?.({
+          key: "speed",
+          value: "4.5",
+          policy: {
+            allowVoice: true,
+            allowModelId: true,
+            allowVoiceSettings: true,
+          },
+          providerConfig: {},
+        } as never),
+      ).toEqual({
+        handled: true,
+        overrides: { speed: 4.5 },
+      });
+    } finally {
+      if (previousBaseUrl === undefined) {
+        delete process.env.OPENAI_TTS_BASE_URL;
+      } else {
+        process.env.OPENAI_TTS_BASE_URL = previousBaseUrl;
+      }
+    }
+  });
+
+  it("treats a blank environment API key as missing across speech entry points", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "   ");
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200 }));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const providerConfig = {
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+    await expect(
+      provider.synthesizeTelephony?.({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig,
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI API key missing");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("trims a valid environment API key for normal and telephony synthesis", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "  sk-env  ");
+    const provider = buildOpenAISpeechProvider();
+    const authorizationHeaders: Array<string | null> = [];
+    globalThis.fetch = vi.fn(async (_url: string, init?: RequestInit) => {
+      authorizationHeaders.push(new Headers(init?.headers).get("authorization"));
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    }) as unknown as typeof fetch;
+    const providerConfig = {
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+    };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(true);
+    await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+    await provider.synthesizeTelephony?.({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      timeoutMs: 1_000,
+    });
+
+    expect(authorizationHeaders).toEqual(["Bearer sk-env", "Bearer sk-env"]);
   });
 
   it("preserves talk responseFormat overrides", () => {
@@ -351,28 +598,33 @@ describe("buildOpenAISpeechProvider", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("honors explicit responseFormat overrides and clears voice-note compatibility when not opus", async () => {
-    const provider = buildOpenAISpeechProvider();
-    mockSpeechFetchExpectingFormat("wav");
+  it.each([
+    { responseFormat: "wav" as const, voiceCompatible: false },
+    { responseFormat: "mp3" as const, voiceCompatible: true },
+  ])(
+    "marks configured $responseFormat voice-note compatibility as $voiceCompatible",
+    async ({ responseFormat, voiceCompatible }) => {
+      const provider = buildOpenAISpeechProvider();
+      mockSpeechFetchExpectingFormat(responseFormat);
 
-    const result = await provider.synthesize({
-      text: "hello",
-      cfg: {} as never,
-      providerConfig: {
-        apiKey: "sk-test",
-        baseUrl: "https://proxy.example.com/openai/v1",
-        model: "canopylabs/orpheus-v1-english",
-        voice: "daniel",
-        responseFormat: "wav",
-      },
-      target: "voice-note",
-      timeoutMs: 1_000,
-    });
+      const result = await provider.synthesize({
+        text: "hello",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat,
+        },
+        target: "voice-note",
+        timeoutMs: 1_000,
+      });
 
-    expect(result.outputFormat).toBe("wav");
-    expect(result.fileExtension).toBe(".wav");
-    expect(result.voiceCompatible).toBe(false);
-  });
+      expect(result.outputFormat).toBe(responseFormat);
+      expect(result.fileExtension).toBe(`.${responseFormat}`);
+      expect(result.voiceCompatible).toBe(voiceCompatible);
+    },
+  );
 
   it("passes extra_body config through to OpenAI-compatible speech requests", async () => {
     const provider = buildOpenAISpeechProvider();

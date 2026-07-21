@@ -1,5 +1,9 @@
+/**
+ * Contract suite for bundled plugin registration ownership and manifest auth metadata.
+ */
 import { describe, expect, it } from "vitest";
-import { loadPluginManifestRegistry, pluginRegistrationContractRegistry } from "../testing.js";
+import { pluginRegistrationContractRegistry } from "../../plugins/contracts/registry.js";
+import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 type PluginRegistrationContractParams = {
   pluginId: string;
@@ -40,6 +44,7 @@ function findRegistration(pluginId: string) {
   return entry;
 }
 
+/** Installs tests that pin a bundled plugin's registered provider/tool ownership. */
 export function describePluginRegistrationContract(params: PluginRegistrationContractParams) {
   describe(`${params.pluginId} plugin registration contract`, () => {
     if (params.cliBackendIds) {

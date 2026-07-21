@@ -1,3 +1,6 @@
+/**
+ * Tests command status runtime lazy loading and direct status reply behavior.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const buildStatusReply = vi.fn(async (params: unknown) => params);
@@ -84,6 +87,7 @@ describe("resolveDirectStatusReplyForSession", () => {
     resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
     resolveDefaultModel.mockReturnValue({ defaultProvider: "openai", defaultModel: "gpt-5.4" });
     createModelSelectionState.mockResolvedValue({
+      resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "on"),
     });

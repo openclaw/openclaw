@@ -1,3 +1,8 @@
+/**
+ * Path extraction for the apply_patch envelope grammar.
+ * Used by pre-execution policy hooks that only need destination paths, not the
+ * full strict patch parser.
+ */
 import path from "node:path";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -144,11 +149,14 @@ export function extractApplyPatchTargetPaths(
   const paths: string[] = [];
   const seen = new Set<string>();
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
+    const line = lines.at(index);
+    if (line === undefined) {
+      break;
+    }
     const addPath = readMarkerPath(line, ADD_FILE_MARKER);
     if (addPath !== undefined) {
       pushPath(paths, seen, addPath, options);
-      while (index + 1 < lines.length && lines[index + 1].startsWith("+")) {
+      while (index + 1 < lines.length && lines.at(index + 1)?.startsWith("+")) {
         index += 1;
       }
       continue;
@@ -165,20 +173,24 @@ export function extractApplyPatchTargetPaths(
       // sub-marker that names the new path. Skip leading blank lines so
       // human-edited patches with extra spacing still pick it up.
       let lookahead = index + 1;
-      while (lookahead < lines.length && lines[lookahead].trim() === "") {
+      while (lookahead < lines.length && lines.at(lookahead)?.trim() === "") {
         lookahead += 1;
       }
-      const movePath = readMarkerPath(lines[lookahead], MOVE_TO_MARKER);
+      const movePath = readMarkerPath(lines.at(lookahead), MOVE_TO_MARKER);
       if (movePath !== undefined) {
         pushPath(paths, seen, movePath, options);
         lookahead += 1;
       }
       while (lookahead < lines.length) {
-        if (lines[lookahead].trim() === "") {
+        const lookaheadLine = lines.at(lookahead);
+        if (lookaheadLine === undefined) {
+          break;
+        }
+        if (lookaheadLine.trim() === "") {
           lookahead += 1;
           continue;
         }
-        if (lines[lookahead].startsWith("***")) {
+        if (lookaheadLine.startsWith("***")) {
           break;
         }
         lookahead += 1;

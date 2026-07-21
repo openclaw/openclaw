@@ -1,3 +1,4 @@
+// Plugins CLI uninstall tests cover plugin removal selection and uninstall output.
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -182,6 +183,20 @@ describe("plugins cli uninstall", () => {
     expect(writeConfigFile).toHaveBeenCalledWith({
       plugins: {
         entries: {},
+      },
+    });
+    expect(replaceConfigFile).toHaveBeenCalledWith({
+      baseHash: "mock",
+      nextConfig: {
+        plugins: {
+          entries: {},
+        },
+      },
+      writeOptions: {
+        allowConfigSizeDrop: true,
+        auditOrigin: "plugin-install",
+        afterWrite: { mode: "restart", reason: "plugin source changed" },
+        unsetPaths: [["plugins", "installs"]],
       },
     });
     expect(refreshPluginRegistry).toHaveBeenCalledWith({

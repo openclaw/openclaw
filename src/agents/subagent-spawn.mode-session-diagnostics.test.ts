@@ -1,3 +1,5 @@
+// Subagent spawn session-mode diagnostic tests cover actionable errors when a
+// persistent child session cannot bind to a channel thread.
 import os from "node:os";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,7 +10,7 @@ import {
 describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
   const callGatewayMock = vi.fn();
   let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-  let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+  let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 
   beforeEach(async () => {
     callGatewayMock.mockReset();
@@ -66,7 +68,7 @@ describe('spawnSubagentDirect mode="session" diagnostics (#67400)', () => {
 describe('spawnSubagentDirect mode="session" with thread binding-capable channels (#67400)', () => {
   const callGatewayMock = vi.fn();
   let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
-  let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").resetSubagentRegistryForTests;
+  let resetSubagentRegistryForTests: typeof import("./subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 
   beforeEach(async () => {
     callGatewayMock.mockReset();

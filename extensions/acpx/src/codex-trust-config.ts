@@ -1,3 +1,7 @@
+/**
+ * Builds isolated Codex config for ACPX sessions. It preserves safe inherited
+ * runtime options while rendering only trusted project entries for the session.
+ */
 import path from "node:path";
 
 function stripTomlComment(line: string): string {
@@ -114,6 +118,7 @@ function parseTrustedInlineProjectEntries(value: string): string[] {
   return trusted;
 }
 
+/** Extract trusted project paths from Codex TOML config. */
 export function extractTrustedCodexProjectPaths(configToml: string): string[] {
   const trusted = new Set<string>();
   let currentProjectPath: string | undefined;
@@ -137,12 +142,14 @@ export function extractTrustedCodexProjectPaths(configToml: string): string[] {
 
     const assignment =
       /^(?<key>"(?:\\.|[^"\\])*"|'[^']*'|[A-Za-z0-9_\-/.~:]+)\s*=\s*(?<value>.+)$/.exec(line);
-    if (!assignment?.groups) {
+    const rawKey = assignment?.groups?.key;
+    const rawValue = assignment?.groups?.value;
+    if (!rawKey || rawValue === undefined) {
       continue;
     }
 
-    const key = parseTomlString(assignment.groups.key) ?? assignment.groups.key;
-    const value = assignment.groups.value.trim();
+    const key = parseTomlString(rawKey) ?? rawKey;
+    const value = rawValue.trim();
     if (inProjectsTable && /^\{.*\}$/.test(value)) {
       if (/\btrust_level\s*=\s*["']trusted["']/.test(value) && key) {
         trusted.add(key);
@@ -261,6 +268,7 @@ function extractInheritedCodexRuntimeConfig(configToml: string): string {
   return inheritedLines.join("\n");
 }
 
+/** Render a session-local Codex config with inherited runtime settings and trust entries. */
 export function renderIsolatedCodexConfig(params: {
   sourceConfigToml?: string;
   projectPaths: string[];
@@ -290,8 +298,4 @@ export function renderIsolatedCodexConfig(params: {
   ]
     .filter((line, index, lines) => !(line === "" && lines[index - 1] === ""))
     .join("\n");
-}
-
-export function renderIsolatedCodexProjectTrustConfig(projectPaths: string[]): string {
-  return renderIsolatedCodexConfig({ projectPaths });
 }

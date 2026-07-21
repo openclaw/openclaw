@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime.guild behavior.
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -11,63 +12,17 @@ import {
   type DiscordActionConfig,
   type OpenClawConfig,
 } from "../runtime-api.js";
+import { discordGuildActionRuntime } from "./runtime-deps.js";
 import {
-  addRoleDiscord,
-  canManageGuildRoleDiscord,
-  canManageGuildMemberRoleDiscord,
-  createChannelDiscord,
-  createScheduledEventDiscord,
-  deleteChannelDiscord,
-  editChannelDiscord,
-  fetchChannelInfoDiscord,
-  fetchMemberInfoDiscord,
-  hasAnyChannelPermissionDiscord,
-  hasAnyGuildPermissionDiscord,
-  fetchRoleInfoDiscord,
-  fetchVoiceStatusDiscord,
-  listGuildChannelsDiscord,
-  listGuildEmojisDiscord,
-  listScheduledEventsDiscord,
-  moveChannelDiscord,
-  removeChannelPermissionDiscord,
-  removeRoleDiscord,
-  setChannelPermissionDiscord,
-  uploadEmojiDiscord,
-  uploadStickerDiscord,
-  resolveEventCoverImage,
-} from "../send.js";
+  createDiscordMessagingActionContext,
+  type DiscordMessagingActionOptions,
+} from "./runtime.messaging.shared.js";
 import {
   createDiscordActionOptions,
   readDiscordChannelCreateParams,
   readDiscordChannelEditParams,
   readDiscordChannelMoveParams,
 } from "./runtime.shared.js";
-
-export const discordGuildActionRuntime = {
-  addRoleDiscord,
-  canManageGuildRoleDiscord,
-  canManageGuildMemberRoleDiscord,
-  createChannelDiscord,
-  createScheduledEventDiscord,
-  resolveEventCoverImage,
-  deleteChannelDiscord,
-  editChannelDiscord,
-  fetchChannelInfoDiscord,
-  fetchMemberInfoDiscord,
-  hasAnyChannelPermissionDiscord,
-  hasAnyGuildPermissionDiscord,
-  fetchRoleInfoDiscord,
-  fetchVoiceStatusDiscord,
-  listGuildChannelsDiscord,
-  listGuildEmojisDiscord,
-  listScheduledEventsDiscord,
-  moveChannelDiscord,
-  removeChannelPermissionDiscord,
-  removeRoleDiscord,
-  setChannelPermissionDiscord,
-  uploadEmojiDiscord,
-  uploadStickerDiscord,
-};
 
 type DiscordRoleMutationOpts = { cfg: OpenClawConfig; accountId?: string };
 type DiscordRoleMutation = (
@@ -355,7 +310,7 @@ export async function handleDiscordGuildAction(
   params: Record<string, unknown>,
   isActionEnabled: ActionGate<DiscordActionConfig>,
   cfg: OpenClawConfig,
-  options?: { mediaLocalRoots?: readonly string[] },
+  options?: DiscordMessagingActionOptions,
 ): Promise<AgentToolResult<unknown>> {
   const accountId = readStringParam(params, "accountId");
   if (!cfg) {
@@ -363,8 +318,26 @@ export async function handleDiscordGuildAction(
   }
   assertGuildAdminActionEnabled(action, isActionEnabled);
   await verifySenderGuildAdminPermission({ action, values: params, accountId, cfg });
+  const readTargetGate = createDiscordMessagingActionContext({
+    action,
+    input: params,
+    isActionEnabled,
+    cfg,
+    options,
+  });
   const withOpts = (extra?: Record<string, unknown>) =>
     createDiscordActionOptions({ cfg, accountId, extra });
+  const assertGuildMetadataReadAllowed = async (
+    guildId: string,
+    readOptions?: { filteredResults?: boolean },
+  ) => {
+    await readTargetGate.assertGuildReadTargetAllowed({
+      guildId,
+      filteredResults: readOptions?.filteredResults,
+      channelTargetRequiredMessage:
+        "Discord guild metadata reads require a wildcard channel allowlist for this guild.",
+    });
+  };
   switch (action) {
     case "memberInfo": {
       if (!isActionEnabled("memberInfo")) {
@@ -373,6 +346,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const userId = readStringParam(params, "userId", {
         required: true,
       });
@@ -394,6 +368,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const roles = await discordGuildActionRuntime.fetchRoleInfoDiscord(guildId, withOpts());
       return jsonResult({ ok: true, roles });
     }
@@ -404,6 +379,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const emojis = await discordGuildActionRuntime.listGuildEmojisDiscord(guildId, withOpts());
       return jsonResult({ ok: true, emojis });
     }
@@ -488,6 +464,7 @@ export async function handleDiscordGuildAction(
       const channelId = readStringParam(params, "channelId", {
         required: true,
       });
+      await readTargetGate.assertReadTargetAllowed({ channelId });
       const channel = await discordGuildActionRuntime.fetchChannelInfoDiscord(
         channelId,
         withOpts(),
@@ -501,11 +478,13 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId, { filteredResults: true });
       const channels = await discordGuildActionRuntime.listGuildChannelsDiscord(
         guildId,
         withOpts(),
       );
-      return jsonResult({ ok: true, channels });
+      const visibleChannels = await readTargetGate.filterGuildChannelList({ guildId, channels });
+      return jsonResult({ ok: true, channels: visibleChannels });
     }
     case "voiceStatus": {
       if (!isActionEnabled("voiceStatus")) {
@@ -514,6 +493,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const userId = readStringParam(params, "userId", {
         required: true,
       });
@@ -531,6 +511,7 @@ export async function handleDiscordGuildAction(
       const guildId = readStringParam(params, "guildId", {
         required: true,
       });
+      await assertGuildMetadataReadAllowed(guildId);
       const events = await discordGuildActionRuntime.listScheduledEventsDiscord(
         guildId,
         withOpts(),

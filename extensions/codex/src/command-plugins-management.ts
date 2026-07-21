@@ -1,5 +1,11 @@
+// Codex plugin module implements command plugins management behavior.
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import { canMutateCodexHost } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
+import {
+  buildCodexCommandPickerPresentation,
+  type CodexCommandPickerButton,
+} from "./command-presentation.js";
 
 /**
  * Lightweight read/write surface over the Openclaw config file. Plugged in by
@@ -14,11 +20,11 @@ export type CodexPluginsManagementIO = {
   mutate: (update: (block: CodexPluginsConfigBlock) => void) => Promise<void>;
 };
 
-export type CodexPluginConfigEntry = {
+type CodexPluginConfigEntry = {
   enabled?: boolean;
   marketplaceName?: string;
   pluginName?: string;
-  allow_destructive_actions?: boolean;
+  allow_destructive_actions?: boolean | "auto" | "ask";
 };
 
 export type CodexPluginsConfigBlock = {
@@ -41,6 +47,20 @@ export async function handleCodexPluginsSubcommand(
   const [verb = "list", ...args] = rest;
   const normalized = verb.toLowerCase();
 
+  if (normalized === "menu") {
+    if (args.length > 0) {
+      return { text: "Usage: /codex plugins menu" };
+    }
+    return buildPluginsMenuReply();
+  }
+
+  if (normalized === "help") {
+    if (args.length > 0) {
+      return { text: "Usage: /codex plugins help" };
+    }
+    return { text: buildPluginsHelp() };
+  }
+
   if (normalized === "list") {
     if (args.length > 0) {
       return { text: "Usage: /codex plugins list" };
@@ -53,10 +73,14 @@ export async function handleCodexPluginsSubcommand(
 
   const target = args[0];
   if (normalized === "enable" || normalized === "disable") {
+    if (args.length === 0) {
+      const current = await io.readConfig();
+      return buildPluginNamePickerReply(normalized, current);
+    }
     if (!target || args.length > 1) {
       return { text: `Usage: /codex plugins ${normalized} <name>` };
     }
-    if (!canMutateCodexPlugins(ctx)) {
+    if (!canMutateCodexHost(ctx)) {
       return {
         text: `Only an owner or operator.admin gateway client can run /codex plugins ${normalized}.`,
       };
@@ -85,14 +109,96 @@ export async function handleCodexPluginsSubcommand(
   };
 }
 
-function canMutateCodexPlugins(ctx: PluginCommandContext): boolean {
-  if (ctx.senderIsOwner === true) {
-    return true;
-  }
-  return ctx.gatewayClientScopes?.includes("operator.admin") === true;
+function buildPluginsMenuReply(): PluginCommandResult {
+  const buttons: CodexCommandPickerButton[] = [
+    { label: "list", command: "/codex plugins list" },
+    { label: "enable", command: "/codex plugins enable" },
+    { label: "disable", command: "/codex plugins disable" },
+    { label: "help", command: "/codex plugins help" },
+    { label: "back", command: "/codex" },
+  ];
+  const text = [
+    "Codex sub-plugins. Pick a sub-action or type:",
+    "",
+    "  1. /codex plugins list",
+    "  2. /codex plugins enable",
+    "  3. /codex plugins disable",
+    "  4. /codex plugins help",
+    "",
+    "Type '/codex' to go back to the main menu.",
+  ].join("\n");
+  return {
+    text,
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex sub-plugins",
+      "Pick a Codex sub-plugin action:",
+      buttons,
+    ),
+  };
 }
 
-export function buildPluginsHelp(): string {
+function buildPluginNamePickerReply(
+  verb: "enable" | "disable",
+  current: CodexPluginsConfigBlock,
+): PluginCommandResult {
+  const globalEnabled = current.enabled === true;
+  const entries = Object.entries(current.plugins ?? {}).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  const eligible = entries.filter(([, entry]) => {
+    const effectivelyEnabled = globalEnabled && entry.enabled !== false;
+    return verb === "disable" ? effectivelyEnabled : !effectivelyEnabled;
+  });
+
+  if (eligible.length === 0) {
+    const action = verb === "enable" ? "disabled" : "enabled";
+    return {
+      text: [
+        `No configured ${action} Codex sub-plugins found.`,
+        "",
+        "Type '/codex plugins list' to inspect configured sub-plugins.",
+        "Type '/codex plugins menu' to go back to the plugins menu.",
+      ].join("\n"),
+      presentation: buildCodexCommandPickerPresentation(
+        "Codex sub-plugins",
+        "Pick another Codex sub-plugin action:",
+        [
+          { label: "list", command: "/codex plugins list" },
+          { label: "back", command: "/codex plugins menu" },
+        ],
+      ),
+    };
+  }
+
+  const buttons: CodexCommandPickerButton[] = [
+    ...eligible.map(([key]) => ({
+      label: formatCodexDisplayText(key),
+      command: `/codex plugins ${verb} ${key}`,
+    })),
+    { label: "back", command: "/codex plugins menu" },
+  ];
+  const text = [
+    `Codex sub-plugins to ${verb}. Pick one or type:`,
+    "",
+    ...eligible.map(([key], index) => `  ${index + 1}. /codex plugins ${verb} ${key}`),
+    "",
+    ...(verb === "enable" && !globalEnabled
+      ? ["Global codexPlugins.enabled is off; enabling one configured sub-plugin turns it on.", ""]
+      : []),
+    "Type '/codex plugins menu' to go back to the plugins menu.",
+  ].join("\n");
+
+  return {
+    text,
+    presentation: buildCodexCommandPickerPresentation(
+      "Codex sub-plugins",
+      `Pick a Codex sub-plugin to ${verb}:`,
+      buttons,
+    ),
+  };
+}
+
+function buildPluginsHelp(): string {
   return [
     "Codex sub-plugin management (writes only to ~/.openclaw/openclaw.json, never to ~/.codex/config.toml):",
     "- /codex plugins                  (alias for list)",
@@ -102,7 +208,7 @@ export function buildPluginsHelp(): string {
   ].join("\n");
 }
 
-export function formatPluginList(
+function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
   options: { globalEnabled?: boolean } = {},
 ): string {

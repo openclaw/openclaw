@@ -1,3 +1,4 @@
+// Prompt composition scenarios build reusable agent prompt fixtures.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -26,7 +27,10 @@ import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
 
-export type PromptScenarioTurn = {
+// Prompt composition scenarios for system/body prompt stability tests.
+
+/** One turn in a prompt composition scenario. */
+type PromptScenarioTurn = {
   id: string;
   label: string;
   systemPrompt: string;
@@ -34,6 +38,7 @@ export type PromptScenarioTurn = {
   notes: string[];
 };
 
+/** Multi-turn prompt composition scenario fixture. */
 export type PromptScenario = {
   scenario: string;
   focus: string;
@@ -142,7 +147,7 @@ function buildAutoReplySystemPrompt(params: {
   groupSystemPrompt?: string;
 }) {
   const extraSystemPromptParts = [
-    buildInboundMetaSystemPrompt(params.sessionCtx),
+    buildInboundMetaSystemPrompt(params.sessionCtx, {}),
     params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
       ? buildDirectChatContext({
           sessionCtx: params.sessionCtx,
@@ -157,10 +162,7 @@ function buildAutoReplySystemPrompt(params: {
       : "",
     params.includeGroupIntro
       ? buildGroupIntro({
-          cfg: {} as OpenClawConfig,
-          sessionCtx: params.sessionCtx,
           defaultActivation: "mention",
-          silentToken: SILENT_REPLY_TOKEN,
         })
       : "",
     params.groupSystemPrompt?.trim() ?? "",
@@ -345,11 +347,11 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
   return {
     scenario: "auto-reply-group",
     focus: "Group chat bootstrap, steady state, and runtime event turns",
-    expectedStableSystemAfterTurnIds: ["t3"],
+    expectedStableSystemAfterTurnIds: ["t2", "t3"],
     turns: [
       {
         id: "t1",
-        label: "First group turn with one-time intro",
+        label: "First group turn with session-stable intro",
         systemPrompt: buildAutoReplySystemPrompt({
           workspaceDir,
           sessionCtx: {
@@ -370,7 +372,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           },
           body: "Can you investigate this issue?",
         }),
-        notes: ["Expected first-turn bootstrap churn", "Not steady-state"],
+        notes: ["Group intro belongs to the session-stable system prompt"],
       },
       {
         id: "t2",
@@ -387,6 +389,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
             ],
           },
           includeGroupChatContext: true,
+          includeGroupIntro: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -400,7 +403,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
           },
           body: "Give a short update.",
         }),
-        notes: ["One-time intro gone", "Should settle afterward"],
+        notes: ["Group intro remains stable after turn one"],
       },
       {
         id: "t3",
@@ -417,6 +420,7 @@ function createGroupScenario(workspaceDir: string): PromptScenario {
             ],
           },
           includeGroupChatContext: true,
+          includeGroupIntro: true,
         }),
         bodyPrompt: buildAutoReplyBody({
           ctx: {
@@ -695,14 +699,17 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,
-    extraSystemPrompt: buildInboundMetaSystemPrompt({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "D123",
-      AccountId: "A1",
-      ChatType: "direct",
-    }),
+    extraSystemPrompt: buildInboundMetaSystemPrompt(
+      {
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: "D123",
+        AccountId: "A1",
+        ChatType: "direct",
+      },
+      {},
+    ),
   });
   return {
     scenario: "maintenance-prompts",
@@ -733,7 +740,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
   };
 }
 
-export async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
+/** Create a temp workspace with prompt composition context files. */
+async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
   const workspaceDir = await makeTempWorkspace("openclaw-prompt-cache-");
   await writeWorkspaceFile({
     dir: workspaceDir,
@@ -761,6 +769,7 @@ export async function createWorkspaceWithPromptCompositionFiles(): Promise<strin
   return workspaceDir;
 }
 
+/** Create all prompt composition scenarios plus cleanup handles. */
 export async function createPromptCompositionScenarios(): Promise<{
   workspaceDir: string;
   warningWorkspaceDir: string;

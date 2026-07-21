@@ -1,15 +1,20 @@
+/**
+ * Browser CLI navigation and viewport commands.
+ */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "../../browser/act-policy.js";
 import { runBrowserResizeWithOutput } from "../browser-cli-resize.js";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerValue,
   type BrowserParentOpts,
 } from "../browser-cli-shared.js";
 import { danger, defaultRuntime } from "../core-api.js";
-import { requireRef, resolveBrowserActionContext } from "./shared.js";
+import { resolveBrowserActionContext } from "./shared.js";
 
+/** Registers Browser navigate and resize commands. */
 export function registerBrowserNavigationCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -33,7 +38,7 @@ export function registerBrowserNavigationCommands(
     .command("navigate")
     .description("Navigate the current tab to a URL")
     .argument("<url>", "URL to navigate to")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (url: string, opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
@@ -66,7 +71,7 @@ export function registerBrowserNavigationCommands(
     .description("Resize the viewport")
     .argument("<width>", "Viewport width")
     .argument("<height>", "Viewport height")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (width: string, height: string, opts, cmd) => {
       const normalizedWidth = parsePositiveInteger(width, "width");
       const normalizedHeight = parsePositiveInteger(height, "height");
@@ -89,7 +94,4 @@ export function registerBrowserNavigationCommands(
         defaultRuntime.exit(1);
       }
     });
-
-  // Keep `requireRef` reachable; shared utilities are intended for other modules too.
-  void requireRef;
 }

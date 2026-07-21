@@ -1,9 +1,11 @@
+// Diagnostic stability helpers compare diagnostic outputs across runs.
 import {
   onDiagnosticEvent,
   type DiagnosticEventPayload,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 
+// Ring-buffer recorder for stability diagnostics and support-bundle snapshots.
 const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
 const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
@@ -11,6 +13,7 @@ const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 
+/** Sanitized diagnostic event record retained in the stability ring buffer. */
 export type DiagnosticStabilityEventRecord = {
   seq: number;
   ts: number;
@@ -32,6 +35,7 @@ export type DiagnosticStabilityEventRecord = {
   transport?: string;
   brain?: string;
   toolName?: string;
+  approvalId?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
@@ -91,6 +95,7 @@ export type DiagnosticStabilityEventRecord = {
   };
 };
 
+/** Point-in-time stability snapshot with records and derived summaries. */
 export type DiagnosticStabilitySnapshot = {
   generatedAt: string;
   capacity: number;
@@ -337,6 +342,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "run.progress":
       assignReasonCode(record, event.reason);
       break;
+    case "run.execution_phase":
+      record.phase = event.phase;
+      record.provider = event.provider;
+      record.model = event.model;
+      record.toolName = event.tool;
+      break;
     case "context.assembled":
       record.channel = event.channel;
       record.provider = event.provider;
@@ -401,6 +412,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.source = event.toolSource;
       record.pluginId = event.toolOwner;
       record.durationMs = event.durationMs;
+      if (event.terminalReason) {
+        record.outcome = event.terminalReason;
+      }
       assignReasonCode(record, event.errorCategory);
       break;
     case "tool.execution.blocked":
@@ -426,6 +440,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.timedOut = event.timedOut;
       record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
+      break;
+    case "exec.approval.followup_suppressed":
+      record.approvalId = event.approvalId;
+      record.phase = event.phase;
+      assignReasonCode(record, event.reason);
       break;
     case "run.started":
       record.provider = event.provider;
@@ -494,6 +513,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "log.record":
       record.level = event.level;
       record.source = event.loggerName;
+      break;
+    case "security.event":
+      record.source = event.category;
+      record.action = event.action;
+      record.outcome = event.outcome;
+      record.level = event.severity;
+      record.target = event.target?.name ?? event.target?.kind;
+      assignReasonCode(record, event.reason ?? event.policy?.reason);
       break;
     case "diagnostic.memory.sample":
       record.memory = copyMemory(event.memory);
@@ -688,6 +715,7 @@ function normalizeLimit(limit: unknown, defaultLimit = DEFAULT_DIAGNOSTIC_STABIL
   return parsed;
 }
 
+/** Normalizes user-facing snapshot query options. */
 export function normalizeDiagnosticStabilityQuery(
   input: DiagnosticStabilityQueryInput = {},
   options?: { defaultLimit?: number },
@@ -699,6 +727,7 @@ export function normalizeDiagnosticStabilityQuery(
   };
 }
 
+/** Starts the process-wide diagnostic event recorder if it is not already active. */
 export function startDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   if (state.unsubscribe) {
@@ -709,12 +738,14 @@ export function startDiagnosticStabilityRecorder(): void {
   });
 }
 
+/** Stops the process-wide diagnostic event recorder. */
 export function stopDiagnosticStabilityRecorder(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
   state.unsubscribe = null;
 }
 
+/** Returns a sanitized stability snapshot from the process-wide ring buffer. */
 export function getDiagnosticStabilitySnapshot(options?: {
   limit?: number;
   type?: string;
@@ -734,6 +765,7 @@ export function getDiagnosticStabilitySnapshot(options?: {
   };
 }
 
+/** Applies filtering/limits to an existing snapshot without mutating its source records. */
 export function selectDiagnosticStabilitySnapshot(
   snapshot: DiagnosticStabilitySnapshot,
   options?: {
@@ -753,6 +785,7 @@ export function selectDiagnosticStabilitySnapshot(
   };
 }
 
+/** Resets recorder state and subscriptions for isolated tests. */
 export function resetDiagnosticStabilityRecorderForTest(): void {
   const state = getDiagnosticStabilityState();
   state.unsubscribe?.();
@@ -762,3 +795,4 @@ export function resetDiagnosticStabilityRecorderForTest(): void {
   };
   globalStore["__openclawDiagnosticStabilityState"] = next;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

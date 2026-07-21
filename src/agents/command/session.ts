@@ -1,3 +1,6 @@
+/**
+ * Resolves command session ids, keys, stores, and persisted thinking state.
+ */
 import crypto from "node:crypto";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
@@ -6,7 +9,11 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  resolveSessionLifecycleTimestamps,
+} from "../../config/sessions/lifecycle.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -17,28 +24,34 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
+import { listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
+  classifySessionKeyShape,
   DEFAULT_AGENT_ID,
   isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
+import { clearAllCliSessions } from "../cli-session.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
 
-export type SessionResolution = {
+/** Resolved command session identity plus backing store metadata. */
+type SessionResolution = {
   sessionId: string;
   sessionKey?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   storePath: string;
   isNewSession: boolean;
+  previousSessionId?: string;
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
 };
@@ -49,12 +62,62 @@ type SessionKeyResolution = {
   storePath: string;
 };
 
+export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
+  const next = {
+    ...entry,
+    sessionFile: undefined,
+    status: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    abortedLastRun: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
+    restartRecoveryDeliveryRequestFingerprint: undefined,
+    restartRecoveryDeliveryRunId: undefined,
+    restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryBeforeAgentReplyState: undefined,
+    restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
+    restartRecoveryRequesterAccountId: undefined,
+    restartRecoveryRequesterSenderId: undefined,
+    restartRecoverySameChannelThreadRequired: undefined,
+    restartRecoverySourceIngress: undefined,
+    restartRecoverySourceReplyDeliveryMode: undefined,
+    restartRecoveryTerminalDeliveryEvidence: undefined,
+    restartRecoveryTerminalRunIds: undefined,
+    sessionStartedAt: undefined,
+    lastInteractionAt: undefined,
+  };
+  transitionMainSessionRecovery(next, { kind: "clear" });
+  clearAllCliSessions(next);
+  return next;
+}
+
 type SessionIdMatchSet = {
   matches: Array<[string, SessionEntry]>;
   primaryStoreMatches: Array<[string, SessionEntry]>;
   storeByKey: Map<string, SessionKeyResolution>;
 };
 
+function loadCommandSessionStore(params: {
+  agentId?: string;
+  clone?: boolean;
+  storePath: string;
+}): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({
+      storePath: params.storePath,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.clone === false ? { clone: false } : {}),
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
+
+/** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
@@ -104,10 +167,11 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
     }
     return undefined;
   }
-  const legacyStore = loadSessionStore(
-    legacyStorePath,
-    opts.cloneOnWrite ? { clone: false } : undefined,
-  );
+  const legacyStore = loadCommandSessionStore({
+    agentId: DEFAULT_AGENT_ID,
+    storePath: legacyStorePath,
+    ...(opts.cloneOnWrite ? { clone: false } : {}),
+  });
   for (const legacyKey of legacyKeys) {
     const legacyEntry = legacyStore[legacyKey];
     if (legacyEntry) {
@@ -168,7 +232,11 @@ function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
     addMatches(
-      loadSessionStore(candidateStorePath, opts.clone === false ? { clone: false } : undefined),
+      loadCommandSessionStore({
+        agentId,
+        storePath: candidateStorePath,
+        ...(opts.clone === false ? { clone: false } : {}),
+      }),
       candidateStorePath,
     );
   }
@@ -191,7 +259,10 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
-  const sessionStore = loadSessionStore(storePath);
+  const sessionStore = loadCommandSessionStore({
+    storePath,
+    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+  });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };
   }
@@ -207,6 +278,7 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
+/** Resolves the session key/store targeted by one command request. */
 export function resolveSessionKeyForRequest(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -221,8 +293,14 @@ export function resolveSessionKeyForRequest(opts: {
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(opts.cfg));
   const requestedAgentId = opts.agentId?.trim() ? normalizeAgentId(opts.agentId) : undefined;
   const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const requestedSessionKey = opts.sessionKey?.trim() || undefined;
+  const toSessionKey =
+    !requestedSessionKey && !requestedSessionId && classifySessionKeyShape(opts.to) === "agent"
+      ? opts.to?.trim()
+      : undefined;
   const explicitSessionKey =
-    opts.sessionKey?.trim() ||
+    requestedSessionKey ||
+    toSessionKey ||
     (!requestedSessionId
       ? resolveExplicitAgentSessionKey({
           cfg: opts.cfg,
@@ -238,7 +316,11 @@ export function resolveSessionKeyForRequest(opts: {
     agentId: storeAgentId,
   });
   const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
-  const sessionStore = loadSessionStore(storePath, loadOptions);
+  const sessionStore = loadCommandSessionStore({
+    storePath,
+    agentId: storeAgentId,
+    ...(loadOptions ? { clone: false } : {}),
+  });
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
@@ -301,6 +383,7 @@ export function resolveSessionKeyForRequest(opts: {
   return { sessionKey, sessionStore, storePath };
 }
 
+/** Resolves or creates the session used by one agent command request. */
 export function resolveSession(opts: {
   cfg: OpenClawConfig;
   to?: string;
@@ -321,6 +404,9 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
+  const sessionAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveAgentIdFromSessionKey(sessionKey);
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
@@ -332,21 +418,41 @@ export function resolveSession(opts: {
     resetType,
     resetOverride: channelReset,
   });
-  const fresh = sessionEntry
-    ? evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        ...resolveSessionLifecycleTimestamps({
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const terminalMainTranscriptNewerThanRegistry =
+    sessionEntry && !requestedSessionId
+      ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
           entry: sessionEntry,
-          agentId: opts.agentId,
+          sessionScope: sessionCfg?.scope,
+          sessionKey,
+          agentId: sessionAgentId,
+          mainKey: sessionCfg?.mainKey,
           storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+        })
+      : false;
+  const lockedModelSelection = isModelSelectionLocked(sessionEntry);
+  const skipImplicitExpiry =
+    resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
+  const fresh = sessionEntry
+    ? lockedModelSelection ||
+      (!terminalMainTranscriptNewerThanRegistry &&
+        (skipImplicitExpiry ||
+          evaluateSessionFreshness({
+            updatedAt: sessionEntry.updatedAt,
+            ...resolveSessionLifecycleTimestamps({
+              entry: sessionEntry,
+              agentId: sessionAgentId,
+              storePath,
+            }),
+            now,
+            policy: resetPolicy,
+          }).fresh))
     : false;
   const sessionId =
-    opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
-  const isNewSession = !fresh && !opts.sessionId;
+    requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
+  const isNewSession = !fresh && !requestedSessionId;
+  const resolvedSessionEntry =
+    isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
@@ -365,10 +471,11 @@ export function resolveSession(opts: {
   return {
     sessionId,
     sessionKey,
-    sessionEntry,
+    sessionEntry: resolvedSessionEntry,
     sessionStore,
     storePath,
     isNewSession,
+    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
     persistedThinking,
     persistedVerbose,
   };

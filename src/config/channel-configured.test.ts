@@ -1,3 +1,4 @@
+// Covers channel-configured checks from bootstrap and plugin metadata.
 import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
 
@@ -24,6 +25,21 @@ describe("isChannelConfigured", () => {
       isChannelConfigured({}, "irc", {
         IRC_HOST: "irc.example.com",
         IRC_NICK: "openclaw",
+      }),
+    ).toBe(true);
+  });
+
+  it("requires both Mattermost URL and token env vars through the package metadata seam", () => {
+    expect(isChannelConfigured({}, "mattermost", { MATTERMOST_BOT_TOKEN: "token" })).toBe(false);
+    expect(
+      isChannelConfigured({}, "mattermost", {
+        MATTERMOST_URL: "https://mattermost.example.test",
+      }),
+    ).toBe(false);
+    expect(
+      isChannelConfigured({}, "mattermost", {
+        MATTERMOST_BOT_TOKEN: "token",
+        MATTERMOST_URL: "https://mattermost.example.test",
       }),
     ).toBe(true);
   });

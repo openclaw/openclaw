@@ -1,3 +1,4 @@
+// Fireworks plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -10,9 +11,7 @@ function isFireworksProviderId(providerId: string): boolean {
   return normalized === "fireworks" || normalized === "fireworks-ai";
 }
 
-export function createFireworksKimiThinkingDisabledWrapper(
-  baseStreamFn: StreamFn | undefined,
-): StreamFn {
+function createFireworksKimiThinkingDisabledWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {

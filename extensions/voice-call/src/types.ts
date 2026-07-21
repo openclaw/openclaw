@@ -1,3 +1,4 @@
+// Voice Call type declarations define plugin contracts.
 import { z } from "zod";
 import type { CallMode } from "./config.js";
 
@@ -105,6 +106,10 @@ const NormalizedEventSchema = z.discriminatedUnion("type", [
     text: z.string(),
   }),
   BaseEventSchema.extend({
+    type: z.literal("call.assistant-speech"),
+    transcript: z.string(),
+  }),
+  BaseEventSchema.extend({
     type: z.literal("call.speech"),
     transcript: z.string(),
     isFinal: z.boolean(),
@@ -157,6 +162,8 @@ export const CallRecordSchema = z.object({
   from: z.string(),
   to: z.string(),
   sessionKey: z.string().optional(),
+  /** Agent selected when the call was created. Optional for legacy records. */
+  agentId: z.string().optional(),
   startedAt: z.number(),
   answeredAt: z.number().optional(),
   endedAt: z.number().optional(),
@@ -257,6 +264,8 @@ export type PlayTtsInput = {
   text: string;
   voice?: string;
   locale?: string;
+  /** Keep collecting speech after playback when the provider owns the listening XML. */
+  listenAfterPlayback?: boolean;
 };
 
 export type SendDtmfInput = {
@@ -308,4 +317,6 @@ export type OutboundCallOptions = {
   dtmfSequence?: string;
   /** Session that initiated the call, used for agent context/delegated message routing */
   requesterSessionKey?: string;
+  /** Agent selected for this call instead of the plugin default. */
+  agentId?: string;
 };

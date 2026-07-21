@@ -1,3 +1,4 @@
+// Plugin Contract Test Plan tests cover plugin contract test plan script behavior.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mjs";
@@ -14,8 +15,12 @@ describe("scripts/lib/plugin-contract-test-plan.mjs", () => {
   it("keeps manual CI compatible with legacy target refs", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
 
+    // ci.yml imports the plan through the importTargetPlan fallback helper since
+    // 7ae5996bb3c so historical target refs without the module keep working.
+    expect(workflow).toContain("const pluginContractPlan = await importTargetPlan(");
+    expect(workflow).toContain('"./scripts/lib/plugin-contract-test-plan.mjs",');
     expect(workflow).toContain(
-      'await import(\n            "./scripts/lib/plugin-contract-test-plan.mjs"',
+      'typeof pluginContractPlan.createPluginContractTestShards === "function"',
     );
     expect(workflow).toContain("checks-fast-contracts-plugins-legacy");
     expect(workflow).not.toContain(

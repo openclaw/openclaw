@@ -1,10 +1,15 @@
+// Voice Call plugin module implements realtime agent context behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
+import type { CoreAgentDeps } from "./core-bridge.js";
 
+// Builds compact agent context injected into realtime voice sessions.
+
+/** Agent identity subset used by voice instructions. */
 type VoiceIdentityLike = {
   name?: unknown;
   emoji?: unknown;
@@ -13,13 +18,15 @@ type VoiceIdentityLike = {
   vibe?: unknown;
 };
 
+/** Limit injected context while preserving an explicit truncation marker. */
 function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  return `${text.slice(0, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
+  return `${truncateUtf16Safe(text, Math.max(0, maxChars - 32)).trimEnd()}\n[truncated]`;
 }
 
+/** Read configured workspace context files through the safe workspace root. */
 async function readWorkspaceVoiceContextFiles(params: {
   workspaceDir: string;
   files: readonly string[];
@@ -48,11 +55,13 @@ async function readWorkspaceVoiceContextFiles(params: {
   return sections;
 }
 
+/** Build final realtime instructions from base instructions, consult policy, and fast context. */
 export async function buildRealtimeVoiceInstructions(params: {
   baseInstructions: string;
   config: VoiceCallConfig;
-  coreConfig: CoreConfig;
+  coreConfig: OpenClawConfig;
   agentRuntime: CoreAgentDeps;
+  agentId: string;
 }): Promise<string> {
   const { config } = params;
   const sections: string[] = [params.baseInstructions];
@@ -66,7 +75,7 @@ export async function buildRealtimeVoiceInstructions(params: {
     return sections.filter(Boolean).join("\n\n");
   }
 
-  const agentId = config.agentId ?? "main";
+  const { agentId } = params;
   const capsule: string[] = [
     "OpenClaw agent voice context:",
     `- Agent id: ${agentId}`,
@@ -75,10 +84,9 @@ export async function buildRealtimeVoiceInstructions(params: {
   ];
 
   if (contextConfig.includeIdentity) {
-    const identity = params.agentRuntime.resolveAgentIdentity(
-      params.coreConfig as OpenClawConfig,
-      agentId,
-    ) as VoiceIdentityLike | undefined;
+    const identity = params.agentRuntime.resolveAgentIdentity(params.coreConfig, agentId) as
+      | VoiceIdentityLike
+      | undefined;
     const identityLines = [
       normalizeString(identity?.name) ? `- Name: ${normalizeString(identity?.name)}` : undefined,
       normalizeString(identity?.emoji) ? `- Emoji: ${normalizeString(identity?.emoji)}` : undefined,
@@ -94,10 +102,8 @@ export async function buildRealtimeVoiceInstructions(params: {
   }
 
   if (contextConfig.includeWorkspaceFiles) {
-    const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(
-      params.coreConfig as OpenClawConfig,
-      agentId,
-    );
+    const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.coreConfig, agentId);
+    // Workspace reads stay under the agent root; missing or unreadable context files are omitted.
     const fileSections = await readWorkspaceVoiceContextFiles({
       workspaceDir,
       files: contextConfig.files,

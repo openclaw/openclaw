@@ -1,21 +1,27 @@
+/**
+ * Resolves default thinking levels for provider/model pairs. It combines
+ * explicit per-model config, global defaults, catalog metadata, and model
+ * family fallbacks.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-selection-normalize.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 
-type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
-
+/** Resolves the default thinking level for a provider/model pair. */
 export function resolveThinkingDefault(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];
+  agentRuntime?: string | null;
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
   const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
@@ -41,6 +47,14 @@ export function resolveThinkingDefault(params: {
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  // Accept boolean false and common disable aliases as "off".
+  if (
+    perModelThinking === false ||
+    perModelThinking === "disabled" ||
+    perModelThinking === "none"
+  ) {
+    return "off";
+  }
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||
@@ -49,7 +63,8 @@ export function resolveThinkingDefault(params: {
     perModelThinking === "high" ||
     perModelThinking === "xhigh" ||
     perModelThinking === "adaptive" ||
-    perModelThinking === "max"
+    perModelThinking === "max" ||
+    perModelThinking === "ultra"
   ) {
     return perModelThinking;
   }
@@ -87,14 +102,17 @@ export function resolveThinkingDefault(params: {
     provider: params.provider,
     model: params.model,
     catalog,
+    agentRuntime: params.agentRuntime,
   });
 }
 
+/** Resolves thinking default after loading runtime catalog only when needed. */
 export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
-  loadModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  loadRuntimeCatalog: () => Promise<ModelCatalogEntry[]>;
+  agentRuntime?: string | null;
 }): Promise<ThinkLevel> {
   const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
   const configuredSelectedEntry = configuredCatalog.find(
@@ -104,7 +122,7 @@ export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
     configuredCatalog.length === 0 ||
     !configuredSelectedEntry ||
     configuredSelectedEntry.reasoning === undefined;
-  const runtimeCatalog = needsRuntimeCatalog ? await params.loadModelCatalog() : undefined;
+  const runtimeCatalog = needsRuntimeCatalog ? await params.loadRuntimeCatalog() : undefined;
   const runtimeSelectedEntry = runtimeCatalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
@@ -117,5 +135,6 @@ export async function resolveThinkingDefaultWithRuntimeCatalog(params: {
     provider: params.provider,
     model: params.model,
     catalog,
+    agentRuntime: params.agentRuntime,
   });
 }

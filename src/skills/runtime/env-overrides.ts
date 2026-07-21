@@ -1,3 +1,4 @@
+// Skill environment override helpers expose safe env vars requested by active skills.
 import { sanitizeEnvVars, validateEnvVarValue } from "../../agents/sandbox/sanitize-env-vars.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
@@ -6,7 +7,7 @@ import {
   isDangerousHostEnvVarName,
 } from "../../infra/host-env-security.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveSkillConfig } from "../loading/config.js";
+import { isSkillSecretOwnerUnavailable, resolveSkillConfig } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillRuntimeConfig } from "../loading/runtime-config.js";
 import type { SkillEntry, SkillSnapshot } from "../types.js";
@@ -208,6 +209,10 @@ function applySkillConfigEnvOverrides(params: {
   }
 }
 
+function shouldApplySkillConfigEnvOverrides(skillConfig: SkillConfig): boolean {
+  return skillConfig.enabled !== false;
+}
+
 function createEnvReverter(updates: EnvUpdate[]) {
   return () => {
     for (const update of updates) {
@@ -223,8 +228,14 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
 
   for (const entry of skills) {
     const skillKey = resolveSkillKey(entry.skill, entry);
+    if (isSkillSecretOwnerUnavailable(skillKey)) {
+      continue;
+    }
     const skillConfig = resolveSkillConfig(config, skillKey);
     if (!skillConfig) {
+      continue;
+    }
+    if (!shouldApplySkillConfigEnvOverrides(skillConfig)) {
       continue;
     }
 
@@ -252,8 +263,15 @@ export function applySkillEnvOverridesFromSnapshot(params: {
   const updates: EnvUpdate[] = [];
 
   for (const skill of snapshot.skills) {
-    const skillConfig = resolveSkillConfig(config, skill.name);
+    const skillKey = skill.skillKey ?? skill.name;
+    if (isSkillSecretOwnerUnavailable(skillKey)) {
+      continue;
+    }
+    const skillConfig = resolveSkillConfig(config, skillKey);
     if (!skillConfig) {
+      continue;
+    }
+    if (!shouldApplySkillConfigEnvOverrides(skillConfig)) {
       continue;
     }
 
@@ -262,7 +280,7 @@ export function applySkillEnvOverridesFromSnapshot(params: {
       skillConfig,
       primaryEnv: skill.primaryEnv,
       requiredEnv: skill.requiredEnv,
-      skillKey: skill.name,
+      skillKey,
     });
   }
 

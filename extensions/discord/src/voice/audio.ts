@@ -1,6 +1,8 @@
+// Discord plugin module implements audio behavior.
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import { Transform, type Readable, type TransformCallback } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import {
   Application,
   createDecoder as createLibopusDecoder,
@@ -107,13 +109,18 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     windowsHide: true,
   });
   const opusStream = createDiscordOpusEncodeStream();
-  let stderr = "";
+  const stderr = Buffer.alloc(FFMPEG_ERROR_OUTPUT_BYTES);
+  let stderrBytes = 0;
   let ffmpegClosed = false;
+  const killFfmpeg = (signal: NodeJS.Signals = "SIGTERM") => {
+    if (!ffmpegClosed && !ffmpeg.killed) {
+      ffmpeg.kill(signal);
+    }
+  };
 
-  ffmpeg.stderr.setEncoding("utf8");
-  ffmpeg.stderr.on("data", (chunk: string) => {
-    if (stderr.length < FFMPEG_ERROR_OUTPUT_BYTES) {
-      stderr = `${stderr}${chunk}`.slice(0, FFMPEG_ERROR_OUTPUT_BYTES);
+  ffmpeg.stderr.on("data", (chunk: Buffer) => {
+    if (stderrBytes < FFMPEG_ERROR_OUTPUT_BYTES) {
+      stderrBytes += chunk.copy(stderr, stderrBytes, 0, FFMPEG_ERROR_OUTPUT_BYTES - stderrBytes);
     }
   });
 
@@ -123,7 +130,9 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   ffmpeg.once("close", (code, signal) => {
     ffmpegClosed = true;
     if (code && code !== 0) {
-      const suffix = stderr.trim() ? `: ${stderr.trim()}` : "";
+      // A byte cap can end inside a code point; omit that partial suffix instead of emitting U+FFFD.
+      const stderrText = new StringDecoder("utf8").write(stderr.subarray(0, stderrBytes)).trim();
+      const suffix = stderrText ? `: ${stderrText}` : "";
       opusStream.destroy(new Error(`ffmpeg exited with code ${code}${suffix}`));
       return;
     }
@@ -132,7 +141,15 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
     }
   });
 
-  ffmpeg.stdout.on("error", (err) => opusStream.destroy(err));
+  // Both readable child pipes need listeners; an unhandled stream error terminates Node.
+  for (const readable of [ffmpeg.stdout, ffmpeg.stderr]) {
+    readable.on("error", (err) => {
+      // A broken output pipe cannot drain usefully; force termination so a
+      // blocked ffmpeg process cannot outlive the failed playback stream.
+      killFfmpeg("SIGKILL");
+      opusStream.destroy(err);
+    });
+  }
   ffmpeg.stdin.on("error", (err) => {
     if ((err as NodeJS.ErrnoException).code !== "EPIPE") {
       opusStream.destroy(err);
@@ -140,8 +157,8 @@ export function createDiscordOpusPlaybackStream(input: Readable | string): Reada
   });
   ffmpeg.stdout.pipe(opusStream);
   opusStream.once("close", () => {
-    if (!ffmpegClosed && !opusStream.readableEnded) {
-      ffmpeg.kill();
+    if (!opusStream.readableEnded) {
+      killFfmpeg();
     }
   });
   if (typeof input !== "string") {
@@ -179,52 +196,52 @@ class DiscordOpusEncodeStream extends Transform {
     return this.#encoder;
   }
 
-  override async _transform(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    done: TransformCallback,
-  ): Promise<void> {
-    try {
-      const encoder = await this.#getEncoder();
-      this.#buffer =
-        this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
-      while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
-        const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
-        this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
-        this.push(
-          Buffer.from(
-            encoder.encode(frame, {
-              frameSize: DISCORD_OPUS_FRAME_SIZE,
-            }),
-          ),
-        );
+  override _transform(chunk: Buffer, _encoding: BufferEncoding, done: TransformCallback): void {
+    void (async () => {
+      try {
+        const encoder = await this.#getEncoder();
+        this.#buffer =
+          this.#buffer.length > 0 ? Buffer.concat([this.#buffer, chunk]) : Buffer.from(chunk);
+        while (this.#buffer.length >= DISCORD_OPUS_FRAME_BYTES) {
+          const frame = this.#buffer.subarray(0, DISCORD_OPUS_FRAME_BYTES);
+          this.#buffer = this.#buffer.subarray(DISCORD_OPUS_FRAME_BYTES);
+          this.push(
+            Buffer.from(
+              encoder.encode(frame, {
+                frameSize: DISCORD_OPUS_FRAME_SIZE,
+              }),
+            ),
+          );
+        }
+        done();
+      } catch (err) {
+        done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
       }
-      done();
-    } catch (err) {
-      done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
-    }
+    })();
   }
 
-  override async _final(done: TransformCallback): Promise<void> {
-    try {
-      if (this.#buffer.length > 0) {
-        const encoder = await this.#getEncoder();
-        const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
-        this.#buffer.copy(frame);
-        this.#buffer = Buffer.alloc(0);
-        this.push(
-          Buffer.from(
-            encoder.encode(frame, {
-              frameSize: DISCORD_OPUS_FRAME_SIZE,
-            }),
-          ),
-        );
+  override _final(done: TransformCallback): void {
+    void (async () => {
+      try {
+        if (this.#buffer.length > 0) {
+          const encoder = await this.#getEncoder();
+          const frame = Buffer.alloc(DISCORD_OPUS_FRAME_BYTES);
+          this.#buffer.copy(frame);
+          this.#buffer = Buffer.alloc(0);
+          this.push(
+            Buffer.from(
+              encoder.encode(frame, {
+                frameSize: DISCORD_OPUS_FRAME_SIZE,
+              }),
+            ),
+          );
+        }
+        this.#freeEncoder();
+        done();
+      } catch (err) {
+        done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
       }
-      this.#freeEncoder();
-      done();
-    } catch (err) {
-      done(err instanceof Error ? err : new Error(formatErrorMessage(err)));
-    }
+    })();
   }
 
   override _destroy(err: Error | null, done: (error?: Error | null) => void): void {
@@ -365,7 +382,7 @@ export async function writeVoiceWavFile(
 
 function scheduleTempCleanup(tempDir: string, delayMs: number = 30 * 60 * 1000): void {
   const timer = setTimeout(() => {
-    fs.rm(tempDir, { recursive: true, force: true }).catch((err) => {
+    fs.rm(tempDir, { recursive: true, force: true }).catch((err: unknown) => {
       if (shouldLogVerbose()) {
         logVerbose(`discord voice: temp cleanup failed for ${tempDir}: ${formatErrorMessage(err)}`);
       }

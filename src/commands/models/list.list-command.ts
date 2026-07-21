@@ -1,5 +1,7 @@
+/** Implementation of `openclaw models list`. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import type { ModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
@@ -16,10 +18,14 @@ import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
+type PromotionsModule = typeof import("./list.promotions.js");
 type RegistryLoadModule = typeof import("./list.registry-load.js");
 type RowSourcesModule = typeof import("./list.row-sources.js");
 type SourcePlanModule = typeof import("./list.source-plan.js");
 
+const promotionsModuleLoader = createLazyImportLoader<PromotionsModule>(
+  () => import("./list.promotions.js"),
+);
 const registryLoadModuleLoader = createLazyImportLoader<RegistryLoadModule>(
   () => import("./list.registry-load.js"),
 );
@@ -42,6 +48,7 @@ function loadSourcePlanModule(): Promise<SourcePlanModule> {
   return sourcePlanModuleLoader.load();
 }
 
+/** Lists configured, catalog, and runtime-discovered models as text, plain, or JSON. */
 export async function modelsListCommand(
   opts: {
     all?: boolean;
@@ -84,10 +91,10 @@ export async function modelsListCommand(
     commandName: "models list",
     runtime,
   });
+  const agentId = resolveDefaultAgentId(cfg);
   const agentDir = resolveDefaultAgentDir(cfg);
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const metadataSnapshot = loadManifestMetadataSnapshot({
     config: cfg,
     workspaceDir,
@@ -99,11 +106,16 @@ export async function modelsListCommand(
         metadataSnapshot,
       })
     : undefined;
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
+    agentDir,
     workspaceDir,
     metadataSnapshot,
+    // Default output can append authenticated catalog rows beyond the configured
+    // default, so keep the nonprompting OpenAI CLI overlay available in every view.
+    externalCliProviderIds: ["openai"],
   });
 
   let modelRegistry: ModelRegistry | undefined;
@@ -111,9 +123,10 @@ export async function modelsListCommand(
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
+  // Full/provider-filtered lists may need runtime, manifest, and registry rows.
+  // Defer that planning so default configured-only output stays cheap.
   const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
   const sourcePlan = sourcePlanModule
     ? await sourcePlanModule.planAllModelListSources({
@@ -121,19 +134,23 @@ export async function modelsListCommand(
         enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
+        agentId,
+        agentDir,
         metadataSnapshot,
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
-  const loadRegistryState = async (opts?: {
+  const loadRegistryState = async (optsLocal?: {
     normalizeModels?: boolean;
     loadAvailability?: boolean;
   }) => {
     const { loadListModelRegistry } = await loadRegistryLoadModule();
     const loaded = await loadListModelRegistry(cfg, {
+      agentId,
+      agentDir,
       providerFilter,
-      normalizeModels: opts?.normalizeModels ?? Boolean(providerFilter),
-      loadAvailability: opts?.loadAvailability,
+      normalizeModels: optsLocal?.normalizeModels ?? Boolean(providerFilter),
+      loadAvailability: optsLocal?.loadAvailability,
       workspaceDir,
     });
     modelRegistry = loaded.registry;
@@ -147,7 +164,9 @@ export async function modelsListCommand(
       await loadRegistryState();
     } else if (!opts.all && opts.local) {
       const { loadConfiguredListModelRegistry } = await loadRegistryLoadModule();
-      const loaded = loadConfiguredListModelRegistry(cfg, entries, {
+      const loaded = await loadConfiguredListModelRegistry(cfg, entries, {
+        agentId,
+        agentDir,
         providerFilter,
         workspaceDir,
       });
@@ -162,6 +181,7 @@ export async function modelsListCommand(
   }
   const buildRowContext = (skipRuntimeModelSuppression: boolean) => ({
     cfg,
+    agentId,
     agentDir,
     authIndex,
     availableKeys,
@@ -193,6 +213,8 @@ export async function modelsListCommand(
     });
     if (initialAppend.requiresRegistryFallback) {
       const useScopedRegistryFallback = sourcePlan.kind === "provider-runtime-scoped";
+      // Runtime-scoped providers can fail catalog availability while still being
+      // useful for a provider-filtered list; retry through the registry fallback.
       try {
         await loadRegistryState(
           useScopedRegistryFallback
@@ -236,10 +258,33 @@ export async function modelsListCommand(
     );
   }
 
+  // Promotion decorations are best-effort: claim tags come from local
+  // provenance, and the discovery section reads a cadence-gated feed cache.
+  // Neither may break the core listing; stale refreshes have a short timeout.
+  const promotionsModule = await promotionsModuleLoader.load();
+  try {
+    promotionsModule.applyPromotionClaimTags(rows);
+  } catch {
+    // Tags are annotation-only.
+  }
   if (rows.length === 0) {
     runtime.log("No models found.");
-    return;
+  } else {
+    printModelTable(rows, runtime, opts);
   }
-
-  printModelTable(rows, runtime, opts);
+  if (!opts.json && !opts.plain) {
+    // Runs on the empty listing too: a fresh install with zero configured
+    // models is exactly the user passive discovery is for. Compares against
+    // the configured entries, not the rendered rows — filtered and --all
+    // listings show a different set.
+    try {
+      await promotionsModule.printAvailablePromotionsSection({
+        configuredKeys: new Set(entries.map((entry) => entry.key)),
+        runtime,
+      });
+    } catch {
+      // Passive discovery must never fail the listing.
+    }
+  }
+  requestExitAfterOneShotOutput(runtime);
 }

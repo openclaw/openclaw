@@ -1,3 +1,4 @@
+// Searchable select list tests cover filtering and selection behavior.
 import { describe, expect, it } from "vitest";
 import { stripAnsi, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { SearchableSelectList, type SearchableSelectListTheme } from "./searchable-select-list.js";
@@ -254,6 +255,16 @@ describe("SearchableSelectList", () => {
 
     const selected = list.getSelectedItem();
     expect(selected?.value).toContain("gpt");
+  });
+
+  it("treats slashes as fuzzy token separators", () => {
+    const list = new SearchableSelectList(
+      [{ value: "sonnet", label: "Claude Sonnet", description: "anthropic" }],
+      5,
+      mockTheme,
+    );
+
+    expectSelectedValueForQuery(list, "anthropic/sonnet", "sonnet");
   });
 
   it("preserves fuzzy ranking when only fuzzy matches exist", () => {

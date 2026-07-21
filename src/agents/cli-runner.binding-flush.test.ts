@@ -1,3 +1,4 @@
+/** Tests bounded transcript-flush probing before reusing CLI bindings. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isCliBindingFlushed,
@@ -9,10 +10,13 @@ describe("isCliBindingFlushed", () => {
   const workspaceDir = "/tmp/openclaw-workspace";
 
   beforeEach(() => {
+    vi.useRealTimers();
     restoreCliRunnerTestDeps();
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     restoreCliRunnerTestDeps();
   });
 
@@ -34,28 +38,36 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("retries up to three times before giving up", async () => {
+    const delay = vi.fn(async () => undefined);
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
 
     expect(await isCliBindingFlushed("sid-cold", "claude-cli", workspaceDir)).toBe(false);
     expect(probe).toHaveBeenCalledTimes(3);
+    expect(delay).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenNthCalledWith(1, 50);
+    expect(delay).toHaveBeenNthCalledWith(2, 150);
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
+    const delay = vi.fn(async () => undefined);
     let calls = 0;
     const probe = vi.fn(async () => {
       calls += 1;
       return calls >= 2;
     });
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
 
     expect(await isCliBindingFlushed("sid-late", "claude-cli", workspaceDir)).toBe(true);
     expect(probe).toHaveBeenCalledTimes(2);
+    expect(delay).toHaveBeenCalledExactlyOnceWith(50);
   });
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
     vi.useFakeTimers();
     try {
+      // Fake timers enforce the retry contract without introducing wall-clock
+      // sleeps into this import-heavy agent test.
       const probe = vi.fn(async () => false);
       setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
 
@@ -72,6 +84,7 @@ describe("isCliBindingFlushed", () => {
       expect(errored).not.toHaveBeenCalled();
       expect(probe).toHaveBeenCalledTimes(3);
     } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
   });
@@ -92,5 +105,29 @@ describe("isCliBindingFlushed", () => {
 
     expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
+    const probe = vi.fn(async () => false);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+
+    expect(
+      await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
+        skipTranscriptProbe: true,
+      }),
+    ).toBe(true);
+    expect(probe).not.toHaveBeenCalled();
+  });
+
+  it("still probes when transcript-probe skipping is disabled", async () => {
+    const probe = vi.fn(async () => true);
+    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+
+    expect(
+      await isCliBindingFlushed("sid-probe", "claude-cli", workspaceDir, {
+        skipTranscriptProbe: false,
+      }),
+    ).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(1);
   });
 });

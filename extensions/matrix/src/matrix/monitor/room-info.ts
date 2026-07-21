@@ -1,3 +1,4 @@
+// Matrix plugin module implements room info behavior.
 import { isMatrixNotFoundError } from "../errors.js";
 import type { MatrixClient } from "../sdk.js";
 
@@ -120,6 +121,7 @@ export function createMatrixRoomInfoResolver(client: MatrixClient) {
   };
 
   return {
+    getRoomAliases,
     getRoomInfo,
     getMemberDisplayName,
   };

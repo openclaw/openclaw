@@ -1,8 +1,9 @@
+// Msteams plugin module implements cloud behavior.
 import type { MSTeamsConfig } from "../runtime-api.js";
 
 export type MSTeamsCloudName = "Public" | "USGov" | "USGovDoD" | "China";
 
-export const DEFAULT_MSTEAMS_CLOUD: MSTeamsCloudName = "Public";
+const DEFAULT_MSTEAMS_CLOUD: MSTeamsCloudName = "Public";
 
 const PUBLIC_MSTEAMS_SERVICE_HOST = "smba.trafficmanager.net";
 const CHINA_BOT_FRAMEWORK_SERVICE_HOST = "botframework.azure.cn";

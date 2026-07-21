@@ -1,3 +1,4 @@
+// Subagent followup tests cover followup handling after isolated cron agent runs.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // vi.hoisted runs before module imports, ensuring FAST_TEST_MODE is picked up.
@@ -30,8 +31,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
-const { testing: runWaitTesting, readLatestAssistantReply } =
-  await import("../../agents/run-wait.js");
+const { readLatestAssistantReply } = await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 
 async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 100): Promise<T> {
@@ -46,7 +46,7 @@ function createDescendantRun(params?: {
   cleanup?: "keep" | "delete";
   endedAt?: number;
   resultText?: string | null;
-  executionTranscriptFile?: string;
+  hasInternalTranscript?: boolean;
 }) {
   return {
     runId: params?.runId ?? "run-1",
@@ -60,11 +60,16 @@ function createDescendantRun(params?: {
     ...(params?.resultText === undefined
       ? {}
       : { completion: { required: true, resultText: params.resultText } }),
-    ...(params?.executionTranscriptFile
+    ...(params?.hasInternalTranscript
       ? {
           execution: {
             status: "terminal" as const,
-            transcriptFile: params.executionTranscriptFile,
+            transcriptTarget: {
+              agentId: "main",
+              sessionId: "internal-run",
+              sessionKey: "agent:main:internal-session-effects:run",
+              storePath: "/tmp/test-store",
+            },
           },
         }
       : {}),
@@ -163,7 +168,7 @@ describe("readDescendantSubagentFallbackReply", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
         resultText: "fresh recovered output",
-        executionTranscriptFile: "/tmp/openclaw-internal-run.jsonl",
+        hasInternalTranscript: true,
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("stale visible transcript");
@@ -178,7 +183,7 @@ describe("readDescendantSubagentFallbackReply", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([
       createDescendantRun({
         resultText: null,
-        executionTranscriptFile: "/tmp/openclaw-empty-internal-run.jsonl",
+        hasInternalTranscript: true,
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockClear();
@@ -279,14 +284,10 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.mocked(listDescendantRunsForRequester).mockReturnValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
     vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
-    runWaitTesting.setDepsForTest({
-      callGateway: ((opts) => vi.mocked(callGateway)(opts as never)) as typeof callGateway,
-    });
   });
 
   afterEach(() => {
     vi.useRealTimers();
-    runWaitTesting.setDepsForTest();
   });
 
   it("returns initialReply immediately when no active descendants and observedActiveDescendants=false", async () => {

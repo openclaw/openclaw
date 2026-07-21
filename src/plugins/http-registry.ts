@@ -1,3 +1,4 @@
+// Tracks plugin HTTP registry context for current async execution.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -5,7 +6,7 @@ import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "./registry.js";
 import { requireActivePluginHttpRouteRegistry } from "./runtime.js";
 
-export type PluginHttpRouteHandler = (
+type PluginHttpRouteHandler = (
   req: IncomingMessage,
   res: ServerResponse,
 ) => Promise<boolean | void> | boolean | void;

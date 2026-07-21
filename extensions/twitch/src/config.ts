@@ -1,3 +1,4 @@
+// Twitch helper module supports config behavior.
 import {
   listCombinedAccountIds,
   normalizeAccountId,
@@ -13,7 +14,7 @@ import { isAccountConfigured } from "./utils/twitch.js";
  */
 export const DEFAULT_ACCOUNT_ID = "default";
 
-export type ResolvedTwitchAccountContext = {
+type ResolvedTwitchAccountContext = {
   accountId: string;
   account: TwitchAccountConfig | null;
   tokenResolution: TwitchTokenResolution;

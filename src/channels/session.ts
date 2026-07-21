@@ -1,18 +1,15 @@
+// Inbound channel session recorder and last-route updater.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../config/sessions/types.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { InboundLastRouteUpdate } from "./session.types.js";
-export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
 
-let inboundSessionRuntimePromise: Promise<
-  typeof import("../config/sessions/inbound.runtime.js")
-> | null = null;
-
-function loadInboundSessionRuntime() {
-  inboundSessionRuntimePromise ??= import("../config/sessions/inbound.runtime.js");
-  return inboundSessionRuntimePromise;
-}
+// Keep session persistence lazy so channel SDK type paths do not load disk writers.
+const loadInboundSessionRuntime = createLazyRuntimeModule(
+  () => import("../config/sessions/inbound.runtime.js"),
+);
 
 function shouldSkipPinnedMainDmRouteUpdate(
   pin: InboundLastRouteUpdate["mainDmOwnerPin"] | undefined,
@@ -39,18 +36,25 @@ export async function recordInboundSession(params: {
   onRecordError: (err: unknown) => void;
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
+  // Session keys may contain opaque peer ids; preserve case-sensitive payloads while normalizing shape.
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
   const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
   const metaTask = runtime
-    .recordSessionMetaFromInbound({
+    .recordInboundSessionMeta({
       storePath,
       sessionKey: canonicalSessionKey,
       ctx,
       groupResolution,
       createIfMissing,
     })
-    .catch(params.onRecordError);
+    .catch(async (err: unknown) => {
+      try {
+        await Promise.resolve(params.onRecordError(err));
+      } catch {
+        // Error reporting must not reject the detached metadata task.
+      }
+    });
   params.trackSessionMetaTask?.(metaTask);
   void metaTask;
 
@@ -62,7 +66,7 @@ export async function recordInboundSession(params: {
     return;
   }
   const targetSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(update.sessionKey);
-  await runtime.updateLastRoute({
+  await runtime.updateSessionLastRoute({
     storePath,
     sessionKey: targetSessionKey,
     route: update.route,

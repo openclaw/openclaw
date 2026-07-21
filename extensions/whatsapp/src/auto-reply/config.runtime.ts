@@ -1,14 +1,5 @@
-export {
-  evaluateSessionFreshness,
-  loadSessionStore,
-  resolveSessionKey,
-  resolveSessionResetPolicy,
-  resolveSessionResetType,
-  resolveStorePath,
-  resolveThreadFlag,
-  resolveChannelResetConfig,
-  updateLastRoute,
-} from "openclaw/plugin-sdk/session-store-runtime";
+// Whatsapp helper module supports config behavior.
+export { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-store-runtime";
 export {
   getRuntimeConfig,
   getRuntimeConfigSourceSnapshot,

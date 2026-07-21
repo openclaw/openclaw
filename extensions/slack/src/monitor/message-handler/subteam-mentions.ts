@@ -1,3 +1,4 @@
+// Slack plugin module implements subteam mentions behavior.
 import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -14,13 +15,13 @@ type CacheEntry = {
   users: ReadonlySet<string>;
 };
 
-let subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
+const subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 
 export function normalizeSlackId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
 }
 
-export function extractSlackSubteamMentionIds(text?: string | null): string[] {
+function extractSlackSubteamMentionIds(text?: string | null): string[] {
   if (!text) {
     return [];
   }
@@ -122,8 +123,4 @@ export async function isSlackSubteamMentionForBot(params: {
     }
   }
   return false;
-}
-
-export function clearSlackSubteamMentionCacheForTest(): void {
-  subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 }

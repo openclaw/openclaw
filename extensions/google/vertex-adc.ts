@@ -1,13 +1,19 @@
-import { existsSync, readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+// Google plugin module implements vertex adc behavior.
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
+import type { GoogleAuthOptions } from "google-auth-library";
+import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type GoogleAuthorizedUserCredentials = {
   type: "authorized_user";
@@ -28,15 +34,25 @@ type GoogleVertexAdcToken = {
   expiresAtMs: number;
 };
 
+type GoogleOauthTokenResponsePayload = {
+  access_token?: unknown;
+  expires_in?: unknown;
+  error?: unknown;
+  error_description?: unknown;
+};
+
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 const GOOGLE_OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platform";
+const GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS = 30_000;
 // Hold tokens slightly less long than reported expiry (Google's recommendation
 // is a 60s buffer) so we don't ship a request that's already revoked when it
 // leaves the gateway.
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
+const GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES = 1024 * 1024;
+const VERTEX_ADC_TEST_API_KEY = Symbol.for("openclaw.google.vertexAdcTestApi");
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -80,16 +96,33 @@ function resolveGoogleAuthLibraryTokenExpiresAtMs(nowRaw = Date.now()): number |
     : resolveExpiresAtMsFromDurationMs(GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS, { nowMs });
 }
 
-export function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
+function resetGoogleVertexAuthorizedUserTokenCacheForTest(): void {
   cachedGoogleVertexAuthorizedUserToken = undefined;
   cachedGoogleAuthClient = undefined;
   cachedGoogleVertexAdcToken = undefined;
+}
+
+if (process.env.VITEST) {
+  (globalThis as Record<PropertyKey, unknown>)[VERTEX_ADC_TEST_API_KEY] = {
+    reset: resetGoogleVertexAuthorizedUserTokenCacheForTest,
+  };
 }
 
 export function isGoogleVertexCredentialsMarker(
   apiKey: string | undefined,
 ): apiKey is undefined | typeof GCP_VERTEX_CREDENTIALS_MARKER {
   return apiKey === undefined || apiKey === GCP_VERTEX_CREDENTIALS_MARKER;
+}
+
+function hasGoogleVertexProjectEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT) ||
+    normalizeOptionalString(env.GCLOUD_PROJECT),
+  );
+}
+
+function hasGoogleVertexLocationEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION));
 }
 
 function resolveGoogleApplicationCredentialsPath(
@@ -117,19 +150,25 @@ function resolveGoogleApplicationCredentialsPath(
   return existsSync(appDataFallback) ? appDataFallback : undefined;
 }
 
-async function readGoogleAuthorizedUserCredentials(
-  credentialsPath: string,
-): Promise<GoogleAuthorizedUserCredentials | undefined> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await readFile(credentialsPath, "utf8")) as unknown;
-  } catch {
-    return undefined;
-  }
+type GoogleAdcConfig = NonNullable<GoogleAuthOptions["credentials"]>;
+const GOOGLE_VERTEX_ADC_FILE_MAX_BYTES = 1024 * 1024;
+
+function readGoogleAdcCredentials(adcPath: string): GoogleAdcConfig {
+  const text = readSecretFileSync(adcPath, "Google Vertex ADC credentials", {
+    maxBytes: GOOGLE_VERTEX_ADC_FILE_MAX_BYTES,
+    rejectHardlinks: false,
+  });
+  const parsed = JSON.parse(text) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return undefined;
+    throw new Error(`Google Vertex ADC credentials must be a JSON object: ${adcPath}`);
   }
-  const record = parsed as Record<string, unknown>;
+  return parsed as GoogleAdcConfig;
+}
+
+function resolveGoogleAuthorizedUserCredentials(
+  adcConfig: GoogleAdcConfig,
+): GoogleAuthorizedUserCredentials | undefined {
+  const record = adcConfig as Record<string, unknown>;
   if (record.type !== "authorized_user") {
     return undefined;
   }
@@ -143,11 +182,7 @@ async function readGoogleAuthorizedUserCredentials(
 
 function readGoogleAdcCredentialsTypeSync(credentialsPath: string): string | undefined {
   try {
-    const parsed = JSON.parse(readFileSync(credentialsPath, "utf8")) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return undefined;
-    }
-    const type = (parsed as { type?: unknown }).type;
+    const type = (readGoogleAdcCredentials(credentialsPath) as { type?: unknown }).type;
     return typeof type === "string" ? type : undefined;
   } catch {
     return undefined;
@@ -169,9 +204,7 @@ function readGoogleAdcCredentialsTypeSync(credentialsPath: string): string | und
  * probes the default metadata hosts asynchronously at request time, and the
  * provider wires the Vertex transport without this sync predicate.
  */
-export function hasGoogleVertexAuthorizedUserAdcSync(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+function hasGoogleVertexAuthorizedUserAdcSync(env: NodeJS.ProcessEnv = process.env): boolean {
   const credentialsPath = resolveGoogleApplicationCredentialsPath(env);
   if (credentialsPath) {
     const type = readGoogleAdcCredentialsTypeSync(credentialsPath);
@@ -180,6 +213,16 @@ export function hasGoogleVertexAuthorizedUserAdcSync(
     }
   }
   return false;
+}
+
+export function resolveGoogleVertexConfigApiKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return hasGoogleVertexProjectEnv(env) &&
+    hasGoogleVertexLocationEnv(env) &&
+    hasGoogleVertexAuthorizedUserAdcSync(env)
+    ? GCP_VERTEX_CREDENTIALS_MARKER
+    : undefined;
 }
 
 async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
@@ -211,20 +254,35 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     refresh_token: refreshToken,
     grant_type: "refresh_token",
   });
-  const response = await (params.fetchImpl ?? fetch)(GOOGLE_OAUTH_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS,
+    operation: "google-vertex-adc-token-refresh",
+    url: GOOGLE_OAUTH_TOKEN_URL,
   });
-  const payload = (await response.json().catch(() => undefined)) as
-    | { access_token?: unknown; expires_in?: unknown; error?: unknown; error_description?: unknown }
-    | undefined;
+  let response: Response;
+  let payload: GoogleOauthTokenResponsePayload | undefined;
+  try {
+    response = await (params.fetchImpl ?? fetch)(GOOGLE_OAUTH_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body,
+      signal,
+    });
+    // Keep the request deadline active through body consumption. Fetch resolves
+    // at headers, so cleanup here would leave a stalled token body unbounded.
+    payload = await readGoogleOauthTokenResponsePayload(response);
+  } finally {
+    cleanup();
+  }
   if (!response.ok) {
     const description = normalizeOptionalString(payload?.error_description);
     const code = normalizeOptionalString(payload?.error);
     throw new Error(
       `Google Vertex ADC token refresh failed: ${response.status}${code ? ` ${code}` : ""}${description ? ` (${description})` : ""}`,
     );
+  }
+  if (!payload) {
+    throw new Error("Google Vertex ADC token refresh response could not be parsed as JSON.");
   }
   const token = normalizeOptionalString(payload?.access_token);
   if (!token) {
@@ -243,7 +301,64 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   return token;
 }
 
-async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
+async function readGoogleOauthTokenResponsePayload(
+  response: Response,
+): Promise<GoogleOauthTokenResponsePayload | undefined> {
+  const bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Google OAuth token response exceeds ${maxBytes} bytes`),
+  });
+  const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
+  if (!text.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as GoogleOauthTokenResponsePayload;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
+  if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
+    try {
+      return gunzipSync(bytes, { maxOutputLength: GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES }).toString(
+        "utf8",
+      );
+    } catch (error) {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ERR_BUFFER_TOO_LARGE"
+      ) {
+        throw new Error(
+          `Google OAuth token response exceeds ${GOOGLE_OAUTH_TOKEN_RESPONSE_MAX_BYTES} decompressed bytes`,
+          { cause: error },
+        );
+      }
+      return bytes.toString("utf8");
+    }
+  }
+  return bytes.toString("utf8");
+}
+
+function shouldGunzipGoogleOauthTokenResponse(
+  bytes: Buffer,
+  contentEncoding: string | null,
+): boolean {
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    return true;
+  }
+  return (contentEncoding ?? "")
+    .split(",")
+    .map((encoding) => encoding.trim().toLowerCase())
+    .includes("gzip");
+}
+
+async function resolveGoogleVertexAccessTokenViaGoogleAuth(
+  adcConfig?: GoogleAdcConfig,
+): Promise<string> {
   // Lazy-import + cache so we don't pay the google-auth-library load cost on
   // gateway startup; only when we actually need a non-authorized_user token.
   if (!cachedGoogleAuthClient) {
@@ -257,18 +372,43 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
         // It also caches tokens internally and refreshes before expiry.
         return new GoogleAuth({
           scopes: [GOOGLE_VERTEX_OAUTH_SCOPE],
+          ...(adcConfig ? { credentials: adcConfig } : {}),
+          // Best-effort cancellation for clients that use the shared transporter.
+          // WIF STS and GCE metadata need the owner-level deadline below.
+          clientOptions: {
+            transporterOptions: { timeout: GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS },
+          },
         });
       }),
     };
   }
-  const auth = await cachedGoogleAuthClient.promise;
+  const authClient = cachedGoogleAuthClient;
+  const auth = await authClient.promise;
 
   const cached = cachedGoogleVertexAdcToken;
   if (cached && isGoogleVertexTokenFresh(cached.expiresAtMs)) {
     return cached.token;
   }
 
-  const token = await auth.getAccessToken();
+  // Some google-auth-library ADC implementations bypass the configured Gaxios
+  // transporter, so this owner-level deadline also bounds STS and metadata paths.
+  let token: string | null | undefined;
+  try {
+    token = await withTimeout(auth.getAccessToken(), GOOGLE_VERTEX_ADC_TOKEN_REFRESH_TIMEOUT_MS, {
+      createError: () => new DOMException("request timed out", "TimeoutError"),
+    });
+  } catch (error) {
+    // The dependency coalesces in-flight refreshes. Drop only this timed-out
+    // client so a recovered identity endpoint gets a fresh attempt next time.
+    if (
+      error instanceof DOMException &&
+      error.name === "TimeoutError" &&
+      cachedGoogleAuthClient === authClient
+    ) {
+      cachedGoogleAuthClient = undefined;
+    }
+    throw error;
+  }
   const normalized = normalizeOptionalString(token);
   if (!normalized) {
     throw new Error(
@@ -308,13 +448,15 @@ async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {
 export async function resolveGoogleVertexAuthorizedUserHeaders(
   fetchImpl?: typeof fetch,
 ): Promise<Record<string, string>> {
-  const credentialsPath = resolveGoogleApplicationCredentialsPath();
-  if (credentialsPath) {
-    const credentials = await readGoogleAuthorizedUserCredentials(credentialsPath);
-    if (credentials) {
+  const adcPath = resolveGoogleApplicationCredentialsPath();
+  let adcConfig: GoogleAdcConfig | undefined;
+  if (adcPath) {
+    adcConfig = readGoogleAdcCredentials(adcPath);
+    const userAdc = resolveGoogleAuthorizedUserCredentials(adcConfig);
+    if (userAdc) {
       const token = await refreshGoogleVertexAuthorizedUserAccessToken({
-        credentialsPath,
-        credentials,
+        credentialsPath: adcPath,
+        credentials: userAdc,
         fetchImpl,
       });
       return { Authorization: `Bearer ${token}` };
@@ -323,6 +465,6 @@ export async function resolveGoogleVertexAuthorizedUserHeaders(
   // No file-based authorized_user ADC. Fall back to google-auth-library which
   // handles GKE Workload Identity (metadata server), Workload Identity
   // Federation (external_account), and service-account keys.
-  const token = await resolveGoogleVertexAccessTokenViaGoogleAuth();
+  const token = await resolveGoogleVertexAccessTokenViaGoogleAuth(adcConfig);
   return { Authorization: `Bearer ${token}` };
 }

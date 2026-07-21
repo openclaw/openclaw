@@ -1,3 +1,5 @@
+// Common parameter tests cover shared action gates and typed argument readers
+// used by channel/tool adapters.
 import { describe, expect, it } from "vitest";
 import {
   createActionGate,
@@ -47,6 +49,8 @@ describe("readNumberParam", () => {
   });
 
   it("keeps partial parse behavior by default", () => {
+    // Some legacy channel tools pass identifiers with numeric prefixes; strict
+    // parsing is opt-in for new bounded fields.
     const params = { messageId: "42abc" };
     expect(readNumberParam(params, "messageId")).toBe(42);
   });
@@ -128,9 +132,42 @@ describe("readNumberParam", () => {
     ).toThrow("deleteDays must be an integer from 0 to 7");
   });
 
+  it("treats empty or whitespace-only strings as unset for optional positive integer params", () => {
+    // Tool-calling models routinely emit empty-string defaults for optional
+    // params (e.g. Telegram replyTo/threadId) they are not actually setting.
+    // An empty/whitespace string carries no value and must not throw.
+    expect(readPositiveIntegerParam({ replyTo: "" }, "replyTo")).toBeUndefined();
+    expect(readPositiveIntegerParam({ threadId: "   " }, "threadId")).toBeUndefined();
+    expect(readPositiveIntegerParam({ replyTo: "\t\n" }, "replyTo")).toBeUndefined();
+    // Genuinely invalid present values must still throw.
+    expect(() => readPositiveIntegerParam({ replyTo: "0" }, "replyTo")).toThrow(
+      "replyTo must be a positive integer",
+    );
+    expect(() => readPositiveIntegerParam({ replyTo: 0 }, "replyTo")).toThrow(
+      "replyTo must be a positive integer",
+    );
+    expect(() => readPositiveIntegerParam({ replyTo: "-3" }, "replyTo")).toThrow(
+      "replyTo must be a positive integer",
+    );
+  });
+
+  it("treats empty or whitespace-only strings as unset for optional non-negative integer params", () => {
+    expect(readNonNegativeIntegerParam({ position: "" }, "position")).toBeUndefined();
+    expect(readNonNegativeIntegerParam({ position: "  " }, "position")).toBeUndefined();
+    // A present, valid zero is still a real value.
+    expect(readNonNegativeIntegerParam({ position: "0" }, "position")).toBe(0);
+    expect(readNonNegativeIntegerParam({ position: 0 }, "position")).toBe(0);
+    // Genuinely invalid present values must still throw.
+    expect(() => readNonNegativeIntegerParam({ position: "4.5" }, "position")).toThrow(
+      "position must be a non-negative integer",
+    );
+  });
+
   it("throws for invalid present bounded finite number params", () => {
     expect(readFiniteNumberParam({ quality: "0.75" }, "quality")).toBe(0.75);
     expect(readFiniteNumberParam({ quality: null }, "quality")).toBeUndefined();
+    expect(readFiniteNumberParam({ quality: "" }, "quality")).toBeUndefined();
+    expect(readFiniteNumberParam({ quality: " \t\n" }, "quality")).toBeUndefined();
     expect(() => readFiniteNumberParam({ quality: "0.8jpg" }, "quality")).toThrow(
       "quality must be a finite number",
     );

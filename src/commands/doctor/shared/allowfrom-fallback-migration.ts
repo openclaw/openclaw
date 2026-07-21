@@ -1,3 +1,5 @@
+import { expectDefined } from "@openclaw/normalization-core";
+// Doctor migration from legacy DM allowFrom fallback to explicit groupAllowFrom lists.
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.js";
 import { normalizeAnyChannelId } from "../../../channels/registry.js";
@@ -73,6 +75,7 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
   const anyOf = Array.isArray(node.anyOf) ? node.anyOf : undefined;
   if (anyOf) {
+    // Union schemas allow writes when at least one branch accepts the target config path.
     return anyOf.some((branch) => schemaAllowsConfigPath(branch, path));
   }
   const oneOf = Array.isArray(node.oneOf) ? node.oneOf : undefined;
@@ -81,17 +84,15 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
   }
   const allOf = Array.isArray(node.allOf) ? node.allOf : undefined;
   if (allOf) {
+    // Intersections must keep every branch valid before doctor writes a migrated key.
     return allOf.every((branch) => schemaAllowsConfigPath(branch, path));
   }
 
-  const [segment, ...rest] = path;
+  const segment = expectDefined(path[0], "schema path segment");
+  const rest = path.slice(1);
   const properties = asObjectRecord(node.properties);
-  if (
-    segment !== ACCOUNT_SCHEMA_WILDCARD &&
-    properties &&
-    Object.prototype.hasOwnProperty.call(properties, segment)
-  ) {
-    return schemaAllowsConfigPath(properties[segment], rest);
+  if (segment !== ACCOUNT_SCHEMA_WILDCARD && properties && Object.hasOwn(properties, segment)) {
+    return schemaAllowsConfigPath(expectDefined(properties[segment], "schema property"), rest);
   }
 
   const additionalProperties = node.additionalProperties;
@@ -143,6 +144,7 @@ function migrateRecord(params: {
   return true;
 }
 
+/** Copy legacy allowFrom entries into groupAllowFrom where channel metadata permits fallback. */
 export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

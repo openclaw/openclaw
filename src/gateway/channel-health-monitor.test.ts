@@ -1,8 +1,13 @@
+/**
+ * Channel health monitor regression tests.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelId } from "../channels/plugins/types.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelManager, ChannelRuntimeSnapshot } from "./server-channels.js";
+import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import type { ChannelManager } from "./server-channels.js";
 
 function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
   return {
@@ -10,6 +15,8 @@ function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelM
     startChannels: vi.fn(async () => {}),
     startChannel: vi.fn(async () => {}),
     stopChannel: vi.fn(async () => {}),
+    setAutostartSuppression: vi.fn(),
+    getAutostartSuppression: vi.fn(() => null),
     markChannelLoggedOut: vi.fn(),
     isHealthMonitorEnabled: vi.fn(() => true),
     isManuallyStopped: vi.fn(() => false),
@@ -56,8 +63,8 @@ function startDefaultMonitor(
   return startChannelHealthMonitor({
     channelManager: manager,
     checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
-    startupGraceMs: 0,
     ...overrides,
+    timing: { monitorStartupGraceMs: 0, ...overrides.timing },
   });
 }
 
@@ -66,7 +73,7 @@ async function startAndRunCheck(
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
-  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? overrides.startupGraceMs ?? 0;
+  const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
   const checkIntervalMs = overrides.checkIntervalMs ?? DEFAULT_CHECK_INTERVAL_MS;
   await vi.advanceTimersByTimeAsync(startupGraceMs + checkIntervalMs + 1);
   return monitor;
@@ -93,6 +100,20 @@ function runningConnectedSlackAccount(
   };
 }
 
+function disconnectedAccount(
+  lastStartAt: number,
+  overrides: Partial<ChannelAccountSnapshot> = {},
+): Partial<ChannelAccountSnapshot> {
+  return {
+    running: true,
+    connected: false,
+    enabled: true,
+    configured: true,
+    lastStartAt,
+    ...overrides,
+  };
+}
+
 function createSlackSnapshotManager(
   account: Partial<ChannelAccountSnapshot>,
   overrides?: Partial<ChannelManager>,
@@ -112,11 +133,7 @@ function createBusyDisconnectedManager(lastRunActivityAt: number): ChannelManage
   return createSnapshotManager({
     discord: {
       default: {
-        running: true,
-        connected: false,
-        enabled: true,
-        configured: true,
-        lastStartAt: now - 300_000,
+        ...disconnectedAccount(now - 300_000),
         activeRuns: 1,
         busy: true,
         lastRunActivityAt,
@@ -149,6 +166,10 @@ async function expectNoStart(manager: ChannelManager) {
   monitor.stop();
 }
 
+async function advanceHealthCheck() {
+  await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+}
+
 describe("channel-health-monitor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -169,9 +190,19 @@ describe("channel-health-monitor", () => {
     expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
   });
 
+  it("normalizes oversized check intervals before arming timers", () => {
+    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+    const monitor = startDefaultMonitor(createMockChannelManager(), {
+      checkIntervalMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    monitor.stop();
+  });
+
   it("does not run before the grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = startDefaultMonitor(manager, { startupGraceMs: 60_000 });
+    const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
     await vi.advanceTimersByTimeAsync(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
@@ -179,7 +210,9 @@ describe("channel-health-monitor", () => {
 
   it("runs health check after grace period", async () => {
     const manager = createMockChannelManager();
-    const monitor = await startAndRunCheck(manager, { startupGraceMs: 1_000 });
+    const monitor = await startAndRunCheck(manager, {
+      timing: { monitorStartupGraceMs: 1_000 },
+    });
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
     monitor.stop();
   });
@@ -223,6 +256,38 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("treats crash-loop suppressed accounts as expected stopped", async () => {
+    let suppressed = true;
+    const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: managedStoppedAccount("safe mode"),
+        },
+      },
+      {
+        getAutostartSuppression: vi.fn(() => (suppressed ? suppression : null)),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, {
+      checkIntervalMs: 100,
+      cooldownCycles: 0,
+      maxRestartsPerHour: 1,
+    });
+
+    await vi.advanceTimersByTimeAsync(350);
+
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+
+    suppressed = false;
+    await vi.advanceTimersByTimeAsync(101);
+
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    monitor.stop();
+  });
+
   it("skips disabled channels", async () => {
     const manager = createSnapshotManager({
       imessage: {
@@ -244,6 +309,36 @@ describe("channel-health-monitor", () => {
       },
     });
     await expectNoStart(manager);
+  });
+
+  it("does not restart a channel with terminalDisconnect set", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: true,
+        },
+      },
+    });
+    await expectNoRestart(manager);
+  });
+
+  it("restarts a stopped channel without terminalDisconnect", async () => {
+    const manager = createSnapshotManager({
+      whatsapp: {
+        default: {
+          running: false,
+          enabled: true,
+          configured: true,
+          terminalDisconnect: false,
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.startChannel).toHaveBeenCalledWith("whatsapp", "default");
+    monitor.stop();
   });
 
   it("skips manually stopped channels", async () => {
@@ -275,20 +370,8 @@ describe("channel-health-monitor", () => {
     const manager = createSnapshotManager(
       {
         discord: {
-          default: {
-            running: true,
-            connected: false,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - 300_000,
-          },
-          quiet: {
-            running: true,
-            connected: false,
-            enabled: true,
-            configured: true,
-            lastStartAt: now - 300_000,
-          },
+          default: disconnectedAccount(now - 300_000),
+          quiet: disconnectedAccount(now - 300_000),
         },
       },
       {
@@ -309,14 +392,9 @@ describe("channel-health-monitor", () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       whatsapp: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
+        default: disconnectedAccount(now - 300_000, {
           linked: true,
-          lastStartAt: now - 300_000,
-        },
+        }),
       },
     });
     const monitor = await startAndRunCheck(manager);
@@ -330,16 +408,11 @@ describe("channel-health-monitor", () => {
     const now = Date.now();
     const manager = createSnapshotManager({
       discord: {
-        default: {
-          running: true,
-          connected: false,
-          enabled: true,
-          configured: true,
-          lastStartAt: now - 300_000,
+        default: disconnectedAccount(now - 300_000, {
           activeRuns: 2,
           busy: true,
           lastRunActivityAt: now - 30_000,
-        },
+        }),
       },
     });
     await expectNoRestart(manager);
@@ -386,7 +459,9 @@ describe("channel-health-monitor", () => {
         },
       },
     });
-    const monitor = await startAndRunCheck(manager, { channelStartupGraceMs: 60_000 });
+    const monitor = await startAndRunCheck(manager, {
+      timing: { channelConnectGraceMs: 60_000 },
+    });
     expect(manager.stopChannel).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
@@ -441,11 +516,39 @@ describe("channel-health-monitor", () => {
     });
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    await advanceHealthCheck();
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+    await advanceHealthCheck();
+    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    monitor.stop();
+  });
+
+  it("continues pending recovery on the next check without waiting for cooldown", async () => {
+    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      {
+        discord: {
+          default: account,
+        },
+      },
+      {
+        startChannel: vi.fn(async () => {
+          account.running = false;
+          account.connected = false;
+          account.restartPending = true;
+          account.reconnectAttempts = 0;
+        }),
+      },
+    );
+    const monitor = await startAndRunCheck(manager);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+
+    await advanceHealthCheck();
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
     monitor.stop();
   });
@@ -518,6 +621,130 @@ describe("channel-health-monitor", () => {
     releaseStart?.();
     await Promise.resolve();
     monitor.stop();
+  });
+
+  it.each(["manual stop", "abort signal"] as const)(
+    "does not resume an in-flight restart after %s",
+    async (stopMode) => {
+      let releaseStop: (() => void) | undefined;
+      const stopGate = new Promise<void>((resolve) => {
+        releaseStop = resolve;
+      });
+      const abort = new AbortController();
+      const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      });
+      const monitor = startDefaultMonitor(manager, {
+        abortSignal: abort.signal,
+        checkIntervalMs: 100,
+        cooldownCycles: 0,
+      });
+
+      await vi.advanceTimersByTimeAsync(101);
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+      if (stopMode === "manual stop") {
+        monitor.shutdown();
+      } else {
+        abort.abort();
+      }
+      releaseStop?.();
+      await monitor.waitForIdle();
+
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      monitor.stop();
+    },
+  );
+
+  it("does not process later accounts after a retired monitor's stop rejects", async () => {
+    let rejectStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((_resolve, reject) => {
+      rejectStop = () => reject(new Error("stop failed"));
+    });
+    const staleAccount = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      { slack: { first: staleAccount, second: staleAccount } },
+      {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+    monitor.shutdown();
+    rejectStop?.();
+    await monitor.waitForIdle();
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { label: "replacement", shutdownAfterRetire: false, expectedStarts: 1 },
+    { label: "replacement followed by shutdown", shutdownAfterRetire: true, expectedStarts: 0 },
+  ])("coordinates the in-flight restart during $label", async (testCase) => {
+    let releaseStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const staleAccount = disconnectedAccount(Date.now() - 300_000);
+    const manager = createSnapshotManager(
+      { slack: { first: staleAccount, second: staleAccount } },
+      {
+        stopChannel: vi.fn(async () => {
+          await stopGate;
+        }),
+      },
+    );
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+
+    monitor.stop();
+    const idle = monitor.waitForIdle();
+    if (testCase.shutdownAfterRetire) {
+      monitor.shutdown();
+    }
+    releaseStop?.();
+    await idle;
+
+    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    expect(manager.resetRestartAttempts).toHaveBeenCalledTimes(testCase.expectedStarts);
+    expect(manager.startChannel).toHaveBeenCalledTimes(testCase.expectedStarts);
+  });
+
+  it("bounds replacement handoff and abandons a late restart", async () => {
+    let releaseStop: (() => void) | undefined;
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
+      stopChannel: vi.fn(async () => {
+        await stopGate;
+      }),
+    });
+    const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
+
+    await vi.advanceTimersByTimeAsync(101);
+    monitor.stop();
+    const handoff = monitor.waitForIdle();
+    await vi.advanceTimersByTimeAsync(5_001);
+    await handoff;
+
+    releaseStop?.();
+    await monitor.waitForIdle();
+
+    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
   });
 
   it("stops cleanly", async () => {
@@ -623,7 +850,7 @@ describe("channel-health-monitor", () => {
         }),
       );
       const monitor = await startAndRunCheck(manager, {
-        staleEventThresholdMs: customThreshold,
+        timing: { staleEventThresholdMs: customThreshold },
       });
       expect(manager.stopChannel).toHaveBeenCalledWith("slack", "default", { manual: false });
       expect(manager.startChannel).toHaveBeenCalledWith("slack", "default");

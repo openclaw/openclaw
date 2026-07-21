@@ -1,8 +1,10 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+// OpenClaw test instance helper spawns isolated OpenClaw processes.
+import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import type { Readable } from "node:stream";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -10,11 +12,12 @@ import {
 import {
   createOpenClawTestState,
   type OpenClawTestState,
-  type OpenClawTestStateOptions,
 } from "../../src/test-utils/openclaw-test-state.js";
 import { sleep } from "../../src/utils.js";
 
-export type OpenClawTestInstanceOptions = {
+type OpenClawTestStateOptions = NonNullable<Parameters<typeof createOpenClawTestState>[0]>;
+
+type OpenClawTestInstanceOptions = {
   name: string;
   cwd?: string;
   port?: number;
@@ -28,12 +31,14 @@ export type OpenClawTestInstanceOptions = {
   stopTimeoutMs?: number;
 };
 
-export type OpenClawTestInstanceCommandResult = {
+type OpenClawTestInstanceCommandResult = {
   code: number | null;
   signal: NodeJS.Signals | null;
   stdout: string;
   stderr: string;
 };
+
+type OpenClawTestProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 export type OpenClawTestInstance = {
   name: string;
@@ -47,7 +52,7 @@ export type OpenClawTestInstance = {
   state: OpenClawTestState;
   stdout: string[];
   stderr: string[];
-  child?: ChildProcessWithoutNullStreams;
+  child?: OpenClawTestProcess;
   env: NodeJS.ProcessEnv;
   entrypoint: () => Promise<string[]>;
   cli: (
@@ -71,6 +76,8 @@ type BoundedStringLog = string[] & {
   byteLength?: number;
   truncated?: boolean;
 };
+
+type OpenClawTestChildProcess = Pick<OpenClawTestProcess, "kill" | "pid">;
 
 function createBoundedStringLog(): string[] {
   const log = [] as BoundedStringLog;
@@ -151,6 +158,7 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
     cwd,
     env: { ...process.env, VITEST: "1" },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: shouldUseOpenClawTestProcessGroup(),
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
@@ -166,7 +174,7 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
   ]);
 
   if (completed === null) {
-    child.kill("SIGKILL");
+    signalOpenClawTestProcess(child, "SIGKILL");
     throw new Error(`timeout preparing gateway entrypoint\n${formatLogs(stdout, stderr)}`);
   }
   if (completed.code !== 0) {
@@ -191,18 +199,22 @@ async function resolveGatewayEntrypoint(cwd: string): Promise<string[]> {
 
 const getFreePort = async () => {
   const srv = net.createServer();
-  await new Promise<void>((resolve) => srv.listen(0, "127.0.0.1", resolve));
+  await new Promise<void>((resolve) => {
+    srv.listen(0, "127.0.0.1", resolve);
+  });
   const addr = srv.address();
   if (!addr || typeof addr === "string") {
     srv.close();
     throw new Error("failed to bind ephemeral port");
   }
-  await new Promise<void>((resolve) => srv.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    srv.close(() => resolve());
+  });
   return addr.port;
 };
 
 async function waitForPortOpen(
-  proc: ChildProcessWithoutNullStreams,
+  proc: Pick<OpenClawTestProcess, "exitCode" | "signalCode">,
   chunksOut: string[],
   chunksErr: string[],
   port: number,
@@ -242,14 +254,12 @@ async function waitForPortOpen(
   );
 }
 
-async function waitForGatewayExit(
-  child: ChildProcessWithoutNullStreams,
-  timeoutMs: number,
-): Promise<boolean> {
+async function waitForGatewayExit(child: OpenClawTestProcess, timeoutMs: number): Promise<boolean> {
   return await Promise.race([
     new Promise<boolean>((resolve) => {
       if (child.exitCode !== null || child.signalCode !== null) {
-        return resolve(true);
+        resolve(true);
+        return;
       }
       child.once("exit", () => resolve(true));
     }),
@@ -257,7 +267,7 @@ async function waitForGatewayExit(
   ]);
 }
 
-function hasChildExited(child: Pick<ChildProcessWithoutNullStreams, "exitCode" | "signalCode">) {
+function hasChildExited(child: Pick<OpenClawTestProcess, "exitCode" | "signalCode">) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
@@ -345,7 +355,7 @@ export async function createOpenClawTestInstance(
     stateEnv: state.env,
     extraEnv: options.env ?? {},
   });
-  let child: ChildProcessWithoutNullStreams | undefined;
+  let child: OpenClawTestProcess | undefined;
   let cleaned = false;
 
   const instance: OpenClawTestInstance = {
@@ -395,6 +405,7 @@ export async function createOpenClawTestInstance(
           cwd,
           env,
           stdio: ["ignore", "pipe", "pipe"],
+          detached: shouldUseOpenClawTestProcessGroup(),
         },
       );
 
@@ -422,7 +433,7 @@ export async function createOpenClawTestInstance(
       }
       if (!hasChildExited(child) && !child.killed) {
         try {
-          child.kill("SIGTERM");
+          signalOpenClawTestProcess(child, "SIGTERM");
         } catch {
           // ignore
         }
@@ -433,7 +444,7 @@ export async function createOpenClawTestInstance(
       );
       if (!exited && !hasChildExited(child) && !child.killed) {
         try {
-          child.kill("SIGKILL");
+          signalOpenClawTestProcess(child, "SIGKILL");
         } catch {
           // ignore
         }
@@ -473,6 +484,7 @@ async function runCommand(params: {
     cwd: params.cwd,
     env: params.env,
     stdio: ["ignore", "pipe", "pipe"],
+    detached: shouldUseOpenClawTestProcessGroup(),
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
@@ -487,7 +499,7 @@ async function runCommand(params: {
     sleep(params.timeoutMs).then(() => null),
   ]);
   if (completed === null) {
-    child.kill("SIGKILL");
+    signalOpenClawTestProcess(child, "SIGKILL");
     await waitForGatewayExit(child, GATEWAY_STOP_TIMEOUT_MS);
     throw new Error(
       `command timed out after ${params.timeoutMs}ms: ${params.args.join(" ")}\n${formatLogs(stdout, stderr)}`,
@@ -500,10 +512,32 @@ async function runCommand(params: {
   };
 }
 
+function shouldUseOpenClawTestProcessGroup(): boolean {
+  return process.platform !== "win32";
+}
+
+function signalOpenClawTestProcess(
+  child: OpenClawTestChildProcess,
+  signal: NodeJS.Signals,
+  killProcess: (pid: number, signal: NodeJS.Signals) => boolean = (pid, nextSignal) =>
+    process.kill(pid, nextSignal),
+): void {
+  if (shouldUseOpenClawTestProcessGroup() && typeof child.pid === "number") {
+    try {
+      killProcess(-child.pid, signal);
+      return;
+    } catch {
+      // Fall back to the direct child if the process group already exited.
+    }
+  }
+  child.kill(signal);
+}
+
 export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
   hasChildExited,
+  signalOpenClawTestProcess,
   waitForPortOpen,
 };

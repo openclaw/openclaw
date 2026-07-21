@@ -1,3 +1,9 @@
+/**
+ * OpenAI-completions compatibility defaults.
+ *
+ * Provider transports use these helpers to derive OpenAI-compatible request
+ * behavior from endpoint attribution without scattering provider-specific flags.
+ */
 import type { Model } from "../llm/types.js";
 import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
 import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
@@ -33,7 +39,8 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
-export function resolveOpenAICompletionsCompatDefaults(
+/** Resolves default request flags for an OpenAI-compatible completions endpoint. */
+function resolveOpenAICompletionsCompatDefaults(
   input: OpenAICompletionsCompatDefaultsInput,
 ): OpenAICompletionsCompatDefaults {
   const {
@@ -85,6 +92,7 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
     knownProviderFamily === "mistral" ||
+    isZai ||
     isTogether ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   return {
@@ -136,6 +144,7 @@ function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
   return resolveOpenAICompletionsCompatDefaults(input);
 }
 
+/** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;
@@ -160,4 +169,10 @@ export function detectOpenAICompletionsCompat(
       ...capabilities,
     }),
   };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.openAICompletionsCompatTestApi")
+  ] = { resolveOpenAICompletionsCompatDefaults };
 }

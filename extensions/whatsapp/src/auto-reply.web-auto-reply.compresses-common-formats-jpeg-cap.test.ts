@@ -1,15 +1,17 @@
+// Whatsapp tests cover auto reply.web auto reply.compresses common formats jpeg cap plugin behavior.
 import fs from "node:fs/promises";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
-  createAcceptedWhatsAppSendResult,
+  createWebInboundDeliverySpies,
   installWebAutoReplyTestHomeHooks,
   installWebAutoReplyUnitTestHooks,
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./auto-reply.test-harness.js";
-import type { WebInboundMessage } from "./inbound.js";
+import type { WebInboundCallbackMessage, WebInboundMessageInput } from "./inbound.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 installWebAutoReplyTestHomeHooks();
 
@@ -18,6 +20,10 @@ let monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChanne
 describe("web auto-reply", () => {
   installWebAutoReplyUnitTestHooks({ pinDns: true });
   type ListenerFactory = NonNullable<Parameters<typeof monitorWebChannel>[1]>;
+  type WebInboundPlatform = WebInboundCallbackMessage["platform"];
+  type ReplyMock = ReturnType<typeof vi.fn<WebInboundPlatform["reply"]>>;
+  type SendMediaMock = ReturnType<typeof vi.fn<WebInboundPlatform["sendMedia"]>>;
+  type SendComposingMock = ReturnType<typeof vi.fn<WebInboundPlatform["sendComposing"]>>;
   const SMALL_MEDIA_CAP_MB = 0.1;
   const SMALL_MEDIA_CAP_BYTES = Math.floor(SMALL_MEDIA_CAP_MB * 1024 * 1024);
 
@@ -27,15 +33,19 @@ describe("web auto-reply", () => {
 
   async function setupSingleInboundMessage(params: {
     resolverValue: { text: string; mediaUrl: string };
-    sendMedia: ReturnType<typeof vi.fn>;
-    reply?: ReturnType<typeof vi.fn>;
+    sendMedia?: SendMediaMock;
+    reply?: ReplyMock;
   }) {
-    const reply =
-      params.reply ?? vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1"));
-    const sendComposing = vi.fn(async () => undefined);
+    const spies = createWebInboundDeliverySpies() as {
+      sendMedia: SendMediaMock;
+      reply: ReplyMock;
+      sendComposing: SendComposingMock;
+    };
+    const reply = params.reply ?? spies.reply;
+    const sendMedia = params.sendMedia ?? spies.sendMedia;
     const resolver = vi.fn().mockResolvedValue(params.resolverValue);
 
-    let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
+    let capturedOnMessage: ((msg: WebInboundMessageInput) => Promise<void>) | undefined;
     const listenerFactory: ListenerFactory = async ({ onMessage }) => {
       capturedOnMessage = onMessage;
       return createMockWebListener();
@@ -49,26 +59,47 @@ describe("web auto-reply", () => {
 
     return {
       reply,
+      sendMedia,
       dispatch: async (
         id = "msg1",
-        overrides?: Partial<
-          Pick<WebInboundMessage, "from" | "conversationId" | "to" | "accountId" | "chatId">
-        >,
+        overrides?: Partial<{
+          from: string;
+          conversationId: string;
+          accountId: string;
+          recipientJid: string;
+          chatJid: string;
+        }>,
       ) => {
-        await onMessage({
-          body: "hello",
-          from: "+1",
-          conversationId: "+1",
-          to: "+2",
-          accountId: "default",
-          chatType: "direct",
-          chatId: "+1",
-          ...overrides,
-          id,
-          sendComposing,
-          reply,
-          sendMedia: params.sendMedia,
-        } as WebInboundMessage);
+        const from = overrides?.from ?? "+1";
+        const conversationId = overrides?.conversationId ?? from;
+        const chatJid = overrides?.chatJid ?? from;
+        await onMessage(
+          createTestWebInboundMessage({
+            event: {
+              id,
+            },
+            payload: {
+              body: "hello",
+            },
+            platform: {
+              chatJid,
+              recipientJid: overrides?.recipientJid ?? "+2",
+              sendComposing: spies.sendComposing,
+              reply,
+              sendMedia,
+            },
+            admission: {
+              accountId: overrides?.accountId ?? "default",
+              conversation: {
+                kind: "direct",
+                id: conversationId,
+              },
+              sender: {
+                id: from,
+              },
+            },
+          }),
+        );
       },
     };
   }
@@ -114,15 +145,21 @@ describe("web auto-reply", () => {
     }
   }
 
-  function mockFetchMediaBuffer(buffer: Buffer, mime: string) {
-    return vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      body: true,
+  function fetchResponse(body: Buffer | null, mime: string, status = 200): Response {
+    return {
+      ok: status < 400,
+      body: body ? true : null,
       arrayBuffer: async () =>
-        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+        body
+          ? body.buffer.slice(body.byteOffset, body.byteOffset + body.length)
+          : new ArrayBuffer(0),
       headers: new Headers({ "content-type": mime }),
-      status: 200,
-    } as unknown as Response);
+      status,
+    } as unknown as Response;
+  }
+
+  function mockFetchMediaBuffer(buffer: Buffer, mime: string) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue(fetchResponse(buffer, mime));
   }
 
   async function expectCompressedImageWithinCap(params: {
@@ -133,10 +170,8 @@ describe("web auto-reply", () => {
     mediaMaxMb?: number;
   }) {
     await withMediaCap(params.mediaMaxMb ?? 1, async () => {
-      const sendMedia = vi.fn();
-      const { reply, dispatch } = await setupSingleInboundMessage({
+      const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
         resolverValue: { text: "hi", mediaUrl: params.mediaUrl },
-        sendMedia,
       });
       const fetchMock = mockFetchMediaBuffer(params.image, params.mime);
 
@@ -172,13 +207,11 @@ describe("web auto-reply", () => {
     ] as const;
 
     await withMediaCap(1, async () => {
-      const sendMedia = vi.fn();
-      const { reply, dispatch } = await setupSingleInboundMessage({
+      const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
         resolverValue: {
           text: "hi",
           mediaUrl: "https://example.com/big.image",
         },
-        sendMedia,
       });
       let fetchIndex = 0;
 
@@ -186,14 +219,7 @@ describe("web auto-reply", () => {
         const matched = formats[Math.min(fetchIndex, formats.length - 1)] ?? formats[0];
         fetchIndex += 1;
         const { image, mime } = matched;
-        return {
-          ok: true,
-          body: true,
-          arrayBuffer: async () =>
-            image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
-          headers: new Headers({ "content-type": mime }),
-          status: 200,
-        } as unknown as Response;
+        return fetchResponse(image, mime);
       });
 
       try {
@@ -202,7 +228,7 @@ describe("web auto-reply", () => {
           await dispatch(`msg-${fmt.name}-${index}`, {
             from: `+1${index}`,
             conversationId: `conv-${index}`,
-            chatId: `conv-${index}`,
+            chatJid: `conv-${index}`,
           });
           expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
           const payload = imagePayloadAt(sendMedia, beforeCalls);
@@ -249,10 +275,8 @@ describe("web auto-reply", () => {
     }));
 
     try {
-      const sendMedia = vi.fn();
-      const { reply, dispatch } = await setupSingleInboundMessage({
+      const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
         resolverValue: { text: "hi", mediaUrl: "https://example.com/account-big.png" },
-        sendMedia,
       });
       const fetchMock = mockFetchMediaBuffer(bigPng, "image/png");
 
@@ -268,10 +292,8 @@ describe("web auto-reply", () => {
     }
   });
   it("sends PDF media as a document", async () => {
-    const sendMedia = vi.fn();
-    const { reply, dispatch } = await setupSingleInboundMessage({
+    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
       resolverValue: { text: "hi", mediaUrl: "https://example.com/file.pdf" },
-      sendMedia,
     });
 
     const fetchMock = mockFetchMediaBuffer(Buffer.from("%PDF-1.4"), "application/pdf");
@@ -293,7 +315,7 @@ describe("web auto-reply", () => {
   });
 
   it("falls back to text when media send fails", async () => {
-    const sendMedia = vi.fn().mockRejectedValue(new Error("boom"));
+    const sendMedia = vi.fn<WebInboundPlatform["sendMedia"]>().mockRejectedValue(new Error("boom"));
     const { reply, dispatch } = await setupSingleInboundMessage({
       resolverValue: {
         text: "hi",
@@ -303,14 +325,7 @@ describe("web auto-reply", () => {
     });
 
     const smallPng = createSolidPngBuffer(64, 64, { r: 0, g: 255, b: 0 });
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
-      headers: new Headers({ "content-type": "image/png" }),
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = mockFetchMediaBuffer(smallPng, "image/png");
 
     await dispatch("msg1");
 
@@ -321,22 +336,16 @@ describe("web auto-reply", () => {
     fetchMock.mockRestore();
   });
   it("returns a warning when remote media fetch 404s", async () => {
-    const sendMedia = vi.fn();
-    const { reply, dispatch } = await setupSingleInboundMessage({
+    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
       resolverValue: {
         text: "caption",
         mediaUrl: "https://example.com/missing.jpg",
       },
-      sendMedia,
     });
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: false,
-      status: 404,
-      body: null,
-      arrayBuffer: async () => new ArrayBuffer(0),
-      headers: new Headers({ "content-type": "text/plain" }),
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(fetchResponse(null, "text/plain", 404));
 
     await dispatch("msg1");
 
@@ -349,24 +358,16 @@ describe("web auto-reply", () => {
     fetchMock.mockRestore();
   });
   it("sends media with a caption when delivery succeeds", async () => {
-    const sendMedia = vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1"));
-    const { reply, dispatch } = await setupSingleInboundMessage({
+    const { reply, dispatch, sendMedia } = await setupSingleInboundMessage({
       resolverValue: {
         text: "hi",
         mediaUrl: "https://example.com/img.png",
       },
-      sendMedia,
     });
 
     const png = createSolidPngBuffer(64, 64, { r: 0, g: 0, b: 255 });
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
-      headers: new Headers({ "content-type": "image/png" }),
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = mockFetchMediaBuffer(png, "image/png");
 
     await dispatch("msg1");
 

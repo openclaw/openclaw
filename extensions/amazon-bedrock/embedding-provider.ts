@@ -1,3 +1,7 @@
+/**
+ * Amazon Bedrock embedding provider runtime. It normalizes model-specific
+ * request/response shapes across Titan, Cohere, Nova, and TwelveLabs models.
+ */
 import {
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
@@ -7,6 +11,7 @@ import {
 import {
   asOptionalRecord as asRecord,
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
@@ -20,6 +25,7 @@ type BedrockEmbeddingClient = {
   dimensions?: number;
 };
 
+/** Default Bedrock embedding model used when no explicit model is configured. */
 export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 
 /** Request/response format family — each has a different API shape. */
@@ -64,12 +70,18 @@ const MODELS: Record<string, ModelSpec> = {
   "twelvelabs.marengo-embed-3-0-v1:0": { maxTokens: 512, dims: 512, family: "twelvelabs" },
 };
 
+/** Strip AWS inference profile prefix (us., eu., ap., apac., au., jp., global.) from model ID. */
+function stripInferenceProfilePrefix(modelId: string): string {
+  return modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+}
+
 /** Resolve spec, stripping throughput suffixes like `:2:8k` or `:0:512`. */
 function resolveSpec(modelId: string): ModelSpec | undefined {
-  if (MODELS[modelId]) {
-    return MODELS[modelId];
+  const bare = stripInferenceProfilePrefix(modelId);
+  if (MODELS[bare]) {
+    return MODELS[bare];
   }
-  const parts = modelId.split(":");
+  const parts = bare.split(":");
   for (let i = parts.length - 1; i >= 1; i--) {
     const spec = MODELS[parts.slice(0, i).join(":")];
     if (spec) {
@@ -81,7 +93,7 @@ function resolveSpec(modelId: string): ModelSpec | undefined {
 
 /** Infer family from model ID prefix when not in catalog. */
 function inferFamily(modelId: string): Family {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
+  const id = normalizeLowercaseStringOrEmpty(stripInferenceProfilePrefix(modelId));
   if (id.startsWith("amazon.titan-embed-text-v2")) {
     return "titan-v2";
   }
@@ -107,38 +119,18 @@ function inferFamily(modelId: string): Family {
 // AWS SDK lazy loader
 // ---------------------------------------------------------------------------
 
-type SdkClient = import("@aws-sdk/client-bedrock-runtime").BedrockRuntimeClient;
-type SdkCommand = import("@aws-sdk/client-bedrock-runtime").InvokeModelCommand;
+type AwsSdk = typeof import("@aws-sdk/client-bedrock-runtime");
+type AwsCredentialProvider = typeof import("@aws-sdk/credential-provider-node").defaultProvider;
+type AwsCredentialProviderLoader = () => Promise<AwsCredentialProvider | null>;
 
-interface AwsSdk {
-  BedrockRuntimeClient: new (config: { region: string }) => SdkClient;
-  InvokeModelCommand: new (input: {
-    modelId: string;
-    body: string;
-    contentType: string;
-    accept: string;
-  }) => SdkCommand;
-}
-
-interface AwsCredentialProviderSdk {
-  defaultProvider: (init?: { timeout?: number; maxRetries?: number }) => () => Promise<{
-    accessKeyId?: string;
-  }>;
-}
-
-type AwsCredentialProviderLoader = () => Promise<AwsCredentialProviderSdk | null>;
-
-let sdkCache: AwsSdk | null = null;
-let credentialProviderSdkCache: AwsCredentialProviderSdk | null | undefined;
+let sdkPromise: Promise<AwsSdk> | null = null;
+let credentialProviderPromise: Promise<AwsCredentialProvider | null> | null = null;
 
 async function loadSdk(): Promise<AwsSdk> {
-  if (sdkCache) {
-    return sdkCache;
-  }
   try {
-    sdkCache = (await import("@aws-sdk/client-bedrock-runtime")) as unknown as AwsSdk;
-    return sdkCache;
+    return await (sdkPromise ??= import("@aws-sdk/client-bedrock-runtime"));
   } catch {
+    sdkPromise = null;
     throw new Error(
       "No API key found for provider bedrock: @aws-sdk/client-bedrock-runtime is not installed. " +
         "Install it with: npm install @aws-sdk/client-bedrock-runtime",
@@ -146,17 +138,10 @@ async function loadSdk(): Promise<AwsSdk> {
   }
 }
 
-async function loadCredentialProviderSdk(): Promise<AwsCredentialProviderSdk | null> {
-  if (credentialProviderSdkCache !== undefined) {
-    return credentialProviderSdkCache;
-  }
-  try {
-    credentialProviderSdkCache =
-      (await import("@aws-sdk/credential-provider-node")) as unknown as AwsCredentialProviderSdk;
-  } catch {
-    credentialProviderSdkCache = null;
-  }
-  return credentialProviderSdkCache;
+function loadDefaultCredentialProvider(): Promise<AwsCredentialProvider | null> {
+  return (credentialProviderPromise ??= import("@aws-sdk/credential-provider-node")
+    .then(({ defaultProvider }) => defaultProvider)
+    .catch(() => null));
 }
 
 // ---------------------------------------------------------------------------
@@ -304,10 +289,15 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-export const testing = {
+const testing = {
   parseCohereBatch,
   parseSingle,
+  stripInferenceProfilePrefix,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockEmbeddingTestApi"), testing);
+}
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -365,29 +355,29 @@ export async function createBedrockEmbeddingProvider(
 
   const embedQuery = async (
     text: string,
-    options?: { signal?: AbortSignal },
+    optionsValue?: { signal?: AbortSignal },
   ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query", options?.signal))[0] ?? [];
+      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
     }
-    return embedSingle(text, options?.signal);
+    return embedSingle(text, optionsValue?.signal);
   };
 
   const embedBatch = async (
     texts: string[],
-    options?: { signal?: AbortSignal },
+    optionsLocal?: { signal?: AbortSignal },
   ): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
     if (isCohere) {
-      return embedCohere(texts, "search_document", options?.signal);
+      return embedCohere(texts, "search_document", optionsLocal?.signal);
     }
     return Promise.all(
-      texts.map((t) => (t.trim() ? embedSingle(t, options?.signal) : Promise.resolve([]))),
+      texts.map((t) => (t.trim() ? embedSingle(t, optionsLocal?.signal) : Promise.resolve([]))),
     );
   };
 
@@ -417,8 +407,8 @@ function resolveBedrockEmbeddingClient(
   const region =
     regionFromUrl(options.remote?.baseUrl) ??
     regionFromUrl(providerConfig?.baseUrl) ??
-    process.env.AWS_REGION ??
-    process.env.AWS_DEFAULT_REGION ??
+    normalizeOptionalString(process.env.AWS_REGION) ??
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION) ??
     "us-east-1";
 
   let dimensions: number | undefined;
@@ -442,7 +432,7 @@ function resolveBedrockEmbeddingClient(
 
 export async function hasAwsCredentials(
   env: NodeJS.ProcessEnv = process.env,
-  loadCredentialProvider: AwsCredentialProviderLoader = loadCredentialProviderSdk,
+  loadCredentialProvider: AwsCredentialProviderLoader = loadDefaultCredentialProvider,
 ): Promise<boolean> {
   if (env.AWS_ACCESS_KEY_ID?.trim() && env.AWS_SECRET_ACCESS_KEY?.trim()) {
     return true;
@@ -450,12 +440,12 @@ export async function hasAwsCredentials(
   if (env.AWS_BEARER_TOKEN_BEDROCK?.trim()) {
     return true;
   }
-  const credentialProviderSdk = await loadCredentialProvider();
-  if (!credentialProviderSdk) {
+  const defaultProvider = await loadCredentialProvider();
+  if (!defaultProvider) {
     return false;
   }
   try {
-    const credentials = await credentialProviderSdk.defaultProvider({
+    const credentials = await defaultProvider({
       timeout: 1000,
       maxRetries: 0,
     })();
@@ -464,4 +454,3 @@ export async function hasAwsCredentials(
     return false;
   }
 }
-export { testing as __testing };

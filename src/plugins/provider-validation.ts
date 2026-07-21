@@ -1,10 +1,9 @@
+/** Validates and normalizes provider plugin definitions before registry registration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
-
-const warnedDeprecatedDiscoveryProviders = new Set<string>();
 
 type ProviderWizardSetup = NonNullable<NonNullable<ProviderPlugin["wizard"]>["setup"]>;
 type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"]>["modelPicker"]>;
@@ -309,6 +308,8 @@ function normalizeProviderWizard(params: {
   };
 }
 
+/** Normalizes provider plugin metadata and emits diagnostics for invalid public fields. */
+/** Returns a normalized provider plugin plus validation diagnostics for registry insertion. */
 export function normalizeRegisteredProvider(params: {
   pluginId: string;
   source: string;
@@ -350,36 +351,12 @@ export function normalizeRegisteredProvider(params: {
     pushDiagnostic: params.pushDiagnostic,
   });
   const catalog = params.provider.catalog;
-  const discovery = params.provider.discovery;
-  if (catalog && discovery) {
-    pushPluginValidationDiagnostic({
-      level: "warn",
-      pluginId: params.pluginId,
-      source: params.source,
-      message: `provider "${id}" registered both catalog and discovery; using catalog`,
-      pushDiagnostic: params.pushDiagnostic,
-    });
-  }
-  if (!catalog && discovery) {
-    const warningKey = `${params.pluginId}:${id}:discovery`;
-    if (!warnedDeprecatedDiscoveryProviders.has(warningKey)) {
-      warnedDeprecatedDiscoveryProviders.add(warningKey);
-      pushPluginValidationDiagnostic({
-        level: "warn",
-        pluginId: params.pluginId,
-        source: params.source,
-        message: `provider "${id}" uses deprecated discovery; use catalog`,
-        pushDiagnostic: params.pushDiagnostic,
-      });
-    }
-  }
   const {
     wizard: _ignoredWizard,
     docsPath: _ignoredDocsPath,
     aliases: _ignoredAliases,
     envVars: _ignoredEnvVars,
     catalog: _ignoredCatalog,
-    discovery: _ignoredDiscovery,
     ...restProvider
   } = params.provider;
   return {
@@ -393,7 +370,6 @@ export function normalizeRegisteredProvider(params: {
     ...(envVars ? { envVars } : {}),
     auth,
     ...(catalog ? { catalog } : {}),
-    ...(!catalog && discovery ? { discovery } : {}),
     ...(wizard ? { wizard } : {}),
   };
 }

@@ -1,3 +1,4 @@
+// Isolated agent helper tests cover utility behavior used by cron agent runs.
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveCronPayloadOutcome } from "./isolated-agent/helpers.js";
@@ -46,6 +47,31 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.outputText).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
     expect(result.deliveryPayloads).toEqual([
       { text: "**Clawsweeper 6h report**\nClosed: 34 total" },
+    ]);
+  });
+
+  it("lets final assistant text recover multiple plain tool warnings globally", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ zsh (agent) failed",
+          isError: true,
+        },
+        {
+          text: "⚠️ 🛠️ node (agent) failed",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe(
+      "**Daily GTM analytics**\nPostHog and revenue summary complete.",
+    );
+    expect(result.deliveryPayloads).toEqual([
+      { text: "**Daily GTM analytics**\nPostHog and revenue summary complete." },
     ]);
   });
 

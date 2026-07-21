@@ -1,5 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers conversion from OpenClaw bundle-MCP config into Codex app-server
+// thread config patches.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCodexMcpServersConfig, loadCodexBundleMcpThreadConfig } from "./codex-mcp-config.js";
+import { testing as resolverTesting } from "./mcp-connection-resolver.js";
 
 const mocks = vi.hoisted(() => ({
   bundleMcp: {
@@ -23,8 +26,14 @@ beforeEach(() => {
   };
 });
 
+afterEach(() => {
+  resolverTesting.setMcpServerConnectionResolversForTest();
+});
+
 describe("buildCodexMcpServersConfig", () => {
   it("normalizes OpenClaw MCP servers into Codex app-server mcp_servers shape", () => {
+    // Authorization is represented as Codex's bearer env var, while other env
+    // placeholders become env_http_headers for per-thread substitution.
     expect(
       buildCodexMcpServersConfig({
         mcpServers: {
@@ -111,6 +120,8 @@ describe("loadCodexBundleMcpThreadConfig", () => {
   });
 
   it("leaves user mcp.servers to the Codex user MCP projection path", () => {
+    // User MCP config is projected elsewhere; this loader only injects bundled
+    // MCP servers so the same server does not appear twice in Codex.
     const loaded = loadCodexBundleMcpThreadConfig({
       workspaceDir: "/workspace",
       cfg: {
@@ -171,5 +182,98 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.configPatch).toBeUndefined();
     expect(loaded.fingerprint).toBeUndefined();
     expect(loaded.evaluated).toBe(true);
+  });
+
+  it("excludes requester-scoped servers from projection and fingerprint", () => {
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "user-mail",
+        resolve: async () => ({ url: "https://should-never-project.example/mcp" }),
+      },
+    ]);
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+          "user-mail": {
+            type: "http",
+            url: "https://unresolved.invalid",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const loaded = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+    // Same static set without a scoped entry must fingerprint identically.
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+    const withoutScopedConfig = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+
+    expect(loaded.configPatch).toEqual({
+      mcp_servers: {
+        search: {
+          url: "https://mcp.example.com/mcp",
+        },
+      },
+    });
+    expect(JSON.stringify(loaded.configPatch)).not.toContain("unresolved.invalid");
+    expect(JSON.stringify(loaded.configPatch)).not.toContain("user-mail");
+    expect(loaded.configPatch).toEqual(withoutScopedConfig.configPatch);
+    expect(loaded.fingerprint).toBe(withoutScopedConfig.fingerprint);
+  });
+
+  it("keeps static projection byte-identical when no resolver exists", () => {
+    mocks.bundleMcp = {
+      config: {
+        mcpServers: {
+          search: {
+            type: "http",
+            url: "https://mcp.example.com/mcp",
+          },
+        },
+      },
+      diagnostics: [],
+    };
+
+    const a = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+    const b = loadCodexBundleMcpThreadConfig({
+      workspaceDir: "/workspace",
+      cfg: {},
+      toolsEnabled: true,
+    });
+    expect(a.configPatch).toEqual(b.configPatch);
+    expect(a.fingerprint).toBe(b.fingerprint);
+    expect(a.configPatch).toEqual({
+      mcp_servers: {
+        search: {
+          url: "https://mcp.example.com/mcp",
+        },
+      },
+    });
   });
 });

@@ -1,6 +1,13 @@
+// SQLite schema test support reads schema files for shape assertions.
 import { readFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 
+/**
+ * Test helpers for comparing SQLite schema shape.
+ *
+ * The collected shape intentionally ignores SQLite autoindex suffixes while
+ * preserving named index terms, ordering, collation, expressions, and predicates.
+ */
 type ColumnShape = {
   name: string;
   type: string;
@@ -14,13 +21,24 @@ type IndexShape = {
   unique: number;
   origin: string;
   partial: number;
+  sql: string | null;
+  terms: IndexTermShape[];
 };
 
-export type SqliteSchemaShape = Record<
+type IndexTermShape = {
+  kind: "column" | "expression" | "rowid";
+  name: string | null;
+  coll: string;
+  desc: number;
+};
+
+/** Comparable SQLite schema summary used by generated-schema tests. */
+type SqliteSchemaShape = Record<
   string,
   {
     columns: ColumnShape[];
     indexes: IndexShape[];
+    strict: number;
   }
 >;
 
@@ -28,14 +46,31 @@ type TableInfoRow = ColumnShape & {
   cid: number;
 };
 
-type IndexListRow = IndexShape & {
+type IndexListRow = {
   seq: number;
+  name: string;
+  unique: number;
+  origin: string;
+  partial: number;
 };
 
 type SqliteMasterRow = {
   name: string;
 };
 
+type IndexSqlRow = {
+  sql?: unknown;
+};
+
+type IndexXInfoRow = {
+  cid: number;
+  name: string | null;
+  coll: string;
+  desc: number;
+  key: number;
+};
+
+/** Execute schema SQL in memory and return its comparable shape. */
 export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShape {
   const db = new DatabaseSync(":memory:");
   try {
@@ -46,6 +81,7 @@ export function createSqliteSchemaShapeFromSql(schemaUrl: URL): SqliteSchemaShap
   }
 }
 
+/** Collect table columns and indexes from an open SQLite database. */
 export function collectSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShape {
   const tableRows = db
     .prepare(
@@ -65,9 +101,20 @@ export function collectSqliteSchemaShape(db: DatabaseSync): SqliteSchemaShape {
       {
         columns: collectColumns(db, table.name),
         indexes: collectIndexes(db, table.name),
+        strict: collectStrictFlag(db, table.name),
       },
     ]),
   );
+}
+
+function collectStrictFlag(db: DatabaseSync, tableName: string): number {
+  const row = db
+    .prepare("SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?")
+    .get(tableName) as { strict?: unknown } | undefined;
+  if (typeof row?.strict !== "number") {
+    throw new Error(`SQLite table ${tableName} has no table_list entry`);
+  }
+  return row.strict;
 }
 
 function collectColumns(db: DatabaseSync, tableName: string): ColumnShape[] {
@@ -88,16 +135,42 @@ function collectIndexes(db: DatabaseSync, tableName: string): IndexShape[] {
   return (
     db.prepare(`PRAGMA index_list(${quoteSqliteIdentifier(tableName)})`).all() as IndexListRow[]
   )
-    .map(({ name, unique, origin, partial }) => ({
-      name: normalizeAutoIndexName(name),
-      unique,
-      origin,
-      partial,
-    }))
-    .toSorted((left, right) => left.name.localeCompare(right.name));
+    .map(({ name, unique, origin, partial }) => {
+      const row = db
+        .prepare("SELECT sql FROM sqlite_schema WHERE type = 'index' AND name = ?")
+        .get(name) as IndexSqlRow | undefined;
+      return {
+        name: normalizeAutoIndexName(name),
+        unique,
+        origin,
+        partial,
+        sql: typeof row?.sql === "string" ? row.sql : null,
+        terms: collectIndexTerms(db, name),
+      };
+    })
+    .toSorted((left, right) => {
+      const nameOrder = left.name.localeCompare(right.name);
+      return nameOrder !== 0
+        ? nameOrder
+        : JSON.stringify(left).localeCompare(JSON.stringify(right));
+    });
+}
+
+function collectIndexTerms(db: DatabaseSync, indexName: string): IndexTermShape[] {
+  return (
+    db.prepare(`PRAGMA index_xinfo(${quoteSqliteIdentifier(indexName)})`).all() as IndexXInfoRow[]
+  )
+    .filter((term) => term.key === 1)
+    .map(({ cid, name, coll, desc }) => ({
+      kind: cid === -2 ? "expression" : cid === -1 ? "rowid" : "column",
+      name,
+      coll,
+      desc,
+    }));
 }
 
 function normalizeAutoIndexName(name: string): string {
+  // SQLite autoindex names include table-specific suffixes that do not affect schema behavior.
   return name.startsWith("sqlite_autoindex_") ? "sqlite_autoindex" : name;
 }
 

@@ -1,3 +1,4 @@
+// Zalo API module exposes the plugin public contract.
 export {
   addWildcardAllowFrom,
   applyAccountNameToChannelSection,
@@ -52,7 +53,6 @@ export {
   type ReplyPayload,
   resolveClientIp,
   resolveDefaultGroupPolicy,
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveWebhookPath,
   resolveWebhookTargetWithAuthOrRejectSync,

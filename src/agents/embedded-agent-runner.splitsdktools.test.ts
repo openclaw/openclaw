@@ -1,9 +1,10 @@
+// Coverage for classifying SDK tools into the embedded runner runtime surface.
 import { describe, expect, it } from "vitest";
-import { splitSdkTools } from "./embedded-agent-runner.js";
 import {
   collectRegisteredToolNames,
   toSessionToolAllowlist,
 } from "./embedded-agent-runner/tool-name-allowlist.js";
+import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 
 describe("splitSdkTools", () => {
@@ -43,7 +44,26 @@ describe("splitSdkTools", () => {
     ]);
   });
 
+  it("preserves channel-progress visibility metadata", () => {
+    const hiddenWait = {
+      ...createStubTool("wait"),
+      hideFromChannelProgress: true,
+    };
+    const { customTools } = splitSdkTools({
+      tools: [hiddenWait, createStubTool("plugin_wait")],
+      sandboxEnabled: false,
+    });
+
+    expect(customTools[0]).toMatchObject({
+      name: "wait",
+      hideFromChannelProgress: true,
+    });
+    expect(customTools[1]).not.toHaveProperty("hideFromChannelProgress");
+  });
+
   it("keeps OpenClaw-managed custom tools in OpenClaw runtime's session allowlist", () => {
+    // Session tools are OpenClaw-managed custom tools; dropping them from the
+    // allowlist would break inter-agent routing even when sandboxing is enabled.
     const { customTools } = splitSdkTools({
       tools: [createStubTool("read"), createStubTool("sessions_spawn")],
       sandboxEnabled: true,

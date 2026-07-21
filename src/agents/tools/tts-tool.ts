@@ -1,3 +1,8 @@
+/**
+ * tts built-in tool.
+ *
+ * Converts explicit speech requests into generated audio and safe transcript content.
+ */
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -49,7 +54,7 @@ export function createTtsTool(opts?: {
     name: "tts",
     displaySummary: "Text to speech audio.",
     description:
-      "Use only for explicit audio intent (voice/speech/TTS) or active TTS config. Never use for ordinary text replies. Audio auto-delivered from tool result; after success follow reply instructions, no duplicate text/audio.",
+      "Only explicit voice/speech/TTS intent or active TTS config; never ordinary text reply. Audio auto-delivered. After success follow reply instructions; no duplicate text/audio.",
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

@@ -1,3 +1,4 @@
+// Verifies StepFun standard and Step Plan catalog pairing across regions.
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,8 +7,8 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import { upsertAuthProfile } from "./auth-profiles.js";
 import { installModelsConfigTestHooks } from "./models-config.e2e-harness.js";
 
-const EXPECTED_STANDARD_MODELS = ["step-3.5-flash"];
-const EXPECTED_PLAN_MODELS = ["step-3.5-flash", "step-3.5-flash-2603"];
+const EXPECTED_STANDARD_MODELS = ["step-3.7-flash", "step-3.5-flash"];
+const EXPECTED_PLAN_MODELS = ["step-3.7-flash", "step-3.5-flash", "step-3.5-flash-2603"];
 const STEPFUN_STANDARD_CN_BASE_URL = "https://api.stepfun.com/v1";
 const STEPFUN_STANDARD_INTL_BASE_URL = "https://api.stepfun.ai/v1";
 const STEPFUN_PLAN_CN_BASE_URL = "https://api.stepfun.com/step_plan/v1";
@@ -37,6 +38,7 @@ function buildStepFunCatalog(params: {
   profileId?: string;
   env?: NodeJS.ProcessEnv;
 }): ModelProviderConfig | null {
+  // Region can be explicit, profile-tagged, or env-inferred; catalog ids stay paired.
   if (!params.apiKey) {
     return null;
   }
@@ -75,6 +77,7 @@ function inferRegionFromBaseUrl(baseUrl: string | undefined): StepFunRegion | un
 }
 
 function inferRegionFromProfileId(profileId: string | undefined): StepFunRegion | undefined {
+  // Auth profile suffixes are the lightweight region signal for paired providers.
   if (!profileId) {
     return undefined;
   }
@@ -183,6 +186,7 @@ describe("StepFun provider catalog", () => {
       }),
     };
     const pairedStandard = buildStepFunCatalog({
+      // Paired surfaces should converge on the same regional host family.
       surface: "standard",
       apiKey: "test-stepfun-key",
       explicitBaseUrl: resolveDefaultBaseUrl(

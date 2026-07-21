@@ -1,3 +1,4 @@
+// Vitest gateway server config wires the gateway server test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const gatewayServerBackedHttpTests = [
@@ -21,6 +22,8 @@ export function createGatewayServerVitestConfig(env?: Record<string, string | un
         "src/gateway/sessions-history-http.test.ts",
       ],
       fileParallelism: false,
+      // Gateway child projects share one include file; preserve this project's ownership.
+      intersectIncludeFile: true,
       isolate: false,
       name: "gateway-server",
     },

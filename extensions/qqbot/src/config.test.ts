@@ -1,3 +1,4 @@
+// Qqbot tests cover config plugin behavior.
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -12,7 +13,15 @@ import {
   resolveQQBotAccount,
 } from "./bridge/config.js";
 import { qqbotSetupPlugin } from "./channel.setup.js";
-import { QQBotConfigSchema } from "./config-schema.js";
+import { qqbotChannelConfigSchema } from "./config-schema.js";
+
+function requireRuntimeSchema() {
+  const runtimeSchema = qqbotChannelConfigSchema.runtime;
+  if (!runtimeSchema) {
+    throw new Error("expected QQBot runtime config schema");
+  }
+  return runtimeSchema;
+}
 import { makeQqbotDefaultAccountConfig, makeQqbotSecretRefConfig } from "./qqbot-test-support.js";
 
 function requireQQBotSetup() {
@@ -23,6 +32,15 @@ function requireQQBotSetup() {
 }
 
 describe("qqbot config", () => {
+  it("rejects pairing because QQBot has no pairing flow", () => {
+    expect(requireRuntimeSchema().safeParse({ dmPolicy: "pairing" })).toMatchObject({
+      success: false,
+    });
+    expect(
+      requireRuntimeSchema().safeParse({ accounts: { work: { dmPolicy: "pairing" } } }),
+    ).toMatchObject({ success: false });
+  });
+
   it("accepts top-level speech overrides in the manifest schema", () => {
     const manifest = JSON.parse(
       fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
@@ -83,7 +101,7 @@ describe("qqbot config", () => {
   });
 
   it("accepts SecretRef-backed credentials in the runtime schema", () => {
-    const parsed = QQBotConfigSchema.safeParse({
+    const parsed = requireRuntimeSchema().safeParse({
       defaultAccount: "bot2",
       appId: "123456",
       clientSecret: {
@@ -117,7 +135,7 @@ describe("qqbot config", () => {
   });
 
   it("accepts account-level speech overrides as forward-compatible config", () => {
-    const parsed = QQBotConfigSchema.safeParse({
+    const parsed = requireRuntimeSchema().safeParse({
       accounts: {
         bot2: {
           appId: "654321",
@@ -129,6 +147,42 @@ describe("qqbot config", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("accepts canonical group tools config", () => {
+    const parsed = requireRuntimeSchema().safeParse({
+      groups: {
+        G1: {
+          requireMention: true,
+          commandLevel: "safety",
+          tools: { deny: ["*"] },
+          toolsBySender: {
+            "id:alice": { allow: ["read"] },
+          },
+        },
+      },
+      accounts: {
+        bot2: {
+          groups: {
+            G1: { commandLevel: "strict", tools: { allow: [] } },
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects retired group toolPolicy config", () => {
+    const parsed = requireRuntimeSchema().safeParse({
+      groups: {
+        G1: {
+          toolPolicy: "none",
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it("preserves top-level media and upgrade config on the default account", () => {

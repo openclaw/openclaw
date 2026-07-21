@@ -1,3 +1,6 @@
+/**
+ * Browser-local SDK setup/tooling bridge for CLI, media, and action helpers.
+ */
 export {
   callGatewayTool,
   listNodes,
@@ -11,7 +14,6 @@ export {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
-export { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 export {
   formatCliCommand,
   formatHelpExamples,

@@ -1,3 +1,4 @@
+// Discord tests cover exec approvals plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -66,8 +67,7 @@ describe("discord exec approvals", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
-        allowFrom: ["123"],
-        dm: { allowFrom: ["456"] },
+        allowFrom: ["123", "456"],
         defaultTo: "user:789",
       },
     );

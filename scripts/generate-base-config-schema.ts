@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+// Generate Base Config Schema script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { computeBaseConfigSchemaResponse } from "../src/config/schema-base.js";
 
-export function checkBaseConfigSchema(): void {
+function checkBaseConfigSchema(): void {
   computeBaseConfigSchemaResponse({
     generatedAt: "2026-05-05T00:00:00.000Z",
   });

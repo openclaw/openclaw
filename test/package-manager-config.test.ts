@@ -1,3 +1,4 @@
+// Package manager config tests validate workspace package manager settings.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -60,6 +61,7 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+    expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });
@@ -68,6 +70,18 @@ describe("package manager build policy", () => {
     const packageJson = readJson("package.json") as RootPackageJson;
 
     expect(packageJson.files).toContain("THIRD_PARTY_NOTICES.md");
+  });
+
+  it("includes the Crabbox wrapper runtime modules in the published root package", () => {
+    const packageJson = readJson("package.json") as RootPackageJson;
+
+    expect(packageJson.files).toEqual(
+      expect.arrayContaining([
+        "scripts/crabbox-wrapper.mjs",
+        "scripts/crabbox-wrapper-providers.mjs",
+        "scripts/testbox-lease-freshness.mjs",
+      ]),
+    );
   });
 
   it("keeps npm shrinkwrap aligned with workspace overrides", () => {
@@ -224,7 +238,7 @@ describe("package manager build policy", () => {
         .filter((entry) => entry.isDirectory())
         .map((entry) => `extensions/${entry.name}/npm-shrinkwrap.json`)
         .filter((shrinkwrapPath) => fs.existsSync(shrinkwrapPath))
-        .sort((left, right) => left.localeCompare(right)),
+        .toSorted((left, right) => left.localeCompare(right)),
     ];
 
     for (const shrinkwrapPath of shrinkwrapPaths) {

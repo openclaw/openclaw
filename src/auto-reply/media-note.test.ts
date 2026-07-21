@@ -1,3 +1,4 @@
+/** Tests prompt media-note rendering for inbound attachments. */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { getMediaDir } from "../media/store.js";
@@ -304,6 +305,21 @@ describe("buildInboundMediaNote", () => {
   it("strips audio by extension even without mime type", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/voice_message.ogg", "/tmp/document.pdf"],
+      MediaUnderstanding: [
+        {
+          kind: "audio.transcription",
+          attachmentIndex: 0,
+          text: "Transcribed audio content",
+          provider: "whisper",
+        },
+      ],
+    });
+    expect(note).toBe("[media attached: /tmp/document.pdf]");
+  });
+
+  it("strips transcribed MPEG-2 audio by extension", () => {
+    const note = buildInboundMediaNote({
+      MediaPaths: ["/tmp/recording.m2a", "/tmp/document.pdf"],
       MediaUnderstanding: [
         {
           kind: "audio.transcription",

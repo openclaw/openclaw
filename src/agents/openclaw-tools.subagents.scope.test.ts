@@ -1,3 +1,4 @@
+// Verifies subagents list only exposes runs owned by the caller's subtree.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,11 +8,15 @@ import {
   resetSubagentsConfigOverride,
   setSubagentsConfigOverride,
 } from "./openclaw-tools.subagents.test-harness.js";
-import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagent-registry.js";
+import {
+  addSubagentRunForTests,
+  resetSubagentRegistryForTests,
+} from "./subagent-registry.test-helpers.js";
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
 function writeStore(storePath: string, store: Record<string, unknown>) {
+  // Scope tests use a real session-store file so spawnedBy lookups match runtime behavior.
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, JSON.stringify(store, null, 2), "utf-8");
 }

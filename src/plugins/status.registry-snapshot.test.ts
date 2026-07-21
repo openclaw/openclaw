@@ -1,3 +1,4 @@
+// Covers plugin status snapshots built from registry state.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -71,7 +72,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const env = {
       ...createColdPluginHermeticEnv(tempRoot, {
         bundledPluginsDir: makeTempDir(),
-        disablePersistedRegistry: false,
       }),
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_STATE_DIR: stateDir,
@@ -130,9 +130,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
         version: "1.2.3",
         providers: ["indexed-provider"],
         contracts: {
+          agentToolResultMiddleware: ["openclaw", "codex"],
           speechProviders: ["indexed-speech-provider"],
           realtimeTranscriptionProviders: ["indexed-transcription-provider"],
           realtimeVoiceProviders: ["indexed-voice-provider"],
+          trustedToolPolicies: ["workflow-budget"],
         },
         commandAliases: [{ name: "indexed-demo" }],
         configSchema: {
@@ -161,6 +163,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
       speechProviderIds: ["indexed-speech-provider"],
       realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
       realtimeVoiceProviderIds: ["indexed-voice-provider"],
+      contracts: {
+        agentToolResultMiddleware: ["openclaw", "codex"],
+        speechProviders: ["indexed-speech-provider"],
+        realtimeTranscriptionProviders: ["indexed-transcription-provider"],
+        realtimeVoiceProviders: ["indexed-voice-provider"],
+        trustedToolPolicies: ["workflow-budget"],
+      },
       commands: ["indexed-demo"],
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",
@@ -250,7 +259,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
     const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
     const env = createColdPluginHermeticEnv(workspaceDir, {
       bundledPluginsDir: makeTempDir(),
-      disablePersistedRegistry: false,
     });
 
     await refreshPluginRegistry({

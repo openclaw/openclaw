@@ -1,18 +1,20 @@
+// Diagnostic session context tests cover session context capture for diagnostics.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { saveCronStore } from "../cron/store.js";
 import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
   formatCronSessionDiagnosticFields,
   formatStoppedCronSessionDiagnosticFields,
-  parseCronRunSessionKey,
-  readLastAssistantFromSessionFile,
   resolveCronSessionDiagnosticContext,
 } from "./diagnostic-session-context.js";
 
 let tempDir: string | undefined;
-let previousStateDir: string | undefined;
+let testState: OpenClawTestState | undefined;
 
 function writeJsonl(filePath: string, rows: unknown[]) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -20,30 +22,26 @@ function writeJsonl(filePath: string, rows: unknown[]) {
 }
 
 describe("diagnostic session context", () => {
-  beforeEach(() => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-diagnostic-session-"));
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+  beforeEach(async () => {
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-diagnostic-session-",
+    });
+    tempDir = testState.stateDir;
   });
 
-  afterEach(() => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (tempDir) {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+  afterEach(async () => {
+    await testState?.cleanup();
+    testState = undefined;
     tempDir = undefined;
   });
 
   it("parses cron run session keys", () => {
-    expect(parseCronRunSessionKey("agent:clawblocker:cron:job-123:run:run-456")).toEqual({
-      agentId: "clawblocker",
-      cronJobId: "job-123",
-      cronRunId: "run-456",
-    });
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+      }),
+    ).toMatchObject({ agentId: "clawblocker", cronJobId: "job-123", cronRunId: "run-456" });
   });
 
   it("formats cron job and last assistant context for stalled session logs", async () => {
@@ -93,17 +91,34 @@ describe("diagnostic session context", () => {
   });
 
   it("reads the latest assistant message from a transcript tail", () => {
-    const filePath = path.join(tempDir!, "session.jsonl");
+    const filePath = path.join(tempDir!, "agents", "clawblocker", "sessions", "run-456.jsonl");
     writeJsonl(filePath, [
       { message: { role: "assistant", content: "older" } },
       { message: { role: "user", content: "later user" } },
       { message: { role: "assistant", content: "newer" } },
     ]);
 
-    expect(readLastAssistantFromSessionFile(filePath)).toBe("newer");
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+      }).lastAssistant,
+    ).toBe("newer");
+  });
+
+  it("keeps bounded quoted fields UTF-16 safe", () => {
+    const prefix = "a".repeat(136);
+
+    expect(
+      formatCronSessionDiagnosticFields({ cronJobName: `${prefix}😀${"b".repeat(140)}` }),
+    ).toBe(`cronJob="${prefix}..."`);
   });
 
   it("ignores missing transcript tail files", () => {
-    expect(readLastAssistantFromSessionFile(path.join(tempDir!, "missing.jsonl"))).toBeUndefined();
+    expect(
+      resolveCronSessionDiagnosticContext({
+        sessionKey: "agent:clawblocker:cron:job-123:run:run-456",
+        activeSessionId: "missing",
+      }).lastAssistant,
+    ).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+// Qa Lab tests cover capture saved view plugin behavior.
 import { describe, expect, it } from "vitest";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 
@@ -101,5 +102,21 @@ describe("capture saved views", () => {
     }));
 
     expect(normalizeCaptureSavedViews(views)).toHaveLength(12);
+  });
+
+  it("keeps bounded saved view text on UTF-16 boundaries", () => {
+    const view = normalizeCaptureSavedView({
+      id: `${"i".repeat(255)}😀after`,
+      name: `${"n".repeat(79)}😀after`,
+      sessionIds: [`${"s".repeat(255)}😀after`],
+      searchText: `${"q".repeat(499)}😀after`,
+    });
+
+    expect(view).toMatchObject({
+      id: "i".repeat(255),
+      name: "n".repeat(79),
+      sessionIds: ["s".repeat(255)],
+      searchText: "q".repeat(499),
+    });
   });
 });

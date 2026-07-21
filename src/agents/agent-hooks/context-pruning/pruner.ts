@@ -1,3 +1,5 @@
+/** Context-pruning planner that trims old assistant/tool content under token pressure. */
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ImageContent, TextContent, ToolResultMessage } from "../../../llm/types.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../utils/cjk-chars.js";
 import { dropThinkingBlocks } from "../../embedded-agent-runner/thinking.js";
@@ -34,7 +36,9 @@ function coerceTextBlock(block: unknown): string | null {
 }
 
 function isImageBlock(block: unknown): boolean {
-  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "image";
+  return (
+    Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
+  );
 }
 
 function collectTextSegments(content: ReadonlyArray<TextContent | ImageContent>): string[] {
@@ -84,7 +88,10 @@ function takeHeadFromJoinedText(parts: string[], maxChars: number): string {
   }
   let remaining = maxChars;
   let out = "";
-  for (let i = 0; i < parts.length && remaining > 0; i++) {
+  for (const [i, p] of parts.entries()) {
+    if (remaining <= 0) {
+      break;
+    }
     if (i > 0) {
       out += "\n";
       remaining -= 1;
@@ -92,12 +99,11 @@ function takeHeadFromJoinedText(parts: string[], maxChars: number): string {
         break;
       }
     }
-    const p = parts[i];
     if (p.length <= remaining) {
       out += p;
       remaining -= p.length;
     } else {
-      out += p.slice(0, remaining);
+      out += sliceUtf16Safe(p, 0, remaining);
       remaining = 0;
     }
   }
@@ -110,17 +116,18 @@ function takeTailFromJoinedText(parts: string[], maxChars: number): string {
   }
   let remaining = maxChars;
   const out: string[] = [];
-  for (let i = parts.length - 1; i >= 0 && remaining > 0; i--) {
-    const p = parts[i];
+  for (const [reverseIndex, p] of parts.toReversed().entries()) {
+    if (remaining <= 0) {
+      break;
+    }
     if (p.length <= remaining) {
       out.push(p);
       remaining -= p.length;
     } else {
-      out.push(p.slice(p.length - remaining));
-      remaining = 0;
+      out.push(sliceUtf16Safe(p, -remaining));
       break;
     }
-    if (remaining > 0 && i > 0) {
+    if (remaining > 0 && reverseIndex < parts.length - 1) {
       out.push("\n");
       remaining -= 1;
     }
@@ -284,6 +291,7 @@ ${tail}`;
   return { ...msg, content: [asText(trimmed + note)] };
 }
 
+/** Returns a pruned message array when configured thresholds are exceeded, otherwise original. */
 export function pruneContextMessages(params: {
   messages: AgentMessage[];
   settings: EffectiveContextPruningSettings;

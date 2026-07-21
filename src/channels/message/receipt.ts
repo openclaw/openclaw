@@ -1,3 +1,8 @@
+/**
+ * Channel message receipt normalization.
+ *
+ * Builds stable receipts from platform send results and nested adapter receipt data.
+ */
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type {
   MessageReceipt,
@@ -37,6 +42,7 @@ function appendUnique(values: string[], value: string | undefined): void {
   }
 }
 
+/** Builds one normalized receipt from platform send results or nested adapter receipts. */
 export function createMessageReceiptFromOutboundResults(params: {
   results: readonly MessageReceiptInputResult[];
   kind?: MessageReceiptPartKind;
@@ -46,20 +52,26 @@ export function createMessageReceiptFromOutboundResults(params: {
 }): MessageReceipt {
   const parts = params.results.flatMap((result, resultIndex) => {
     if (hasNestedReceiptData(result.receipt)) {
-      return result.receipt.parts.length > 0
-        ? result.receipt.parts.map((part, partIndex) => ({
-            ...part,
-            index: part.index ?? partIndex,
-            ...(part.threadId || !params.threadId ? {} : { threadId: params.threadId }),
-            ...(part.replyToId || !params.replyToId ? {} : { replyToId: params.replyToId }),
-          }))
-        : result.receipt.platformMessageIds.map((platformMessageId, partIndex) => ({
-            platformMessageId,
-            kind: params.kind ?? "unknown",
-            index: partIndex,
-            ...(params.threadId ? { threadId: params.threadId } : {}),
-            ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-          }));
+      if (result.receipt.parts.length === 0) {
+        return result.receipt.platformMessageIds.map((platformMessageId, partIndex) => ({
+          platformMessageId,
+          kind: params.kind ?? "unknown",
+          index: partIndex,
+          ...(params.threadId ? { threadId: params.threadId } : {}),
+          ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+        }));
+      }
+      // Mixed adapter-supplied reply metadata is authoritative: missing entries mean
+      // those physical messages were not native replies and must not inherit the route reply.
+      const hasPartReplyMetadata = result.receipt.parts.some((part) => part.replyToId);
+      return result.receipt.parts.map((part, partIndex) => ({
+        ...part,
+        index: part.index ?? partIndex,
+        ...(part.threadId || !params.threadId ? {} : { threadId: params.threadId }),
+        ...(part.replyToId || !params.replyToId || hasPartReplyMetadata
+          ? {}
+          : { replyToId: params.replyToId }),
+      }));
     }
     const platformMessageId = resolveReceiptMessageId(result);
     if (!platformMessageId) {
@@ -108,10 +120,12 @@ export function createMessageReceiptFromOutboundResults(params: {
   };
 }
 
+/** Lists unique platform message ids in receipt order. */
 export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[] {
   return normalizeUniqueStringEntries(receipt.platformMessageIds);
 }
 
+/** Resolves the explicit primary platform id, falling back to the first unique receipt id. */
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {
   const primary = receipt.primaryPlatformMessageId?.trim();
   if (primary) {

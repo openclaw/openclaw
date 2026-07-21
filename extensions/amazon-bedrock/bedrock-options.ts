@@ -1,12 +1,18 @@
-import type { StreamOptions, ThinkingBudgets, ThinkingLevel } from "openclaw/plugin-sdk/llm";
+/**
+ * Stream option extensions and prompt-cache policy for Amazon Bedrock models.
+ * Provider registration and runtime streaming share these contracts.
+ */
+import type { ModelThinkingLevel, StreamOptions, ThinkingBudgets } from "openclaw/plugin-sdk/llm";
 
-export type BedrockThinkingDisplay = "summarized" | "omitted";
+/** How Bedrock thinking output should be displayed to users. */
+type BedrockThinkingDisplay = "summarized" | "omitted";
 
+/** Extra Bedrock-specific stream options accepted by the provider runtime. */
 export interface BedrockOptions extends StreamOptions {
   region?: string;
   profile?: string;
   toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
-  reasoning?: ThinkingLevel;
+  reasoning?: ModelThinkingLevel;
   thinkingBudgets?: ThinkingBudgets;
   interleavedThinking?: boolean;
   thinkingDisplay?: BedrockThinkingDisplay;
@@ -22,6 +28,7 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
   });
 }
 
+/** Return whether a Bedrock model is known to support Anthropic prompt caching. */
 export function supportsBedrockPromptCaching(modelId: string, modelName?: string): boolean {
   const candidates = getModelMatchCandidates(modelId, modelName);
   const hasClaudeRef = candidates.some((s) => s.includes("claude"));
@@ -32,6 +39,16 @@ export function supportsBedrockPromptCaching(modelId: string, modelName?: string
     return false;
   }
   if (candidates.some((s) => s.includes("-4-"))) {
+    return true;
+  }
+  if (
+    candidates.some(
+      (candidate) =>
+        candidate.includes("claude-fable-5") ||
+        candidate.includes("claude-mythos-5") ||
+        candidate.includes("claude-sonnet-5"),
+    )
+  ) {
     return true;
   }
   if (candidates.some((s) => s.includes("claude-3-7-sonnet"))) {

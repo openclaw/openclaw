@@ -1,3 +1,4 @@
+// Loads plugin public runtime surfaces through documented entrypoints.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
@@ -12,6 +13,7 @@ export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".cjs",
 ] as const;
 
+/** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
 export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (
     path.posix.isAbsolute(artifactBasename) ||
@@ -39,7 +41,8 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   return normalized;
 }
 
-export function normalizeBundledPluginDirName(dirName: string): string {
+/** Normalizes a bundled plugin directory name and rejects path-like values. */
+function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
     !normalized ||
@@ -54,6 +57,7 @@ export function normalizeBundledPluginDirName(dirName: string): string {
   return normalized;
 }
 
+/** Resolves a source-tree public surface artifact path for bundled plugin development. */
 export function resolveBundledPluginSourcePublicSurfacePath(params: {
   sourceRoot: string;
   dirName: string;
@@ -66,6 +70,31 @@ export function resolveBundledPluginSourcePublicSurfacePath(params: {
     const sourceCandidate = path.resolve(params.sourceRoot, dirName, `${sourceBaseName}${ext}`);
     if (fs.existsSync(sourceCandidate)) {
       return sourceCandidate;
+    }
+  }
+  return null;
+}
+
+/** Resolves a public surface artifact within one installed plugin root. */
+export function resolvePluginRootPublicSurfacePath(params: {
+  pluginRoot: string;
+  artifactBasename: string;
+}): string | null {
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const pluginRoot = path.resolve(params.pluginRoot);
+  for (const candidate of [
+    path.join(pluginRoot, artifactBasename),
+    path.join(pluginRoot, "dist", artifactBasename),
+  ]) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
+  for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
+    const candidate = path.join(pluginRoot, `${sourceBaseName}${ext}`);
+    if (fs.existsSync(candidate)) {
+      return candidate;
     }
   }
   return null;
@@ -153,6 +182,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
+/** Resolves a bundled plugin public surface artifact across source, dist, and package layouts. */
 export function resolveBundledPluginPublicSurfacePath(params: {
   rootDir: string;
   dirName: string;

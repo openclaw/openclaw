@@ -1,3 +1,4 @@
+// Loads bundled plugin metadata without activating plugin runtime code.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +38,8 @@ type BundledPluginPathPair = {
   built: string;
 };
 
-export type BundledPluginMetadata = {
+/** Metadata collected from a bundled plugin package and manifest. */
+type BundledPluginMetadata = {
   dirName: string;
   idHint: string;
   source: BundledPluginPathPair;
@@ -168,6 +170,7 @@ function collectBundledPluginMetadata(
   return entries;
 }
 
+/** Lists bundled plugin metadata from source or built package layouts. */
 export function listBundledPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
@@ -190,6 +193,7 @@ export function listBundledPluginMetadata(params?: {
   return metadata;
 }
 
+/** Finds bundled plugin metadata by manifest id. */
 export function findBundledPluginMetadataById(
   pluginId: string,
   params?: {
@@ -200,28 +204,6 @@ export function findBundledPluginMetadataById(
   },
 ): BundledPluginMetadata | undefined {
   return listBundledPluginMetadata(params).find((entry) => entry.manifest.id === pluginId);
-}
-
-export function resolveBundledPluginWorkspaceSourcePath(params: {
-  rootDir: string;
-  scanDir?: string;
-  pluginId: string;
-}): string | null {
-  const metadata = findBundledPluginMetadataById(params.pluginId, {
-    ...resolveBundledPluginLookupParams({
-      rootDir: params.rootDir,
-      scanDir: params.scanDir,
-    }),
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  });
-  if (!metadata) {
-    return null;
-  }
-  if (params.scanDir) {
-    return path.resolve(params.scanDir, metadata.dirName);
-  }
-  return path.resolve(params.rootDir, "extensions", metadata.dirName);
 }
 
 function listBundledPluginEntryBaseDirs(params: {
@@ -296,6 +278,7 @@ function listBundledPluginEntrySearchPaths(
   return uniqueStrings(paths);
 }
 
+/** Resolves a generated runtime path for a bundled plugin entry. */
 export function resolveBundledPluginGeneratedPath(
   rootDir: string,
   entry: BundledPluginPathPair | undefined,
@@ -345,6 +328,7 @@ function resolveBundledPluginEntryCandidate(baseDir: string, entryPath: string):
   return candidate;
 }
 
+/** Resolves the repo entry path for a bundled plugin, preferring source unless requested. */
 export function resolveBundledPluginRepoEntryPath(params: {
   rootDir: string;
   pluginId: string;

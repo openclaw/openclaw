@@ -1,6 +1,8 @@
+// Shared Vitest spy helpers for repeated mock assertions.
 import { vi } from "vitest";
 
-export type RestorableMock = {
+/** Minimal mock contract for helpers that restore spies after a scoped run. */
+type RestorableMock = {
   mockRestore(): void;
 };
 

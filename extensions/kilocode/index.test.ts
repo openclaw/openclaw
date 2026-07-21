@@ -1,3 +1,4 @@
+// Kilocode tests cover index plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -52,7 +53,7 @@ describe("kilocode provider plugin", () => {
 
     const wrappedAuto = provider.wrapStreamFn?.({
       provider: "kilocode",
-      modelId: "kilo/auto",
+      modelId: "kilo-auto/balanced",
       thinkingLevel: "high",
       streamFn: baseStreamFn,
     } as never);
@@ -61,7 +62,7 @@ describe("kilocode provider plugin", () => {
       {
         api: "openai-completions",
         provider: "kilocode",
-        id: "kilo/auto",
+        id: "kilo-auto/balanced",
       } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},

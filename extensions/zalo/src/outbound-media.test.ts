@@ -1,25 +1,36 @@
-import { stat } from "node:fs/promises";
-import { join } from "node:path";
+import fs from "node:fs";
+import path from "node:path";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+// Zalo tests cover outbound media plugin behavior.
+import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginRuntime } from "../runtime-api.js";
 
-const loadOutboundMediaFromUrlMock = vi.fn();
-const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
+const loadWebMediaMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
-  loadOutboundMediaFromUrl: (...args: unknown[]) => loadOutboundMediaFromUrlMock(...args),
-}));
+vi.mock("openclaw/plugin-sdk/web-media", () => {
+  return {
+    loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
+  };
+});
 
 import {
-  clearHostedZaloMediaForTest,
   prepareHostedZaloMediaUrl,
   resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
+import { setZaloRuntime } from "./runtime.js";
 
-function resolveHostedZaloMediaDirName(): string {
-  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
-  return workerId ? `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${workerId}` : ZALO_OUTBOUND_MEDIA_DIR_NAME;
+const testStateEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  OPENCLAW_STATE_DIR: fs.mkdtempSync(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-media-"),
+  ),
+};
+
+function openTestStore<T>(options: OpenKeyedStoreOptions) {
+  return createPluginStateKeyedStoreForTests<T>("zalo", { ...options, env: testStateEnv });
 }
 
 function createMockResponse() {
@@ -36,12 +47,21 @@ function createMockResponse() {
   };
 }
 
+function installZaloRuntimeForTest(): void {
+  setZaloRuntime({
+    state: {
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) => openTestStore<T>(options),
+    },
+  } as unknown as PluginRuntime);
+}
+
 describe("zalo outbound hosted media", () => {
-  beforeEach(() => {
-    clearHostedZaloMediaForTest();
-    loadOutboundMediaFromUrlMock.mockReset();
-    loadOutboundMediaFromUrlMock.mockResolvedValue({
+  beforeEach(async () => {
+    installZaloRuntimeForTest();
+    loadWebMediaMock.mockReset();
+    loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("image-bytes"),
+      kind: "image",
       contentType: "image/png",
       fileName: "photo.png",
     });
@@ -54,9 +74,10 @@ describe("zalo outbound hosted media", () => {
       maxBytes: 1024,
     });
 
-    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith("https://example.com/photo.png", {
-      maxBytes: 1024,
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "https://example.com/photo.png",
+      expect.objectContaining({ maxBytes: 1024 }),
+    );
     expect(hostedUrl).toMatch(
       /^https:\/\/gateway\.example\.com\/zalo-webhook\/media\/[a-f0-9]+\?token=[a-f0-9]+$/,
     );
@@ -70,23 +91,18 @@ describe("zalo outbound hosted media", () => {
       proxyUrl: "http://proxy.example:8080",
     });
 
-    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledWith("https://example.com/photo.png", {
-      maxBytes: 1024,
-      proxyUrl: "http://proxy.example:8080",
-    });
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "https://example.com/photo.png",
+      expect.objectContaining({ maxBytes: 1024, proxyUrl: "http://proxy.example:8080" }),
+    );
   });
 
-  it("creates hosted media storage with private filesystem permissions", async () => {
+  it("persists hosted media in SQLite plugin state instead of temp sidecars", async () => {
     const hostedUrl = await prepareHostedZaloMediaUrl({
       mediaUrl: "https://example.com/photo.png",
       webhookUrl: "https://gateway.example.com/zalo-webhook",
       maxBytes: 1024,
     });
-
-    if (process.platform === "win32") {
-      expect(hostedUrl).toContain("/zalo-webhook/media/");
-      return;
-    }
 
     const { pathname } = new URL(hostedUrl);
     const id = pathname.split("/").pop();
@@ -96,16 +112,30 @@ describe("zalo outbound hosted media", () => {
     expect(id).toHaveLength(24);
     expect(/^[0-9a-f]+$/.test(id)).toBe(true);
 
-    const storageDir = join(resolvePreferredOpenClawTmpDir(), resolveHostedZaloMediaDirName());
-    const [dirStats, metadataStats, bufferStats] = await Promise.all([
-      stat(storageDir),
-      stat(join(storageDir, `${id}.json`)),
-      stat(join(storageDir, `${id}.bin`)),
-    ]);
+    const metaStore = openTestStore<{
+      id: string;
+      routePath: string;
+      contentType: string;
+      byteLength: number;
+    }>({
+      namespace: "hosted-outbound-media",
+      maxEntries: 80,
+    });
+    const chunkStore = openTestStore({
+      namespace: "hosted-outbound-media-chunks",
+      maxEntries: 16_384,
+    });
 
-    expect(dirStats.mode & 0o777).toBe(0o700);
-    expect(metadataStats.mode & 0o777).toBe(0o600);
-    expect(bufferStats.mode & 0o777).toBe(0o600);
+    const metaEntry = (await metaStore.entries()).find(({ value }) => value.id === id);
+    expect(metaEntry?.value).toMatchObject({
+      id,
+      routePath: "/zalo-webhook/media/",
+      contentType: "image/png",
+      byteLength: Buffer.byteLength("image-bytes"),
+    });
+    expect(
+      (await chunkStore.entries()).some(({ key }) => key.startsWith(`media:${id}:chunk:`)),
+    ).toBe(true);
   });
 
   it("preserves the root webhook path when deriving the hosted media route", () => {
@@ -163,7 +193,7 @@ describe("zalo outbound hosted media", () => {
         }),
       ).rejects.toThrow(/expiry/);
 
-      expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
+      expect(loadWebMediaMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -209,6 +239,27 @@ describe("zalo outbound hosted media", () => {
       {
         method: "GET",
         url: `${pathname}?token=wrong`,
+      } as never,
+      response.res as never,
+    );
+
+    expect(handled).toBe(true);
+    expect(response.res.statusCode).toBe(401);
+    expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
+  });
+
+  it("rejects hosted media requests without a token", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const response = createMockResponse();
+
+    const handled = await tryHandleHostedZaloMediaRequest(
+      {
+        method: "GET",
+        url: new URL(hostedUrl).pathname,
       } as never,
       response.res as never,
     );

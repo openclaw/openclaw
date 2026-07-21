@@ -18,6 +18,7 @@ export {
 export {
   hasEnvHttpProxyConfigured,
   hasEnvHttpProxyAgentConfigured,
+  matchesNoProxy,
   resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
@@ -31,6 +32,7 @@ type GuardedFetchPresetOptions = Omit<
   "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
 >;
 
+/** Apply the trusted-env-proxy guarded fetch preset without exposing raw mode strings to plugins. */
 export function withTrustedEnvProxyGuardedFetchMode(
   params: GuardedFetchPresetOptions,
 ): GuardedFetchOptions {

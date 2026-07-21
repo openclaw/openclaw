@@ -1,3 +1,4 @@
+// E2E Websocket Open tests cover e2e websocket open script behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForWebSocketOpen } from "../../scripts/e2e/lib/websocket-open.mjs";
@@ -28,7 +29,9 @@ describe("E2E WebSocket open guard", () => {
     } finally {
       clearTimeout(keepAlive);
     }
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(ws.terminated).toBe(true);
     expect(ws.listenerCount("open")).toBe(0);

@@ -1,8 +1,10 @@
+// Npm Verify Exec tests cover npm verify exec script behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runNpmVerifyCommand } from "../../scripts/lib/npm-verify-exec.ts";
+import { withEnv } from "../../src/test-utils/env.js";
 
 const tempDirs: string[] = [];
 
@@ -64,5 +66,27 @@ describe("npm verifier command execution", () => {
         { maxBufferBytes: 1024, timeoutMs: 5_000 },
       ),
     ).toThrow(/ENOBUFS|maxBuffer/u);
+  });
+
+  it("rejects malformed command limit environment values", () => {
+    const root = makeTempRoot();
+
+    withEnv({ OPENCLAW_NPM_VERIFY_COMMAND_TIMEOUT_MS: "5m" }, () => {
+      expect(() =>
+        runNpmVerifyCommand(
+          { command: process.execPath, args: ["-e", "process.stdout.write('ok')"] },
+          root,
+        ),
+      ).toThrow("invalid OPENCLAW_NPM_VERIFY_COMMAND_TIMEOUT_MS: 5m");
+    });
+
+    withEnv({ OPENCLAW_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES: "16mb" }, () => {
+      expect(() =>
+        runNpmVerifyCommand(
+          { command: process.execPath, args: ["-e", "process.stdout.write('ok')"] },
+          root,
+        ),
+      ).toThrow("invalid OPENCLAW_NPM_VERIFY_COMMAND_MAX_BUFFER_BYTES: 16mb");
+    });
   });
 });

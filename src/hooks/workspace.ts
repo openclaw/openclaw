@@ -1,9 +1,11 @@
+// Hook workspace helpers resolve hook roots and workspace-local hook files.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -16,6 +18,10 @@ import {
 import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
 import type { Hook, HookEntry, HookSource, ParsedHookFrontmatter } from "./types.js";
+
+// Hook descriptors are small metadata. Bounding the pinned descriptor read also
+// covers files that grow after the boundary open validates their identity.
+const HOOK_METADATA_MAX_BYTES = 1024 * 1024;
 
 type HookPackageManifest = {
   name?: string;
@@ -33,6 +39,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
     absolutePath: manifestPath,
     rootPath: dir,
     boundaryLabel: "hook package directory",
+    maxBytes: HOOK_METADATA_MAX_BYTES,
   });
   if (raw === null) {
     return null;
@@ -72,6 +79,7 @@ function loadHookFromDir(params: {
     absolutePath: hookMdPath,
     rootPath: params.hookDir,
     boundaryLabel: "hook directory",
+    maxBytes: HOOK_METADATA_MAX_BYTES,
   });
   if (content === null) {
     return null;
@@ -195,7 +203,7 @@ function loadHooksFromDir(params: {
   return hooks;
 }
 
-export function loadHookEntriesFromDir(params: {
+function loadHookEntriesFromDir(params: {
   dir: string;
   source: HookSource;
   pluginId?: string;
@@ -292,11 +300,17 @@ function readRootFileUtf8(params: {
   absolutePath: string;
   rootPath: string;
   boundaryLabel: string;
+  maxBytes: number;
 }): string | null {
   return withOpenedRootFileSync(params, (opened) => {
     try {
-      return fs.readFileSync(opened.fd, "utf-8");
-    } catch {
+      return readFileDescriptorBoundedSync(opened.fd, params.maxBytes).toString("utf-8");
+    } catch (err) {
+      if (err instanceof RangeError) {
+        log.warn(
+          `Ignoring oversized hook metadata ${params.absolutePath}: file exceeds the ${params.maxBytes}-byte limit`,
+        );
+      }
       return null;
     }
   });

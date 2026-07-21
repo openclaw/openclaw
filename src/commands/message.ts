@@ -1,3 +1,4 @@
+/** CLI entrypoint for channel message actions. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -14,6 +15,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
+import { parsePositiveIntOrUndefined } from "../cli/program/helpers.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
@@ -51,6 +53,7 @@ function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>
   };
 }
 
+/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -93,6 +96,8 @@ export async function messageCommand(
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
+  // Keep the gateway client identity explicit so channel plugins can distinguish
+  // CLI-originated owner actions from background gateway work.
   const run = async () =>
     await runMessageAction({
       cfg,
@@ -101,6 +106,7 @@ export async function messageCommand(
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
       senderIsOwner: opts.senderIsOwner !== false,
+      conversationReadOrigin: "direct-operator",
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
@@ -128,7 +134,8 @@ export async function messageCommand(
   }
 
   const { formatMessageCliText } = await import("./message-format.js");
-  for (const line of formatMessageCliText(result)) {
+  const displayLimit = parsePositiveIntOrUndefined(opts.limit);
+  for (const line of formatMessageCliText(result, { displayLimit })) {
     runtime.log(line);
   }
 }

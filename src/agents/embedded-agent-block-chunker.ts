@@ -1,3 +1,8 @@
+/**
+ * Splits streamed embedded-agent replies into Markdown-safe message chunks.
+ */
+
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
   findFenceSpanAt,
@@ -116,6 +121,7 @@ export class EmbeddedBlockChunker {
     this.#chunking = chunking;
   }
 
+  /** Add streamed text to the pending chunk buffer. */
   append(text: string) {
     if (!text) {
       return;
@@ -123,18 +129,22 @@ export class EmbeddedBlockChunker {
     this.#buffer += text;
   }
 
+  /** Clear any buffered reply text without emitting it. */
   reset() {
     this.#buffer = "";
   }
 
+  /** Return the currently buffered text for tests and flush logic. */
   get bufferedText() {
     return this.#buffer;
   }
 
+  /** Return true when there is pending text to drain. */
   hasBuffered(): boolean {
     return this.#buffer.length > 0;
   }
 
+  /** Emit safe chunks according to size and Markdown fence constraints. */
   drain(params: { force: boolean; emit: (chunk: string) => void }) {
     // KNOWN: We cannot split inside fenced code blocks (Markdown breaks + UI glitches).
     // When forced (maxChars), we close + reopen the fence to keep Markdown valid.
@@ -259,7 +269,7 @@ export class EmbeddedBlockChunker {
     }
 
     const nextStart =
-      absoluteBreakIdx < source.length && /\s/.test(source[absoluteBreakIdx])
+      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
         ? absoluteBreakIdx + 1
         : absoluteBreakIdx;
     return { start: skipLeadingNewlines(source, nextStart), reopenFence: undefined };
@@ -365,19 +375,25 @@ export class EmbeddedBlockChunker {
     }
 
     for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window[i]) && isSafeFenceBreak(fenceSpans, offset + i)) {
+      if (/\s/.test(window.charAt(i)) && isSafeFenceBreak(fenceSpans, offset + i)) {
         return { index: i };
       }
     }
 
     if (buffer.length >= maxChars) {
-      if (isSafeFenceBreak(fenceSpans, offset + maxChars)) {
-        return { index: maxChars };
+      const firstCodePointWidth = (buffer.codePointAt(0) ?? 0) > 0xffff ? 2 : 1;
+      const forcedBreakIndex = sliceUtf16Safe(
+        buffer,
+        0,
+        Math.max(maxChars, firstCodePointWidth),
+      ).length;
+      if (isSafeFenceBreak(fenceSpans, offset + forcedBreakIndex)) {
+        return { index: forcedBreakIndex };
       }
-      const fence = findFenceSpanAt(fenceSpans, offset + maxChars);
+      const fence = findFenceSpanAt(fenceSpans, offset + forcedBreakIndex);
       if (fence) {
         const closeFenceStart = findFenceCloseLineStart(buffer, fence, offset);
-        if (closeFenceStart >= minChars && closeFenceStart < maxChars) {
+        if (closeFenceStart >= minChars && closeFenceStart < forcedBreakIndex) {
           return {
             index: closeFenceStart,
             fenceSplit: {
@@ -388,7 +404,7 @@ export class EmbeddedBlockChunker {
           };
         }
         return {
-          index: maxChars,
+          index: forcedBreakIndex,
           fenceSplit: {
             closeFenceLine: `${fence.indent}${fence.marker}`,
             reopenFenceLine: fence.openLine,
@@ -396,7 +412,7 @@ export class EmbeddedBlockChunker {
           },
         };
       }
-      return { index: maxChars };
+      return { index: forcedBreakIndex };
     }
 
     return { index: -1 };

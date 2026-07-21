@@ -1,3 +1,8 @@
+/**
+ * Tests baseline tool availability for assembled agent tools.
+ * Ensures control-plane tools remain present and node-originated runs receive
+ * the restricted node-safe subset.
+ */
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -26,6 +31,7 @@ describe("tool availability", () => {
     expect(toolNames).toContain("cron");
     expect(toolNames).toContain("gateway");
     expect(toolNames).toContain("nodes");
+    expect(toolNames).toContain("openclaw");
   });
 
   it("keeps canvas available by current trust model", () => {

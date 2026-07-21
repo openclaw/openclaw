@@ -1,3 +1,4 @@
+// Covers exec approval config normalization and safe-bin policy.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -113,9 +114,9 @@ describe("exec approvals node host allowlist check", () => {
 
   it("satisfies via safeBins even when not in allowlist", () => {
     const resolution = {
-      rawExecutable: "jq",
-      resolvedPath: "/usr/bin/jq",
-      executableName: "jq",
+      rawExecutable: "head",
+      resolvedPath: "/usr/bin/head",
+      executableName: "head",
     };
     // Not in allowlist
     const entries: ExecAllowlistEntry[] = [{ pattern: "/usr/bin/python3" }];
@@ -124,9 +125,9 @@ describe("exec approvals node host allowlist check", () => {
 
     // But is a safe bin with non-file args
     const safe = isSafeBinUsage({
-      argv: ["jq", ".foo"],
+      argv: ["head", "-n", "1"],
       resolution,
-      safeBins: normalizeSafeBins(["jq"]),
+      safeBins: normalizeSafeBins(["head"]),
     });
     // Safe bins are disabled on Windows (PowerShell parsing/expansion differences).
     if (process.platform === "win32") {

@@ -1,3 +1,4 @@
+/** Interactive and noninteractive secrets configure workflow. */
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { confirm, select, text } from "@clack/prompts";
@@ -47,7 +48,8 @@ import { resolveSecretRefValue } from "./resolve.js";
 import { assertExpectedResolvedSecretValue } from "./secret-value.js";
 import { isRecord } from "./shared.js";
 
-export type SecretsConfigureResult = {
+/** Result returned after interactive secrets configure builds and preflights an apply plan. */
+type SecretsConfigureResult = {
   plan: SecretsApplyPlan;
   preflight: SecretsApplyResult;
 };
@@ -110,7 +112,7 @@ function removeSecretProvider(config: OpenClawConfig, providerAlias: string): bo
     return false;
   }
   const providers = config.secrets.providers;
-  if (!Object.prototype.hasOwnProperty.call(providers, providerAlias)) {
+  if (!Object.hasOwn(providers, providerAlias)) {
     return false;
   }
   delete providers[providerAlias];
@@ -814,6 +816,7 @@ async function configureProvidersInteractive(
   }
 }
 
+/** Runs interactive secrets configuration and returns changed config/auth-store state. */
 export async function runSecretsConfigureInteractive(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -1074,3 +1077,4 @@ export async function runSecretsConfigureInteractive(
 
   return { plan, preflight };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

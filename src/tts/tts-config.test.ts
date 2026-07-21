@@ -1,8 +1,10 @@
+// TTS config tests cover text-to-speech config loading and overrides.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resolveConfiguredTtsMode,
   resolveEffectiveTtsConfig,
@@ -10,7 +12,7 @@ import {
 } from "./tts-config.js";
 
 describe("shouldAttemptTtsPayload", () => {
-  let originalPrefsPath: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let root = "";
   let dir: string;
   let prefsPath: string;
@@ -27,7 +29,7 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   beforeEach(() => {
-    originalPrefsPath = process.env.OPENCLAW_TTS_PREFS;
+    envSnapshot = captureEnv(["OPENCLAW_TTS_PREFS"]);
     dir = path.join(root, `case-${caseId++}`);
     mkdirSync(dir, { recursive: true });
     prefsPath = path.join(dir, "tts.json");
@@ -35,11 +37,8 @@ describe("shouldAttemptTtsPayload", () => {
   });
 
   afterEach(() => {
-    if (originalPrefsPath === undefined) {
-      delete process.env.OPENCLAW_TTS_PREFS;
-    } else {
-      process.env.OPENCLAW_TTS_PREFS = originalPrefsPath;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   it("skips TTS when config, prefs, and session state leave auto mode off", () => {
@@ -165,5 +164,32 @@ describe("shouldAttemptTtsPayload", () => {
     expect(resolved.provider).toBe("openai");
     expect(resolved.providers?.openai?.model).toBe("gpt-4o-mini-tts");
     expect(resolved.providers?.openai?.voice).toBe("shimmer");
+  });
+
+  it("preserves null and array override semantics while blocking prototype keys", () => {
+    const agentTts = JSON.parse(
+      '{"providers":{"custom":{"nullable":null,"voices":["override"],"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}}}',
+    );
+    const cfg = {
+      messages: {
+        tts: {
+          providers: {
+            custom: {
+              model: "base",
+              nullable: "base",
+              voices: ["base"],
+            },
+          },
+        },
+      },
+      agents: { list: [{ id: "reader", tts: agentTts }] },
+    } as OpenClawConfig;
+
+    expect(resolveEffectiveTtsConfig(cfg, "reader").providers?.custom).toEqual({
+      model: "base",
+      nullable: null,
+      voices: ["override"],
+    });
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 });

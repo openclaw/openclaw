@@ -1,4 +1,6 @@
+// Msteams plugin module implements reply stream controller behavior.
 import {
+  type AgentPlanStep,
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
@@ -6,7 +8,6 @@ import {
   mergeChannelProgressDraftLine,
   normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
-  resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -16,22 +17,6 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 type Maybe<T> = T | undefined;
-
-/**
- * Resolve the informative status text shown above the streaming card while the
- * agent is working. Pulls custom labels from `msteams.streaming.progressDraft`
- * config when set, falls back to the plugin-sdk's default rotation otherwise.
- */
-export function pickInformativeStatusText(
-  params: { config?: MSTeamsConfig; seed?: string; random?: () => number } | (() => number) = {},
-): string | undefined {
-  const options = typeof params === "function" ? { random: params } : params;
-  return resolveChannelProgressDraftLabel({
-    entry: options.config,
-    seed: options.seed,
-    random: options.random,
-  });
-}
 
 // The SDK throws StreamCancelledError synchronously from stream.emit/update
 // when the user pressed Stop in Teams (Teams replies 403 to the next chunk
@@ -91,13 +76,17 @@ export function createTeamsReplyStreamController(params: {
   let streamFailed = false;
   let lastInformativeText = "";
   let progressLines: Array<string | ChannelProgressDraftLine> = [];
+  let latestPlan: AgentPlanStep[] | undefined;
+  let latestPlanExplanation: string | undefined;
   let pendingFinalPayload: Maybe<ReplyPayload>;
   // openclaw's reply pipeline calls onPartialReply with the cumulative text on
   // each chunk, but the SDK's HttpStream appends each emit() to its internal
   // text buffer (this.text += activity.text). Forwarding cumulative text into
   // an appending sink produces "chunk1 + chunk2 + chunk3..." duplication. We
-  // track the length of text we've already emitted and forward only the delta.
-  let emittedTextLength = 0;
+  // track the cumulative text we've already emitted and forward only the
+  // delta. Holding text instead of length preserves the next chunk when the
+  // pipeline normalizes trailing whitespace between cumulative snapshots.
+  let emittedText = "";
 
   const wasCanceled = () => canceledLocally || Boolean(stream?.canceled);
 
@@ -112,7 +101,10 @@ export function createTeamsReplyStreamController(params: {
    * default) and prepends collected tool-progress lines when configured.
    */
   const renderInformativeUpdate = (): void => {
-    if (!stream || wasCanceled()) {
+    // A late gate timer must not touch the stream once the final text is
+    // queued: the SDK resets its stream id on close, so an update after that
+    // would post a fresh stale "working" card below the final answer.
+    if (!stream || wasCanceled() || streamFinalizationPending) {
       return;
     }
     const informativeText = formatChannelProgressDraftText({
@@ -120,7 +112,13 @@ export function createTeamsReplyStreamController(params: {
       lines: shouldStreamPreviewToolProgress ? progressLines : [],
       seed: params.progressSeed,
       bullet: "-",
+      narration: latestPlanExplanation,
+      plan: latestPlan,
     });
+    // Empty render after a cleared plan intentionally keeps the previous
+    // card: Teams streams cannot delete or blank an update mid-stream, and
+    // the final answer settles the card at turn end. Default label configs
+    // re-render immediately, so this only lingers with `label: false`.
     if (!informativeText || informativeText === lastInformativeText) {
       return;
     }
@@ -140,8 +138,8 @@ export function createTeamsReplyStreamController(params: {
 
   // Gate informative updates so they only start firing once meaningful work
   // has begun (avoids flickering "Thinking..." before the first real tool
-  // call). The gate is shape-agnostic — it just calls `onStart` once when the
-  // first noteWork() arrives.
+  // call). The gate is shape-agnostic — it calls `onStart` once the initial
+  // work delay elapses.
   const progressDraftGate = createChannelProgressDraftGate({
     onStart: renderInformativeUpdate,
   });
@@ -151,7 +149,6 @@ export function createTeamsReplyStreamController(params: {
       // Starting a reply is not enough to decide that native streaming should
       // own delivery. Wait for text tokens or explicit progress work so
       // no-token replies keep the normal block-delivery path.
-      return;
     },
 
     onPartialReply(payload: { text?: string }): void {
@@ -171,15 +168,32 @@ export function createTeamsReplyStreamController(params: {
       // appending sink. Without this, "Here's a" → "Here's a sonnet" → ...
       // gets emitted as full repeats and the SDK concatenates the lot.
       const fullText = payload.text;
-      // If the pipeline ever sends shorter text than we've emitted (e.g.
-      // edit-in-place semantics), skip rather than emit a negative slice.
-      if (fullText.length <= emittedTextLength) {
+      let prefixLength = 0;
+      while (
+        prefixLength < emittedText.length &&
+        prefixLength < fullText.length &&
+        emittedText[prefixLength] === fullText[prefixLength]
+      ) {
+        prefixLength += 1;
+      }
+      const previousRemainder = emittedText.slice(prefixLength);
+      const delta = fullText.slice(prefixLength);
+      // Duplicate or prefix-only out-of-order snapshots produce no delta.
+      if (!delta) {
         return;
       }
-      const delta = fullText.slice(emittedTextLength);
+      // Non-whitespace rewrites are not safe to append into Teams. Let block
+      // delivery carry the final payload, but clear the SDK's accumulated text
+      // before closing so stale prefixes are not finalized as another message.
+      if (previousRemainder.trim()) {
+        stream.clearText();
+        streamFailed = true;
+        streamFinalizationPending = true;
+        return;
+      }
       try {
         stream.emit(delta);
-        emittedTextLength = fullText.length;
+        emittedText = fullText;
         tokensEmitted = true;
       } catch (err) {
         if (isStreamCancelledError(err)) {
@@ -216,10 +230,10 @@ export function createTeamsReplyStreamController(params: {
         return;
       }
       const hadStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
+      const progressActive = await progressDraftGate.noteWork();
       // If the gate was already started, the call above is a no-op — refresh
       // the informative line manually so the latest progress lines render.
-      if (hadStarted && progressDraftGate.hasStarted) {
+      if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
         renderInformativeUpdate();
       }
     },
@@ -253,7 +267,23 @@ export function createTeamsReplyStreamController(params: {
         }
       }
       const hadStarted = progressDraftGate.hasStarted;
-      await progressDraftGate.noteWork();
+      const progressActive = await progressDraftGate.noteWork();
+      if ((hadStarted || progressActive) && progressDraftGate.hasStarted) {
+        renderInformativeUpdate();
+      }
+    },
+
+    async pushPlanProgress(
+      steps?: AgentPlanStep[],
+      options?: { explanation?: string },
+    ): Promise<void> {
+      if (!stream || streamMode !== "progress" || streamFinalizationPending) {
+        return;
+      }
+      latestPlan = steps?.length ? steps.map((entry) => ({ ...entry })) : undefined;
+      latestPlanExplanation = options?.explanation?.replace(/\s+/g, " ").trim() || undefined;
+      const hadStarted = progressDraftGate.hasStarted;
+      await progressDraftGate.startNow();
       if (hadStarted && progressDraftGate.hasStarted) {
         renderInformativeUpdate();
       }
@@ -310,6 +340,9 @@ export function createTeamsReplyStreamController(params: {
     },
 
     async finalize(): Promise<Maybe<ReplyPayload>> {
+      // The delay gate may still hold a pending start timer for fast turns;
+      // stop it before closing so it cannot fire against the closed stream.
+      progressDraftGate.cancel();
       if (!stream || !streamFinalizationPending || wasCanceled()) {
         return undefined;
       }

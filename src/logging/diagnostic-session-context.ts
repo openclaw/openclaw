@@ -1,7 +1,10 @@
+// Diagnostic session context helpers capture session metadata for support bundles.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
-import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
 
 const SESSION_TAIL_BYTES = 64 * 1024;
 const MAX_QUOTED_FIELD_CHARS = 140;
@@ -18,12 +21,12 @@ function quoteLogField(value: string): string {
   const oneLine = value.replace(/\s+/g, " ").trim();
   const truncated =
     oneLine.length > MAX_QUOTED_FIELD_CHARS
-      ? `${oneLine.slice(0, Math.max(0, MAX_QUOTED_FIELD_CHARS - 3))}...`
+      ? `${truncateUtf16Safe(oneLine, Math.max(0, MAX_QUOTED_FIELD_CHARS - 3))}...`
       : oneLine;
   return `"${truncated.replace(/["\\]/g, "\\$&")}"`;
 }
 
-export function parseCronRunSessionKey(sessionKey?: string): {
+function parseCronRunSessionKey(sessionKey?: string): {
   agentId?: string;
   cronJobId?: string;
   cronRunId?: string;
@@ -102,7 +105,7 @@ function textFromContent(content: unknown): string | undefined {
   return texts.length ? texts.join(" ") : undefined;
 }
 
-export function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
+function readLastAssistantFromSessionFile(filePath: string | undefined): string | undefined {
   if (!filePath) {
     return undefined;
   }
@@ -116,7 +119,7 @@ export function readLastAssistantFromSessionFile(filePath: string | undefined): 
   }
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     try {
-      const parsed = JSON.parse(lines[index]) as {
+      const parsed = JSON.parse(expectDefined(lines[index], "lines entry at index")) as {
         message?: { role?: unknown; content?: unknown };
       };
       if (parsed.message?.role !== "assistant") {
@@ -138,7 +141,7 @@ function readCronJobName(cronJobId: string | undefined): string | undefined {
     return undefined;
   }
   try {
-    const store = loadCronStoreSync(resolveCronStorePath());
+    const store = loadCronJobsStoreSync(resolveCronJobsStorePath());
     const job = store.jobs.find((entry) => entry.id === cronJobId);
     return typeof job?.name === "string" && job.name.trim() ? job.name.trim() : undefined;
   } catch {
@@ -195,8 +198,3 @@ export function formatStoppedCronSessionDiagnosticFields(context: CronSessionCon
   }
   return fields.join(" ");
 }
-
-export const testing = {
-  quoteLogField,
-};
-export { testing as __testing };

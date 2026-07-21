@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite merge patch plugin behavior.
 import { describe, expect, it } from "vitest";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 
@@ -7,7 +8,7 @@ describe("applyQaMergePatch", () => {
       applyQaMergePatch(
         {
           agents: [
-            { id: "qa", model: { primary: "openai/gpt-5.5" }, tools: ["read"] },
+            { id: "qa", model: { primary: "openai/gpt-5.6-luna" }, tools: ["read"] },
             { id: "keep", enabled: true },
           ],
         },
@@ -23,7 +24,7 @@ describe("applyQaMergePatch", () => {
         {
           id: "qa",
           model: {
-            primary: "openai/gpt-5.5",
+            primary: "openai/gpt-5.6-luna",
             fallback: "anthropic/claude-opus-4-8",
           },
           tools: ["read"],

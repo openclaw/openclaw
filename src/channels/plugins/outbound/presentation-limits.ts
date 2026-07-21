@@ -1,4 +1,17 @@
+/**
+ * Presentation limit adapters for channel outbound payloads.
+ *
+ * Truncates and reshapes portable presentation blocks to match per-channel limits.
+ */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  renderMessagePresentationChartFallbackText,
+  renderMessagePresentationTableFallbackText,
+  resolveMessagePresentationActionValue,
+  resolveMessagePresentationButtonAction,
+  resolveMessagePresentationOptionAction,
+} from "../../../interactive/payload.js";
 import type {
   MessagePresentation,
   MessagePresentationBlock,
@@ -61,10 +74,44 @@ function truncatePresentationText(value: string, limits: TextLimits | undefined)
     return truncateUtf8Bytes(value, limit);
   }
   if (limits?.encoding === "utf16-units") {
-    return value.length > limit ? value.slice(0, limit) : value;
+    return truncateUtf16Safe(value, limit);
   }
   const chars = Array.from(value);
   return chars.length > limit ? chars.slice(0, limit).join("") : value;
+}
+
+function splitPresentationText(value: string, limits: TextLimits | undefined): string[] {
+  const limit = positiveInteger(limits?.maxLength);
+  if (!limit || truncatePresentationText(value, limits) === value) {
+    return [value];
+  }
+  const chunks: string[] = [];
+  let remaining = value;
+  while (remaining) {
+    const prefix = truncatePresentationText(remaining, limits);
+    if (!prefix || prefix === remaining) {
+      chunks.push(remaining);
+      break;
+    }
+    // Keep complete fallback lines together when possible. Retain the newline
+    // itself so concatenating the blocks reconstructs every authored character.
+    const newlineIndex = prefix.lastIndexOf("\n");
+    const splitIndex = newlineIndex > 0 ? newlineIndex + 1 : prefix.length;
+    chunks.push(remaining.slice(0, splitIndex));
+    remaining = remaining.slice(splitIndex);
+  }
+  return chunks;
+}
+
+function fallbackTextBlocks(params: {
+  blockType: "context" | "text";
+  text: string;
+  limits?: TextLimits;
+}): MessagePresentationBlock[] {
+  return splitPresentationText(params.text, params.limits).map((text) => ({
+    type: params.blockType,
+    text,
+  }));
 }
 
 function utf8ByteLength(value: string): number {
@@ -98,8 +145,13 @@ function buttonFallbackLabel(
   maxLabelLength: number | undefined,
 ): string {
   const label = truncateText(button.label, maxLabelLength);
-  const target = button.url ?? button.webApp?.url ?? button.web_app?.url;
-  return target ? `${label}: ${target}` : label;
+  if (button.disabled) {
+    return label;
+  }
+  const action = resolveMessagePresentationButtonAction(button);
+  return action?.type === "url" || (action?.type === "web-app" && action.url)
+    ? `${label}: ${action.url}`
+    : label;
 }
 
 function actionCapacity(limits: ActionLimits | undefined): number | undefined {
@@ -200,10 +252,16 @@ function adaptButton(
   button: MessagePresentationButton,
   limits: ActionLimits | undefined,
 ): MessagePresentationButton | undefined {
-  const hasLinkTarget = Boolean(button.url || button.webApp || button.web_app);
-  const valueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
+  const hasExplicitAction = button.action !== undefined;
+  const action = resolveMessagePresentationButtonAction(button);
+  if (!action) {
+    return undefined;
+  }
+  const actionValue = resolveMessagePresentationActionValue(action);
+  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
+  const legacyValueFits = fitsByteLimit(button.value, limits?.maxValueBytes);
   if (
-    (!valueFits && !hasLinkTarget) ||
+    (hasExplicitAction ? !actionFits : action.type === "callback" && !legacyValueFits) ||
     (button.disabled === true && limits?.supportsDisabled !== true)
   ) {
     return undefined;
@@ -212,7 +270,7 @@ function adaptButton(
     ...button,
     label: truncateText(button.label, limits?.maxLabelLength),
   };
-  if (!valueFits) {
+  if (!legacyValueFits) {
     delete adapted.value;
   }
   if (limits?.supportsStyles === false) {
@@ -293,13 +351,25 @@ function adaptOption(
   option: MessagePresentationOption,
   limits: SelectLimits | undefined,
 ): MessagePresentationOption | undefined {
-  if (!fitsByteLimit(option.value, limits?.maxValueBytes)) {
+  const hasExplicitAction = option.action !== undefined;
+  const action = resolveMessagePresentationOptionAction(option);
+  if (!action) {
     return undefined;
   }
-  return {
+  const actionValue = resolveMessagePresentationActionValue(action);
+  const actionFits = actionValue === undefined || fitsByteLimit(actionValue, limits?.maxValueBytes);
+  const legacyValueFits = fitsByteLimit(option.value, limits?.maxValueBytes);
+  if (hasExplicitAction ? !actionFits : !legacyValueFits) {
+    return undefined;
+  }
+  const adapted: MessagePresentationOption = {
     ...option,
     label: truncateText(option.label, limits?.maxLabelLength),
   };
+  if (!legacyValueFits) {
+    delete adapted.value;
+  }
+  return adapted;
 }
 
 function adaptSelectBlock(
@@ -339,7 +409,9 @@ function adaptSelectBlock(
   const blocks: MessagePresentationBlock[] = [
     {
       type: "select",
-      placeholder: truncateText(block.placeholder ?? "", limits?.maxLabelLength) || undefined,
+      ...(block.placeholder
+        ? { placeholder: truncateText(block.placeholder, limits?.maxLabelLength) }
+        : {}),
       options,
     },
   ];
@@ -457,6 +529,26 @@ export function adaptMessagePresentationForChannel(params: {
   });
   const blocks: MessagePresentationBlock[] = [];
   for (const block of params.presentation.blocks) {
+    if (block.type === "chart" && capabilities?.charts !== true) {
+      blocks.push(
+        ...fallbackTextBlocks({
+          blockType: fallbackBlockType,
+          text: renderMessagePresentationChartFallbackText(block),
+          limits: limits?.text,
+        }),
+      );
+      continue;
+    }
+    if (block.type === "table" && capabilities?.tables !== true) {
+      blocks.push(
+        ...fallbackTextBlocks({
+          blockType: fallbackBlockType,
+          text: renderMessagePresentationTableFallbackText(block),
+          limits: limits?.text,
+        }),
+      );
+      continue;
+    }
     if (block.type === "buttons") {
       if (capabilities?.buttons === false) {
         const fallback = fallbackListBlock({

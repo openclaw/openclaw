@@ -1,3 +1,4 @@
+// Xiaomi setup module handles plugin onboarding behavior.
 import {
   createDefaultModelsPresetAppliers,
   type OpenClawConfig,
@@ -83,17 +84,6 @@ export function applyXiaomiProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 
 export function applyXiaomiConfig(cfg: OpenClawConfig): OpenClawConfig {
   return xiaomiPresetAppliers.applyConfig(cfg);
-}
-
-export function applyXiaomiTokenPlanProviderConfig(
-  cfg: OpenClawConfig,
-  region: XiaomiTokenPlanRegion,
-): OpenClawConfig {
-  return withProviderBaseUrl(
-    xiaomiTokenPlanPresetAppliers.applyProviderConfig(cfg),
-    XIAOMI_TOKEN_PLAN_PROVIDER_ID,
-    resolveXiaomiTokenPlanBaseUrl(region),
-  );
 }
 
 export function applyXiaomiTokenPlanConfig(

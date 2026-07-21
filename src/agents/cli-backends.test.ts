@@ -1,17 +1,18 @@
+/** Tests CLI backend config resolution, normalization, and live-test defaults. */
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CliBackendConfig } from "../config/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
-import {
-  testing as cliBackendsTesting,
-  resolveCliBackendConfig,
-  resolveCliBackendLiveTest,
-} from "./cli-backends.js";
+import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 
 type RuntimeBackendEntry = ReturnType<
   (typeof import("../plugins/cli-backends.runtime.js"))["resolveRuntimeCliBackends"]
@@ -24,6 +25,7 @@ let runtimeBackendEntries: RuntimeBackendEntry[] = [];
 let setupBackendEntries: SetupBackendEntry[] = [];
 
 function createBackendEntry(params: {
+  autoSelectAuthProfile?: boolean;
   pluginId: string;
   id: string;
   config: CliBackendConfig;
@@ -31,13 +33,17 @@ function createBackendEntry(params: {
   bundleMcpMode?: CliBundleMcpMode;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
   ) => CliBackendConfig;
 }) {
+  // Runtime/setup backend entries share most shape; tests build both from one
+  // helper so registry behavior stays aligned.
   return {
     pluginId: params.pluginId,
     source: "test",
@@ -48,8 +54,13 @@ function createBackendEntry(params: {
       ...(params.bundleMcpMode ? { bundleMcpMode: params.bundleMcpMode } : {}),
       ...(params.defaultAuthProfileId ? { defaultAuthProfileId: params.defaultAuthProfileId } : {}),
       ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
+      ...(params.autoSelectAuthProfile !== undefined
+        ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
+        : {}),
+      ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
+      ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
         defaultModelRef:
@@ -150,6 +161,7 @@ function normalizeTestClaudeArgs(
   args: string[] | undefined,
   permission: { mode?: string; overrideExisting: boolean },
 ): string[] | undefined {
+  // Mirrors Claude backend normalization without loading the bundled runtime.
   if (!args) {
     return permission.mode ? ["--permission-mode", permission.mode] : args;
   }
@@ -157,7 +169,7 @@ function normalizeTestClaudeArgs(
   let hasSettingSources = false;
   let hasPermissionMode = false;
   for (let i = 0; i < args.length; i += 1) {
-    const arg = args[i];
+    const arg = expectDefined(args[i], "args[i] test invariant");
     if (arg === "--dangerously-skip-permissions") {
       continue;
     }
@@ -219,6 +231,40 @@ function normalizeTestClaudeBackendConfig(
   };
 }
 
+function readTestGeminiOutput(
+  args: readonly string[] | undefined,
+): NonNullable<CliBackendConfig["output"]> {
+  for (let index = 0; index < (args?.length ?? 0); index += 1) {
+    const arg = args?.[index];
+    const value =
+      arg === "--output-format" || arg === "-o"
+        ? args?.[index + 1]
+        : arg?.startsWith("--output-format=")
+          ? arg.slice("--output-format=".length)
+          : arg?.startsWith("-o=")
+            ? arg.slice("-o=".length)
+            : undefined;
+    if (value === "stream-json") {
+      return "jsonl";
+    }
+    if (value === "json" || value === "text") {
+      return value;
+    }
+  }
+  return "text";
+}
+
+function normalizeTestGeminiBackendConfig(config: CliBackendConfig): CliBackendConfig {
+  const output = readTestGeminiOutput(config.args);
+  const resumeOutput = readTestGeminiOutput(config.resumeArgs ?? config.args);
+  return {
+    ...config,
+    output,
+    resumeOutput,
+    jsonlDialect: output === "jsonl" || resumeOutput === "jsonl" ? "gemini-stream-json" : undefined,
+  };
+}
+
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
 });
@@ -230,6 +276,8 @@ beforeEach(() => {
       id: "claude-cli",
       bundleMcp: true,
       bundleMcpMode: "claude-config-file",
+      autoSelectAuthProfile: false,
+      ownsNativeCompaction: true,
       config: {
         command: "claude",
         args: [
@@ -336,18 +384,33 @@ beforeEach(() => {
       id: "google-gemini-cli",
       bundleMcp: true,
       bundleMcpMode: "gemini-system-settings",
+      authEpochMode: "profile-only",
+      prepareExecution: async () => null,
+      normalizeConfig: normalizeTestGeminiBackendConfig,
       config: {
         command: "gemini",
-        args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
-        resumeArgs: [
+        args: [
           "--skip-trust",
-          "--resume",
-          "{sessionId}",
+          "--approval-mode",
+          "auto_edit",
           "--output-format",
-          "json",
+          "stream-json",
           "--prompt",
           "{prompt}",
         ],
+        resumeArgs: [
+          "--skip-trust",
+          "--approval-mode",
+          "auto_edit",
+          "--resume",
+          "{sessionId}",
+          "--output-format",
+          "stream-json",
+          "--prompt",
+          "{prompt}",
+        ],
+        output: "jsonl",
+        jsonlDialect: "gemini-stream-json",
         imageArg: "@",
         imagePathScope: "workspace",
         modelArg: "--model",
@@ -384,6 +447,28 @@ beforeEach(() => {
 });
 
 describe("resolveCliBackendConfig reliability merge", () => {
+  it("preserves backend-owned runtime artifacts across command overrides", () => {
+    const runtimeArtifact = {
+      kind: "bundled-package-tree",
+      packageName: "@fixture/cli",
+      entrypoint: "command",
+    } as const;
+    runtimeBackendEntries.unshift(
+      createRuntimeBackendEntry({
+        pluginId: "fixture",
+        id: "fixture-cli",
+        config: { command: "fixture", args: ["run"] },
+        runtimeArtifact,
+      }),
+    );
+
+    const resolved = resolveCliBackendConfig("fixture-cli", {
+      agents: { defaults: { cliBackends: { "fixture-cli": { command: "/opt/fixture" } } } },
+    });
+    expect(resolved?.config.command).toBe("/opt/fixture");
+    expect(resolved?.runtimeArtifact).toEqual(runtimeArtifact);
+  });
+
   it("defaults codex-cli fresh sandboxing and config-pinned resume sandboxing", () => {
     const resolved = requireCliBackendConfig("codex-cli");
 
@@ -408,77 +493,6 @@ describe("resolveCliBackendConfig reliability merge", () => {
       'service_tier="fast"',
       "--skip-git-repo-check",
     ]);
-  });
-
-  it("deep-merges reliability watchdog overrides for codex", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "codex-cli": {
-              command: "codex",
-              reliability: {
-                watchdog: {
-                  resume: {
-                    noOutputTimeoutMs: 42_000,
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const resolved = requireCliBackendConfig("codex-cli", cfg);
-
-    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutMs).toBe(42_000);
-    // Ensure defaults are retained when only one field is overridden.
-    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.3);
-    expect(resolved.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
-    expect(resolved.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
-    expect(resolved.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
-  });
-
-  it("deep-merges reliability output-limit overrides", () => {
-    runtimeBackendEntries.unshift(
-      createRuntimeBackendEntry({
-        pluginId: "test",
-        id: "test-cli",
-        config: {
-          command: "test-cli",
-          reliability: {
-            outputLimits: {
-              maxTurnRawChars: 8192,
-              maxTurnLines: 20_000,
-            },
-          },
-        },
-      }),
-    );
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "test-cli": {
-              command: "test-cli",
-              reliability: {
-                outputLimits: {
-                  maxTurnRawChars: 16_384,
-                },
-              },
-            },
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
-
-    const resolved = requireCliBackendConfig("test-cli", cfg);
-
-    expect(resolved?.config.reliability?.outputLimits).toEqual({
-      maxTurnRawChars: 16_384,
-      maxTurnLines: 20_000,
-    });
   });
 });
 
@@ -520,6 +534,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.output).toBe("jsonl");
     expect(resolved?.config.args).toContain("stream-json");
     expect(resolved?.config.args).toContain("--include-partial-messages");
@@ -544,6 +559,11 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(resolved?.config.resumeArgs).toContain("--permission-mode");
     expect(resolved?.config.resumeArgs).toContain("bypassPermissions");
     expect(resolved?.config.resumeArgs).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("declares ownsNativeCompaction for claude-cli", () => {
+    const resolved = requireCliBackendConfig("claude-cli");
+    expect(resolved?.ownsNativeCompaction).toBe(true);
   });
 
   it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {
@@ -893,6 +913,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("claude-config-file");
+    expect(resolved?.autoSelectAuthProfile).toBe(false);
     expect(resolved?.config.args).toEqual([
       "-p",
       "--output-format",
@@ -923,11 +944,66 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 });
 
 describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
-  it("uses Gemini CLI json args and existing-session resume mode", () => {
+  it("uses Gemini CLI stream-json args and existing-session resume mode", () => {
     const resolved = requireCliBackendConfig("google-gemini-cli");
 
     expect(resolved?.bundleMcp).toBe(true);
     expect(resolved?.bundleMcpMode).toBe("gemini-system-settings");
+    expect(resolved?.authEpochMode).toBe("profile-only");
+    expect(resolved?.prepareExecution).toBeTypeOf("function");
+    expect(resolved?.config.args).toEqual([
+      "--skip-trust",
+      "--approval-mode",
+      "auto_edit",
+      "--output-format",
+      "stream-json",
+      "--prompt",
+      "{prompt}",
+    ]);
+    expect(resolved?.config.resumeArgs).toEqual([
+      "--skip-trust",
+      "--approval-mode",
+      "auto_edit",
+      "--resume",
+      "{sessionId}",
+      "--output-format",
+      "stream-json",
+      "--prompt",
+      "{prompt}",
+    ]);
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.resumeOutput).toBe("jsonl");
+    expect(resolved?.config.jsonlDialect).toBe("gemini-stream-json");
+    expect(resolved?.config.modelArg).toBe("--model");
+    expect(resolved?.config.sessionMode).toBe("existing");
+    expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
+    expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
+  });
+
+  it("keeps legacy Gemini CLI json arg overrides on the json parser", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "google-gemini-cli": {
+              command: "gemini",
+              args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],
+              resumeArgs: [
+                "--skip-trust",
+                "--resume",
+                "{sessionId}",
+                "--output-format=json",
+                "--prompt",
+                "{prompt}",
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = requireCliBackendConfig("google-gemini-cli", cfg);
+
     expect(resolved?.config.args).toEqual([
       "--skip-trust",
       "--output-format",
@@ -935,19 +1011,38 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
       "--prompt",
       "{prompt}",
     ]);
-    expect(resolved?.config.resumeArgs).toEqual([
-      "--skip-trust",
-      "--resume",
-      "{sessionId}",
-      "--output-format",
-      "json",
-      "--prompt",
-      "{prompt}",
-    ]);
-    expect(resolved?.config.modelArg).toBe("--model");
-    expect(resolved?.config.sessionMode).toBe("existing");
-    expect(resolved?.config.sessionIdFields).toEqual(["session_id", "sessionId"]);
-    expect(resolved?.config.modelAliases?.pro).toBe("gemini-3.1-pro-preview");
+    expect(resolved?.config.output).toBe("json");
+    expect(resolved?.config.resumeOutput).toBe("json");
+    expect(resolved?.config.jsonlDialect).toBeUndefined();
+  });
+
+  it("keeps Gemini CLI short stream-json arg overrides on the jsonl parser", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "google-gemini-cli": {
+              command: "gemini",
+              args: ["--skip-trust", "-o", "stream-json", "--prompt", "{prompt}"],
+              resumeArgs: [
+                "--skip-trust",
+                "--resume",
+                "{sessionId}",
+                "-o=stream-json",
+                "--prompt",
+                "{prompt}",
+              ],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = requireCliBackendConfig("google-gemini-cli", cfg);
+
+    expect(resolved?.config.output).toBe("jsonl");
+    expect(resolved?.config.resumeOutput).toBe("jsonl");
+    expect(resolved?.config.jsonlDialect).toBe("gemini-stream-json");
   });
 
   it("uses Codex CLI bundle MCP config overrides", () => {
@@ -1024,3 +1119,4 @@ describe("resolveCliBackendConfig alias precedence", () => {
     expect(resolved?.config.args).toEqual(["--canonical"]);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

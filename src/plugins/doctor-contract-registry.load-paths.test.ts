@@ -1,17 +1,20 @@
+// Covers doctor contract registry load paths for plugins.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { findLegacyConfigIssues } from "../config/legacy.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
-  clearPluginDoctorContractRegistryCache,
   listPluginDoctorLegacyConfigRules,
   listPluginDoctorSessionRouteStateOwners,
+  listPluginDoctorSessionStoreAgentIds,
 } from "./doctor-contract-registry.js";
+import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
 const tempDirs: string[] = [];
+const repoRoot = path.resolve(import.meta.dirname, "../..");
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(
@@ -88,6 +91,55 @@ module.exports = {
       changes: ["configured load-path doctor contract LLM policy"],
     };
   },
+};
+`,
+    "utf8",
+  );
+}
+
+function writeDistDoctorPlugin(pluginRoot: string, pluginId: string): void {
+  fs.mkdirSync(path.join(pluginRoot, "dist"), { recursive: true });
+  fs.writeFileSync(
+    path.join(pluginRoot, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: pluginId,
+        name: "Dist Doctor",
+        version: "0.0.0-test",
+        configSchema: {},
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginRoot, "package.json"),
+    JSON.stringify(
+      {
+        name: `@openclaw/${pluginId}`,
+        version: "0.0.0-test",
+        type: "module",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+        },
+      },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  fs.writeFileSync(path.join(pluginRoot, "dist", "index.js"), "export {};\n", "utf8");
+  fs.writeFileSync(
+    path.join(pluginRoot, "dist", "doctor-contract-api.cjs"),
+    `
+module.exports = {
+  legacyConfigRules: [
+    {
+      path: ["plugins", "entries", ${JSON.stringify(pluginId)}, "config", "distOnly"],
+      message: "dist doctor contract warning",
+    },
+  ],
 };
 `,
     "utf8",
@@ -192,6 +244,26 @@ describe("doctor contract registry load-path plugins", () => {
     ]);
   });
 
+  it("discovers doctor warning rules from package dist contracts", () => {
+    const stateDir = makeTempDir();
+    const pluginRoot = makeTempDir();
+    const pluginId = "dist-doctor";
+    writeDistDoctorPlugin(pluginRoot, pluginId);
+    const config = createDoctorPluginConfig(pluginRoot, pluginId);
+
+    const rules = listPluginDoctorLegacyConfigRules({
+      config,
+      env: makeHermeticDoctorEnv(stateDir),
+      pluginIds: [pluginId],
+    });
+    expect(rules).toEqual([
+      {
+        path: ["plugins", "entries", pluginId, "config", "distOnly"],
+        message: "dist doctor contract warning",
+      },
+    ]);
+  });
+
   it("applies compatibility normalizers from plugins.load.paths", () => {
     const stateDir = makeTempDir();
     const pluginRoot = makeTempDir();
@@ -235,5 +307,41 @@ describe("doctor contract registry load-path plugins", () => {
         authProfilePrefixes: ["load-path:"],
       },
     ]);
+  });
+
+  describe("real Voice Call contract", () => {
+    let agentIds: string[];
+
+    beforeAll(() => {
+      const stateDir = makeTempDir();
+      const pluginRoot = path.join(repoRoot, "extensions", "voice-call");
+      const config = {
+        plugins: {
+          load: { paths: [pluginRoot] },
+          entries: {
+            "voice-call": {
+              enabled: true,
+              config: {
+                agentId: "Voice",
+                numbers: {
+                  "+15550001111": { agentId: "Cards" },
+                  "+15550002222": {},
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      agentIds = listPluginDoctorSessionStoreAgentIds({
+        config,
+        env: makeHermeticDoctorEnv(stateDir),
+        pluginIds: ["voice-call"],
+      });
+    });
+
+    it("loads session-store agent IDs from the real Voice Call doctor contract", () => {
+      expect(agentIds).toEqual(["cards", "voice"]);
+    });
   });
 });

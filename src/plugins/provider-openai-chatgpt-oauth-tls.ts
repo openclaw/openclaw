@@ -1,3 +1,4 @@
+/** TLS helpers for ChatGPT OAuth provider discovery in plugin runtime code. */
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -24,11 +25,10 @@ const TLS_CERT_ERROR_PATTERNS = [
 const OPENAI_AUTH_PROBE_URL =
   "https://auth.openai.com/oauth/authorize?response_type=code&client_id=openclaw-preflight&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email";
 const OPENAI_PROVIDER_ID = "openai";
-const LEGACY_OPENAI_PROVIDER_ID = ["openai", "codex"].join("-");
 
 type PreflightFailureKind = "tls-cert" | "network";
 
-export type OpenAIOAuthTlsPreflightResult =
+type OpenAIOAuthTlsPreflightResult =
   | { ok: true }
   | {
       ok: false;
@@ -85,9 +85,7 @@ function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
     return false;
   }
   return Object.values(profiles).some(
-    (profile) =>
-      (profile.provider === OPENAI_PROVIDER_ID || profile.provider === LEGACY_OPENAI_PROVIDER_ID) &&
-      profile.mode === "oauth",
+    (profile) => profile.provider === OPENAI_PROVIDER_ID && profile.mode === "oauth",
   );
 }
 
@@ -107,8 +105,9 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+  let response: Response | undefined;
   try {
-    await fetchImpl(OPENAI_AUTH_PROBE_URL, {
+    response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
       method: "GET",
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
@@ -122,6 +121,10 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
       code: failure.code,
       message: failure.message,
     };
+  } finally {
+    if (response?.bodyUsed !== true) {
+      await response?.body?.cancel().catch(() => undefined);
+    }
   }
 }
 

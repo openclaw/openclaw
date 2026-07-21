@@ -1,3 +1,4 @@
+// Google tests cover oauth.local login plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth?state=state-123";
@@ -35,6 +36,7 @@ describe("loginGeminiCliOAuth local browser flow", () => {
   it("prints the auth URL before attempting best-effort browser launch", async () => {
     const events: string[] = [];
     const { loginGeminiCliOAuth } = await import("./oauth.js");
+    const signal = new AbortController().signal;
     const openUrl = vi.fn(async () => {
       events.push("open");
     });
@@ -49,6 +51,7 @@ describe("loginGeminiCliOAuth local browser flow", () => {
       note: async () => {},
       prompt: async () => "",
       progress: { update: () => {}, stop: () => {} },
+      signal,
     });
 
     expect(result).toEqual({
@@ -64,6 +67,6 @@ describe("loginGeminiCliOAuth local browser flow", () => {
     expect(waitForLocalCallbackMock).toHaveBeenCalledWith(
       expect.objectContaining({ expectedState: "state-123" }),
     );
-    expect(exchangeCodeForTokensMock).toHaveBeenCalledWith("oauth-code", "pkce-verifier");
+    expect(exchangeCodeForTokensMock).toHaveBeenCalledWith("oauth-code", "pkce-verifier", signal);
   });
 });

@@ -1,12 +1,19 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+// Host Server script supports OpenClaw repository automation.
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createConnection } from "node:net";
+import { tmpdir } from "node:os";
 import path from "node:path";
+import type { Readable } from "node:stream";
+import { sleep as delay } from "../../lib/sleep.mjs";
 import { die, run, say, sh, warn } from "./host-command.ts";
-import type { HostServer } from "./types.ts";
+import type { HostServer, NpmRegistryPackage, NpmRegistryServer } from "./types.ts";
 
 const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
 const HOST_SERVER_STDERR_DRAIN_MS = 5_000;
+type HostServerChild = ChildProcess & { stderr: Readable };
 
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
@@ -21,7 +28,7 @@ export function resolveHostIp(explicit = ""): string {
   return output;
 }
 
-export function allocateHostPort(): number {
+function allocateHostPort(): number {
   return Number(
     run(
       "python3",
@@ -34,7 +41,7 @@ export function allocateHostPort(): number {
   );
 }
 
-export async function isHostPortFree(port: number): Promise<boolean> {
+async function isHostPortFree(port: number): Promise<boolean> {
   return await new Promise((resolve) => {
     const server = createServer();
     server.once("error", () => resolve(false));
@@ -81,24 +88,94 @@ export async function startHostServer(input: {
     hostIp: input.hostIp,
     port: actualPort,
     stop: async () => {
-      child.kill("SIGTERM");
-      await new Promise<void>((resolve) => {
-        child.once("exit", () => resolve());
-        setTimeout(() => {
-          child.kill("SIGKILL");
-          resolve();
-        }, 2_000).unref();
-      });
+      await stopHostServerChild(child);
     },
     urlFor: (filePath) =>
       `http://${input.hostIp}:${actualPort}/${encodeURIComponent(path.basename(filePath))}`,
   };
 }
 
-async function waitForHostServer(
-  child: ChildProcessWithoutNullStreams,
-  port: number,
-): Promise<void> {
+export async function startNpmRegistryServer(input: {
+  hostIp: string;
+  packages: NpmRegistryPackage[];
+}): Promise<NpmRegistryServer> {
+  if (input.packages.length === 0) {
+    die("npm registry server requires at least one package");
+  }
+  const port = allocateHostPort();
+  const portFile = path.join(tmpdir(), `openclaw-npm-registry-${randomUUID()}.port`);
+  const packageArgs = input.packages.flatMap((pkg) => [pkg.name, pkg.version, pkg.tarballPath]);
+  const child = spawn(
+    process.execPath,
+    ["scripts/e2e/lib/plugins/npm-registry-server.mjs", portFile, ...packageArgs],
+    {
+      env: {
+        ...process.env,
+        OPENCLAW_NPM_REGISTRY_BIND_HOST: "0.0.0.0",
+        OPENCLAW_NPM_REGISTRY_PORT: String(port),
+        OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  await waitForHostServer(child, port);
+  const url = `http://${input.hostIp}:${port}`;
+  say(`Serve prepared npm package set on ${url}`);
+  return {
+    url,
+    stop: async () => {
+      try {
+        await stopHostServerChild(child);
+      } finally {
+        await rm(portFile, { force: true });
+      }
+    },
+  };
+}
+
+async function stopHostServerChild(
+  child: HostServerChild,
+  terminateTimeoutMs = 2_000,
+  killTimeoutMs = 1_500,
+): Promise<boolean> {
+  if (hasHostServerChildExited(child)) {
+    return true;
+  }
+  child.kill("SIGTERM");
+  if (await waitForChildExit(child, terminateTimeoutMs)) {
+    return true;
+  }
+  child.kill("SIGKILL");
+  return await waitForChildExit(child, killTimeoutMs);
+}
+
+async function waitForChildExit(child: HostServerChild, timeoutMs: number): Promise<boolean> {
+  if (hasHostServerChildExited(child)) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const onExit = () => settle(true);
+    const timeout = setTimeout(() => settle(hasHostServerChildExited(child)), timeoutMs);
+    timeout.unref();
+    function settle(exited: boolean): void {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      child.off("exit", onExit);
+      resolve(exited);
+    }
+    child.once("exit", onExit);
+  });
+}
+
+function hasHostServerChildExited(child: HostServerChild): boolean {
+  return child.exitCode != null || child.signalCode != null;
+}
+
+async function waitForHostServer(child: HostServerChild, port: number): Promise<void> {
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr = appendBoundedOutput(stderr, chunk, HOST_SERVER_STDERR_LIMIT_BYTES);
@@ -112,16 +189,18 @@ async function waitForHostServer(
   });
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
-    if (child.exitCode != null) {
+    if (hasHostServerChildExited(child)) {
       if (!childClosed) {
         await Promise.race([childClose, delay(HOST_SERVER_STDERR_DRAIN_MS)]);
       }
-      die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
+      die(`host artifact server exited early: ${stderr.trim() || formatHostServerExit(child)}`);
     }
     if (await canConnect(port)) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
   }
   child.kill("SIGTERM");
   die(`host artifact server did not start on port ${port}: ${stderr.trim()}`);
@@ -133,6 +212,10 @@ function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number
     return combined.toString("utf8");
   }
   return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
+}
+
+function formatHostServerExit(child: HostServerChild): string {
+  return child.signalCode ? `signal ${child.signalCode}` : `exit ${child.exitCode ?? "unknown"}`;
 }
 
 async function canConnect(port: number): Promise<boolean> {
@@ -150,10 +233,7 @@ async function canConnect(port: number): Promise<boolean> {
   });
 }
 
-async function delay(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export const testing = {
   appendBoundedOutput,
+  stopHostServerChild,
 };

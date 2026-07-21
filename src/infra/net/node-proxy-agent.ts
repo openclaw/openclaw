@@ -1,9 +1,12 @@
-import type { Agent as HttpAgent } from "node:http";
+// Node proxy agent helpers adapt env or explicit proxy settings for libraries
+// that need node:http Agent instances.
+import type { Agent as HttpAgent, AgentOptions as HttpAgentOptions } from "node:http";
+import type { AgentOptions as HttpsAgentOptions } from "node:https";
 import { createRequire } from "node:module";
 import { matchesNoProxy, resolveEnvHttpProxyAgentOptions } from "./proxy-env.js";
-import { resolveActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
+import { resolveActiveManagedProxyTlsOptions } from "./proxy/active-managed-proxy-tls.js";
 
-export const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
+const UNSUPPORTED_PROXY_PROTOCOL_MESSAGE =
   "Unsupported proxy protocol. SOCKS and PAC proxy URLs are not supported; use an HTTP or HTTPS proxy URL.";
 
 type NodeProxyProtocol = "http" | "https";
@@ -12,19 +15,33 @@ type ProxylineCreateAmbientNodeProxyAgent =
 type ProxylineAgentOptions = NonNullable<Parameters<ProxylineCreateAmbientNodeProxyAgent>[0]>;
 type ProxylineEnvSnapshot = NonNullable<ProxylineAgentOptions["env"]>;
 type ProxylineTlsOptions = ProxylineAgentOptions["proxyTls"];
+type NodeProxyAgentOptions = HttpAgentOptions & HttpsAgentOptions;
+type NodeProxyAgentWithOptions = HttpAgent & {
+  keepAlive: boolean;
+  keepAliveMsecs: number;
+  maxFreeSockets: number;
+  maxSockets: number;
+  maxTotalSockets: number;
+  options?: NodeProxyAgentOptions;
+  scheduling?: "fifo" | "lifo";
+  timeout?: number;
+};
 
 const require = createRequire(import.meta.url);
 
+/** Selects either ambient env proxy resolution or a caller-supplied fixed proxy URL. */
 export type CreateNodeProxyAgentOptions =
   | {
       mode: "env";
       targetUrl: string | URL;
       protocol?: NodeProxyProtocol;
+      agentOptions?: NodeProxyAgentOptions;
     }
   | {
       mode: "explicit";
       proxyUrl: string | URL;
       protocol?: NodeProxyProtocol;
+      agentOptions?: NodeProxyAgentOptions;
     };
 
 function inferTargetProtocol(targetUrl: string | URL): NodeProxyProtocol | undefined {
@@ -52,11 +69,15 @@ function parseTargetUrl(targetUrl: string | URL): URL | undefined {
 }
 
 function formatNoProxyTargetUrl(targetUrl: string | URL): string | undefined {
+  // WebSocket proxy bypass uses HTTP(S) semantics so NO_PROXY default ports and
+  // hostname matching stay aligned with normal requests.
   const target = parseTargetUrl(targetUrl);
   if (target === undefined) {
     return undefined;
   }
   const parsed = new URL(target.href);
+  // Bypass matching uses web request semantics. Map WebSocket schemes to the
+  // equivalent request schemes so default ports and host rules line up.
   if (parsed.protocol === "ws:") {
     parsed.protocol = "http:";
   } else if (parsed.protocol === "wss:") {
@@ -84,6 +105,8 @@ function proxyUrlWithDefaultScheme(proxyUrl: string, protocol: NodeProxyProtocol
 
 function fixedProxyEnv(proxyUrl: URL): ProxylineEnvSnapshot {
   const href = proxyUrl.href;
+  // Proxyline's ambient agent only reads env-shaped input. Pin both request
+  // scheme slots to the explicit URL and clear bypass rules for a fixed agent.
   return {
     HTTP_PROXY: href,
     HTTPS_PROXY: href,
@@ -101,6 +124,39 @@ function loadCreateAmbientNodeProxyAgent(): ProxylineCreateAmbientNodeProxyAgent
     .createAmbientNodeProxyAgent;
 }
 
+function applyNodeAgentOptions(agent: HttpAgent, options: NodeProxyAgentOptions | undefined): void {
+  if (options === undefined) {
+    return;
+  }
+  const agentWithOptions = agent as NodeProxyAgentWithOptions;
+  agentWithOptions.options = {
+    ...agentWithOptions.options,
+    ...options,
+  };
+  if (typeof options.keepAlive === "boolean") {
+    agentWithOptions.keepAlive = options.keepAlive;
+  }
+  if (typeof options.keepAliveMsecs === "number") {
+    agentWithOptions.keepAliveMsecs = options.keepAliveMsecs;
+  }
+  if (typeof options.maxFreeSockets === "number") {
+    agentWithOptions.maxFreeSockets = options.maxFreeSockets;
+  }
+  if (typeof options.maxSockets === "number") {
+    agentWithOptions.maxSockets = options.maxSockets;
+  }
+  if (typeof options.maxTotalSockets === "number") {
+    agentWithOptions.maxTotalSockets = options.maxTotalSockets;
+  }
+  if (options.scheduling === "fifo" || options.scheduling === "lifo") {
+    agentWithOptions.scheduling = options.scheduling;
+  }
+  if (typeof options.timeout === "number") {
+    agentWithOptions.timeout = options.timeout;
+  }
+}
+
+/** Resolves the env proxy URL that should be used for a specific Node target. */
 export function resolveEnvNodeProxyUrlForTarget(
   targetUrl: string | URL,
   env: NodeJS.ProcessEnv = process.env,
@@ -126,6 +182,7 @@ function createFixedNodeProxyAgent(
   options: {
     protocol?: NodeProxyProtocol;
     proxyTls?: ProxylineTlsOptions;
+    agentOptions?: NodeProxyAgentOptions;
   } = {},
 ): HttpAgent {
   const parsedProxyUrl =
@@ -140,26 +197,36 @@ function createFixedNodeProxyAgent(
   if (agent === undefined) {
     throw new Error(`${UNSUPPORTED_PROXY_PROTOCOL_MESSAGE} Got ${parsedProxyUrl.protocol}`);
   }
+  applyNodeAgentOptions(agent as HttpAgent, options.agentOptions);
   return agent as HttpAgent;
 }
 
+/** Creates a Node HTTP(S) agent for explicit proxy URLs; unsupported protocols throw. */
 export function createNodeProxyAgent(
   options: Extract<CreateNodeProxyAgentOptions, { mode: "explicit" }>,
 ): HttpAgent;
+/** Creates a Node HTTP(S) agent from env proxy settings, or undefined when bypassed. */
 export function createNodeProxyAgent(
   options: Extract<CreateNodeProxyAgentOptions, { mode: "env" }>,
 ): HttpAgent | undefined;
 export function createNodeProxyAgent(options: CreateNodeProxyAgentOptions): HttpAgent | undefined {
   if (options.mode === "explicit") {
-    return createFixedNodeProxyAgent(options.proxyUrl, { protocol: options.protocol });
+    return createFixedNodeProxyAgent(options.proxyUrl, {
+      protocol: options.protocol,
+      agentOptions: options.agentOptions,
+    });
   }
-  return createEnvNodeProxyAgentForTarget(options.targetUrl, { protocol: options.protocol });
+  return createEnvNodeProxyAgentForTarget(options.targetUrl, {
+    protocol: options.protocol,
+    agentOptions: options.agentOptions,
+  });
 }
 
 function createEnvNodeProxyAgentForTarget(
   targetUrl: string | URL,
   options: {
     protocol?: NodeProxyProtocol;
+    agentOptions?: NodeProxyAgentOptions;
   } = {},
 ): HttpAgent | undefined {
   const proxyUrl = resolveEnvNodeProxyUrlForTarget(targetUrl);
@@ -169,9 +236,11 @@ function createEnvNodeProxyAgentForTarget(
   return createFixedNodeProxyAgent(proxyUrl, {
     protocol: options.protocol ?? inferTargetProtocol(targetUrl) ?? "https",
     proxyTls: resolveActiveManagedProxyTlsOptions({ proxyUrl: proxyUrl.href }),
+    agentOptions: options.agentOptions,
   });
 }
 
+/** Builds paired HTTP and HTTPS agents for libraries that require both slots. */
 export function createFixedNodeProxyAgentPair(proxyUrl: string | URL): {
   httpAgent: HttpAgent;
   httpsAgent: HttpAgent;

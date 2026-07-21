@@ -1,10 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
+// Voice Call tests cover webhook.hangup once.lifecycle plugin behavior.
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider } from "./manager.test-harness.js";
-import { flushPendingCallRecordWritesForTest } from "./manager/store.js";
+import { setVoiceCallStateRuntime } from "./runtime-state.js";
 import type { WebhookContext, WebhookParseOptions } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
+
+function installStateRuntime(): void {
+  setVoiceCallStateRuntime({
+    state: {
+      resolveStateDir: () => "",
+      openKeyedStore: (() => {
+        throw new Error("openKeyedStore is not used by voice-call webhook lifecycle tests");
+      }) as never,
+      openSyncKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateSyncKeyedStoreForTests("voice-call", options),
+      openChannelIngressQueue: (() => {
+        throw new Error(
+          "openChannelIngressQueue is not used by voice-call webhook lifecycle tests",
+        );
+      }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error(
+          "openChannelIngressDrain is not used by voice-call webhook lifecycle tests",
+        );
+      }) as never,
+    },
+  });
+}
 
 const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({
@@ -118,8 +147,13 @@ class RejectInboundReplayWithHangupFailureProvider extends RejectInboundReplayPr
 }
 
 describe("Voice-call webhook hangup-once lifecycle", () => {
+  beforeEach(() => {
+    resetPluginStateStoreForTests();
+    installStateRuntime();
+  });
+
   afterEach(() => {
-    // Each test uses an isolated store path, so only server cleanup is needed.
+    resetPluginStateStoreForTests();
   });
 
   it("hangs up a rejected inbound replay only once across duplicate webhook delivery", async () => {
@@ -153,7 +187,6 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
     } finally {
       await firstServer.stop();
     }
-    await flushPendingCallRecordWritesForTest();
     expect(firstProvider.hangupCalls).toHaveLength(1);
 
     const secondProvider = new RejectInboundReplayProvider("plivo");

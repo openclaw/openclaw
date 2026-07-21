@@ -1,3 +1,4 @@
+// Documents provider/model id normalization from built-ins and plugin manifests.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   clearCurrentPluginMetadataSnapshot,
@@ -30,12 +31,20 @@ describe("normalizeStaticProviderModelId", () => {
   });
 
   it("applies shipped bundled provider model aliases without manifest lookup", () => {
+    // Shipped aliases must work before plugin metadata is loaded so catalog and
+    // config parsing can normalize common refs during startup.
     expect(normalizeStaticProviderModelId("anthropic", "sonnet-4.6")).toBe("claude-sonnet-4-6");
     expect(normalizeStaticProviderModelId("vercel-ai-gateway", "sonnet-4.6")).toBe(
       "anthropic/claude-sonnet-4-6",
     );
     expect(normalizeStaticProviderModelId("huggingface", "huggingface/vendor/model")).toBe(
       "vendor/model",
+    );
+  });
+
+  it("strips native Anthropic provider prefixes from static catalog ids", () => {
+    expect(normalizeStaticProviderModelId("anthropic", "anthropic/claude-haiku-4-5")).toBe(
+      "claude-haiku-4-5",
     );
   });
 
@@ -65,12 +74,12 @@ describe("normalizeStaticProviderModelId", () => {
     ).toBe("openrouter/auto");
   });
 
-  it("normalizes retired XAI beta ids without manifest lookup", () => {
+  it("preserves provider-owned XAI beta aliases without manifest lookup", () => {
     expect(
       normalizeStaticProviderModelId("xai", "grok-4.20-experimental-beta-0304-reasoning", {
         allowManifestNormalization: false,
       }),
-    ).toBe("grok-4.20-beta-latest-reasoning");
+    ).toBe("grok-4.20-experimental-beta-0304-reasoning");
   });
 
   it("normalizes the shipped retired Together default without manifest lookup", () => {
@@ -82,6 +91,8 @@ describe("normalizeStaticProviderModelId", () => {
   });
 
   it("uses current plugin metadata manifest normalization by default", () => {
+    // Runtime callers use the current metadata snapshot by default, so plugin
+    // normalization policy applies even without an explicit manifest list.
     setCurrentPluginMetadataSnapshot(
       {
         policyHash: "test-policy",

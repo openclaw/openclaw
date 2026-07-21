@@ -1,21 +1,39 @@
+import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
+// Markdown Core module implements render aware chunking behavior.
+import { annotateAssistantTranscriptRoleMessageBoundary } from "./ir-annotations.js";
 import {
-  chunkMarkdownIR,
+  copyMarkdownLinkSpan,
+  isAutoLinkedMarkdownLink,
+  mergeAnnotationSpans,
+  type MarkdownAnnotationSpan,
+} from "./ir-spans.js";
+import {
   sliceMarkdownIR,
   type MarkdownIR,
   type MarkdownLinkSpan,
   type MarkdownStyleSpan,
 } from "./ir.js";
 
+/** A rendered chunk paired with the Markdown IR slice that produced it. */
 export type RenderedMarkdownChunk<TRendered> = {
+  /** Rendered payload for this chunk after caller-specific escaping/link rewriting. */
   rendered: TRendered;
+  /** Source IR slice used to produce the rendered payload. */
   source: MarkdownIR;
 };
 
+/** Inputs for chunking Markdown IR against the final rendered payload size. */
 export type RenderMarkdownIRChunksWithinLimitOptions<TRendered> = {
+  /** Parsed Markdown IR to split. */
   ir: MarkdownIR;
+  /** Maximum measured size for each rendered chunk. */
   limit: number;
+  /** Returns the size unit enforced by the target transport. */
   measureRendered: (rendered: TRendered) => number;
+  /** Renders a candidate IR slice for measuring and final output. */
   renderChunk: (ir: MarkdownIR) => TRendered;
+  /** Re-annotate transcript-role headers promoted by a new message boundary. */
+  assistantTranscriptRoleMessageBoundaries?: boolean;
 };
 
 type RenderResolver<TRendered> = Pick<
@@ -30,6 +48,16 @@ function resolveIntegerOption(value: number, fallback: number, opts: { min: numb
   return Math.max(opts.min, Math.trunc(value));
 }
 
+function prepareChunkForMessageBoundary<TRendered>(
+  options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
+  chunk: MarkdownIR,
+): MarkdownIR {
+  return options.assistantTranscriptRoleMessageBoundaries === true
+    ? annotateAssistantTranscriptRoleMessageBoundary(chunk)
+    : chunk;
+}
+
+/** Chunks Markdown IR by rendered size while preserving styles, links, and whitespace. */
 export function renderMarkdownIRChunksWithinLimit<TRendered>(
   options: RenderMarkdownIRChunksWithinLimitOptions<TRendered>,
 ): RenderedMarkdownChunk<TRendered>[] {
@@ -37,36 +65,56 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     return [];
   }
 
+  // Callers pass Infinity to mean "no size cap" (e.g. a media caption that must not be
+  // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
+  // shattering the text into one chunk per character; emit the whole IR as one chunk.
+  if (options.limit === Number.POSITIVE_INFINITY) {
+    const source = prepareChunkForMessageBoundary(options, options.ir);
+    return [{ source, rendered: options.renderChunk(source) }];
+  }
+
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
-  const pending = chunkMarkdownIR(options.ir, normalizedLimit);
+  const renderResolver: RenderResolver<TRendered> = {
+    measureRendered: options.measureRendered,
+    renderChunk: (chunk) => options.renderChunk(prepareChunkForMessageBoundary(options, chunk)),
+  };
+  // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
+  // The initial reverse keeps the final order stable while avoiding shift/unshift
+  // moving every remaining chunk for long messages.
+  const pending = splitMarkdownIRPreserveWhitespace(options.ir, normalizedLimit).toReversed();
   const finalized: MarkdownIR[] = [];
 
   while (pending.length > 0) {
-    const chunk = pending.shift();
+    const chunk = pending.pop();
     if (!chunk) {
       continue;
     }
 
-    const rendered = options.renderChunk(chunk);
-    if (options.measureRendered(rendered) <= normalizedLimit || chunk.text.length <= 1) {
+    const rendered = renderResolver.renderChunk(chunk);
+    if (renderResolver.measureRendered(rendered) <= normalizedLimit || chunk.text.length <= 1) {
       finalized.push(chunk);
       continue;
     }
 
-    const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, options);
+    const split = splitMarkdownIRByRenderedLimit(chunk, normalizedLimit, renderResolver);
     if (split.length <= 1) {
       // Worst-case safety: avoid retry loops and keep the original chunk.
       finalized.push(chunk);
       continue;
     }
-    pending.unshift(...split);
+    for (let index = split.length - 1; index >= 0; index -= 1) {
+      const next = split[index];
+      if (next) {
+        pending.push(next);
+      }
+    }
   }
 
-  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, options).map(
-    (source) => ({
-      source,
-      rendered: options.renderChunk(source),
-    }),
+  return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, renderResolver).map(
+    (chunk) => {
+      const source = prepareChunkForMessageBoundary(options, chunk);
+      return { source, rendered: options.renderChunk(source) };
+    },
   );
 }
 
@@ -110,10 +158,11 @@ function findLargestChunkTextLengthWithinRenderedLimit<TRendered>(
   // Rendered length is not guaranteed to be monotonic after escaping/link or
   // file-reference rewriting, so test exact candidates from longest to shortest.
   for (let candidateLength = currentTextLength - 1; candidateLength >= 1; candidateLength -= 1) {
-    const candidate = sliceMarkdownIR(chunk, 0, candidateLength);
+    const safeCandidateLength = avoidTrailingHighSurrogateBreak(chunk.text, 0, candidateLength);
+    const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
     const rendered = options.renderChunk(candidate);
     if (options.measureRendered(rendered) <= renderedLimit) {
-      return candidateLength;
+      return safeCandidateLength;
     }
   }
   return 0;
@@ -135,7 +184,9 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   let sawNonWhitespace = false;
 
   for (let index = start; index < maxEnd; index += 1) {
-    const char = text[index];
+    const char = text.charAt(index);
+    // Parenthesized text often carries rewritten file/link references; prefer
+    // keeping it intact unless no outside break exists in the current window.
     if (char === "(") {
       sawNonWhitespace = true;
       parenDepth += 1;
@@ -154,6 +205,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
       continue;
     }
     if (char === "\n") {
+      // Newlines preserve markdown block structure better than other spaces.
       lastAnyNewlineBreak = index + 1;
       if (parenDepth === 0) {
         lastOutsideParenNewlineBreak = index + 1;
@@ -195,7 +247,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   if (lastAnyWhitespaceBreak > start) {
     return resolveWhitespaceBreak(lastAnyWhitespaceBreak, lastAnyWhitespaceRunStart);
   }
-  return maxEnd;
+  return avoidTrailingHighSurrogateBreak(text, start, maxEnd);
 }
 
 function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {
@@ -240,35 +292,53 @@ function mergeAdjacentLinkSpans(links: MarkdownLinkSpan[]): MarkdownLinkSpan[] {
   const merged: MarkdownLinkSpan[] = [];
   for (const link of links) {
     const last = merged.at(-1);
-    if (last && last.href === link.href && link.start <= last.end) {
+    if (
+      last &&
+      last.href === link.href &&
+      isAutoLinkedMarkdownLink(last) === isAutoLinkedMarkdownLink(link) &&
+      link.start <= last.end
+    ) {
       last.end = Math.max(last.end, link.end);
       continue;
     }
-    merged.push({ ...link });
+    merged.push(copyMarkdownLinkSpan(link));
   }
   return merged;
 }
 
 function mergeMarkdownIRChunks(left: MarkdownIR, right: MarkdownIR): MarkdownIR {
   const offset = left.text.length;
-  return {
-    text: left.text + right.text,
-    styles: mergeAdjacentStyleSpans([
-      ...left.styles,
-      ...right.styles.map((span) => ({
-        ...span,
-        start: span.start + offset,
-        end: span.end + offset,
-      })),
-    ]),
-    links: mergeAdjacentLinkSpans([
-      ...left.links,
-      ...right.links.map((link) => ({
-        ...link,
+  const shiftedAnnotations: MarkdownAnnotationSpan[] = [];
+  for (const annotation of right.annotations ?? []) {
+    shiftedAnnotations.push({
+      ...annotation,
+      start: annotation.start + offset,
+      end: annotation.end + offset,
+    });
+  }
+  const shiftedStyles: MarkdownStyleSpan[] = [];
+  for (const span of right.styles) {
+    shiftedStyles.push({
+      ...span,
+      start: span.start + offset,
+      end: span.end + offset,
+    });
+  }
+  const shiftedLinks: MarkdownLinkSpan[] = [];
+  for (const link of right.links) {
+    shiftedLinks.push(
+      copyMarkdownLinkSpan(link, {
         start: link.start + offset,
         end: link.end + offset,
-      })),
-    ]),
+      }),
+    );
+  }
+  const annotations = mergeAnnotationSpans([...(left.annotations ?? []), ...shiftedAnnotations]);
+  return {
+    text: left.text + right.text,
+    styles: mergeAdjacentStyleSpans([...left.styles, ...shiftedStyles]),
+    links: mergeAdjacentLinkSpans([...left.links, ...shiftedLinks]),
+    ...(annotations.length > 0 ? { annotations } : {}),
   };
 }
 
@@ -318,6 +388,8 @@ function coalesceWhitespaceOnlyMarkdownIRChunks<TRendered>(
     }
 
     if (prev && next) {
+      // Split pure whitespace between neighbors before dropping it so list,
+      // paragraph, and quote spacing survives when both sides still fit.
       for (let prefixLength = chunkLength - 1; prefixLength >= 1; prefixLength -= 1) {
         const prefix = sliceMarkdownIR(chunk, 0, prefixLength);
         const suffix = sliceMarkdownIR(chunk, prefixLength, chunkLength);

@@ -1,3 +1,4 @@
+// Cleans stale queue state and recent dedupe entries.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
@@ -31,7 +32,7 @@ function resolveQueueCleanupLaneClearer() {
     : defaultQueueCleanupDeps.clearCommandLane;
 }
 
-export const testing = {
+const queueCleanupTestApi = {
   setDepsForTests(deps: Partial<typeof defaultQueueCleanupDeps> | undefined): void {
     queueCleanupDeps.resolveEmbeddedSessionLane =
       typeof deps?.resolveEmbeddedSessionLane === "function"
@@ -48,6 +49,11 @@ export const testing = {
     queueCleanupDeps.clearCommandLane = defaultQueueCleanupDeps.clearCommandLane;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.queueCleanupTestApi")] =
+    queueCleanupTestApi;
+}
 
 export function clearSessionQueues(keys: Array<string | undefined>): ClearSessionQueueResult {
   const seen = new Set<string>();
@@ -71,4 +77,3 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
 
   return { followupCleared, laneCleared, keys: clearedKeys };
 }
-export { testing as __testing };

@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+// Telegram tests cover targets plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   isNumericTelegramSenderUserId,
@@ -199,7 +201,7 @@ describe("telegram group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
     expect(
       resolveTelegramGroupRequireMention({ cfg: telegramCfg, groupId: "-1001:topic:77" }),
     ).toBe(false);
@@ -241,7 +243,7 @@ describe("telegram group policy", () => {
           },
         },
       },
-    } as any;
+    } as OpenClawConfig;
 
     expect(
       resolveTelegramGroupRequireMention({

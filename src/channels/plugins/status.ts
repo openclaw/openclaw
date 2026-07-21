@@ -1,11 +1,18 @@
+/**
+ * Channel status snapshot builders.
+ *
+ * Combines plugin status hooks, account inspection, and safe account field projection.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { inspectChannelAccount } from "../account-inspection.js";
-import { projectSafeChannelAccountSnapshotFields } from "../account-snapshot-fields.js";
+import {
+  projectSafeChannelAccountSnapshotFields,
+  redactChannelAccountSnapshotBaseUrl,
+} from "../account-snapshot-fields.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelAccountSnapshot } from "./types.public.js";
 
-// Channel docking: status snapshots flow through plugin.status hooks here.
 export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(params: {
   plugin: ChannelPlugin<ResolvedAccount>;
   cfg: OpenClawConfig;
@@ -47,13 +54,13 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
     };
   }
 
-  return {
+  return redactChannelAccountSnapshotBaseUrl({
     ...snapshot,
     accountId: normalizeOptionalString(snapshot.accountId) ? snapshot.accountId : params.accountId,
     enabled: snapshot.enabled ?? params.enabledFallback,
     configured: snapshot.configured ?? params.configuredFallback,
     ...(params.probe !== undefined && snapshot.probe === undefined ? { probe: params.probe } : {}),
-  };
+  });
 }
 
 export async function buildReadOnlySourceChannelAccountSnapshot<ResolvedAccount>(params: {

@@ -1,3 +1,5 @@
+// Subagent spawn thread-binding tests cover child-session placement, target
+// account selection, and completion routing for channel thread spawns.
 import os from "node:os";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -84,6 +86,8 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   });
 
   function installChannelRouteProjectionPluginsForTest() {
+    // Matrix fixture projects a parent room plus child thread id into the
+    // gateway delivery target shape used by thread-bound sessions.
     const matrixBase = createChannelTestPluginBaseForTest({ id: "matrix", label: "Matrix" });
     setActivePluginRegistryForTest(
       createTestRegistryForTest([
@@ -160,6 +164,8 @@ describe("spawnSubagentDirect thread binding delivery", () => {
   });
 
   it("passes the target agent's bound account to core thread binding", async () => {
+    // Cross-agent spawns bind the target agent account, while requester origin
+    // remains the caller account for completion reporting.
     const boundRoom = "!room:example.org";
     const bindCalls: Array<Record<string, unknown>> = [];
     currentSessionBindingService = {
@@ -262,17 +268,17 @@ describe("spawnSubagentDirect thread binding delivery", () => {
         context: "isolated",
       },
       {
-        agentSessionKey: "agent:main:telegram:default:direct:456",
+        agentSessionKey: "agent:main:matrix:default:room:456",
         completionOwnerKey: "agent:main:main",
-        agentChannel: "telegram",
+        agentChannel: "matrix",
         agentAccountId: "default",
-        agentTo: "telegram:direct:456",
+        agentTo: "room:456",
       },
     );
 
     expect(result.status).toBe("accepted");
     const registeredRun = firstRegisteredSubagentRun();
-    expect(registeredRun.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registeredRun.controllerSessionKey).toBe("agent:main:matrix:default:room:456");
     expect(registeredRun.requesterSessionKey).toBe("agent:main:main");
     expect(registeredRun.requesterDisplayKey).toBe("agent:main:main");
   });

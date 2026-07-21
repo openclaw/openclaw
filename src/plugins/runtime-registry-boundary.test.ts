@@ -1,3 +1,4 @@
+/** Ensures runtime registry access stays inside plugin boundary and activation rules. */
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -11,6 +12,7 @@ const allowedRuntimeResolverRefs = new Set([
   "src/commands/doctor.e2e-harness.ts",
   "src/infra/outbound/channel-bootstrap.runtime.ts",
   "src/plugins/capability-provider-runtime.ts",
+  "src/plugins/loader-runtime-registry.ts",
   "src/plugins/loader.ts",
 ]);
 
@@ -79,7 +81,12 @@ function listSourceFilesByDirectory(dir: string): string[] {
 }
 
 function isProductionTypeScriptFile(path: string): boolean {
-  return path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith(".test.tsx");
+  return (
+    path.endsWith(".ts") &&
+    !path.endsWith(".test.ts") &&
+    !path.endsWith(".test.tsx") &&
+    !/\.test-(?:fixtures|harness|helpers|mocks|setup|support|utils)\.tsx?$/u.test(path)
+  );
 }
 
 describe("runtime plugin registry boundary", () => {

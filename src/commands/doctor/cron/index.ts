@@ -1,410 +1,258 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+// Doctor cron repair orchestration for legacy stores, run logs, payloads, and warnings.
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
-import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  loadCronQuarantineFile,
-  loadCronStore,
-  resolveCronQuarantinePath,
-  resolveCronStorePath,
-  saveCronStore,
-} from "../../../cron/store.js";
-import type { CronJob } from "../../../cron/types.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../../../packages/normalization-core/src/string-coerce.js";
+import { loadCronQuarantineFile, resolveCronJobsStorePath } from "../../../cron/store.js";
+import type { HealthFinding } from "../../../flows/health-checks.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
+import { countStaleDreamingJobs } from "./dreaming-payload-migration.js";
 import {
-  countStaleDreamingJobs,
-  migrateLegacyDreamingPayloadShape,
-} from "./dreaming-payload-migration.js";
+  applyLegacyCronStoreRepair,
+  loadLegacyCronRepairState,
+  type LegacyCronRepairResult,
+  type LegacyCronRepairState,
+} from "./legacy-repair.js";
 import {
-  legacyCronRunLogFilesExist,
-  migrateLegacyCronRunLogsToSqlite,
-} from "./legacy-run-log-migration.js";
-import {
-  archiveLegacyCronStoreForMigration,
-  legacyCronStoreFilesExist,
-  loadLegacyCronStoreForMigration,
-} from "./legacy-store-migration.js";
+  formatLegacyIssuePreview,
+  formatUnresolvedCommandPromptAdvisory,
+  formatUnresolvedShellPromptAdvisory,
+} from "./repair-plan.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
+import { noteCronDeliveryTargetAdvisory, noteCronModelOverrides } from "./warnings.js";
 
-type CronDoctorOutcome = {
-  changed: boolean;
-  warnings: string[];
-};
-
-type CrontabReader = () => Promise<{ stdout?: unknown; stderr?: unknown }>;
-
-const execFileAsync = promisify(execFile);
-const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
-  /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
-const CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT = 3;
+export {
+  collectLegacyWhatsAppCrontabHealthWarning,
+  noteLegacyWhatsAppCrontabHealthCheck,
+} from "./warnings.js";
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function formatRunLogMigrationNote(importedFiles: number): string {
-  return importedFiles > 0
-    ? ` Imported ${pluralize(importedFiles, "legacy cron run log")} into SQLite.`
-    : "";
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
-function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): string[] {
-  const lines: string[] = [];
-  if (issues.jobId) {
-    lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
-  }
-  if (issues.missingId) {
-    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
-  }
-  if (issues.nonStringId) {
-    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
-  }
-  if (issues.legacyScheduleString) {
-    lines.push(
-      `- ${pluralize(issues.legacyScheduleString, "job")} stores schedule as a bare string`,
+// Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
+// The scheduler sets this while a run is active and clears it on completion, so a
+// leftover marker (gateway killed mid-run) makes `cron list` show the job as
+// `running` while nothing executes it. Startup marks exactly these runs interrupted
+// (`src/cron/service/ops.ts` `start`), so doctor only reports the count here.
+function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
+  return jobs.filter((job) => {
+    const state = job.state;
+    return (
+      typeof state === "object" &&
+      state !== null &&
+      typeof (state as { runningAtMs?: unknown }).runningAtMs === "number"
     );
-  }
-  if (issues.legacyScheduleCron) {
-    lines.push(`- ${pluralize(issues.legacyScheduleCron, "job")} still uses \`schedule.cron\``);
-  }
-  if (issues.legacyPayloadKind) {
-    lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
-  }
-  if (issues.legacyPayloadCodexModel) {
-    lines.push(
-      `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+  }).length;
+}
+
+// Fixed advisory threshold: three failures in a row is a clear chronic signal on
+// its own. It coincides with the scheduler's built-in transient-retry budget, but
+// doctor deliberately does not mirror retry exhaustion semantics.
+const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
+
+// Count enabled jobs stuck in repeated run failures. `state.consecutiveErrors`
+// resets to 0 on the next successful run and also increments for runs interrupted
+// by a gateway restart (startup marks in-flight runs failed, `src/cron/service/ops.ts`),
+// so a streak can mean task failures, interrupted runs, or a mix — the note says so.
+// Failure alerts are opt-in, so by default nothing else surfaces the streak.
+// Disabled jobs no longer re-fire (e.g. the scheduler disables exhausted
+// one-shot jobs with their error state retained), so they are excluded.
+function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): number {
+  return jobs.filter((job) => {
+    // Missing `enabled` counts as enabled, matching `isJobEnabled`
+    // (`src/cron/service/jobs.ts`); only an explicit `false` is excluded.
+    if (job.enabled === false) {
+      return false;
+    }
+    const state = job.state;
+    if (typeof state !== "object" || state === null) {
+      return false;
+    }
+    const consecutiveErrors = (state as { consecutiveErrors?: unknown }).consecutiveErrors;
+    return (
+      typeof consecutiveErrors === "number" &&
+      consecutiveErrors >= CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS
     );
-  }
-  if (issues.legacyPayloadProvider) {
-    lines.push(
-      `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,
-    );
-  }
-  if (issues.legacyTopLevelPayloadFields) {
-    lines.push(
-      `- ${pluralize(issues.legacyTopLevelPayloadFields, "job")} still uses top-level payload fields`,
-    );
-  }
-  if (issues.legacyTopLevelDeliveryFields) {
-    lines.push(
-      `- ${pluralize(issues.legacyTopLevelDeliveryFields, "job")} still uses top-level delivery fields`,
-    );
-  }
-  if (issues.legacyDeliveryMode) {
-    lines.push(
-      `- ${pluralize(issues.legacyDeliveryMode, "job")} still uses delivery mode \`deliver\``,
-    );
-  }
-  if (issues.invalidSchedule) {
-    lines.push(
-      `- ${pluralize(issues.invalidSchedule, "job")} has an invalid persisted schedule and will be removed`,
-    );
-  }
-  if (issues.invalidPayload) {
-    lines.push(
-      `- ${pluralize(issues.invalidPayload, "job")} has an invalid persisted payload and will be removed`,
-    );
-  }
-  return lines;
+  }).length;
 }
 
-function normalizeModelProvider(value: unknown): string | undefined {
-  const raw = normalizeOptionalString(value);
-  if (!raw) {
-    return undefined;
-  }
-  const slash = raw.indexOf("/");
-  if (slash <= 0 || slash >= raw.length - 1) {
-    return undefined;
-  }
-  return raw.slice(0, slash).trim().toLowerCase() || undefined;
-}
+const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
 
-function normalizeModelRef(value: unknown): string | undefined {
-  const raw = normalizeOptionalString(value);
-  if (!raw) {
-    return undefined;
-  }
-  const slash = raw.indexOf("/");
-  if (slash <= 0 || slash >= raw.length - 1) {
-    return undefined;
-  }
-  const provider = raw.slice(0, slash).trim().toLowerCase();
-  const model = raw.slice(slash + 1).trim();
-  return provider && model ? `${provider}/${model}` : undefined;
-}
-
-function normalizeModelMismatchKey(value: unknown): string | undefined {
-  return normalizeModelRef(value) ?? normalizeOptionalString(value)?.toLowerCase();
-}
-
-function getRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
-  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
-}
-
-function mergeLegacyCronJobs(params: {
-  currentJobs: Array<Record<string, unknown>>;
-  legacyJobs: Array<Record<string, unknown>>;
-}): { jobs: Array<Record<string, unknown>>; importedCount: number } {
-  const merged = [...params.currentJobs];
-  const currentKeys = new Set(
-    params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
-  );
-  let importedCount = 0;
-
-  for (const legacyJob of params.legacyJobs) {
-    const key = cronJobMigrationKey(legacyJob);
-    if (key && currentKeys.has(key)) {
-      continue;
-    }
-    if (key) {
-      currentKeys.add(key);
-    }
-    merged.push(legacyJob);
-    importedCount += 1;
-  }
-
-  return { jobs: merged, importedCount };
-}
-
-function formatProviderCounts(counts: Map<string, number>): string {
-  return [...counts.entries()]
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([provider, count]) => `${provider}=${count}`)
-    .join(", ");
-}
-
-function noteCronModelOverrides(params: {
-  cfg: OpenClawConfig;
-  jobs: Array<Record<string, unknown>>;
-  storePath: string;
-}) {
-  const defaultModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
-  const defaultKey = normalizeModelMismatchKey(defaultModel);
-  const providerCounts = new Map<string, number>();
-  const mismatchExamples: string[] = [];
-  let overrideCount = 0;
-  let mismatchCount = 0;
-
-  for (const rawJob of params.jobs) {
-    const payload = getRecord(rawJob.payload);
-    const kind = normalizeOptionalString(payload?.kind)?.toLowerCase();
-    if (kind && kind !== "agentturn") {
-      continue;
-    }
-    const model = normalizeOptionalString(payload?.model);
-    if (!model) {
-      continue;
-    }
-    overrideCount += 1;
-    const provider = normalizeModelProvider(model) ?? "bare/alias";
-    providerCounts.set(provider, (providerCounts.get(provider) ?? 0) + 1);
-    const modelKey = normalizeModelMismatchKey(model);
-    if (defaultKey && modelKey && modelKey !== defaultKey) {
-      mismatchCount += 1;
-      if (mismatchExamples.length < CRON_MODEL_OVERRIDE_EXAMPLE_LIMIT) {
-        const id = normalizeOptionalString(rawJob.id) ?? normalizeOptionalString(rawJob.jobId);
-        const name = normalizeOptionalString(rawJob.name);
-        mismatchExamples.push(`${id ?? name ?? "<unnamed>"} -> ${model}`);
-      }
-    }
-  }
-
-  if (overrideCount === 0) {
-    return;
-  }
-
-  const lines = [
-    `Cron model overrides detected at ${shortenHomePath(params.storePath)}.`,
-    `- ${pluralize(overrideCount, "job")} set \`payload.model\` and will not inherit \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
-    `- Provider namespaces: ${formatProviderCounts(providerCounts)}`,
-  ];
-  if (mismatchCount > 0) {
-    lines.push(
-      `- ${pluralize(mismatchCount, "job")} ${mismatchCount === 1 ? "uses" : "use"} a different model than \`agents.defaults.model\`${defaultModel ? ` (${defaultModel})` : ""}`,
-    );
-    lines.push(`- Examples: ${mismatchExamples.join(", ")}`);
-  }
-  lines.push(
-    `Review with ${formatCliCommand("openclaw cron list")} and ${formatCliCommand("openclaw cron show <job-id>")}; remove \`payload.model\` from jobs that should inherit the default.`,
-  );
-
-  note(lines.join("\n"), "Cron");
-}
-
-function migrateLegacyNotifyFallback(params: {
-  jobs: Array<Record<string, unknown>>;
-  legacyWebhook?: string;
-}): CronDoctorOutcome {
-  let changed = false;
-  const warnings: string[] = [];
-
-  for (const raw of params.jobs) {
-    if (!("notify" in raw)) {
-      continue;
-    }
-
-    const jobName =
-      normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id) ?? "<unnamed>";
-    const notify = raw.notify === true;
-    if (!notify) {
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    const delivery =
-      raw.delivery && typeof raw.delivery === "object" && !Array.isArray(raw.delivery)
-        ? (raw.delivery as Record<string, unknown>)
-        : null;
-    const mode = normalizeOptionalLowercaseString(delivery?.mode);
-    const to = normalizeOptionalString(delivery?.to);
-
-    if (mode === "webhook" && to) {
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if ((mode === undefined || mode === "none" || mode === "webhook") && params.legacyWebhook) {
-      raw.delivery = {
-        ...delivery,
-        mode: "webhook",
-        to: mode === "none" ? params.legacyWebhook : (to ?? params.legacyWebhook),
-      };
-      delete raw.notify;
-      changed = true;
-      continue;
-    }
-
-    if (!params.legacyWebhook) {
-      warnings.push(
-        `Cron job "${jobName}" still uses legacy notify fallback, but cron.webhook is unset so doctor cannot migrate it automatically.`,
-      );
-      continue;
-    }
-
-    warnings.push(
-      `Cron job "${jobName}" uses legacy notify fallback alongside delivery mode "${mode}". Migrate it manually so webhook delivery does not replace existing announce behavior.`,
-    );
-  }
-
-  return { changed, warnings };
-}
-
-async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
-  const result = await execFileAsync("crontab", ["-l"], {
-    encoding: "utf8",
-    windowsHide: true,
-  });
+function legacyCronStoreFinding(params: {
+  readonly message: string;
+  readonly path: string;
+  readonly requirement: string;
+  readonly fixHint?: string;
+}): HealthFinding {
   return {
-    stdout: result.stdout,
-    stderr: result.stderr,
+    checkId: LEGACY_CRON_STORE_CHECK_ID,
+    severity: "warning",
+    message: params.message,
+    path: params.path,
+    requirement: params.requirement,
+    fixHint:
+      params.fixHint ??
+      `Run ${formatCliCommand("openclaw doctor --fix")} to normalize legacy cron storage.`,
   };
 }
 
-function coerceCrontabText(crontab: unknown): string {
-  if (typeof crontab === "string") {
-    return crontab;
-  }
-  if (crontab == null) {
-    return "";
-  }
-  if (typeof crontab === "number" || typeof crontab === "boolean" || typeof crontab === "bigint") {
-    return String(crontab);
-  }
-  return "";
-}
-
-function findLegacyWhatsAppHealthCrontabLines(crontab: unknown): string[] {
-  return coerceCrontabText(crontab)
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"))
-    .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
-}
-
-export async function collectLegacyWhatsAppCrontabHealthWarning(
-  params: {
-    platform?: NodeJS.Platform;
-    readCrontab?: CrontabReader;
-  } = {},
-): Promise<string | null> {
-  if ((params.platform ?? process.platform) !== "linux") {
-    return null;
-  }
-
-  let crontab: unknown;
+export async function collectLegacyCronStoreHealthFindings(params: {
+  cfg: OpenClawConfig;
+}): Promise<readonly HealthFinding[]> {
+  let state: LegacyCronRepairState | null;
   try {
-    crontab = (await (params.readCrontab ?? readUserCrontab)()).stdout;
-  } catch {
-    return null;
+    state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
+  } catch (err) {
+    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
+    return [
+      legacyCronStoreFinding({
+        message: `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
+        path: storePath,
+        requirement: "cron-store-readable",
+        fixHint: [
+          `Fix the file's permissions or contents and re-run ${formatCliCommand("openclaw doctor")}.`,
+          "Later health checks will continue.",
+          `Details: ${errorMessage(err)}`,
+        ].join(" "),
+      }),
+    ];
+  }
+  if (!state) {
+    return [];
   }
 
-  const legacyLines = findLegacyWhatsAppHealthCrontabLines(crontab);
-  if (legacyLines.length === 0) {
-    return null;
+  const findings: HealthFinding[] = [];
+  const {
+    storePath,
+    quarantinePath,
+    legacyStoreDetected,
+    legacyRunLogDetected,
+    legacyImportCount,
+    sqliteProjectionBackfillCount,
+    rawJobs,
+  } = state;
+
+  try {
+    const quarantine = await loadCronQuarantineFile(quarantinePath);
+    if (quarantine.jobs.length > 0) {
+      findings.push(
+        legacyCronStoreFinding({
+          message: `${pluralize(quarantine.jobs.length, "quarantined cron job row")} found at ${shortenHomePath(quarantinePath)}.`,
+          path: quarantinePath,
+          requirement: "quarantined-cron-rows",
+          fixHint: `Review or repair the quarantined rows manually before copying any job back into ${shortenHomePath(storePath)}.`,
+        }),
+      );
+    }
+  } catch (err) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Unable to read quarantined cron rows at ${shortenHomePath(quarantinePath)}.`,
+        path: quarantinePath,
+        requirement: "cron-quarantine-readable",
+        fixHint: `Fix the quarantine file's permissions or contents. Details: ${errorMessage(err)}`,
+      }),
+    );
   }
 
-  return [
-    "Legacy WhatsApp crontab health check detected.",
-    "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
-    `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
-    `Matched ${pluralize(legacyLines.length, "entry")}.`,
-  ].join("\n");
+  if (legacyStoreDetected) {
+    findings.push(
+      legacyCronStoreFinding({
+        message:
+          legacyImportCount > 0
+            ? `${pluralize(legacyImportCount, "legacy JSON cron job")} will be imported into SQLite.`
+            : `Legacy JSON cron store was found at ${shortenHomePath(storePath)}.`,
+        path: storePath,
+        requirement: "legacy-cron-store",
+      }),
+    );
+  }
+  if (legacyRunLogDetected) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `Legacy JSON cron run logs will be imported into SQLite for ${shortenHomePath(storePath)}.`,
+        path: storePath,
+        requirement: "legacy-cron-run-logs",
+      }),
+    );
+  }
+
+  if (rawJobs.length === 0) {
+    return findings;
+  }
+
+  const normalized = normalizeStoredCronJobs(rawJobs);
+  for (const line of formatLegacyIssuePreview(normalized.issues)) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: line.replace(/^- /u, ""),
+        path: storePath,
+        requirement: "legacy-cron-store-shape",
+      }),
+    );
+  }
+
+  if (sqliteProjectionBackfillCount > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns.`,
+        path: storePath,
+        requirement: "sqlite-projection-backfill",
+      }),
+    );
+  }
+
+  const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  if (notifyCount > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(notifyCount, "job")} still uses legacy notify webhook fallback.`,
+        path: storePath,
+        requirement: "legacy-notify-fallback",
+      }),
+    );
+  }
+
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
+  if (dreamingStaleCount > 0) {
+    findings.push(
+      legacyCronStoreFinding({
+        message: `${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape.`,
+        path: storePath,
+        requirement: "legacy-dreaming-payload",
+      }),
+    );
+  }
+
+  return findings;
 }
 
-export async function noteLegacyWhatsAppCrontabHealthCheck(
-  params: {
-    platform?: NodeJS.Platform;
-    readCrontab?: CrontabReader;
-  } = {},
-): Promise<void> {
-  const warning = await collectLegacyWhatsAppCrontabHealthWarning(params);
-  if (warning) {
-    note(warning, "Cron");
+function noteLegacyCronRepairResult(result: LegacyCronRepairResult): void {
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
   }
 }
 
+/** Inspect cron storage and optionally repair legacy JSON/SQLite/payload shapes. */
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
   prompter: Pick<DoctorPrompter, "confirm">;
 }) {
-  const storePath = resolveCronStorePath(params.cfg.cron?.store);
-  const quarantinePath = resolveCronQuarantinePath(storePath);
-  let store: Awaited<ReturnType<typeof loadCronStore>>;
-  let legacyStoreDetected = false;
-  let legacyRunLogDetected = false;
-  let legacyImportCount = 0;
+  let state: LegacyCronRepairState | null;
   try {
-    legacyStoreDetected = await legacyCronStoreFilesExist(storePath);
-    legacyRunLogDetected = await legacyCronRunLogFilesExist(storePath);
-    store = await loadCronStore(storePath);
-    if (legacyStoreDetected) {
-      const legacyStore = (await loadLegacyCronStoreForMigration(storePath)).store;
-      const merged = mergeLegacyCronJobs({
-        currentJobs: store.jobs as unknown as Array<Record<string, unknown>>,
-        legacyJobs: legacyStore.jobs as unknown as Array<Record<string, unknown>>,
-      });
-      legacyImportCount = merged.importedCount;
-      store = { version: 1, jobs: merged.jobs as unknown as CronJob[] };
-    }
+    state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
+    const storePath = resolveCronJobsStorePath(params.cfg.cron?.store);
     note(
       [
         `Unable to read cron job store at ${shortenHomePath(storePath)}.`,
@@ -415,6 +263,18 @@ export async function maybeRepairLegacyCronStore(params: {
     );
     return;
   }
+  if (!state) {
+    return;
+  }
+  const {
+    storePath,
+    quarantinePath,
+    legacyStoreDetected,
+    legacyRunLogDetected,
+    legacyImportCount,
+    sqliteProjectionBackfillCount,
+    rawJobs,
+  } = state;
   try {
     const quarantine = await loadCronQuarantineFile(quarantinePath);
     if (quarantine.jobs.length > 0) {
@@ -437,7 +297,6 @@ export async function maybeRepairLegacyCronStore(params: {
       "Cron",
     );
   }
-  const rawJobs = (store.jobs ?? []) as unknown as Array<Record<string, unknown>>;
   if (rawJobs.length === 0) {
     if (!legacyStoreDetected && !legacyRunLogDetected) {
       return;
@@ -464,32 +323,54 @@ export async function maybeRepairLegacyCronStore(params: {
     if (!shouldRepair) {
       return;
     }
-    if (legacyStoreDetected) {
-      await saveCronStore(storePath, { version: 1, jobs: [] });
-      await archiveLegacyCronStoreForMigration(storePath);
-    }
-    const runLogMigration = legacyRunLogDetected
-      ? await migrateLegacyCronRunLogsToSqlite(storePath)
-      : { importedFiles: 0 };
-    if (legacyStoreDetected) {
-      note(
-        `Cron store migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
-        "Doctor changes",
-      );
-    } else {
-      note(
-        `Cron run logs migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
-        "Doctor changes",
-      );
-    }
+    noteLegacyCronRepairResult(await applyLegacyCronStoreRepair({ cfg: params.cfg, state }));
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
+  noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs, storePath });
+
+  const inFlightCount = countInFlightCronJobs(rawJobs);
+  if (inFlightCount > 0) {
+    const subject = inFlightCount === 1 ? "it" : "them";
+    note(
+      [
+        `${pluralize(inFlightCount, "cron job")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw cron list")} shows ${subject} as \`running\`.`,
+        `- If no gateway is currently executing ${subject}, the marker is left over from an interrupted run; the gateway marks such runs interrupted the next time it starts.`,
+        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
+
+  const chronicFailureCount = countChronicallyFailingCronJobs(rawJobs);
+  if (chronicFailureCount > 0) {
+    note(
+      [
+        `${pluralize(chronicFailureCount, "cron job")} ${chronicFailureCount === 1 ? "has" : "have"} failed ${CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS}+ runs in a row (\`state.consecutiveErrors\`), so the scheduler only re-fires ${chronicFailureCount === 1 ? "it" : "them"} on error backoff.`,
+        `- The count resets on the next successful run and also counts runs interrupted by a gateway restart, so a lasting streak means repeated task failures, repeatedly interrupted runs, or a mix. Failure alerts are opt-in, so this may be the only notice.`,
+        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
-  const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
   const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
+  // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
+  // --fix preview so the repair note does not promise a fix that never lands (#94655).
+  const commandPromptAdvisory = formatUnresolvedCommandPromptAdvisory(
+    normalized.unresolvedAgentTurnCommandPromptJobs,
+  );
+  if (commandPromptAdvisory) {
+    note(commandPromptAdvisory, "Cron");
+  }
+  const shellPromptAdvisory = formatUnresolvedShellPromptAdvisory(
+    normalized.unresolvedAgentTurnShellToolPromptJobs,
+  );
+  if (shellPromptAdvisory) {
+    note(shellPromptAdvisory, "Cron");
+  }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (legacyStoreDetected) {
     previewLines.unshift(
@@ -500,6 +381,11 @@ export async function maybeRepairLegacyCronStore(params: {
   }
   if (legacyRunLogDetected) {
     previewLines.push("- legacy JSON cron run logs will be imported into SQLite");
+  }
+  if (sqliteProjectionBackfillCount > 0) {
+    previewLines.push(
+      `- ${pluralize(sqliteProjectionBackfillCount, "SQLite cron row")} will be backfilled from stored config JSON into split columns`,
+    );
   }
   if (notifyCount > 0) {
     previewLines.push(
@@ -515,9 +401,13 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
+  const noteHeading = legacyStoreDetected
+    ? `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`
+    : `Cron store issues detected at ${shortenHomePath(storePath)}.`;
+
   note(
     [
-      `Legacy cron job storage detected at ${shortenHomePath(storePath)}.`,
+      noteHeading,
       ...previewLines,
       `Repair with ${formatCliCommand("openclaw doctor --fix")} to normalize the store before the next scheduler run.`,
     ].join("\n"),
@@ -532,52 +422,7 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
 
-  const notifyMigration = migrateLegacyNotifyFallback({
-    jobs: rawJobs,
-    legacyWebhook,
-  });
-  const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
-  const changed =
-    legacyStoreDetected ||
-    legacyRunLogDetected ||
-    normalized.mutated ||
-    notifyMigration.changed ||
-    dreamingMigration.changed;
-  if (!changed && notifyMigration.warnings.length === 0) {
-    return;
-  }
-
-  if (changed) {
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: rawJobs as unknown as CronJob[],
-    });
-    const runLogMigration = legacyRunLogDetected
-      ? await migrateLegacyCronRunLogsToSqlite(storePath)
-      : { importedFiles: 0 };
-    if (legacyStoreDetected) {
-      await archiveLegacyCronStoreForMigration(storePath);
-      note(
-        `Cron store migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
-        "Doctor changes",
-      );
-    } else if (legacyRunLogDetected) {
-      note(
-        `Cron run logs migrated to SQLite at ${shortenHomePath(storePath)}.${formatRunLogMigrationNote(runLogMigration.importedFiles)}`,
-        "Doctor changes",
-      );
-    } else {
-      note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
-    }
-    if (dreamingMigration.rewrittenCount > 0) {
-      note(
-        `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
-        "Doctor changes",
-      );
-    }
-  }
-
-  if (notifyMigration.warnings.length > 0) {
-    note(notifyMigration.warnings.join("\n"), "Doctor warnings");
-  }
+  noteLegacyCronRepairResult(
+    await applyLegacyCronStoreRepair({ cfg: params.cfg, state, normalized }),
+  );
 }

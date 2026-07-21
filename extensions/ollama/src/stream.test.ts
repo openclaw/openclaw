@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Ollama tests cover stream plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -14,6 +16,7 @@ function makeOllamaResponse(params: {
   content?: string;
   thinking?: string;
   reasoning?: string;
+  done_reason?: string;
   tool_calls?: Array<{ function: { name: string; arguments: Record<string, unknown> } }>;
 }) {
   return {
@@ -27,6 +30,7 @@ function makeOllamaResponse(params: {
       ...(params.tool_calls ? { tool_calls: params.tool_calls } : {}),
     },
     done: true,
+    ...(params.done_reason ? { done_reason: params.done_reason } : {}),
     prompt_eval_count: 100,
     eval_count: 50,
   };
@@ -85,11 +89,34 @@ describe("buildAssistantMessage", () => {
     expect(msg.content).toHaveLength(1);
     expect(msg.content[0]).toEqual({ type: "text", text: "Just text" });
   });
+
+  it("preserves output-budget length stops", () => {
+    const response = makeOllamaResponse({
+      content: "Partial answer",
+      done_reason: "length",
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.stopReason).toBe("length");
+  });
+
+  it("keeps a length stop authoritative over complete-looking tool calls", () => {
+    const response = makeOllamaResponse({
+      done_reason: "length",
+      tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
+    });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.stopReason).toBe("length");
+  });
 });
 
 describe("createOllamaStreamFn thinking events", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    vi.useRealTimers();
   });
 
   function makeNdjsonBody(chunks: Array<Record<string, unknown>>): ReadableStream<Uint8Array> {
@@ -183,8 +210,10 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const thinkingDeltas = events.filter((e) => e.type === "thinking_delta");
     expect(thinkingDeltas).toHaveLength(2);
-    expect(thinkingDeltas[0].delta).toBe("Step 1");
-    expect(thinkingDeltas[1].delta).toBe(" and step 2");
+    expect(expectDefined(thinkingDeltas[0], "first Ollama thinking delta").delta).toBe("Step 1");
+    expect(expectDefined(thinkingDeltas[1], "second Ollama thinking delta").delta).toBe(
+      " and step 2",
+    );
 
     const thinkingStart = events.find((e) => e.type === "thinking_start");
     expect(thinkingStart?.contentIndex).toBe(0);
@@ -227,6 +256,59 @@ describe("createOllamaStreamFn thinking events", () => {
 
     const textStart = events.find((e) => e.type === "text_start") as { contentIndex?: number };
     expect(textStart?.contentIndex).toBe(0);
+  });
+
+  it("emits length for a token-limited native stream", async () => {
+    const events = await streamOllamaEvents([
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:00Z",
+        message: { role: "assistant", content: "Partial answer" },
+        done: false,
+      },
+      {
+        model: "qwen3.5",
+        created_at: "2026-01-01T00:00:01Z",
+        message: { role: "assistant", content: "" },
+        done: true,
+        done_reason: "length",
+        prompt_eval_count: 10,
+        eval_count: 5,
+      },
+    ]);
+
+    const done = events.find((event) => event.type === "done") as {
+      reason?: string;
+      message?: { stopReason?: string };
+    };
+    expect(done.reason).toBe("length");
+    expect(done.message?.stopReason).toBe("length");
+  });
+
+  it("preserves a native length stop when the partial response contains tool calls", async () => {
+    const events = await streamOllamaEvents(
+      [
+        makeOllamaResponse({
+          done_reason: "length",
+          tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
+        }),
+      ],
+      {},
+      {
+        messages: [{ role: "user", content: "test" }],
+        tools: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+      } as never,
+    );
+
+    const done = events.find((event) => event.type === "done") as {
+      reason?: string;
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+    };
+    expect(done.reason).toBe("length");
+    expect(done.message?.stopReason).toBe("length");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({ type: "toolCall", name: "read" }),
+    ]);
   });
 
   it("uses generic stream timeout for Ollama request timeout", async () => {
@@ -295,6 +377,7 @@ describe("createOllamaStreamFn thinking events", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {
@@ -343,6 +426,7 @@ describe("createOllamaStreamFn thinking events", () => {
       "start",
       "toolcall_start",
       "toolcall_delta",
+      "toolcall_end",
       "done",
     ]);
     const done = events.find((event) => event.type === "done") as {
@@ -354,6 +438,92 @@ describe("createOllamaStreamFn thinking events", () => {
       type: "toolCall",
       name: "read",
       arguments: { path: "/path/to/file", line_start: 1, line_end: 400 },
+    });
+  });
+
+  it("yields to the event loop while processing dense native stream chunks", async () => {
+    const chunks = [
+      ...Array.from({ length: 65 }, (_value, index) => ({
+        model: "qwen3.5",
+        created_at: `2026-01-01T00:00:${String(index % 60).padStart(2, "0")}Z`,
+        message: { role: "assistant" as const, content: "x" },
+        done: false,
+      })),
+      makeOllamaResponse({ content: "" }),
+    ];
+    const body = makeNdjsonBody(chunks);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(
+      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      { messages: [{ role: "user", content: "test" }] } as never,
+      {},
+    );
+
+    let timerFired = false;
+    const timerPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        timerFired = true;
+        resolve();
+      }, 0);
+    });
+    let yieldedBeforeDone = false;
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      if (timerFired && event.type !== "done") {
+        yieldedBeforeDone = true;
+      }
+    }
+    await timerPromise;
+
+    expect(yieldedBeforeDone).toBe(true);
+  });
+
+  it("reports caller aborts during dense native stream processing as aborted", async () => {
+    const chunks = [
+      ...Array.from({ length: 65 }, (_value, index) => ({
+        model: "qwen3.5",
+        created_at: `2026-01-01T00:00:${String(index % 60).padStart(2, "0")}Z`,
+        message: { role: "assistant" as const, content: "x" },
+        done: false,
+      })),
+      makeOllamaResponse({ content: "" }),
+    ];
+    const body = makeNdjsonBody(chunks);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(body, { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const controller = new AbortController();
+    const streamFn = createOllamaStreamFn("http://localhost:11434");
+    const stream = streamFn(
+      { api: "ollama", provider: "ollama", id: "qwen3.5", contextWindow: 65536 } as never,
+      { messages: [{ role: "user", content: "test" }] } as never,
+      { signal: controller.signal },
+    );
+
+    setTimeout(() => {
+      controller.abort();
+    }, 0);
+
+    const events: Array<{ type: string; reason?: string; error?: { stopReason?: string } }> = [];
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      reason?: string;
+      error?: { stopReason?: string };
+    }>) {
+      events.push(event);
+    }
+
+    const lastEvent = events.at(-1);
+    expect(lastEvent).toMatchObject({
+      type: "error",
+      reason: "aborted",
+      error: { stopReason: "aborted" },
     });
   });
 });

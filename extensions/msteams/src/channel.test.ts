@@ -1,3 +1,4 @@
+// Msteams tests cover channel plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
@@ -72,6 +73,15 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(true);
     if (res.success) {
       expect(res.data.historyLimit).toBe(4);
+    }
+  });
+
+  it("accepts the opt-in Graph media fallback", () => {
+    const res = MSTeamsConfigSchema.safeParse({ graphMediaFallback: true });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.graphMediaFallback).toBe(true);
     }
   });
 

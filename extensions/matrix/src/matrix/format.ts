@@ -1,3 +1,4 @@
+// Matrix helper module supports format behavior.
 import MarkdownIt from "markdown-it";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isAutoLinkedFileRef } from "openclaw/plugin-sdk/text-autolink-runtime";
@@ -128,7 +129,12 @@ function isMentionStartBoundary(charBefore: string | undefined): boolean {
   return !charBefore || !/[A-Za-z0-9_]/.test(charBefore);
 }
 
-function trimMentionSuffix(raw: string, end: number): { raw: string; end: number } | null {
+function trimMentionSuffix(
+  rawInput: string,
+  endInput: number,
+): { raw: string; end: number } | null {
+  let raw = rawInput;
+  let end = endInput;
   while (raw.length > 1 && TRIMMABLE_MENTION_SUFFIX.test(raw.at(-1) ?? "")) {
     if (raw.at(-1) === "]" && /\[[0-9A-Fa-f:.]+\](?::\d+)?$/i.test(raw)) {
       break;
@@ -343,8 +349,14 @@ function compactLooseListTokens(tokens: MarkdownToken[]): void {
         item.immediateParagraphOpenIndexes.length === 1 &&
         item.immediateParagraphCloseIndexes.length === 1
       ) {
-        tokens[item.immediateParagraphOpenIndexes[0]].hidden = true;
-        tokens[item.immediateParagraphCloseIndexes[0]].hidden = true;
+        const openIndex = item.immediateParagraphOpenIndexes[0];
+        const closeIndex = item.immediateParagraphCloseIndexes[0];
+        const openToken = openIndex === undefined ? undefined : tokens[openIndex];
+        const closeToken = closeIndex === undefined ? undefined : tokens[closeIndex];
+        if (openToken && closeToken) {
+          openToken.hidden = true;
+          closeToken.hidden = true;
+        }
       }
       continue;
     }

@@ -1,3 +1,4 @@
+// Telegram plugin module implements conversation route behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,
@@ -23,7 +24,7 @@ import {
 type TelegramResolvedRoute = ReturnType<typeof resolveAgentRoute>;
 type ConfiguredTelegramBinding = NonNullable<ConfiguredBindingRouteResult["bindingResolution"]>;
 
-export type TelegramConversationBindingMode =
+type TelegramConversationBindingMode =
   | { kind: "none" }
   | {
       kind: "configured";
@@ -36,7 +37,7 @@ export type TelegramConversationBindingMode =
     }
   | { kind: "plugin-owned-runtime" };
 
-export type TelegramConversationRouteResult = {
+type TelegramConversationRouteResult = {
   route: TelegramResolvedRoute;
   bindingMode: TelegramConversationBindingMode;
 };

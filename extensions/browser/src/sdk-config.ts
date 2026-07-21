@@ -1,11 +1,13 @@
+/**
+ * Browser-local SDK config bridge plus Browser-specific default port helpers.
+ */
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export {
   getRuntimeConfig,
-  getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
-export { mutateConfigFile, replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
+export { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 export {
   type BrowserConfig,
   type BrowserProfileConfig,
@@ -29,6 +31,7 @@ const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
 const DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN =
   DEFAULT_BROWSER_CDP_PORT_RANGE_END - DEFAULT_BROWSER_CDP_PORT_RANGE_START;
 
+/** Default loopback port for the Browser control server. */
 export const DEFAULT_BROWSER_CONTROL_PORT = 18791;
 
 function isValidPort(port: number): boolean {
@@ -43,10 +46,12 @@ function derivePort(base: number, offset: number, fallback: number): number {
   return clampPort(base + offset, fallback);
 }
 
+/** Derives the Browser control port from the gateway port. */
 export function deriveDefaultBrowserControlPort(gatewayPort: number): number {
   return derivePort(gatewayPort, 2, DEFAULT_BROWSER_CONTROL_PORT);
 }
 
+/** Derives the managed Chrome CDP port range from the Browser control port. */
 export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): PortRange {
   const start = derivePort(browserControlPort, 9, DEFAULT_BROWSER_CDP_PORT_RANGE_START);
   const end = start + DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN;
@@ -71,6 +76,7 @@ function matchesBooleanToken(value: string, tokens: readonly string[]): boolean 
   return tokens.includes(value);
 }
 
+/** Parses common string booleans with optional custom truthy/falsy tokens. */
 export function parseBooleanValue(
   value: unknown,
   options: BooleanParseOptions = {},

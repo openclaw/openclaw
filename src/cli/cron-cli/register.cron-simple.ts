@@ -1,8 +1,14 @@
+// Cron simple command registration: remove, toggle, show, runs, and run-now.
+import {
+  resolvePositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { defaultRuntime } from "../../runtime.js";
+import { sleep } from "../../utils/sleep.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { parseDurationMs } from "../parse-duration.js";
@@ -31,10 +37,6 @@ type CronRunLogEntryResult = {
   status?: "ok" | "error" | "skipped";
 };
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function parseCronRunWaitDuration(raw: unknown, label: string): number {
   const input =
     typeof raw === "string" || typeof raw === "number" || typeof raw === "bigint"
@@ -44,7 +46,7 @@ function parseCronRunWaitDuration(raw: unknown, label: string): number {
   if (!Number.isFinite(durationMs) || durationMs < 0) {
     throw new Error(`invalid ${label}`);
   }
-  return durationMs;
+  return resolveTimerTimeoutMs(durationMs, 0, 0);
 }
 
 function parseCronRunPollInterval(raw: unknown): number {
@@ -52,7 +54,7 @@ function parseCronRunPollInterval(raw: unknown): number {
   if (durationMs <= 0) {
     throw new Error("invalid --poll-interval");
   }
-  return durationMs;
+  return resolvePositiveTimerTimeoutMs(durationMs, 2_000);
 }
 
 async function waitForCronRunCompletion(params: {
@@ -62,6 +64,7 @@ async function waitForCronRunCompletion(params: {
   timeoutMs: number;
   pollIntervalMs: number;
 }): Promise<CronRunLogEntryResult> {
+  // Poll the task ledger rather than cron.run because completion state is written asynchronously.
   const startedAt = Date.now();
   for (;;) {
     const page = (await callGatewayFromCli("cron.runs", params.opts, {
@@ -73,10 +76,11 @@ async function waitForCronRunCompletion(params: {
     if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
       return entry;
     }
-    if (Date.now() - startedAt >= params.timeoutMs) {
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= params.timeoutMs) {
       throw new Error(`timed out waiting for cron run ${params.runId}`);
     }
-    await sleep(params.pollIntervalMs);
+    await sleep(Math.min(params.pollIntervalMs, params.timeoutMs - elapsedMs));
   }
 }
 
@@ -89,7 +93,7 @@ function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefin
   );
 }
 
-export async function loadCronJobForShow(
+async function loadCronJobForShow(
   opts: GatewayRpcOpts,
   idOrName: string,
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
@@ -220,7 +224,7 @@ export function registerCronSimpleCommands(cron: Command) {
   addGatewayClientOptions(
     cron
       .command("runs")
-      .description("Show cron run history (JSONL-backed)")
+      .description("Show cron run history")
       .requiredOption("--id <id>", "Job id")
       .option("--run-id <runId>", "Filter by cron run id")
       .option("--limit <n>", "Max entries (default 50)", "50")

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Temporarily narrows CHANGELOG.md to packaged release notes for npm tarballs.
 import { existsSync } from "node:fs";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -18,7 +19,10 @@ const RELEASE_VERSION_PATTERN =
 const PRERELEASE_VERSION_PATTERN =
   /^([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*)-(?:alpha|beta)\.[1-9][0-9]*$/u;
 
-export function resolvePackageChangelogVersions(packageVersion) {
+/**
+ * Resolves acceptable changelog headings for a package version.
+ */
+export function resolvePackageChangelogVersions(packageVersion, options = {}) {
   const match = RELEASE_VERSION_PATTERN.exec(packageVersion);
   if (!match) {
     throw new Error(
@@ -28,7 +32,7 @@ export function resolvePackageChangelogVersions(packageVersion) {
   if (PRERELEASE_VERSION_PATTERN.test(packageVersion)) {
     return [packageVersion, match[1], UNRELEASED_HEADING];
   }
-  return [packageVersion];
+  return options.allowUnreleased ? [packageVersion, UNRELEASED_HEADING] : [packageVersion];
 }
 
 function splitLines(content) {
@@ -54,8 +58,11 @@ function extractPreamble(lines, firstHeadingIndex) {
   return lines.slice(0, firstHeadingIndex).join("\n").trimEnd();
 }
 
-export function extractCurrentPackageChangelog(content, packageVersion) {
-  const targetVersions = resolvePackageChangelogVersions(packageVersion);
+/**
+ * Extracts the current release changelog section for package publishing.
+ */
+export function extractCurrentPackageChangelog(content, packageVersion, options = {}) {
+  const targetVersions = resolvePackageChangelogVersions(packageVersion, options);
   const lines = splitLines(content);
   const headings = findLevelTwoHeadings(lines);
   const heading = targetVersions
@@ -99,6 +106,9 @@ async function readPackageVersion(cwd) {
   return packageJson.version;
 }
 
+/**
+ * Restores the source changelog from a package-changelog backup.
+ */
 export async function restorePackageChangelog(cwd = process.cwd()) {
   const backupPath = path.join(cwd, BACKUP_PATH);
   if (!existsSync(backupPath)) {
@@ -115,11 +125,17 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
     try {
       expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion);
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(
-        `Refusing to restore stale packaged changelog backup from ${BACKUP_PATH}: ${message}`,
-        { cause: error },
-      );
+      try {
+        expectedPackaged = extractCurrentPackageChangelog(backup, packageVersion, {
+          allowUnreleased: true,
+        });
+      } catch {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          `Refusing to restore stale packaged changelog backup from ${BACKUP_PATH}: ${message}`,
+          { cause: error },
+        );
+      }
     }
     if (current !== expectedPackaged) {
       throw new Error(
@@ -132,13 +148,16 @@ export async function restorePackageChangelog(cwd = process.cwd()) {
   return true;
 }
 
-export async function preparePackageChangelog(cwd = process.cwd()) {
+/**
+ * Writes packaged changelog content while preserving a restorable backup.
+ */
+export async function preparePackageChangelog(cwd = process.cwd(), options = {}) {
   await restorePackageChangelog(cwd);
   const changelogPath = path.join(cwd, CHANGELOG_PATH);
   const backupPath = path.join(cwd, BACKUP_PATH);
   const original = await readFile(changelogPath, "utf8");
   const packageVersion = await readPackageVersion(cwd);
-  const packaged = extractCurrentPackageChangelog(original, packageVersion);
+  const packaged = extractCurrentPackageChangelog(original, packageVersion, options);
   if (packaged === original) {
     return false;
   }

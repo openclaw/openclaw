@@ -1,13 +1,14 @@
-export { decideChannelIngress } from "./decision.js";
+// Public channel ingress/message-access barrel. Keep this as the narrow import
+// point for callers that need access decisions without plugin internals.
 export { defineStableChannelIngressIdentity } from "./runtime-identity.js";
 export {
   channelIngressRoutes,
   createChannelIngressResolver,
-  readChannelIngressStoreAllowFromForDmPolicy,
   resolveChannelMessageIngress,
   resolveStableChannelMessageIngress,
 } from "./runtime.js";
-export { resolveChannelIngressState } from "./state.js";
+export { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
+
 export type {
   ChannelIngressAccessGroupMembershipResolver,
   ChannelIngressCommandPresetInput,

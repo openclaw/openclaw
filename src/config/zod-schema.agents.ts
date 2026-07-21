@@ -1,8 +1,8 @@
+// Defines agent-related Zod schema fragments for config parsing.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
-import { TranscribeAudioSchema } from "./zod-schema.core.js";
 
 export const AgentsSchema = z
   .object({
@@ -18,13 +18,7 @@ const BindingMatchSchema = z
     accountId: z.string().optional(),
     peer: z
       .object({
-        kind: z.union([
-          z.literal("direct"),
-          z.literal("group"),
-          z.literal("channel"),
-          /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-          z.literal("dm"),
-        ]),
+        kind: z.union([z.literal("direct"), z.literal("group"), z.literal("channel")]),
         id: z.string(),
       })
       .strict()
@@ -83,24 +77,16 @@ const AcpBindingSchema = z
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
       });
-      return;
     }
   });
 
 export const BindingsSchema = z.array(z.union([RouteBindingSchema, AcpBindingSchema])).optional();
 
-export const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
+const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
 
 export const BroadcastSchema = z
   .object({
     strategy: BroadcastStrategySchema.optional(),
   })
   .catchall(z.array(z.string()))
-  .optional();
-
-export const AudioSchema = z
-  .object({
-    transcription: TranscribeAudioSchema,
-  })
-  .strict()
   .optional();

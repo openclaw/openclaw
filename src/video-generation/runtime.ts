@@ -1,3 +1,4 @@
+// Video generation runtime coordinates provider auth, fallbacks, and job polling.
 import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,7 +29,7 @@ const MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS = 5_000;
 // Internal request hint for providers that perform their own final snapping.
 const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedDurations");
 
-export type VideoGenerationRuntimeDeps = {
+type VideoGenerationRuntimeDeps = {
   getProvider?: typeof getVideoGenerationProvider;
   listProviders?: typeof listVideoGenerationProviders;
   getProviderEnvVars?: typeof getProviderEnvVars;

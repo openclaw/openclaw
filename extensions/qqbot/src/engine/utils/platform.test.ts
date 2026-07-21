@@ -1,14 +1,22 @@
+// Qqbot tests cover platform plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getHomeDir,
-  getQQBotDataPath,
+  getQQBotDataDir,
   getQQBotMediaPath,
-  resolveQQBotLocalMediaPath,
   resolveQQBotPayloadLocalFilePath,
 } from "./platform.js";
+
+function getQQBotDataPath(...subPaths: string[]): string {
+  return getQQBotDataDir(...subPaths);
+}
+
+function resolveQQBotLocalMediaPath(p: string): string | null {
+  return resolveQQBotPayloadLocalFilePath(p);
+}
 
 describe("qqbot local media path remapping", () => {
   const createdPaths: string[] = [];
@@ -181,7 +189,7 @@ describe("qqbot media path resolution honors OPENCLAW_HOME (#83562)", () => {
     const relative = path.relative(parent, candidate);
     return (
       relative === "" ||
-      (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+      (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
     );
   }
 

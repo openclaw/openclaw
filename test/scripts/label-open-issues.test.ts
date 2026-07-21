@@ -1,3 +1,4 @@
+// Label Open Issues tests cover label open issues script behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/label-open-issues.ts";
 
@@ -13,6 +14,22 @@ describe("label-open-issues helpers", () => {
   // turn a bounded request-timeout assertion into a wall-clock wait.
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("parses CLI options strictly before external calls", () => {
+    expect(testing.parseArgs(["--dry-run", "--limit", "2", "--model", "gpt-5.5"])).toEqual({
+      dryRun: true,
+      limit: 2,
+      model: "gpt-5.5",
+    });
+
+    expect(() => testing.parseArgs(["--model", "--dry-run"])).toThrow("Missing --model value");
+    expect(() => testing.parseArgs(["--model", "-h"])).toThrow("Missing --model value");
+    expect(() => testing.parseArgs(["--limit", "--dry-run"])).toThrow(
+      "Missing/invalid --limit value",
+    );
+    expect(() => testing.parseArgs(["--limit", "-h"])).toThrow("Missing/invalid --limit value");
+    expect(() => testing.parseArgs(["--wat"])).toThrow("Unknown argument: --wat");
   });
 
   it("classifies items from OpenAI structured response text", async () => {
@@ -71,7 +88,18 @@ describe("label-open-issues helpers", () => {
   });
 
   it("times out stalled OpenAI classification body reads", async () => {
-    const response = new Response(new ReadableStream({}), { status: 200 });
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200 },
+    );
     vi.useFakeTimers();
     const request = testing.classifyItem(labelItem, "issue", {
       apiKey: "test-key",
@@ -86,6 +114,39 @@ describe("label-open-issues helpers", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     await rejection;
+    await Promise.resolve();
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels stalled OpenAI classification error body reads", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        pull() {
+          return new Promise(() => {});
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 500 },
+    );
+    vi.useFakeTimers();
+    const request = testing.classifyItem(labelItem, "issue", {
+      apiKey: "test-key",
+      model: "test-model",
+      timeoutMs: 5,
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+    const rejection = expect(request).rejects.toThrow(
+      /OpenAI issue label classification request exceeded timeout/u,
+    );
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+    await Promise.resolve();
+    expect(canceled).toBe(true);
   });
 
   it("bounds OpenAI error response bodies", async () => {
@@ -164,5 +225,42 @@ describe("label-open-issues helpers", () => {
     expect(() => testing.resolveOpenAITimeoutMs("slow")).toThrow(
       /OPENCLAW_LABEL_OPEN_ISSUES_OPENAI_TIMEOUT_MS must be an integer/u,
     );
+  });
+
+  it("does not split boundary emoji in model prompts", async () => {
+    let requestBody = "";
+    const response = new Response(
+      JSON.stringify({
+        output_text: JSON.stringify({
+          category: "bug",
+          isSupport: false,
+          isSkillOnly: false,
+        }),
+      }),
+      { status: 200 },
+    );
+
+    await testing.classifyItem(
+      {
+        ...labelItem,
+        body: `${"a".repeat(5999)}😀tail`,
+      },
+      "issue",
+      {
+        apiKey: "placeholder",
+        model: "test-model",
+        timeoutMs: 50,
+        fetchImpl: ((_url, init) => {
+          requestBody = String(init?.body ?? "");
+          return Promise.resolve(response);
+        }) as typeof fetch,
+      },
+    );
+
+    const payload = JSON.parse(requestBody) as { input: Array<{ content: string }> };
+    const prompt = payload.input[1]?.content ?? "";
+    expect(prompt).toContain(`${"a".repeat(5999)}\n\n[truncated]`);
+    expect(prompt).not.toContain("\uD83D");
+    expect(prompt).not.toContain("tail");
   });
 });

@@ -1,14 +1,20 @@
-import { spawn } from "node:child_process";
+/**
+ * Manages subprocess lifecycle, streaming output buffers, stdin writes, and
+ * termination for Codex sandbox exec-server process RPCs.
+ */
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { WebSocket } from "ws";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { requireObject, requireString, requireStringArray } from "./json-rpc.js";
+import { resolveExecServerPath } from "./path-uri.js";
 import type { ManagedProcess, OpenClawExecServer, ProcessChunk } from "./types.js";
 
 const ENV_KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const RETAINED_PROCESS_OUTPUT_BYTES = 1024 * 1024;
 const CLOSED_PROCESS_EVICTION_MS = 60_000;
 
+/** Starts a sandbox-backed process and registers it in the connection-local process table. */
 export async function startProcess(
   execServer: OpenClawExecServer,
   processes: Map<string, ManagedProcess>,
@@ -21,7 +27,7 @@ export async function startProcess(
     throw new Error(`process already exists: ${processId}`);
   }
   const argv = requireStringArray(record.argv, "argv");
-  const cwd = requireString(record.cwd, "cwd");
+  const cwd = resolveExecServerPath(requireString(record.cwd, "cwd"), "process cwd");
   rejectUnsupportedArg0(record.arg0);
   const env = readProcessEnv(record);
   const tty = record.tty === true;
@@ -94,19 +100,29 @@ async function runProcess(
   });
   managed.finalizeToken = execSpec.finalizeToken;
   managed.finalizeExec = backend.finalizeExec;
-  if (managed.abortController.signal.aborted) {
-    managed.failure = "process start cancelled";
-    await finalizeProcess(managed);
-    throw new Error("process start cancelled");
+  let child: ChildProcessWithoutNullStreams;
+  try {
+    if (managed.abortController.signal.aborted) {
+      throw new Error("process start cancelled");
+    }
+    const [command, ...args] = execSpec.argv;
+    if (!command) {
+      throw new Error("OpenClaw sandbox exec spec did not provide a command.");
+    }
+    child = spawn(command, args, {
+      env: execSpec.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  } catch (error) {
+    managed.failure = error instanceof Error ? error.message : String(error);
+    await finalizeProcess(managed).catch((finalizeError: unknown) => {
+      embeddedAgentLog.warn("codex sandbox exec-server finalize after start failure failed", {
+        processId: managed.processId,
+        error: finalizeError instanceof Error ? finalizeError.message : String(finalizeError),
+      });
+    });
+    throw error;
   }
-  const [command, ...args] = execSpec.argv;
-  if (!command) {
-    throw new Error("OpenClaw sandbox exec spec did not provide a command.");
-  }
-  const child = spawn(command, args, {
-    env: execSpec.env,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
   managed.child = child;
   const abortListener = () => child.kill("SIGTERM");
   managed.abortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -115,8 +131,10 @@ async function runProcess(
   );
   child.stderr.on("data", (chunk: Buffer) => appendProcessChunk(managed, "stderr", chunk));
   child.once("error", (error) => {
-    managed.failure = error.message;
-    emitProcessClosed(managed, null);
+    // Node can report an abort or transport error before the child exits. The
+    // backend lease and Codex terminal notifications stay owned until close.
+    managed.failure ??= error.message;
+    notifyProcessWaiters(managed);
   });
   child.once("close", (code) => {
     managed.abortController.signal.removeEventListener("abort", abortListener);
@@ -148,6 +166,8 @@ function appendProcessChunk(
   };
   managed.chunks.push(chunk);
   managed.retainedOutputBytes += data.length;
+  // Keep enough recent output for polling clients without letting long-running
+  // processes grow the app-server bridge memory without bound.
   while (managed.retainedOutputBytes > RETAINED_PROCESS_OUTPUT_BYTES && managed.chunks.length > 1) {
     const removed = managed.chunks.shift();
     if (!removed) {
@@ -196,6 +216,8 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
       error: message,
     });
   });
+  // Closed processes stay briefly readable so clients that observe close before
+  // their final poll can still drain exit/output state.
   managed.evictProcess();
   notifyProcessWaiters(managed);
 }
@@ -234,6 +256,7 @@ function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined
   return retained;
 }
 
+/** Reads buffered process output, optionally waiting for new output or process close. */
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -261,6 +284,7 @@ export async function readProcess(
   };
 }
 
+/** Writes base64 stdin data to a running process when stdin is still open. */
 export function writeProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -279,6 +303,7 @@ export function writeProcess(
   return { status: "accepted" };
 }
 
+/** Requests process termination and reports whether it was running at call time. */
 export function terminateProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,

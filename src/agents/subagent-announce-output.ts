@@ -1,5 +1,11 @@
+/**
+ * Subagent completion output capture.
+ *
+ * Reads child session output, detects waiting states, and formats completion findings for announcements.
+ */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -14,9 +20,10 @@ import {
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
+import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
-import { extractAssistantText, sanitizeTextContent } from "./tools/session-message-text.js";
-import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
+import { extractAssistantText, sanitizeTextContent } from "./tools/chat-history-text.js";
+import { isAnnounceSkip, selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 
@@ -202,9 +209,10 @@ export async function readSubagentOutput(
   let messages: unknown[] | undefined;
   if (options?.sessionFile) {
     const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
-      sessionKey,
-      undefined,
-      options.sessionFile,
+      {
+        sessionFile: options.sessionFile,
+        sessionId: sessionKey,
+      },
       {
         mode: "recent",
         maxMessages: 100,
@@ -284,7 +292,11 @@ export function applySubagentWaitOutcome(params: {
     outcome = { status: "timeout" };
   } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
     outcome = { status: "error", error: "subagent run terminated" };
-  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
+  } else if (
+    terminalOutcome?.reason === "blocked" ||
+    terminalOutcome?.reason === "abandoned" ||
+    terminalOutcome?.reason === "failed"
+  ) {
     outcome = { status: "error", error: terminalOutcome.error ?? waitError };
   } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };
@@ -355,14 +367,25 @@ type ChildCompletionRow = {
 };
 
 function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
-  return (
-    child.completion?.resultText ??
-    child.delivery?.payload?.frozenResultText ??
+  const primary = child.completion?.resultText ?? child.delivery?.payload?.frozenResultText;
+  const fallback =
     child.completion?.fallbackResultText ??
     child.delivery?.payload?.fallbackFrozenResultText ??
-    child.frozenResultText ??
-    undefined
-  )?.trim();
+    child.frozenResultText;
+  if (child.outcome?.status === "ok") {
+    return selectDeliverableSessionsReply(primary, fallback);
+  }
+  return (primary ?? fallback)?.trim() || undefined;
+}
+
+function hasCapturedChildCompletionReply(child: ChildCompletionRow): boolean {
+  return [
+    child.completion?.resultText,
+    child.delivery?.payload?.frozenResultText,
+    child.completion?.fallbackResultText,
+    child.delivery?.payload?.fallbackFrozenResultText,
+    child.frozenResultText,
+  ].some((value) => Boolean(value?.trim()));
 }
 
 export function buildChildCompletionFindings(
@@ -381,11 +404,7 @@ export function buildChildCompletionFindings(
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
-    if (
-      child.outcome?.status === "ok" &&
-      resultText &&
-      (isAnnounceSkip(resultText) || isSilentReplyText(resultText, SILENT_REPLY_TOKEN))
-    ) {
+    if (child.outcome?.status === "ok" && !resultText && hasCapturedChildCompletionReply(child)) {
       continue;
     }
     const title =
@@ -410,9 +429,11 @@ export function buildChildCompletionFindings(
 
 export function dedupeLatestChildCompletionRows(
   children: Array<{
+    runId: string;
     childSessionKey: string;
     task: string;
     label?: string;
+    generation?: number;
     createdAt: number;
     endedAt?: number;
     frozenResultText?: string | null;
@@ -432,7 +453,7 @@ export function dedupeLatestChildCompletionRows(
   const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
-    if (!existing || child.createdAt > existing.createdAt) {
+    if (!existing || compareSubagentRunGeneration(child, existing) > 0) {
       latestByChildSessionKey.set(child.childSessionKey, child);
     }
   }
@@ -486,23 +507,6 @@ export function filterCurrentDirectChildCompletionRows(
   });
 }
 
-function formatDurationShort(valueMs?: number) {
-  if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
-    return "n/a";
-  }
-  const totalSeconds = Math.round(valueMs / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) {
-    return `${hours}h${minutes}m`;
-  }
-  if (minutes > 0) {
-    return `${minutes}m${seconds}s`;
-  }
-  return `${seconds}s`;
-}
-
 function formatTokenCount(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return "0";
@@ -511,7 +515,13 @@ function formatTokenCount(value?: number) {
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
   if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
+    const formattedThousands = (value / 1_000).toFixed(1);
+    // Keep the compact stats unit scheme stable when one-decimal rounding
+    // reaches the next unit, e.g. 999_999 -> 1000.0k.
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(value / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
   }
   return String(Math.round(value));
 }
@@ -535,7 +545,9 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestMode()) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
     }
     entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }
@@ -550,7 +562,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       : undefined;
 
   const parts = [
-    `runtime ${formatDurationShort(runtimeMs)}`,
+    `runtime ${formatDurationCompact(runtimeMs) ?? "n/a"}`,
     `tokens ${formatTokenCount(ioTotal)} (in ${formatTokenCount(input)} / out ${formatTokenCount(output)})`,
   ];
   if (typeof promptCache === "number" && promptCache > ioTotal) {
@@ -559,7 +571,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   return `Stats: ${parts.join(" • ")}`;
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<SubagentAnnounceOutputDeps>) {
     subagentAnnounceOutputDeps = overrides
       ? {
@@ -569,4 +581,8 @@ export const testing = {
       : defaultSubagentAnnounceOutputDeps;
   },
 };
-export { testing as __testing };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.subagentAnnounceOutputTestApi")
+  ] = testing;
+}

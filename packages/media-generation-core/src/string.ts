@@ -1,11 +1,7 @@
-export function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
+// Shared string normalization helpers for media-generation packages.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Return unique trimmed strings while preserving first-seen order. */
 export function uniqueTrimmedStrings(values: readonly unknown[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];

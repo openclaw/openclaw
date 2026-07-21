@@ -1,8 +1,13 @@
+/**
+ * External channel plugin catalog contract suites.
+ *
+ * Writes synthetic manifests and catalog files to prove parser behavior for discovered plugins.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
-import { listChannelPluginCatalogEntries } from "../../catalog.js";
+import { listRawChannelPluginCatalogEntries } from "../../catalog.js";
 
 function createCatalogEntry(params: {
   packageName: string;
@@ -83,7 +88,7 @@ function expectCatalogIdsContain(params: {
   catalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  const ids = listChannelPluginCatalogEntries({
+  const ids = listRawChannelPluginCatalogEntries({
     ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
     ...(params.env ? { env: params.env } : {}),
   }).map((entry) => entry.id);
@@ -95,7 +100,7 @@ function findCatalogEntry(params: {
   catalogPaths?: string[];
   env?: NodeJS.ProcessEnv;
 }) {
-  return listChannelPluginCatalogEntries({
+  return listRawChannelPluginCatalogEntries({
     ...(params.catalogPaths ? { catalogPaths: params.catalogPaths } : {}),
     ...(params.env ? { env: params.env } : {}),
   }).find((entry) => entry.id === params.channelId);
@@ -116,6 +121,7 @@ function expectCatalogEntryMatch(params: {
   ).toMatchObject(params.expected);
 }
 
+/** Installs catalog entry tests shared by plugin registry and manifest suites. */
 export function describeChannelPluginCatalogEntriesContract() {
   describe("channel plugin catalog entries contract", () => {
     it.each([
@@ -473,6 +479,7 @@ export function describeChannelPluginCatalogEntriesContract() {
   });
 }
 
+/** Installs catalog path resolution tests that depend on env/home/state paths. */
 export function describeChannelPluginCatalogPathResolutionContract() {
   describe("channel plugin catalog path resolution contract", () => {
     it.each([

@@ -1,3 +1,5 @@
+// Matrix helper module supports formatting behavior.
+import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   markdownToMatrixHtml,
@@ -143,12 +145,16 @@ export function buildReplyRelation(replyToId?: string): MatrixReplyRelation | un
 
 export function buildThreadRelation(threadId: string, replyToId?: string): MatrixThreadRelation {
   const trimmed = threadId.trim();
-  return {
+  const relation: MatrixThreadRelation = {
     rel_type: RelationType.Thread,
     event_id: trimmed,
-    is_falling_back: true,
-    "m.in_reply_to": { event_id: replyToId?.trim() || trimmed },
   };
+  const fallbackReplyToId = replyToId?.trim();
+  if (fallbackReplyToId) {
+    relation.is_falling_back = true;
+    relation["m.in_reply_to"] = { event_id: fallbackReplyToId };
+  }
+  return relation;
 }
 
 export function resolveMatrixMsgType(contentType?: string, _fileName?: string): MatrixMediaMsgType {
@@ -182,7 +188,7 @@ export function resolveMatrixVoiceDecision(opts: {
 function isMatrixVoiceCompatibleAudio(opts: { contentType?: string; fileName?: string }): boolean {
   // Matrix currently shares the core voice compatibility policy.
   // Keep this wrapper as the seam if Matrix policy diverges later.
-  return getCore().media.isVoiceCompatibleAudio({
+  return isVoiceMessageCompatibleAudio({
     contentType: opts.contentType,
     fileName: opts.fileName,
   });

@@ -1,7 +1,14 @@
+/**
+ * Resolves provider/model prompt-cache retention behavior.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 
 type CacheRetention = "none" | "short" | "long";
+
+export function parseCacheRetention(value: unknown): CacheRetention | undefined {
+  return value === "none" || value === "short" || value === "long" ? value : undefined;
+}
 
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
@@ -43,8 +50,8 @@ export function resolveCacheRetention(
     return undefined;
   }
 
-  const newVal = extraParams?.cacheRetention;
-  if (newVal === "none" || newVal === "short" || newVal === "long") {
+  const newVal = parseCacheRetention(extraParams?.cacheRetention);
+  if (newVal) {
     return newVal;
   }
 

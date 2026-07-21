@@ -1,9 +1,11 @@
+/** Handles inline slash commands, skill invocations, and abort actions before model runs. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
+import type { ExecPolicyOverrides } from "../../agents/exec-defaults.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,9 +18,15 @@ import {
   resolveSkillCommandInvocation,
 } from "../../skills/discovery/chat-commands.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { markCommandReplyForDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  ThinkingCatalogEntry,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   readAbortCutoffFromSessionEntry,
@@ -26,6 +34,10 @@ import {
   shouldSkipMessageByAbortCutoff,
 } from "./abort-cutoff.js";
 import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
+import {
+  takeCommandSessionMetadataChangesFromTargets,
+  type CommandSessionMetadataChange,
+} from "./command-session-metadata.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
@@ -39,6 +51,10 @@ type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.
 type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
+
+type InternalGetReplyOptions = GetReplyOptions & {
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+};
 
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
   () => import("../../skills/discovery/chat-commands.runtime.js"),
@@ -120,7 +136,8 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
   return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
-export type InlineActionResult =
+/** Result of attempting to handle an inbound message as an inline action. */
+type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
       kind: "continue";
@@ -128,23 +145,6 @@ export type InlineActionResult =
       abortedLastRun: boolean;
       cleanedBody: string;
     };
-
-// Command / skill-dispatch handlers ("/compact", "/status", tool-not-available
-// errors, etc.) emit system-meta feedback for an explicit user action; they
-// are not assistant source content. Mark them so dispatch-from-config does
-// not silently drop them when sourceReplyDeliveryMode === "message_tool_only"
-// (the default for many channels and group chats). See #87107.
-function markCommandReplyForDelivery(
-  reply: ReplyPayload | ReplyPayload[] | undefined,
-): ReplyPayload | ReplyPayload[] | undefined {
-  if (!reply) {
-    return reply;
-  }
-  if (Array.isArray(reply)) {
-    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
-  }
-  return markReplyPayloadForSourceSuppressionDelivery(reply);
-}
 
 function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
@@ -177,6 +177,7 @@ function extractBlockedToolReason(result: unknown): string | null {
   return typeof reason === "string" && reason.trim() ? reason.trim() : null;
 }
 
+/** Handles inline actions or returns continue when the message should become a model turn. */
 export async function handleInlineActions(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -184,6 +185,8 @@ export async function handleInlineActions(params: {
   agentId: string;
   agentDir?: string;
   sessionEntry?: SessionEntry;
+  initialSessionEntry?: SessionEntry;
+  allowCreateSessionEntry?: boolean;
   previousSessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -203,10 +206,12 @@ export async function handleInlineActions(params: {
   elevatedAllowed: boolean;
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"];
+  thinkingCatalog?: ThinkingCatalogEntry[];
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
+  execOverrides?: ExecPolicyOverrides;
   blockReplyChunking?: BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   resolveDefaultThinkingLevel: Awaited<
@@ -226,6 +231,8 @@ export async function handleInlineActions(params: {
     agentId,
     agentDir,
     sessionEntry,
+    initialSessionEntry,
+    allowCreateSessionEntry,
     previousSessionEntry,
     sessionStore,
     sessionKey,
@@ -244,10 +251,12 @@ export async function handleInlineActions(params: {
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
+    execOverrides,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     resolveDefaultThinkingLevel,
@@ -258,9 +267,60 @@ export async function handleInlineActions(params: {
     abortedLastRun: initialAbortedLastRun,
     skillFilter,
   } = params;
+  const internalOpts = opts as InternalGetReplyOptions | undefined;
+  const notifyInlineCommandSessionMetadataChanges = () => {
+    const changes = takeCommandSessionMetadataChangesFromTargets([sessionCtx, ctx]);
+    if (changes) {
+      internalOpts?.onSessionMetadataChanges?.(changes);
+    }
+  };
 
   let directives = initialDirectives;
   let cleanedBody = initialCleanedBody;
+  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
+
+  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  if (!isStopLikeInbound && targetSessionEntry) {
+    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
+    const incoming = resolveAbortCutoffFromContext(ctx);
+    const shouldSkip = cutoff
+      ? shouldSkipMessageByAbortCutoff({
+          cutoffMessageSid: cutoff.messageSid,
+          cutoffTimestamp: cutoff.timestamp,
+          messageSid: incoming?.messageSid,
+          timestamp: incoming?.timestamp,
+        })
+      : false;
+    if (shouldSkip) {
+      typing.cleanup();
+      return { kind: "reply", reply: undefined };
+    }
+    if (cutoff) {
+      await (
+        await loadAbortCutoffRuntime()
+      ).clearAbortCutoffInSessionRuntime({
+        sessionEntry: targetSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
+  }
+
+  const isEmptyConfig = Object.keys(cfg).length === 0;
+  const skipWhenConfigEmpty = command.channelId
+    ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
+    : false;
+  if (
+    skipWhenConfigEmpty &&
+    isEmptyConfig &&
+    command.from &&
+    command.to &&
+    command.from !== command.to
+  ) {
+    typing.cleanup();
+    return { kind: "reply", reply: undefined };
+  }
 
   const slashCommandName = resolveSlashCommandName(command.commandBodyNormalized);
   const shouldLoadSkillCommands =
@@ -268,8 +328,12 @@ export async function handleInlineActions(params: {
     slashCommandName !== null &&
     // `/skill …` needs the full skill command list.
     (slashCommandName === "skill" || !getBuiltinSlashCommands().has(slashCommandName));
+  const canReusePreloadedSkillCommands = execOverrides === undefined;
   const skillCommands =
-    shouldLoadSkillCommands && params.skillCommands
+    shouldLoadSkillCommands &&
+    canReusePreloadedSkillCommands &&
+    params.skillCommands &&
+    params.skillCommands.length > 0
       ? params.skillCommands
       : shouldLoadSkillCommands
         ? (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
@@ -277,9 +341,11 @@ export async function handleInlineActions(params: {
             cfg,
             agentId,
             skillFilter,
+            sessionEntry: targetSessionEntry,
+            sessionKey,
+            execOverrides,
           })
         : [];
-  const targetSessionEntry = sessionStore?.[sessionKey] ?? sessionEntry;
 
   const skillInvocation =
     allowTextCommands && skillCommands.length > 0
@@ -312,6 +378,7 @@ export async function handleInlineActions(params: {
           senderE164: ctx.SenderE164,
           originatingTo: ctx.OriginatingTo,
           to: ctx.To,
+          nativeChannelId: ctx.NativeChannelId,
           messageThreadId: ctx.MessageThreadId,
           memberRoleIds: ctx.MemberRoleIds,
         },
@@ -328,6 +395,9 @@ export async function handleInlineActions(params: {
         groupId: extractExplicitGroupId(ctx.From),
         skillCommand: {
           name: skillInvocation.command.name,
+          ...(skillInvocation.command.skillFile
+            ? { skillFile: skillInvocation.command.skillFile }
+            : {}),
           skillName: skillInvocation.command.skillName,
           ...(skillInvocation.command.skillSource
             ? { skillSource: skillInvocation.command.skillSource }
@@ -405,34 +475,6 @@ export async function handleInlineActions(params: {
     await opts.onBlockReply(reply);
   };
 
-  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
-  if (!isStopLikeInbound && targetSessionEntry) {
-    const cutoff = readAbortCutoffFromSessionEntry(targetSessionEntry);
-    const incoming = resolveAbortCutoffFromContext(ctx);
-    const shouldSkip = cutoff
-      ? shouldSkipMessageByAbortCutoff({
-          cutoffMessageSid: cutoff.messageSid,
-          cutoffTimestamp: cutoff.timestamp,
-          messageSid: incoming?.messageSid,
-          timestamp: incoming?.timestamp,
-        })
-      : false;
-    if (shouldSkip) {
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
-    }
-    if (cutoff) {
-      await (
-        await loadAbortCutoffRuntime()
-      ).clearAbortCutoffInSessionRuntime({
-        sessionEntry: targetSessionEntry,
-        sessionStore,
-        sessionKey,
-        storePath,
-      });
-    }
-  }
-
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender
       ? extractInlineSimpleCommand(cleanedBody)
@@ -468,6 +510,7 @@ export async function handleInlineActions(params: {
       model,
       contextTokens,
       workspaceDir,
+      thinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -500,6 +543,8 @@ export async function handleInlineActions(params: {
         failures: elevatedFailures,
       },
       sessionEntry: targetSessionEntry,
+      initialSessionEntry,
+      allowCreateSessionEntry,
       previousSessionEntry,
       sessionStore,
       sessionKey,
@@ -508,6 +553,7 @@ export async function handleInlineActions(params: {
       workspaceDir,
       opts,
       defaultGroupActivation: defaultActivation,
+      thinkingCatalog,
       resolvedThinkLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
@@ -531,6 +577,7 @@ export async function handleInlineActions(params: {
       commandBodyNormalized: inlineCommand.command,
     };
     const inlineResult = await runCommands(inlineCommandContext);
+    notifyInlineCommandSessionMetadataChanges();
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
@@ -542,21 +589,6 @@ export async function handleInlineActions(params: {
 
   if (directiveAck) {
     await sendInlineReply(directiveAck);
-  }
-
-  const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.channelId
-    ? Boolean(getChannelPlugin(command.channelId)?.commands?.skipWhenConfigEmpty)
-    : false;
-  if (
-    skipWhenConfigEmpty &&
-    isEmptyConfig &&
-    command.from &&
-    command.to &&
-    command.from !== command.to
-  ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
   }
 
   let abortedLastRun = initialAbortedLastRun;
@@ -596,6 +628,7 @@ export async function handleInlineActions(params: {
   const commandBodyBeforeRun = command.commandBodyNormalized;
   const bodyBeforeRun = sessionCtx.BodyStripped ?? sessionCtx.BodyForAgent;
   const commandResult = await runCommands(command);
+  notifyInlineCommandSessionMetadataChanges();
   if (!commandResult.shouldContinue) {
     typing.cleanup();
     return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };

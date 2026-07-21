@@ -1,23 +1,26 @@
+// Core root-command descriptor catalog used for help placeholders and lazy registration.
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
-export type CoreCliCommandDescriptor = NamedCommandDescriptor;
+/** Descriptor shape for root commands owned by the core CLI. */
+type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
-    name: "crestodian",
-    description: "Open the interactive setup and repair assistant",
+    name: "setup",
+    description: "Chat with OpenClaw; onboard when setup is incomplete",
     hasSubcommands: false,
   },
   {
-    name: "setup",
-    description: "Initialize local config and an agent workspace",
+    name: "crestodian", // hidden alias
+    description: "Deprecated: use openclaw setup",
     hasSubcommands: false,
+    hidden: true,
   },
   {
     name: "onboard",
-    description: "Interactive onboarding for gateway, workspace, and skills",
-    hasSubcommands: false,
+    description: "Guided setup for auth, models, Gateway, workspace, channels, and skills",
+    hasSubcommands: true,
   },
   {
     name: "configure",
@@ -27,12 +30,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   {
     name: "config",
     description:
-      "Non-interactive config helpers (get/set/unset/file/validate). Default: starts guided setup.",
+      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
     hasSubcommands: true,
   },
   {
     name: "backup",
-    description: "Create and verify local backup archives for OpenClaw state",
+    description: "Create and verify backup archives and SQLite snapshots",
     hasSubcommands: true,
   },
   {
@@ -42,7 +45,7 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "doctor",
-    description: "Diagnose and repair config, Gateway, plugin, and channel problems",
+    description: "Health checks + quick fixes for the gateway and channels",
     hasSubcommands: false,
   },
   {
@@ -62,12 +65,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "message",
-    description: "Send, read, and manage channel messages",
+    description: "Send, read, and manage messages and channel actions",
     hasSubcommands: true,
   },
   {
     name: "mcp",
-    description: "Manage OpenClaw MCP config and channel bridge",
+    description: "Manage OpenClaw mcp.servers config and channel bridge",
     hasSubcommands: true,
     parentDefaultHelp: true,
   },
@@ -78,22 +81,27 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "agent",
-    description: "Run one agent turn via the Gateway",
+    description: "Run an agent turn via the Gateway (use --local for embedded)",
     hasSubcommands: false,
   },
   {
     name: "agents",
-    description: "Manage isolated agents (workspaces, auth, routing)",
+    description: "Manage isolated agents (workspaces + auth + routing)",
     hasSubcommands: true,
   },
   {
     name: "status",
-    description: "Show Gateway, channel, model, and recent-session status",
+    description: "Show channel health and recent session recipients",
     hasSubcommands: false,
   },
   {
     name: "health",
-    description: "Fetch detailed health from the running Gateway",
+    description: "Fetch health from the running gateway",
+    hasSubcommands: false,
+  },
+  {
+    name: "audit",
+    description: "Inspect metadata-only run, tool, and message lifecycle records",
     hasSubcommands: false,
   },
   {
@@ -108,25 +116,30 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
   {
     name: "tasks",
-    description: "Inspect durable background tasks and flows",
+    description: "Inspect durable background tasks and TaskFlow state",
     hasSubcommands: true,
   },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
+/** Static root-command descriptors for the core CLI surface. */
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
 
+/** Return core root-command descriptors in help/registration order. */
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
   return coreCliCommandCatalog.getDescriptors();
 }
 
+/** Return names for all core root commands. */
 export function getCoreCliCommandNames(): string[] {
   return coreCliCommandCatalog.getNames();
 }
 
+/** Return core root commands that own child subcommands. */
 export function getCoreCliCommandsWithSubcommands(): string[] {
   return coreCliCommandCatalog.getCommandsWithSubcommands();
 }
 
+/** Return core root commands whose parent action should default to help. */
 export function getCoreCliParentDefaultHelpCommands(): string[] {
   return coreCliCommandCatalog.getParentDefaultHelpCommands();
 }

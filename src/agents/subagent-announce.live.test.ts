@@ -1,3 +1,5 @@
+// Live subagent announce E2E tests exercise real gateway, session, and provider
+// flows for subagent completion delivery.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -21,10 +23,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import { resolveSubagentController, steerControlledSubagentRun } from "./subagent-control.js";
-import { listSubagentRunsForRequester } from "./subagent-registry.js";
+import { listSubagentRunsForRequester } from "./subagent-registry.test-helpers.js";
 
 const LIVE = isLiveTestEnabled() && isTruthyEnvValue(process.env.OPENCLAW_LIVE_SUBAGENT_E2E);
 const describeLive = LIVE ? describe : describe.skip;
@@ -42,7 +44,9 @@ const REQUEST_TIMEOUT_MS = 8 * 60_000;
 const WAIT_TIMEOUT_MS = 8 * 60_000;
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 type LiveSubagentModelConfig = {
@@ -53,7 +57,7 @@ type LiveSubagentModelConfig = {
 type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
 
 function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
-  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.5";
+  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.6-luna";
   if (modelKey.startsWith("google/")) {
     return {
       modelKey,
@@ -65,6 +69,8 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 }
 
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
+  // Live E2E runs need the provider credential that matches the selected model
+  // family; fail early before gateway startup.
   expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
 }
 
@@ -188,6 +194,7 @@ function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForReques
       endedReason: run.endedReason,
       pauseReason: run.pauseReason,
       outcome: run.outcome?.status,
+      outcomeError: run.outcome?.status === "error" ? run.outcome.error : undefined,
       delivery: run.delivery?.status,
       deliveryError: run.delivery?.lastError,
       suppressAnnounceReason: run.suppressAnnounceReason,
@@ -288,7 +295,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -297,7 +303,7 @@ describeLive("subagent announce live", () => {
       });
       await state.writeConfig(
         liveSubagentConfig(modelKey, state.workspaceDir, port, token, {
-          queue: { mode: "collect", debounceMs: 2_500 },
+          queue: { mode: "collect" },
           toolAllow: ["sessions_spawn", "bash"],
         }),
       );
@@ -329,7 +335,6 @@ describeLive("subagent announce live", () => {
               taskName: "issue_82913_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 180,
             })}.`,
             'Step 2: after spawn returns status="accepted", immediately call the bash tool with command exactly: sleep 35; printf ISSUE_82913_PARENT_TOOL_DONE.',
             "Do not call sessions_yield at any point in this scenario.",
@@ -350,7 +355,7 @@ describeLive("subagent announce live", () => {
 
       const completedRunBeforeDelivery = await waitFor("issue 82913 child completion", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
@@ -483,7 +488,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -521,7 +525,6 @@ describeLive("subagent announce live", () => {
               taskName: "steered_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 300,
             })}.`,
             'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
             `Step 3: reply exactly ${parentStartedToken}.`,
@@ -539,7 +542,7 @@ describeLive("subagent announce live", () => {
         listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
       const spawnedRun = await waitFor("steered child spawn", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSteeredChildRuns()[0];
       });
@@ -548,7 +551,7 @@ describeLive("subagent announce live", () => {
       expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
       const runBeforeSteer = await waitFor("steered child bash tool start", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         const currentRun =
           listSteeredChildRuns().find((run) => run.runId === spawnedRun.runId) ?? spawnedRun;
@@ -590,7 +593,7 @@ describeLive("subagent announce live", () => {
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return listSteeredChildRuns().find(
           (run) =>
@@ -612,7 +615,7 @@ describeLive("subagent announce live", () => {
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         return inProcessAgentDispatches.some((entry) => entry.phase === "started")
           ? true
@@ -620,19 +623,28 @@ describeLive("subagent announce live", () => {
       });
 
       const completedDispatch = await waitFor(
-        "in-process subagent completion agent dispatch",
+        "in-process subagent completion agent dispatch with parent token",
         () => {
           if (initialError) {
-            throw initialError;
+            throw toLintErrorObject(initialError, "Non-Error thrown");
           }
-          return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
+          return inProcessAgentDispatches.find(
+            (entry) => entry.phase === "completed" && entry.resultText.includes(parentToken),
+          );
         },
-      );
+      ).catch((error: unknown) => {
+        throw new Error(
+          `timed out waiting for parent token in completion dispatch; dispatches=${JSON.stringify(
+            inProcessAgentDispatches,
+          )}`,
+          { cause: error },
+        );
+      });
       expect(completedDispatch.resultText).toContain(parentToken);
       expect(
         inProcessAgentDispatches.some((entry) => {
           if (initialError) {
-            throw initialError;
+            throw toLintErrorObject(initialError, "Non-Error thrown");
           }
           return entry.phase === "started";
         }),
@@ -671,7 +683,6 @@ describeLive("subagent announce live", () => {
           OPENCLAW_SKIP_CANVAS_HOST: "1",
           OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
           OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
           OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
           OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
@@ -741,7 +752,6 @@ describeLive("subagent announce live", () => {
                   taskName: `gemini_stress_${childNumber}`,
                   cleanup: "keep",
                   context: "isolated",
-                  runTimeoutSeconds: 300,
                 },
               )}.`;
             }),
@@ -759,7 +769,7 @@ describeLive("subagent announce live", () => {
 
       const completedRuns = await waitFor("three Gemini stress child completions", () => {
         if (initialError) {
-          throw initialError;
+          throw toLintErrorObject(initialError, "Non-Error thrown");
         }
         const runs = listSubagentRunsForRequester(sessionKey).filter((run) =>
           run.taskName?.startsWith("gemini_stress_"),
@@ -787,3 +797,17 @@ describeLive("subagent announce live", () => {
     12 * 60_000,
   );
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

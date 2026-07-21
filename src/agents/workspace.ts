@@ -1,10 +1,16 @@
+/**
+ * Workspace bootstrap, template, state, and attestation helpers. This module
+ * creates and reads AGENTS/SOUL/TOOLS-style bootstrap files while guarding
+ * filesystem boundaries and recently-attested workspaces.
+ */
+import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { replaceFileAtomic } from "../infra/replace-file.js";
+import { retryAsync } from "../infra/retry.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -12,7 +18,26 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  readWorkspaceBootstrapFile,
+} from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
+import {
+  assertNoUnmigratedWorkspaceState,
+  LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
+  LEGACY_WORKSPACE_STATE_DIRNAME,
+} from "./workspace-legacy-state.js";
+import {
+  clearExpiredWorkspaceStateForVanishedWorkspace,
+  mergeWorkspaceSetupState,
+  readWorkspaceStateSnapshot,
+  replaceWorkspaceAttestation,
+  WORKSPACE_ATTESTATION_RECENT_MS,
+  type WorkspaceAttestation,
+  type WorkspaceStateSnapshot,
+  type WorkspaceSetupState,
+} from "./workspace-state-store.js";
 import {
   resolveWorkspaceTemplateDir,
   resolveWorkspaceTemplateSearchDirs,
@@ -29,18 +54,17 @@ export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
-const WORKSPACE_STATE_DIRNAME = ".openclaw";
-const WORKSPACE_STATE_FILENAME = "workspace-state.json";
-const WORKSPACE_STATE_VERSION = 1;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
 ] as const;
+const TRANSIENT_WORKSPACE_READ_CODES = new Set(["EAGAIN", "EWOULDBLOCK", "EINTR"]);
+const TRANSIENT_WORKSPACE_READ_ERRNOS = new Set([-11, -4]);
+const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
-const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -60,48 +84,63 @@ async function readWorkspaceFileWithGuards(params: {
   filePath: string;
   workspaceDir: string;
 }): Promise<WorkspaceGuardedReadResult> {
-  const opened = await openRootFile({
-    absolutePath: params.filePath,
-    rootPath: params.workspaceDir,
-    boundaryLabel: "workspace root",
-    maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-  });
-  if (!opened.ok) {
-    workspaceFileCache.delete(params.filePath);
-    return opened;
-  }
-
-  const identity = workspaceFileIdentity(opened.stat, opened.path);
-  const cached = workspaceFileCache.get(params.filePath);
-  if (cached && cached.identity === identity) {
-    syncFs.closeSync(opened.fd);
-    return { ok: true, content: cached.content };
-  }
-
   try {
-    const content = syncFs.readFileSync(opened.fd, "utf-8");
-    workspaceFileCache.set(params.filePath, { content, identity });
-    return { ok: true, content };
+    // A transient FS race (EAGAIN/EWOULDBLOCK/EINTR under load) on the open or
+    // read must not drop the agent's bootstrap file for the turn — this reader
+    // runs every turn for AGENTS/SOUL/HEARTBEAT/etc. Retry the whole open+read so
+    // each attempt uses a fresh fd (retrying readFileSync on the same fd could
+    // return truncated content after a partial read); the inode-identity guard
+    // in openRootFile still protects against a swapped file between attempts.
+    return await retryAsync(
+      async () => {
+        const opened = await openRootFile({
+          absolutePath: params.filePath,
+          rootPath: params.workspaceDir,
+          boundaryLabel: "workspace root",
+          maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+        });
+        if (!opened.ok) {
+          // Boundary resolution can report transient IO as "validation", while
+          // pinned open failures use "io". Classify the underlying error so
+          // deterministic path and validation failures still return unchanged.
+          if (isTransientWorkspaceReadError(opened.error)) {
+            throw opened.error;
+          }
+          workspaceFileCache.delete(params.filePath);
+          return opened;
+        }
+
+        const identity = workspaceFileIdentity(opened.stat, opened.path);
+        const cached = workspaceFileCache.get(params.filePath);
+        if (cached && cached.identity === identity) {
+          syncFs.closeSync(opened.fd);
+          return { ok: true, content: cached.content };
+        }
+
+        try {
+          const content = await readWorkspaceBootstrapFile(opened.fd);
+          workspaceFileCache.set(params.filePath, { content, identity });
+          return { ok: true, content };
+        } finally {
+          syncFs.closeSync(opened.fd);
+        }
+      },
+      {
+        attempts: 3,
+        minDelayMs: 50,
+        maxDelayMs: 50,
+        shouldRetry: (err) => isTransientWorkspaceReadError(err),
+      },
+    );
   } catch (error) {
+    // Non-transient read failure, or transient retries exhausted.
     workspaceFileCache.delete(params.filePath);
     return { ok: false, reason: "io", error };
-  } finally {
-    syncFs.closeSync(opened.fd);
   }
 }
 
 function stripFrontMatter(content: string): string {
-  if (!content.startsWith("---")) {
-    return content;
-  }
-  const endIndex = content.indexOf("\n---", 3);
-  if (endIndex === -1) {
-    return content;
-  }
-  const start = endIndex + "\n---".length;
-  let trimmed = content.slice(start);
-  trimmed = trimmed.replace(/^\s+/, "");
-  return trimmed;
+  return extractFrontmatterBlock(content)?.body.replace(/^\s+/, "") ?? content;
 }
 
 async function loadTemplate(name: string): Promise<string> {
@@ -171,12 +210,6 @@ export type ExtraBootstrapLoadDiagnostic = {
   detail: string;
 };
 
-type WorkspaceSetupState = {
-  version: typeof WORKSPACE_STATE_VERSION;
-  bootstrapSeededAt?: string;
-  setupCompletedAt?: string;
-};
-
 /** Set of recognized bootstrap filenames for runtime validation */
 const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_AGENTS_FILENAME,
@@ -196,6 +229,23 @@ const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
   DEFAULT_HEARTBEAT_FILENAME,
 ]);
 
+export const WORKSPACE_VANISHED_ERROR_CODE = "WORKSPACE_VANISHED";
+
+export class WorkspaceVanishedError extends Error {
+  readonly code = WORKSPACE_VANISHED_ERROR_CODE;
+  readonly workspaceDir: string;
+
+  constructor(params: { workspaceDir: string }) {
+    super(
+      `OpenClaw workspace appears to have disappeared after a recent initialization: ${params.workspaceDir}. ` +
+        `Refusing to reseed BOOTSTRAP.md over a recently attested workspace. ` +
+        "Restore the workspace or run a full OpenClaw reset if this reset was intentional.",
+    );
+    this.name = "WorkspaceVanishedError";
+    this.workspaceDir = params.workspaceDir;
+  }
+}
+
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
     await fs.writeFile(filePath, content, {
@@ -212,18 +262,34 @@ async function writeFileIfMissing(filePath: string, content: string): Promise<bo
   }
 }
 
+function isTransientWorkspaceReadError(error: unknown): boolean {
+  const fsError = error as NodeJS.ErrnoException | undefined;
+  if (fsError?.code && TRANSIENT_WORKSPACE_READ_CODES.has(fsError.code)) {
+    return true;
+  }
+  if (typeof fsError?.errno === "number" && TRANSIENT_WORKSPACE_READ_ERRNOS.has(fsError.errno)) {
+    return true;
+  }
+  return error instanceof Error && TRANSIENT_WORKSPACE_READ_MESSAGE.test(error.message);
+}
+
 async function fileContentDiffersFromTemplate(
   filePath: string,
   template: string,
 ): Promise<boolean> {
   try {
-    return (await fs.readFile(filePath, "utf-8")) !== template;
+    return await retryAsync(async () => (await fs.readFile(filePath, "utf-8")) !== template, {
+      attempts: 3,
+      minDelayMs: 50,
+      maxDelayMs: 50,
+      shouldRetry: (err) => isTransientWorkspaceReadError(err),
+    });
   } catch (err) {
     const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
+    if (anyErr.code === "ENOENT") {
+      return false;
     }
-    return false;
+    throw err;
   }
 }
 
@@ -243,7 +309,57 @@ async function hasWorkspaceUserContentEvidence(
       // continue
     }
   }
-  return await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
+  if (await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME)) {
+    return true;
+  }
+  return await hasWorkspaceSkillEvidence(dir);
+}
+
+async function hasWorkspaceSkillEvidence(dir: string): Promise<boolean> {
+  try {
+    const skillEntries = await fs.readdir(path.join(dir, "skills"), { withFileTypes: true });
+    for (const entry of skillEntries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      try {
+        await fs.access(path.join(dir, "skills", entry.name, "SKILL.md"));
+        return true;
+      } catch {
+        // continue
+      }
+    }
+  } catch {
+    // no workspace skills
+  }
+  return false;
+}
+
+async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (
+        entry.name === ".DS_Store" ||
+        entry.name === LEGACY_WORKSPACE_STATE_DIRNAME ||
+        entry.name === LEGACY_WORKSPACE_STATE_CURRENT_FILENAME
+      ) {
+        continue;
+      }
+      if (entry.name === "skills" && entry.isDirectory()) {
+        if (!(await hasWorkspaceSkillEvidence(dir))) {
+          continue;
+        }
+      }
+      return true;
+    }
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "ENOENT") {
+      throw err;
+    }
+  }
+  return false;
 }
 
 async function workspaceProfileLooksConfigured(params: {
@@ -263,6 +379,60 @@ async function workspaceProfileLooksConfigured(params: {
   );
 }
 
+async function workspaceRequiredBootstrapLooksCustomized(
+  dir: string,
+  opts?: { generatedHashes?: ReadonlyMap<string, string> },
+): Promise<boolean> {
+  const fileNames = [DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME, DEFAULT_HEARTBEAT_FILENAME];
+  const generatedHashes = opts?.generatedHashes;
+  if (generatedHashes && generatedHashes.size > 0) {
+    for (const fileName of fileNames) {
+      const filePath = path.join(dir, fileName);
+      const generatedHash = generatedHashes.get(fileName);
+      try {
+        const content = await fs.readFile(filePath, "utf-8");
+        const contentHash = createHash("sha256").update(content).digest("hex");
+        if (!generatedHash || contentHash !== generatedHash) {
+          return true;
+        }
+      } catch {
+        // Missing generated files are not customization evidence.
+      }
+    }
+    return false;
+  }
+  const fileDiffs = await Promise.all(
+    fileNames.map(async (fileName) =>
+      fileContentDiffersFromTemplate(path.join(dir, fileName), await loadTemplate(fileName)),
+    ),
+  );
+  return fileDiffs.some(Boolean);
+}
+
+async function workspaceAttestedGeneratedFilesIntact(
+  dir: string,
+  generatedHashes: ReadonlyMap<string, string>,
+): Promise<boolean> {
+  if (
+    !generatedHashes.has(DEFAULT_AGENTS_FILENAME) ||
+    !generatedHashes.has(DEFAULT_TOOLS_FILENAME)
+  ) {
+    return false;
+  }
+  for (const [fileName, generatedHash] of generatedHashes) {
+    try {
+      const content = await fs.readFile(path.join(dir, fileName), "utf-8");
+      const contentHash = createHash("sha256").update(content).digest("hex");
+      if (contentHash !== generatedHash) {
+        return false;
+      }
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
   return await workspaceProfileLooksConfigured(params);
 }
@@ -276,7 +446,6 @@ type WorkspaceBootstrapCompletionReconcileResult = {
 async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
-  statePath: string;
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
@@ -293,8 +462,8 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
       ...params.state,
       setupCompletedAt: new Date().toISOString(),
     };
-    await writeWorkspaceSetupState(params.statePath, completedState);
-    return { repaired: true, bootstrapExists: false, state: completedState };
+    const persistedState = mergeWorkspaceSetupState(params.dir, completedState);
+    return { repaired: true, bootstrapExists: false, state: persistedState };
   }
 
   if (
@@ -312,76 +481,151 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     bootstrapSeededAt: params.state.bootstrapSeededAt ?? now,
     setupCompletedAt: now,
   };
-  await writeWorkspaceSetupState(params.statePath, repairedState);
+  const persistedState = mergeWorkspaceSetupState(params.dir, repairedState);
   try {
     await fs.rm(params.bootstrapPath, { force: true });
-    return { repaired: true, bootstrapExists: false, state: repairedState };
+    return { repaired: true, bootstrapExists: false, state: persistedState };
   } catch {
     // Completion state is authoritative; stale BOOTSTRAP cleanup is best-effort.
-    return { repaired: true, bootstrapExists: true, state: repairedState };
+    return { repaired: true, bootstrapExists: true, state: persistedState };
   }
 }
 
-function resolveWorkspaceStatePath(dir: string): string {
-  return path.join(dir, WORKSPACE_STATE_DIRNAME, WORKSPACE_STATE_FILENAME);
+async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string, string>> {
+  const hashes = new Map<string, string>();
+  const fileNames = [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+  ];
+  for (const fileName of fileNames) {
+    try {
+      const content = await fs.readFile(path.join(dir, fileName), "utf-8");
+      if (content === (await loadTemplate(fileName))) {
+        hashes.set(fileName, createHash("sha256").update(content).digest("hex"));
+      }
+    } catch {
+      // Missing or unreadable files are not attested as generated.
+    }
+  }
+  return hashes;
 }
 
-function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
+function recentWorkspaceAttestation(
+  attestation: WorkspaceAttestation | undefined,
+  nowMs = Date.now(),
+): WorkspaceAttestation | undefined {
+  if (!attestation) {
+    return undefined;
+  }
+  const ageMs = nowMs - attestation.attestedAtMs;
+  // Clock rollback must not turn disappearance protection into permission to
+  // reseed. A healthy workspace refreshes the future-dated row below.
+  if (ageMs > WORKSPACE_ATTESTATION_RECENT_MS) {
+    return undefined;
+  }
+  return attestation;
+}
+
+async function maybeWriteWorkspaceAttestation(dir: string): Promise<void> {
   try {
-    const parsed = JSON.parse(raw) as {
-      bootstrapSeededAt?: unknown;
-      setupCompletedAt?: unknown;
-      onboardingCompletedAt?: unknown;
-    };
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-    const legacyCompletedAt = readStringValue(parsed.onboardingCompletedAt);
-    return {
-      version: WORKSPACE_STATE_VERSION,
-      bootstrapSeededAt: readStringValue(parsed.bootstrapSeededAt),
-      setupCompletedAt: readStringValue(parsed.setupCompletedAt) ?? legacyCompletedAt,
-    };
+    // Order snapshots by when their filesystem observation starts. The store
+    // compares against a separate lock-time clock, so a newer committed scan
+    // wins when this async collection finishes later.
+    const attestedAtMs = Date.now();
+    const generatedHashes = await collectGeneratedBootstrapHashes(dir);
+    replaceWorkspaceAttestation({
+      workspaceDir: dir,
+      attestedAtMs,
+      generatedHashes,
+    });
   } catch {
-    return null;
+    // Attestation is a lifecycle guard; setup should not fail solely because
+    // the auxiliary disappearance evidence could not be refreshed.
   }
 }
 
-async function readWorkspaceSetupState(
-  statePath: string,
-  opts?: { persistLegacyMigration?: boolean },
-): Promise<WorkspaceSetupState> {
-  try {
-    const raw = await fs.readFile(statePath, "utf-8");
-    const parsed = parseWorkspaceSetupState(raw);
-    if (
-      opts?.persistLegacyMigration &&
-      parsed &&
-      raw.includes('"onboardingCompletedAt"') &&
-      !raw.includes('"setupCompletedAt"') &&
-      parsed.setupCompletedAt
-    ) {
-      await writeWorkspaceSetupState(statePath, parsed);
-    }
-    return parsed ?? { version: WORKSPACE_STATE_VERSION };
-  } catch (err) {
-    const anyErr = err as { code?: string };
-    if (anyErr.code !== "ENOENT") {
-      throw err;
-    }
-    return {
-      version: WORKSPACE_STATE_VERSION,
-    };
-  }
+function hasWorkspaceSetupStateMarker(state: WorkspaceSetupState): boolean {
+  return Boolean(state.bootstrapSeededAt || state.setupCompletedAt);
 }
 
-async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
-  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
-  return await readWorkspaceSetupState(statePath);
+function hasRecentWorkspaceSetupState(
+  snapshot: WorkspaceStateSnapshot,
+  nowMs = Date.now(),
+): boolean {
+  if (!hasWorkspaceSetupStateMarker(snapshot.setup) || snapshot.setupUpdatedAtMs === undefined) {
+    return false;
+  }
+  return nowMs - snapshot.setupUpdatedAtMs <= WORKSPACE_ATTESTATION_RECENT_MS;
+}
+
+async function workspaceAttestationHasSurvivalEvidence(params: {
+  dir: string;
+  bootstrapPath: string;
+  state: WorkspaceSetupState;
+  attestation: WorkspaceAttestation;
+}): Promise<boolean> {
+  if (await pathExists(params.bootstrapPath)) {
+    return true;
+  }
+  if (
+    await workspaceRequiredBootstrapLooksCustomized(params.dir, {
+      generatedHashes: params.attestation.generatedHashes,
+    })
+  ) {
+    return true;
+  }
+  if (await workspaceProfileLooksConfigured({ dir: params.dir })) {
+    return true;
+  }
+  return (
+    hasWorkspaceSetupStateMarker(params.state) &&
+    (await workspaceAttestedGeneratedFilesIntact(params.dir, params.attestation.generatedHashes))
+  );
+}
+
+async function workspaceSetupStateHasSurvivalEvidence(params: {
+  dir: string;
+  bootstrapPath: string;
+  initialState: WorkspaceStateSnapshot;
+}): Promise<boolean> {
+  if (await pathExists(params.bootstrapPath)) {
+    return true;
+  }
+  if (await hasWorkspaceUserContentEvidence(params.dir)) {
+    return true;
+  }
+  const currentState = readCanonicalWorkspaceStateSnapshot(params.dir);
+  if (
+    currentState.setup.bootstrapSeededAt !== params.initialState.setup.bootstrapSeededAt ||
+    currentState.setup.setupCompletedAt !== params.initialState.setup.setupCompletedAt
+  ) {
+    return true;
+  }
+  const generatedHashes = await collectGeneratedBootstrapHashes(params.dir);
+  return [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+  ].every((fileName) => generatedHashes.has(fileName));
+}
+
+function readCanonicalWorkspaceStateSnapshot(dir: string): WorkspaceStateSnapshot {
+  const snapshot = readWorkspaceStateSnapshot(dir);
+  assertNoUnmigratedWorkspaceState({
+    workspaceDir: dir,
+  });
+  return snapshot;
 }
 
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
-  const state = await readWorkspaceSetupStateForDir(dir);
+  const state = readCanonicalWorkspaceStateSnapshot(dir).setup;
   return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
 }
 
@@ -389,8 +633,7 @@ export async function resolveWorkspaceBootstrapStatus(
   dir: string,
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const statePath = resolveWorkspaceStatePath(resolvedDir);
-  const state = await readWorkspaceSetupState(statePath);
+  const state = readCanonicalWorkspaceStateSnapshot(resolvedDir).setup;
   if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
     return "complete";
   }
@@ -404,34 +647,6 @@ export async function resolveWorkspaceBootstrapStatus(
 
 export async function isWorkspaceBootstrapPending(dir: string): Promise<boolean> {
   return (await resolveWorkspaceBootstrapStatus(dir)) === "pending";
-}
-
-export async function reconcileWorkspaceBootstrapCompletion(
-  dir: string,
-): Promise<WorkspaceBootstrapCompletionReconcileResult> {
-  const resolvedDir = resolveUserPath(dir);
-  const statePath = resolveWorkspaceStatePath(resolvedDir);
-  const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const state = await readWorkspaceSetupState(statePath, {
-    persistLegacyMigration: true,
-  });
-  return await reconcileWorkspaceBootstrapCompletionState({
-    dir: resolvedDir,
-    bootstrapPath,
-    statePath,
-    state,
-  });
-}
-
-async function writeWorkspaceSetupState(
-  statePath: string,
-  state: WorkspaceSetupState,
-): Promise<void> {
-  await replaceFileAtomic({
-    filePath: statePath,
-    content: `${JSON.stringify(state, null, 2)}\n`,
-    tempPrefix: ".workspace-state",
-  });
 }
 
 async function hasGitRepo(dir: string): Promise<boolean> {
@@ -495,14 +710,54 @@ export async function ensureAgentWorkspace(params?: {
   userPath?: string;
   heartbeatPath?: string;
   bootstrapPath?: string;
+  bootstrapPending?: boolean;
   identityPathCreated?: boolean;
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+  let initialState = readCanonicalWorkspaceStateSnapshot(dir);
+  let reseedingExpiredWorkspaceState = false;
+  const recentAttestation = recentWorkspaceAttestation(initialState.attestation);
+  const recentSetupState = hasRecentWorkspaceSetupState(initialState);
+  const workspaceExists = await pathExists(dir);
+
+  if (!workspaceExists) {
+    if (recentAttestation) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+    // Old setup state lived inside the workspace and disappeared with it.
+    // Expired SQLite evidence must preserve that reseed contract. The write
+    // transaction also catches a concurrent attestation refresh.
+    if (!clearExpiredWorkspaceStateForVanishedWorkspace(dir)) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+  }
+
   await fs.mkdir(dir, { recursive: true });
 
+  const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   if (!params?.ensureBootstrapFiles) {
-    return { dir };
+    const hasContentEvidence = await hasSkipBootstrapWorkspaceContentEvidence(dir);
+    if (recentAttestation && !hasContentEvidence) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+    if (
+      hasWorkspaceSetupStateMarker(initialState.setup) &&
+      !initialState.attestation &&
+      !(await workspaceSetupStateHasSurvivalEvidence({
+        dir,
+        bootstrapPath,
+        initialState,
+      }))
+    ) {
+      if (recentSetupState || !clearExpiredWorkspaceStateForVanishedWorkspace(dir)) {
+        throw new WorkspaceVanishedError({ workspaceDir: dir });
+      }
+    }
+    if (hasContentEvidence) {
+      await maybeWriteWorkspaceAttestation(dir);
+    }
+    return { dir, bootstrapPending: false };
   }
 
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
@@ -511,13 +766,10 @@ export async function ensureAgentWorkspace(params?: {
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
-  const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
-  const statePath = resolveWorkspaceStatePath(dir);
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
-    const userContentPaths = [path.join(dir, "memory"), path.join(dir, ".git")];
-    const paths = [...templatePaths, ...userContentPaths];
+    const paths = [...templatePaths, path.join(dir, "memory")];
     const existing = await Promise.all(
       paths.map(async (p) => {
         try {
@@ -528,9 +780,55 @@ export async function ensureAgentWorkspace(params?: {
         }
       }),
     );
-    const hasCanonicalRootMemory = await exactWorkspaceEntryExists(dir, DEFAULT_MEMORY_FILENAME);
-    return existing.every((v) => !v) && !hasCanonicalRootMemory;
+    return existing.every((v) => !v) && !(await hasWorkspaceUserContentEvidence(dir));
   })();
+
+  if (isBrandNewWorkspace) {
+    if (recentAttestation) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+    reseedingExpiredWorkspaceState = initialState.setupExists || Boolean(initialState.attestation);
+    // A wiped workspace can leave its directory (or only .git) behind. Clear
+    // expired SQLite evidence before deciding whether setup already completed.
+    if (!clearExpiredWorkspaceStateForVanishedWorkspace(dir)) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+  }
+
+  if (initialState.attestation && !isBrandNewWorkspace) {
+    const hasWorkspaceEvidence = await workspaceAttestationHasSurvivalEvidence({
+      dir,
+      bootstrapPath,
+      state: initialState.setup,
+      attestation: initialState.attestation,
+    });
+    if (!hasWorkspaceEvidence) {
+      if (recentAttestation) {
+        throw new WorkspaceVanishedError({ workspaceDir: dir });
+      }
+      reseedingExpiredWorkspaceState = true;
+      // The transaction rejects a concurrent refresh. Only the expired
+      // snapshot we just inspected may be cleared before reseeding.
+      if (!clearExpiredWorkspaceStateForVanishedWorkspace(dir)) {
+        throw new WorkspaceVanishedError({ workspaceDir: dir });
+      }
+    }
+  } else if (
+    hasWorkspaceSetupStateMarker(initialState.setup) &&
+    !isBrandNewWorkspace &&
+    !(await workspaceSetupStateHasSurvivalEvidence({ dir, bootstrapPath, initialState }))
+  ) {
+    // Setup can outlive a best-effort attestation write or arrive alone from
+    // Doctor. Ambiguous partial remnants must fail closed, not inherit stale
+    // completion state and silently suppress BOOTSTRAP reseeding.
+    if (recentSetupState) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+    reseedingExpiredWorkspaceState = true;
+    if (!clearExpiredWorkspaceStateForVanishedWorkspace(dir)) {
+      throw new WorkspaceVanishedError({ workspaceDir: dir });
+    }
+  }
 
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
@@ -538,7 +836,19 @@ export async function ensureAgentWorkspace(params?: {
   const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
   const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
   const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  // Template and filesystem checks above are async. Another process may have
+  // completed setup while they ran, so optional-file policy needs fresh state.
+  initialState = readCanonicalWorkspaceStateSnapshot(dir);
   const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
+  // When the workspace is already configured, skip optional bootstrap files to
+  // prevent subagent spawns from recreating root-level SOUL.md, USER.md,
+  // IDENTITY.md, or HEARTBEAT.md that were removed intentionally or only exist
+  // under agent-specific subdirectories.
+  if (initialState.setup.setupCompletedAt) {
+    for (const filename of OPTIONAL_BOOTSTRAP_FILENAMES) {
+      skipOptionalBootstrapFiles.add(filename);
+    }
+  }
   const shouldWriteBootstrapFile = (fileName: string): boolean =>
     !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
 
@@ -557,9 +867,7 @@ export async function ensureAgentWorkspace(params?: {
     await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   }
 
-  let state = await readWorkspaceSetupState(statePath, {
-    persistLegacyMigration: true,
-  });
+  let state = readCanonicalWorkspaceStateSnapshot(dir).setup;
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -576,7 +884,6 @@ export async function ensureAgentWorkspace(params?: {
     const repair = await reconcileWorkspaceBootstrapCompletionState({
       dir,
       bootstrapPath,
-      statePath,
       state,
       bootstrapExists,
     });
@@ -588,14 +895,21 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (!state.bootstrapSeededAt && !state.setupCompletedAt && !bootstrapExists) {
-    // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
-    // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
-    // already-configured workspaces.
+    // If USER/IDENTITY diverged from templates, or if user-content indicators
+    // exist, treat setup as complete and avoid recreating BOOTSTRAP.
+    const hasRecentAttestedCustomization = recentAttestation
+      ? await workspaceRequiredBootstrapLooksCustomized(dir, {
+          generatedHashes: recentAttestation.generatedHashes,
+        })
+      : false;
     if (
-      await workspaceProfileLooksConfigured({
+      hasRecentAttestedCustomization ||
+      (await workspaceProfileLooksConfigured({
         dir,
-        includeGitEvidence: true,
-      })
+        // A preexisting Git repository is user evidence. Git metadata left by
+        // an expired, wiped OpenClaw workspace is not completion evidence.
+        includeGitEvidence: !reseedingExpiredWorkspaceState,
+      }))
     ) {
       markState({ setupCompletedAt: nowIso() });
     } else {
@@ -613,9 +927,10 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
-    await writeWorkspaceSetupState(statePath, state);
+    state = mergeWorkspaceSetupState(dir, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
+  await maybeWriteWorkspaceAttestation(dir);
 
   return {
     dir,
@@ -626,6 +941,7 @@ export async function ensureAgentWorkspace(params?: {
     userPath,
     heartbeatPath,
     bootstrapPath,
+    bootstrapPending: !state.setupCompletedAt && bootstrapExists,
     identityPathCreated,
   };
 }
@@ -813,14 +1129,6 @@ async function resolveExtraBootstrapPatternPaths(
   return matches.length > 0 ? matches : [pattern];
 }
 
-export async function loadExtraBootstrapFiles(
-  dir: string,
-  extraPatterns: string[],
-): Promise<WorkspaceBootstrapFile[]> {
-  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
-  return loaded.files;
-}
-
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
@@ -889,3 +1197,4 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   }
   return { files, diagnostics };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,3 +1,4 @@
+// Zalo plugin module implements runtime support behavior.
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 export type { OpenClawConfig, GroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 export type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
@@ -63,7 +64,6 @@ export {
   isNumericTargetId,
   sendPayloadWithChunkedTextAndMedia,
 } from "openclaw/plugin-sdk/reply-payload";
-export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 export { waitForAbortSignal } from "openclaw/plugin-sdk/runtime";
 export {
   applyBasicWebhookRequestGuards,

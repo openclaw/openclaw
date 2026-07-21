@@ -1,7 +1,11 @@
+// Workshop service tests cover skill workshop generation, storage, and validation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import {
@@ -9,8 +13,10 @@ import {
   resetSkillsRefreshStateForTest,
 } from "../runtime/refresh-state.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { renderProposalMarkdown } from "./frontmatter.js";
 import {
   applySkillProposal,
+  getSkillProposalRunProgress,
   inspectSkillProposal,
   listSkillProposals,
   proposeCreateSkill,
@@ -21,20 +27,22 @@ import {
   resolvePendingSkillProposal,
   reviseSkillProposal,
 } from "./service.js";
-import { readSkillProposalManifest, resolveProposalDraftPath } from "./store.js";
+import { readSkillProposalManifest, updateSkillProposalRecord } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
-let envSnapshot: ReturnType<typeof captureEnv>;
+let testState: OpenClawTestState;
 let stateDir = "";
 
 beforeEach(async () => {
-  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  stateDir = await tempDirs.make("openclaw-skill-workshop-state-");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skill-workshop-state-",
+  });
+  stateDir = testState.stateDir;
 });
 
 afterEach(async () => {
-  envSnapshot.restore();
+  await testState.cleanup();
   resetSkillsRefreshStateForTest();
   await tempDirs.cleanup();
 });
@@ -44,6 +52,17 @@ async function makeWorkspace(): Promise<string> {
 }
 
 describe("skill workshop proposals", () => {
+  it("renders proposal markdown with a terminal newline", () => {
+    expect(
+      renderProposalMarkdown({
+        name: "example",
+        description: "Example proposal",
+        content: "# Example",
+        date: "2026-07-05T00:00:00.000Z",
+      }).endsWith("\n"),
+    ).toBe(true);
+  });
+
   it("creates a pending proposal under the workshop and applies it as an active workspace skill", async () => {
     const workspaceDir = await makeWorkspace();
     const proposal = await proposeCreateSkill({
@@ -87,9 +106,7 @@ describe("skill workshop proposals", () => {
     expect(proposal.record.target.skillFile).toBe(
       path.join(workspaceDir, "skills", "weather-helper", "SKILL.md"),
     );
-    await expect(
-      fs.readFile(resolveProposalDraftPath(proposal.record.id), "utf8"),
-    ).resolves.toContain("date: ");
+    expect(proposal.content).toContain("date: ");
 
     const listed = await listSkillProposals();
     expect(listed.proposals).toHaveLength(1);
@@ -131,6 +148,169 @@ describe("skill workshop proposals", () => {
     });
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "applies updates through opted-in trusted workspace skills symlink targets",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-target-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const skillDir = path.join(targetSkillsDir, "shared-skill");
+      await writeSkill({
+        dir: skillDir,
+        name: "shared-skill",
+        description: "Shared skill target",
+        body: "# Shared Skill\n\nOld body.\n",
+      });
+      await fs.mkdir(path.join(skillDir, "references"), { recursive: true });
+      await fs.writeFile(path.join(skillDir, "references", "shared.md"), "Old support.\n", "utf8");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeUpdateSkill({
+        workspaceDir,
+        config,
+        skillName: "shared-skill",
+        content: "# Shared Skill\n\nNew body.\n",
+        supportFiles: [{ path: "references/shared.md", content: "New support.\n" }],
+      });
+
+      const applied = await applySkillProposal({
+        workspaceDir,
+        config,
+        proposalId: proposal.record.id,
+      });
+
+      expect(applied.targetSkillFile).toBe(
+        path.join(workspaceDir, "skills", "shared-skill", "SKILL.md"),
+      );
+      await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+        "New body.",
+      );
+      await expect(
+        fs.readFile(path.join(skillDir, "references", "shared.md"), "utf8"),
+      ).resolves.toBe("New support.\n");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "blocks trusted workspace skills symlink writes until workshop writes are enabled",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-readonly-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const config = { skills: { load: { allowSymlinkTargets: [targetSkillsDir] } } };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Readonly Symlink Skill",
+        description: "Must not write without explicit workshop opt-in",
+        content: "# Readonly\n\nDo not write.\n",
+        supportFiles: [
+          {
+            path: "references/details.md",
+            content: "This support file must not be written.\n",
+          },
+        ],
+      });
+
+      await expect(
+        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).rejects.toThrow("allowSymlinkTargetWrites");
+      await expect(
+        fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "SKILL.md")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(targetSkillsDir, "readonly-symlink-skill", "references", "details.md")),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "validates support file targets against trusted symlink write roots",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-trusted-");
+      const untrustedSkillsDir = await tempDirs.make("openclaw-skill-workshop-support-untrusted-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      await fs.symlink(untrustedSkillsDir, path.join(workspaceDir, "other-skills"), "dir");
+      const config = {
+        skills: {
+          load: { allowSymlinkTargets: [targetSkillsDir] },
+          workshop: { allowSymlinkTargetWrites: true },
+        },
+      };
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        config,
+        name: "Support Escape",
+        description: "Must keep support writes in trusted roots",
+        content: "# Support Escape\n\nDo not write through the wrong skill dir.\n",
+        supportFiles: [
+          {
+            path: "references/details.md",
+            content: "This support file must not be written outside the trusted target.\n",
+          },
+        ],
+      });
+
+      await updateSkillProposalRecord({
+        record: {
+          ...proposal.record,
+          target: {
+            ...proposal.record.target,
+            skillDir: path.join(workspaceDir, "other-skills", "support-escape"),
+          },
+        },
+      });
+
+      await expect(
+        applySkillProposal({ workspaceDir, config, proposalId: proposal.record.id }),
+      ).rejects.toThrow("untrusted symlink target");
+      await expect(
+        fs.access(path.join(untrustedSkillsDir, "support-escape", "references", "details.md")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(targetSkillsDir, "support-escape", "SKILL.md")),
+      ).rejects.toThrow();
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "blocks untrusted workspace skills symlink targets before support files are written",
+    async () => {
+      const workspaceDir = await makeWorkspace();
+      const targetSkillsDir = await tempDirs.make("openclaw-skill-workshop-untrusted-skills-");
+      await fs.symlink(targetSkillsDir, path.join(workspaceDir, "skills"), "dir");
+      const proposal = await proposeCreateSkill({
+        workspaceDir,
+        name: "Untrusted Symlink Skill",
+        description: "Must not write through an untrusted symlink",
+        content: "# Untrusted\n\nDo not write.\n",
+        supportFiles: [
+          {
+            path: "references/details.md",
+            content: "This support file must not be written.\n",
+          },
+        ],
+      });
+
+      await expect(
+        applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+      ).rejects.toThrow("untrusted symlink target");
+      await expect(
+        fs.access(path.join(targetSkillsDir, "untrusted-symlink-skill", "SKILL.md")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(
+          path.join(targetSkillsDir, "untrusted-symlink-skill", "references", "details.md"),
+        ),
+      ).rejects.toThrow();
+    },
+  );
 
   it("preserves non-proposal frontmatter when proposals become active skills", async () => {
     const workspaceDir = await makeWorkspace();
@@ -202,6 +382,7 @@ describe("skill workshop proposals", () => {
       name: "Draftable Skill",
       description: "Original proposal",
       content: "# Draftable\n\nOriginal body.\n",
+      origin: { runId: "original-run" },
       supportFiles: [
         {
           path: "references/original.md",
@@ -217,6 +398,7 @@ describe("skill workshop proposals", () => {
       proposalId: proposal.record.id,
       description: "Revised proposal",
       content: "# Draftable\n\nRevised body.\n",
+      origin: { runId: "revision-run" },
       evidence: "",
     });
 
@@ -225,6 +407,8 @@ describe("skill workshop proposals", () => {
     expect(revised.record.description).toBe("Revised proposal");
     expect(revised.record.goal).toBe("Original goal");
     expect(revised.record.evidence).toBeUndefined();
+    expect(revised.record.origin).toEqual({ runId: "revision-run" });
+    expect(revised.record.originRunIds).toEqual(["original-run", "revision-run"]);
     expect(revised.record.supportFiles?.map((file) => file.path)).toEqual([
       "references/original.md",
     ]);
@@ -235,10 +419,31 @@ describe("skill workshop proposals", () => {
       workspaceDir,
       proposalId: proposal.record.id,
       content: "# Draftable\n\nFinal body.\n",
+      origin: { runId: "revision-run" },
       supportFiles: [],
     });
 
     expect(removedSupport.record.proposedVersion).toBe("v3");
+    expect(removedSupport.record.origin).toEqual({ runId: "revision-run" });
+    expect(removedSupport.record.originRunIds).toEqual(["original-run", "revision-run"]);
+    expect(removedSupport.record.originRunMutationCounts?.["revision-run"]).toBe(2);
+
+    const laterRevision = await reviseSkillProposal({
+      workspaceDir,
+      proposalId: proposal.record.id,
+      content: "# Draftable\n\nLater body.\n",
+      origin: { runId: "later-run" },
+      supportFiles: [],
+    });
+    expect(laterRevision.record.proposedVersion).toBe("v4");
+    expect(laterRevision.record.originRunIds).toEqual([
+      "original-run",
+      "revision-run",
+      "later-run",
+    ]);
+    await expect(
+      getSkillProposalRunProgress({ workspaceDir, runId: "revision-run" }),
+    ).resolves.toEqual({ mutationCount: 2, proposalIds: [proposal.record.id] });
     expect(removedSupport.record.supportFiles).toBeUndefined();
     await expect(
       fs.access(
@@ -257,8 +462,32 @@ describe("skill workshop proposals", () => {
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "draftable-skill", "SKILL.md"), "utf8"),
     ).resolves.toBe(
-      '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nFinal body.\n',
+      '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nLater body.\n',
     );
+  });
+
+  it("rebuilds a stale manifest before recovering run progress", async () => {
+    const workspaceDir = await makeWorkspace();
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Recovered Proposal",
+      description: "Recover a durable proposal after manifest interruption",
+      content: "# Recovered Proposal\n",
+      origin: { runId: "interrupted-run" },
+    });
+    await fs.writeFile(
+      path.join(stateDir, "skill-workshop", "proposals.json"),
+      `${JSON.stringify({
+        schema: "openclaw.skill-workshop.proposals-manifest.v1",
+        updatedAt: new Date().toISOString(),
+        proposals: [],
+      })}\n`,
+      "utf8",
+    );
+
+    await expect(
+      getSkillProposalRunProgress({ workspaceDir, runId: "interrupted-run" }),
+    ).resolves.toEqual({ mutationCount: 1, proposalIds: [proposal.record.id] });
   });
 
   it("resolves pending proposals by skill name for tool-driven revisions", async () => {
@@ -751,6 +980,82 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 
+  it.each([
+    "skill name",
+    "description",
+    "content",
+    "support file",
+    "support path",
+    "goal",
+    "evidence",
+  ])(
+    "rejects a recognized literal credential in %s before writing proposal state",
+    async (surface) => {
+      const workspaceDir = await makeWorkspace();
+      const sample = `sk-proj-${"a".repeat(32)}`;
+      const input = {
+        workspaceDir,
+        name: surface === "skill name" ? sample : "Credential Safety",
+        description: surface === "description" ? sample : "Keep credentials out of skill proposals",
+        content: surface === "content" ? `# Unsafe\n\n${sample}\n` : "# Safe content\n",
+        ...(surface === "support file"
+          ? { supportFiles: [{ path: "references/example.md", content: sample }] }
+          : {}),
+        ...(surface === "support path"
+          ? { supportFiles: [{ path: `references/${sample}.md`, content: "Safe support.\n" }] }
+          : {}),
+        ...(surface === "goal" ? { goal: sample } : {}),
+        ...(surface === "evidence" ? { evidence: sample } : {}),
+      };
+
+      await expect(proposeCreateSkill(input)).rejects.toThrow(
+        "contains a recognized literal credential",
+      );
+      expect((await listSkillProposals()).proposals).toHaveLength(0);
+    },
+  );
+
+  it("rejects literal credentials before update or revision writes", async () => {
+    const workspaceDir = await makeWorkspace();
+    const sample = `github_pat_${"a".repeat(32)}`;
+    const skillDir = path.join(workspaceDir, "skills", "safe-skill");
+    await writeSkill({
+      dir: skillDir,
+      name: "safe-skill",
+      description: "A writable workspace skill",
+      body: "# Safe Skill\n\nOriginal body.\n",
+    });
+
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir,
+        skillName: "safe-skill",
+        description: sample,
+        content: "# Safe Update\n\nNo credentials.\n",
+      }),
+    ).rejects.toThrow("contains a recognized literal credential");
+    expect((await listSkillProposals()).proposals).toHaveLength(0);
+
+    const proposal = await proposeCreateSkill({
+      workspaceDir,
+      name: "Safe Revision",
+      description: "A safe pending proposal",
+      content: "# Safe Revision\n\nOriginal proposal.\n",
+    });
+    await expect(
+      reviseSkillProposal({
+        workspaceDir,
+        proposalId: proposal.record.id,
+        description: sample,
+        content: "# Safe Revision\n\nNo credentials.\n",
+      }),
+    ).rejects.toThrow("contains a recognized literal credential");
+    const unchanged = await inspectSkillProposal(proposal.record.id, { workspaceDir });
+    expect(unchanged?.record.proposedVersion).toBe("v1");
+    expect(unchanged?.content).toContain("Original proposal.");
+    expect(unchanged?.content).not.toContain(sample);
+  });
+
   it("rejects unsafe support paths before creating proposal state", async () => {
     const workspaceDir = await makeWorkspace();
 
@@ -889,3 +1194,4 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

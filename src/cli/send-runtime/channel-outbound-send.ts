@@ -1,3 +1,4 @@
+// Runtime send adapter used by CLI send commands for channel plugins.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
@@ -24,6 +25,10 @@ type RuntimeSendOpts = {
   formatting?: OutboundDeliveryFormattingOptions;
   gifPlayback?: boolean;
   gatewayClientScopes?: readonly string[];
+  /** @internal Opaque durable intent id for provider-side reconciliation. */
+  deliveryQueueId?: string;
+  /** @internal Refresh durable timing before recipient-visible or finalizing platform I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
   textMode?: "markdown" | "html";
 };
 
@@ -36,6 +41,7 @@ function resolveRuntimeReplyToId(opts: RuntimeSendOpts): string | undefined {
   return raw == null ? undefined : normalizeOptionalString(String(raw));
 }
 
+/** Create a send runtime that dispatches text, media, or rich blocks through a channel plugin. */
 export function createChannelOutboundRuntimeSend(params: {
   channelId: ChannelId;
   unavailableMessage: string;
@@ -45,6 +51,7 @@ export function createChannelOutboundRuntimeSend(params: {
       const outbound = await loadChannelOutboundAdapter(params.channelId);
       const threadId = resolveRuntimeThreadId(opts);
       const replyToId = resolveRuntimeReplyToId(opts);
+      // Build context lazily so text/media/block branches share identical delivery metadata.
       const buildContext = () => ({
         cfg: opts.cfg ?? getRuntimeConfig(),
         to,
@@ -62,6 +69,8 @@ export function createChannelOutboundRuntimeSend(params: {
           opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
+        deliveryQueueId: opts.deliveryQueueId,
+        onPlatformSendDispatch: opts.onPlatformSendDispatch,
       });
       const hasMedia = Boolean(opts.mediaUrl);
       if (opts.blocks && outbound?.sendPayload) {

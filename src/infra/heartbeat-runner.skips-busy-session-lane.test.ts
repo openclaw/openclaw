@@ -1,11 +1,11 @@
+// Covers heartbeat skipping while session lanes or cron jobs are busy.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
-import {
-  __testing as replyRunRegistryTesting,
-  createReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { markCronJobActive, resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { CommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -46,7 +46,7 @@ afterAll(() => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
-  resetCronActiveJobsForTests();
+  resetCronActiveJobs();
   replyRunRegistryTesting.resetReplyRunRegistry();
 });
 
@@ -355,6 +355,44 @@ describe("heartbeat runner skips when target session lane is busy", () => {
         expect(replySpy).not.toHaveBeenCalled();
       } finally {
         operation.complete();
+      }
+    });
+  });
+
+  it("does not infer admission rejection from a replacement run after an empty heartbeat", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      const sessionKey = await seedHeartbeatTelegramSession(storePath, cfg);
+      let operation: ReturnType<typeof createReplyOperation> | undefined;
+      const replySpy = vi.fn(async (_ctx, replyOptions) => {
+        const runState = resolveReplyOperationRunState(replyOptions);
+        if (!runState) {
+          throw new Error("expected heartbeat reply operation state");
+        }
+        runState.admission = { status: "owned" };
+        operation = createReplyOperation({
+          sessionKey,
+          sessionId: "racing-visible-session",
+          resetTriggered: false,
+        });
+        operation.setPhase("running");
+        return undefined;
+      });
+
+      try {
+        const result = await runHeartbeatOnce({
+          cfg,
+          deps: {
+            getQueueSize: vi.fn((_lane?: string) => 0),
+            nowMs: () => Date.now(),
+            getReplyFromConfig: replySpy,
+          } as HeartbeatDeps,
+        });
+
+        expect(result.status).toBe("ran");
+        expect(replySpy).toHaveBeenCalledOnce();
+      } finally {
+        operation?.complete();
       }
     });
   });

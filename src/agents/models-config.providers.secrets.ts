@@ -1,3 +1,8 @@
+/**
+ * Provider auth resolution entry points used during model config generation.
+ * The resolvers return env/profile/config marker values so discovery can prove
+ * auth availability without writing secret material into generated config.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -8,6 +13,7 @@ import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
+  resolveOAuthApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
 import {
@@ -21,9 +27,9 @@ import {
   type ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import type { AuthStorageData } from "./sessions/index.js";
 
 export type {
-  ProfileApiKeyResolution,
   ProviderApiKeyResolver,
   ProviderAuthResolver,
   ProviderConfig,
@@ -31,17 +37,8 @@ export type {
 } from "./models-config.providers.secret-helpers.js";
 
 export {
-  listAuthProfilesForProvider,
   normalizeApiKeyConfig,
-  normalizeConfiguredProviderApiKey,
-  normalizeHeaderValues,
-  normalizeResolvedEnvApiKey,
-  resolveApiKeyFromCredential,
-  resolveApiKeyFromProfiles,
-  resolveAwsSdkApiKeyVarName,
-  resolveEnvApiKeyVarName,
   resolveMissingProviderApiKey,
-  toDiscoveryApiKey,
 } from "./models-config.providers.secret-helpers.js";
 
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);
@@ -55,6 +52,42 @@ function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
 }
 
+/** Create a resolver over the credential map already selected for one lifecycle generation. */
+export function createProviderApiKeyResolverFromPreparedCredentials(
+  env: NodeJS.ProcessEnv,
+  credentials: Readonly<AuthStorageData>,
+  config?: OpenClawConfig,
+): ProviderApiKeyResolver {
+  const resolveConfiguredOrEnvironment = createProviderApiKeyResolver(
+    env,
+    { version: 1, profiles: {} },
+    config,
+  );
+  const getLookupCaches = createProviderAuthLookupCaches(env, config);
+  return (provider: string) => {
+    const authProvider = resolveProviderIdForAuthFromCaches(provider, getLookupCaches());
+    // Discovery already collapsed profile and environment precedence into this generation.
+    // Rechecking ambient env first would make catalog augmentation describe a different account.
+    const credential = credentials[authProvider];
+    if (!credential) {
+      return resolveConfiguredOrEnvironment(provider);
+    }
+    if (credential.type === "oauth") {
+      return {
+        apiKey: resolveOAuthApiKeyMarker(authProvider),
+        discoveryApiKey: toDiscoveryApiKey(credential.access),
+      };
+    }
+    if (!credential.key.trim()) {
+      return resolveConfiguredOrEnvironment(provider);
+    }
+    return {
+      apiKey: credential.key,
+      discoveryApiKey: toDiscoveryApiKey(credential.key),
+    };
+  };
+}
+
 function createProviderAuthLookupCaches(
   env: NodeJS.ProcessEnv,
   config?: OpenClawConfig,
@@ -62,6 +95,8 @@ function createProviderAuthLookupCaches(
   let caches: ProviderAuthLookupCaches | undefined;
   return () => {
     if (!caches) {
+      // Env auth lookup maps are process-stable for a resolver instance, so one
+      // cached normalization pass avoids repeating alias/candidate expansion.
       const lookupMaps = resolveProviderEnvAuthLookupMaps({ config, env });
       caches = {
         aliasMap: lookupMaps.aliasMap,
@@ -84,6 +119,7 @@ function resolveProviderIdForAuthFromCaches(
   return caches.aliasMap[normalized] ?? normalized;
 }
 
+/** Create a resolver that returns redacted API-key markers for provider discovery. */
 export function createProviderApiKeyResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
@@ -99,6 +135,8 @@ export function createProviderApiKeyResolver(
       authEvidenceMap: lookupCaches.authEvidenceMap,
     });
     if (envVar) {
+      // Public return value carries the env var name, while discovery receives
+      // only the redacted/hashable value form.
       return {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(env[envVar]),
@@ -130,6 +168,7 @@ export function createProviderApiKeyResolver(
   };
 }
 
+/** Create a resolver that reports provider auth mode and provenance. */
 export function createProviderAuthResolver(
   env: NodeJS.ProcessEnv,
   authStoreInput: AuthProfileStoreInput,
@@ -157,6 +196,8 @@ export function createProviderAuthResolver(
         continue;
       }
       if (cred.type === "oauth") {
+        // Prefer concrete API-key profiles, but keep one OAuth profile as a
+        // fallback so provider routing can advertise OAuth-backed availability.
         oauthCandidate ??= {
           apiKey: options?.oauthMarker,
           discoveryApiKey: toDiscoveryApiKey(cred.access),
@@ -245,6 +286,8 @@ function resolveConfigBackedProviderAuth(params: {
   });
   const apiKey = synthetic?.apiKey?.trim();
   if (apiKey) {
+    // Synthetic plugin auth can prove configured availability, but non-marker
+    // values must not be written back as raw generated config secrets.
     return isNonSecretApiKeyMarker(apiKey)
       ? {
           apiKey,
@@ -267,6 +310,8 @@ function resolveConfigBackedProviderAuth(params: {
     defaults: params.config?.secrets?.defaults,
   }).ref;
   if (configuredApiKeyRef) {
+    // Secret refs are preserved as markers. Env refs can still provide a
+    // discovery value from the current process without exposing the secret name's value.
     if (configuredApiKeyRef.source === "env") {
       const envVar = configuredApiKeyRef.id.trim();
       const envValue = params.env?.[envVar]?.trim();

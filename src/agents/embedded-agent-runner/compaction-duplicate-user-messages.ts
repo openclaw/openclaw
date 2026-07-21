@@ -1,3 +1,6 @@
+/**
+ * Removes short-window duplicate user turns from compaction summaries.
+ */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
 const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
@@ -7,6 +10,7 @@ type MessageLike = {
   role?: unknown;
   content?: unknown;
   timestamp?: unknown;
+  __openclaw?: unknown;
 };
 
 type EntryLike = {
@@ -49,12 +53,18 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   if (!text || text.length < MIN_DUPLICATE_USER_MESSAGE_CHARS) {
     return undefined;
   }
+  // Persisted sender identity keeps distinct participants separate while senderless legacy
+  // turns retain the old retry behavior. A JSON tuple avoids sender/text delimiter collisions.
+  const metadata = message["__openclaw"];
+  const senderId =
+    isRecord(metadata) && typeof metadata.senderId === "string" ? metadata.senderId : "";
   return {
-    key: text.normalize("NFC").toLowerCase(),
+    key: JSON.stringify([senderId, text.normalize("NFC").toLowerCase()]),
     timestamp: message.timestamp,
   };
 }
 
+/** Drop later duplicate user messages while preserving the first prompt. */
 export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   messages: readonly T[],
   options: DuplicateUserMessageOptions = {},
@@ -72,6 +82,8 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     const lastSeenAt = lastSeenAtByKey.get(signature.key);
     lastSeenAtByKey.set(signature.key, signature.timestamp);
     if (typeof lastSeenAt === "number" && signature.timestamp - lastSeenAt <= windowMs) {
+      // Keep the first prompt and drop only later repeats. The first copy anchors the summarized
+      // branch while duplicate retries no longer inflate compaction context.
       removed += 1;
       continue;
     }
@@ -80,6 +92,7 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   return removed > 0 ? result : [...messages];
 }
 
+/** Collects session entry ids that should be skipped when building a compaction branch summary. */
 export function collectDuplicateUserMessageEntryIdsForCompaction(
   entries: readonly EntryLike[],
   options: DuplicateUserMessageOptions = {},

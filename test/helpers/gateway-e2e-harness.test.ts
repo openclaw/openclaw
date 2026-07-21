@@ -1,4 +1,5 @@
-import { createServer, type Server } from "node:http";
+// Gateway E2E harness tests cover helper server and probe behavior.
+import { createServer, type RequestListener, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { postJson } from "./gateway-e2e-harness.js";
 
@@ -20,7 +21,7 @@ afterEach(async () => {
   server = undefined;
 });
 
-async function listen(handler: Parameters<typeof createServer>[0]): Promise<string> {
+async function listen(handler: RequestListener): Promise<string> {
   server = createServer(handler);
   await new Promise<void>((resolve) => {
     server?.listen(0, "127.0.0.1", resolve);

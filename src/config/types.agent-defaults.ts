@@ -1,3 +1,4 @@
+// Defines agent default configuration types shared by runtime schemas.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentModelConfig,
@@ -13,11 +14,27 @@ import type {
 } from "./types.base.js";
 import type { MemorySearchConfig } from "./types.tools.js";
 
+/** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
+/** Optional bootstrap files that setup can skip while still creating required agent files. */
 export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
+/** Embedded runner behavior contract used by strict-agentic provider flows. */
 export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
+/** Prompt-only default for how strongly agents should delegate to sub-agents. */
 export type SubagentDelegationMode = "suggest" | "prefer";
+/** Image compression/detail preference used before sending image inputs to models. */
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+/** Canonical thinking levels accepted by agent defaults and compaction overrides. */
+export type AgentThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max"
+  | "ultra";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -30,6 +47,7 @@ export type PromptOverlaysConfig = {
 };
 
 export type AgentModelEntryConfig = {
+  /** Optional display/lookup alias for this provider/model entry. */
   alias?: string;
   /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
   params?: Record<string, unknown>;
@@ -39,30 +57,33 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
+export type AgentModelPolicyConfig = {
+  /** Model refs allowed for session/run overrides. Empty or omitted allows any model. */
+  allow?: string[];
+};
+
 export type AgentModelListConfig = {
+  /** Primary provider/model ref. */
   primary?: string;
+  /** Ordered provider/model fallback refs. */
   fallbacks?: string[];
 };
 
 export type AgentContextPruningConfig = {
+  /** Pruning mode for old tool results in model context. */
   mode?: "off" | "cache-ttl";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
-  keepLastAssistants?: number;
-  softTrimRatio?: number;
-  hardClearRatio?: number;
-  minPrunableToolChars?: number;
   tools?: {
+    /** Tool names eligible for context pruning. */
     allow?: string[];
+    /** Tool names excluded from context pruning. */
     deny?: string[];
   };
-  softTrim?: {
-    maxChars?: number;
-    headChars?: number;
-    tailChars?: number;
-  };
   hardClear?: {
+    /** Replace oversized old tool results with a placeholder at high pressure. */
     enabled?: boolean;
+    /** Placeholder text inserted when a tool result is hard-cleared. */
     placeholder?: string;
   };
 };
@@ -93,17 +114,6 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
-export type AgentRunRetriesConfig = {
-  /** Base number of run retry iterations (default: 24). */
-  base?: number;
-  /** Additional run retry iterations per fallback profile (default: 8). */
-  perProfile?: number;
-  /** Minimum limit for run retry iterations (default: 32). */
-  min?: number;
-  /** Maximum limit for run retry iterations (default: 160). */
-  max?: number;
-};
-
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -114,7 +124,7 @@ export type CliBackendConfig = {
   /** Output parsing mode when resuming a CLI session. */
   resumeOutput?: "json" | "text" | "jsonl";
   /** JSONL event dialect for CLIs with provider-specific stream formats. */
-  jsonlDialect?: "claude-stream-json";
+  jsonlDialect?: "claude-stream-json" | "gemini-stream-json";
   /** Long-lived CLI process mode. */
   liveSession?: "claude-stdio";
   /** Prompt input mode (default: arg). */
@@ -135,6 +145,8 @@ export type CliBackendConfig = {
   sessionArgs?: string[];
   /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
   resumeArgs?: string[];
+  /** Argument appended to one explicitly forked resume invocation. */
+  forkArg?: string;
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
@@ -163,19 +175,10 @@ export type CliBackendConfig = {
   reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
-    /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
-    outputLimits?: {
-      /** Max raw JSONL characters retained for one live CLI turn. */
-      maxTurnRawChars?: number;
-      /** Max raw JSONL lines retained for one live CLI turn. */
-      maxTurnLines?: number;
-    };
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
       fresh?: {
-        /** Fixed watchdog timeout in ms (overrides ratio when set). */
-        noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
         /** Lower bound for computed watchdog timeout. */
@@ -185,8 +188,6 @@ export type CliBackendConfig = {
       };
       /** Resume sessions. */
       resume?: {
-        /** Fixed watchdog timeout in ms (overrides ratio when set). */
-        noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
         /** Lower bound for computed watchdog timeout. */
@@ -203,6 +204,8 @@ export type AgentDefaultsConfig = {
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   model?: AgentModelConfig;
+  /** Optional lower-cost model for short internal tasks such as generated session titles. */
+  utilityModel?: string;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.
    * Normal schema parsing rejects this key; use per-model agentRuntime instead.
@@ -233,6 +236,8 @@ export type AgentDefaultsConfig = {
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Explicit model override policy. Empty or omitted allow permits any model. */
+  modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
@@ -292,7 +297,8 @@ export type AgentDefaultsConfig = {
    */
   envelopeTimezone?: string;
   /**
-   * Include absolute timestamps in message envelopes ("on" | "off", default: "on").
+   * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
+   * and embedded model-input prefixes ("on" | "off", default: "on").
    */
   envelopeTimestamp?: "on" | "off";
   /**
@@ -307,8 +313,6 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
-  /** Outer run loop retry iteration boundaries. */
-  runRetries?: AgentRunRetriesConfig;
   /** Embedded OpenClaw runner hardening and compatibility controls. */
   embeddedAgent?: {
     /**
@@ -321,14 +325,14 @@ export type AgentDefaultsConfig = {
     /**
      * Embedded OpenClaw execution contract:
      * - default: keep the standard runner behavior
-     * - strict-agentic: on OpenAI/OpenAI Codex GPT-5-family runs, keep acting until hitting a real blocker
+     * - strict-agentic: enable structured plan tracking and non-visible turn recovery on supported GPT-5 runs
      */
     executionContract?: EmbeddedAgentExecutionContract;
   };
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  thinkingDefault?: AgentThinkingLevel;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -434,7 +438,7 @@ export type AgentDefaultsConfig = {
      */
     includeReasoning?: boolean;
   };
-  /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
+  /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;
   /** Sub-agent defaults (spawned via sessions_spawn). */
   subagents?: {
@@ -442,7 +446,7 @@ export type AgentDefaultsConfig = {
     delegationMode?: SubagentDelegationMode;
     /** Default allowlist of target agent ids for sessions_spawn. Use "*" to allow any configured target. */
     allowAgents?: string[];
-    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 8. */
     maxConcurrent?: number;
     /** Maximum depth allowed for sessions_spawn chains. Default behavior: 1 (no nested spawns). */
     maxSpawnDepth?: number;
@@ -486,14 +490,10 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve tokens target before floor enforcement. */
-  reserveTokens?: number;
+  /** Override the session thinking level for embedded OpenClaw compaction summaries. */
+  thinkingLevel?: AgentThinkingLevel;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). */
-  reserveTokensFloor?: number;
-  /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
-  maxHistoryShare?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
@@ -516,11 +516,11 @@ export type AgentCompactionConfig = {
    * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
-  /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").
+  /** Optional provider/model or configured bare alias for compaction summarization.
    * When set, compaction uses this model instead of the agent's primary model.
    * Falls back to the primary model when unset. */
   model?: string;
-  /** Maximum time in seconds for a single compaction operation (default: 900). */
+  /** Maximum time in seconds for a single compaction operation (default: 180). */
   timeoutSeconds?: number;
   /**
    * Id of a registered compaction provider plugin.
@@ -529,14 +529,14 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Rotate the active session JSONL file after compaction so the next turn
+   * Rotate the active session transcript after compaction so the next turn
    * starts from the compaction summary and unsummarized tail while the old
    * transcript stays archived.
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
   /**
-   * Trigger a normal local compaction when the active session JSONL reaches
+   * Trigger a normal local compaction when the active session transcript reaches
    * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
    * disable. Requires truncateAfterCompaction so successful compaction can
    * rotate to a smaller successor transcript. This does not split raw
@@ -544,7 +544,9 @@ export type AgentCompactionConfig = {
    */
   maxActiveTranscriptBytes?: number | string;
   /**
-   * Send brief compaction notices to the user when compaction starts and completes.
+   * Send brief context-maintenance notices to the user: when compaction starts
+   * and completes, and when a pre-compaction memory flush is exhausted so the
+   * reply continues in a degraded state.
    * Default: false (silent by default).
    */
   notifyUser?: boolean;

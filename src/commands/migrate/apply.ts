@@ -1,3 +1,4 @@
+/** Applies migration plans with backup, filtering, reporting, and progress output. */
 import fs from "node:fs/promises";
 import { withProgress } from "../../cli/progress.js";
 import type { ProgressReporter } from "../../cli/progress.js";
@@ -6,6 +7,7 @@ import type { MigrationApplyResult, MigrationProviderPlugin } from "../../plugin
 import type { RuntimeEnv } from "../../runtime.js";
 import { backupCreateCommand } from "../backup.js";
 import { buildMigrationContext, buildMigrationReportDir } from "./context.js";
+import { applyMigrationItemSelection } from "./item-selection.js";
 import { assertApplySucceeded, assertConflictFreePlan, writeApplyResult } from "./output.js";
 import { buildMigrationProviderOptions } from "./providers.js";
 import { applyMigrationPluginSelection, applyMigrationSkillSelection } from "./selection.js";
@@ -19,6 +21,7 @@ function shouldTreatMissingBackupAsEmptyState(error: unknown): boolean {
   );
 }
 
+/** Creates a verified pre-migration backup, treating absent local state as empty. */
 export async function createPreMigrationBackup(opts: {
   output?: string;
 }): Promise<string | undefined> {
@@ -45,6 +48,7 @@ export async function createPreMigrationBackup(opts: {
   }
 }
 
+/** Applies the selected migration provider plan and writes the final result. */
 export async function runMigrationApply(params: {
   runtime: RuntimeEnv;
   opts: MigrateApplyOptions;
@@ -66,6 +70,8 @@ export async function runMigrationApply(params: {
       (await params.provider.plan(
         buildMigrationContext({
           source: params.opts.source,
+          targetAgentId: params.opts.targetAgentId,
+          itemKinds: params.opts.itemKinds,
           includeSecrets: params.opts.includeSecrets,
           overwrite: params.opts.overwrite,
           configOverride: params.opts.configOverride,
@@ -77,10 +83,15 @@ export async function runMigrationApply(params: {
     if (!params.opts.preflightPlan) {
       tick();
     }
-    const selectedPlan = applyMigrationPluginSelection(
-      applyMigrationSkillSelection(preflightPlan, params.opts.skills),
-      params.opts.plugins,
+    const selectedPlan = applyMigrationItemSelection(
+      applyMigrationPluginSelection(
+        applyMigrationSkillSelection(preflightPlan, params.opts.skills),
+        params.opts.plugins,
+      ),
+      params.opts.itemIds,
     );
+    // Selection is applied before conflict checks so deselected conflicting items
+    // cannot block an otherwise safe migration.
     assertConflictFreePlan(selectedPlan, params.providerId);
     const stateDir = resolveStateDir();
     const reportDir = buildMigrationReportDir(params.providerId, stateDir);
@@ -96,6 +107,8 @@ export async function runMigrationApply(params: {
     await fs.mkdir(reportDir, { recursive: true });
     const ctx = buildMigrationContext({
       source: params.opts.source,
+      targetAgentId: params.opts.targetAgentId,
+      itemKinds: params.opts.itemKinds,
       includeSecrets: params.opts.includeSecrets,
       overwrite: params.opts.overwrite,
       configOverride: params.opts.configOverride,
@@ -122,6 +135,8 @@ export async function runMigrationApply(params: {
         async (progress) => await applyMigration(progress),
       );
   writeApplyResult(params.runtime, params.opts, withBackup);
-  assertApplySucceeded(withBackup);
+  if (!params.opts.allowPartialResult) {
+    assertApplySucceeded(withBackup);
+  }
   return withBackup;
 }

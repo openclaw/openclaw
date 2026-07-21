@@ -1,3 +1,8 @@
+/**
+ * Tests cron-triggered tool assembly.
+ * Ensures cron runs scope cron tool behavior to self-removal of the current
+ * job only.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -18,12 +23,16 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./openclaw-tools.js", () => ({
-  createOpenClawTools: (options: unknown) => {
-    mocks.createOpenClawToolsOptions(options);
-    return [mocks.stubTool("cron")];
-  },
-}));
+vi.mock("./openclaw-tools.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openclaw-tools.js")>();
+  return {
+    createOpenClawTools: (options: unknown) => {
+      mocks.createOpenClawToolsOptions(options);
+      return [mocks.stubTool("cron")];
+    },
+    filterToolsByClientCaps: actual.filterToolsByClientCaps,
+  };
+});
 
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";

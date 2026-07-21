@@ -1,3 +1,4 @@
+/** Verifies bundled channel plugin runtime loading and channel ownership. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   listBundledChannelPluginMetadata,
   resolveBundledChannelGeneratedPath,
-  resolveBundledChannelWorkspacePath,
 } from "./bundled-channel-runtime.js";
 
 const tempRoots: string[] = [];
@@ -23,15 +23,6 @@ afterEach(() => {
 });
 
 describe("bundled channel runtime metadata", () => {
-  it("preserves explicit empty bundled roots", () => {
-    const tempRoot = createTempRoot();
-
-    expect(listBundledChannelPluginMetadata({ rootDir: tempRoot })).toStrictEqual([]);
-    expect(resolveBundledChannelWorkspacePath({ rootDir: tempRoot, pluginId: "telegram" })).toBe(
-      null,
-    );
-  });
-
   it("preserves explicit missing bundled scan roots", () => {
     const tempRoot = createTempRoot();
     const missingScanDir = path.join(tempRoot, "missing-extensions");

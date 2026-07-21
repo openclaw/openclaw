@@ -14,7 +14,7 @@
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
 import type { JsoncAst, JsoncValue } from "./ast.js";
 
-export interface JsoncEmitOptions {
+interface JsoncEmitOptions {
   readonly mode?: "roundtrip" | "render";
   readonly fileNameForGuard?: string;
   readonly acceptPreExistingSentinel?: boolean;
@@ -33,7 +33,9 @@ export function emitJsonc(ast: JsoncAst, opts: JsoncEmitOptions = {}): string {
   }
 
   // Render mode loses comments; walks leaves for caller-injected sentinel.
-  if (ast.root === null) {return "";}
+  if (ast.root === null) {
+    return "";
+  }
   return renderValue(ast.root, guardPath, []);
 }
 

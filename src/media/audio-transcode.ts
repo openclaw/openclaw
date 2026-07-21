@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
+// Audio transcode helpers run ffmpeg to convert audio for provider requirements.
 import path from "node:path";
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { tempWorkspaceSync, withTempWorkspace } from "../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { runFfmpeg } from "./ffmpeg-exec.js";
-import { basenameFromAnyPath } from "./file-name.js";
 
 const DEFAULT_OPUS_SAMPLE_RATE_HZ = 48_000;
 const DEFAULT_OPUS_BITRATE = "64k";
@@ -42,6 +43,17 @@ function normalizeOutputFileName(value?: string): string {
   return DEFAULT_OUTPUT_FILE_NAME;
 }
 
+function resolveMaxDurationSeconds(value?: number): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("maxDurationSeconds must be a positive finite number");
+  }
+  return value;
+}
+
+/** Transcodes arbitrary audio input into mono Opus using a scoped temp workspace. */
 export async function transcodeAudioBufferToOpus(params: {
   audioBuffer: Buffer;
   inputExtension?: string;
@@ -52,7 +64,10 @@ export async function transcodeAudioBufferToOpus(params: {
   sampleRateHz?: number;
   bitrate?: string;
   channels?: number;
+  /** Maximum output duration passed to ffmpeg's `-t` option. */
+  maxDurationSeconds?: number;
 }): Promise<Buffer> {
+  const maxDurationSeconds = resolveMaxDurationSeconds(params.maxDurationSeconds);
   return await withTempWorkspace(
     {
       rootDir: resolvePreferredOpenClawTmpDir(),
@@ -79,6 +94,7 @@ export async function transcodeAudioBufferToOpus(params: {
               "-vn",
               "-sn",
               "-dn",
+              ...(maxDurationSeconds === undefined ? [] : ["-t", String(maxDurationSeconds)]),
               "-c:a",
               "libopus",
               "-b:a",
@@ -100,7 +116,8 @@ export async function transcodeAudioBufferToOpus(params: {
   );
 }
 
-export type AudioContainerTranscodeOutcome =
+/** Outcome for lightweight container transcodes that may be unsupported or intentionally skipped. */
+type AudioContainerTranscodeOutcome =
   | { ok: true; buffer: Buffer }
   | {
       ok: false;
@@ -113,6 +130,7 @@ export type AudioContainerTranscodeOutcome =
       detail?: string;
     };
 
+/** Transcodes known audio container pairs, currently using macOS afconvert recipes where needed. */
 export async function transcodeAudioBuffer(params: {
   audioBuffer: Buffer;
   sourceExtension: string;
@@ -135,6 +153,7 @@ export async function transcodeAudioBuffer(params: {
     return { ok: false, reason: "platform-unsupported" };
   }
 
+  // afconvert is macOS-only and writes native Messages-compatible voice containers.
   const tmp = tempWorkspaceSync({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "tts-transcode-",
@@ -170,23 +189,22 @@ function pickAfconvertRecipe(_source: string, target: string): string[] | undefi
   return undefined;
 }
 
-function runAfconvert(params: {
+async function runAfconvert(params: {
   args: string[];
   timeoutMs: number;
 }): Promise<{ ok: true } | { ok: false; detail: string }> {
-  return new Promise((resolve) => {
-    const child = spawn("/usr/bin/afconvert", params.args, { stdio: "ignore" });
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      resolve({ ok: false, detail: `timeout-${params.timeoutMs}ms` });
-    }, params.timeoutMs);
-    child.once("error", (err) => {
-      clearTimeout(timer);
-      resolve({ ok: false, detail: err.message });
+  try {
+    const result = await runCommandWithTimeout(["/usr/bin/afconvert", ...params.args], {
+      maxOutputBytes: 1024,
+      timeoutMs: params.timeoutMs,
     });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      resolve(code === 0 ? { ok: true } : { ok: false, detail: `exit-${code ?? "unknown"}` });
-    });
-  });
+    if (result.termination === "timeout") {
+      return { ok: false, detail: `timeout-${params.timeoutMs}ms` };
+    }
+    return result.code === 0
+      ? { ok: true }
+      : { ok: false, detail: `exit-${result.code ?? "unknown"}` };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  }
 }

@@ -1,3 +1,7 @@
+/**
+ * Built-in provider labels shown in session/model UI when plugin metadata does
+ * not supply a display name.
+ */
 export const BUILT_IN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   anthropic: "Anthropic",
   "amazon-bedrock": "Amazon Bedrock",
@@ -12,6 +16,7 @@ export const BUILT_IN_PROVIDER_DISPLAY_NAMES: Record<string, string> = {
   groq: "Groq",
   huggingface: "Hugging Face",
   "kimi-coding": "Kimi For Coding",
+  meta: "Meta",
   mistral: "Mistral",
   minimax: "MiniMax",
   "minimax-cn": "MiniMax (China)",

@@ -1,7 +1,14 @@
+/**
+ * Merges generated model-provider config with explicit user config and
+ * preserved secret fields. Setup and doctor flows use this boundary to update
+ * model catalogs without discarding existing credentials.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { normalizeProviderMapKeys } from "./models-config.providers.keys.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
+/** Existing provider config shape that may carry persisted secret/base URL fields. */
 export type ExistingProviderConfig = ProviderConfig & {
   apiKey?: string;
   baseUrl?: string;
@@ -34,6 +41,7 @@ function getProviderModelId(model: unknown): string {
   return normalizeOptionalString(id) ?? "";
 }
 
+/** Merges implicit provider models with explicit config while preserving explicit fields. */
 export function mergeProviderModels(
   implicit: ProviderConfig,
   explicit: ProviderConfig,
@@ -134,16 +142,13 @@ export function mergeProviderModels(
   };
 }
 
+/** Merges implicit and explicit provider config maps by provider id. */
 export function mergeProviders(params: {
   implicit?: Record<string, ProviderConfig> | null;
   explicit?: Record<string, ProviderConfig> | null;
 }): Record<string, ProviderConfig> {
-  const out: Record<string, ProviderConfig> = params.implicit ? { ...params.implicit } : {};
-  for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
-    const providerKey = normalizeOptionalString(key) ?? "";
-    if (!providerKey) {
-      continue;
-    }
+  const out = normalizeProviderMapKeys(params.implicit);
+  for (const [providerKey, explicit] of Object.entries(normalizeProviderMapKeys(params.explicit))) {
     const implicit = out[providerKey];
     out[providerKey] = implicit ? mergeProviderModels(implicit, explicit) : explicit;
   }
@@ -219,21 +224,25 @@ function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean
   return Boolean(entry.baseUrl?.trim() && entry.apiKey);
 }
 
+/** Merges generated provider config with existing secrets safe to preserve. */
 export function mergeWithExistingProviderSecrets(params: {
   nextProviders: Record<string, ProviderConfig>;
   existingProviders: Record<string, ExistingProviderConfig>;
   secretRefManagedProviders: ReadonlySet<string>;
 }): Record<string, ProviderConfig> {
   const { nextProviders, existingProviders, secretRefManagedProviders } = params;
+  const normalizedExistingProviders = normalizeProviderMapKeys(existingProviders);
+  const normalizedNextProviders = normalizeProviderMapKeys(nextProviders);
+
   const mergedProviders: Record<string, ProviderConfig> = {};
-  for (const [key, entry] of Object.entries(existingProviders)) {
+  for (const [key, entry] of Object.entries(normalizedExistingProviders)) {
     if (!isExistingProviderSelfContained(entry)) {
       continue;
     }
     mergedProviders[key] = entry;
   }
-  for (const [key, newEntry] of Object.entries(nextProviders)) {
-    const existing = existingProviders[key];
+  for (const [key, newEntry] of Object.entries(normalizedNextProviders)) {
+    const existing = normalizedExistingProviders[key];
     if (!existing) {
       mergedProviders[key] = newEntry;
       continue;

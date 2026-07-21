@@ -1,3 +1,8 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+/**
+ * Shared Browser control-server test harness with mocked Chrome, CDP,
+ * Playwright, Chrome MCP, config, and media dependencies.
+ */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -11,6 +16,7 @@ type HarnessState = {
   reachable: boolean;
   cfgAttachOnly: boolean;
   cfgEvaluateEnabled: boolean;
+  cfgExtraArgs: string[];
   cfgSsrfPolicy: SsrFPolicy | undefined;
   cfgDefaultProfile: string;
   cfgProfiles: Record<
@@ -35,6 +41,7 @@ const state: HarnessState = {
   reachable: false,
   cfgAttachOnly: false,
   cfgEvaluateEnabled: true,
+  cfgExtraArgs: [],
   cfgSsrfPolicy: undefined,
   cfgDefaultProfile: "openclaw",
   cfgProfiles: {},
@@ -44,10 +51,12 @@ const state: HarnessState = {
   prevGatewayPassword: undefined,
 };
 
+/** Returns mutable Browser control-server harness state. */
 export function getBrowserControlServerTestState(): HarnessState {
   return state;
 }
 
+/** Returns the loopback base URL for the current test server. */
 export function getBrowserControlServerBaseUrl(): string {
   return `http://127.0.0.1:${state.testPort}`;
 }
@@ -60,22 +69,32 @@ function restoreGatewayPortEnv(prevGatewayPort: string | undefined): void {
   process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
 }
 
+/** Sets the mocked browser.evaluateEnabled config flag. */
 export function setBrowserControlServerEvaluateEnabled(enabled: boolean): void {
   state.cfgEvaluateEnabled = enabled;
 }
 
+/** Sets mocked Chrome launch arguments. */
+export function setBrowserControlServerExtraArgs(extraArgs: string[]): void {
+  state.cfgExtraArgs = extraArgs;
+}
+
+/** Sets the mocked Browser SSRF policy. */
 export function setBrowserControlServerSsrFPolicy(policy: SsrFPolicy | undefined): void {
   state.cfgSsrfPolicy = policy;
 }
 
+/** Sets whether mocked Chrome/CDP probes should report reachable. */
 export function setBrowserControlServerReachable(reachable: boolean): void {
   state.reachable = reachable;
 }
 
+/** Sets the URL returned by mocked /json/list tab responses. */
 export function setBrowserControlServerTabUrl(url: string): void {
   state.tabUrl = url;
 }
 
+/** Sets mocked Browser profiles and default profile for config reload tests. */
 export function setBrowserControlServerProfiles(
   profiles: HarnessState["cfgProfiles"],
   defaultProfile = Object.keys(profiles)[0] ?? "openclaw",
@@ -98,6 +117,7 @@ const cdpMocks = vi.hoisted(() => ({
   })),
 }));
 
+/** Returns mocked CDP functions used by Browser control-server tests. */
 export function getCdpMocks(): {
   createTargetViaCdp: MockFn;
   snapshotAria: MockFn;
@@ -116,6 +136,7 @@ type ExecuteActMockOptions = {
   action: ExecuteActMockAction;
   targetId?: string;
   ssrfPolicy?: unknown;
+  browserProxyMode?: unknown;
   evaluateEnabled?: boolean;
   signal?: AbortSignal;
 };
@@ -144,6 +165,7 @@ function buildActPayload(params: {
   action: ExecuteActMockAction;
   fields: readonly string[];
   ssrfPolicy?: unknown;
+  browserProxyMode?: unknown;
   signal?: AbortSignal;
   includeSsrf?: boolean;
   includeSignal?: boolean;
@@ -152,71 +174,82 @@ function buildActPayload(params: {
     cdpUrl: params.cdpUrl,
     targetId: params.targetId,
     ...pickActionFields(params.action, params.fields),
-    ...(params.includeSsrf ? { ssrfPolicy: params.ssrfPolicy } : {}),
+    ...(params.includeSsrf
+      ? { ssrfPolicy: params.ssrfPolicy, browserProxyMode: params.browserProxyMode }
+      : {}),
     ...(params.includeSignal ? { signal: params.signal } : {}),
   };
 }
 
-const pwMocks = vi.hoisted(() => ({
-  armDialogViaPlaywright: vi.fn(async () => {}),
-  armFileUploadViaPlaywright: vi.fn(async () => {}),
-  batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
-  clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  closePlaywrightBrowserConnection: vi.fn(async () => {}),
-  cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
-  downloadViaPlaywright: vi.fn(async () => ({
-    url: "https://example.com/report.pdf",
-    suggestedFilename: "report.pdf",
-    path: "/tmp/report.pdf",
-  })),
-  dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
-  fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
-  getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
-    dialogs: { pending: [], recent: [] },
-  })),
-  getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
-  highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
-  pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
-  pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  responseBodyViaPlaywright: vi.fn(async () => ({
-    url: "https://example.com/api/data",
-    status: 200,
-    headers: { "content-type": "application/json" },
-    body: '{"ok":true}',
-  })),
-  resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  setInputFilesViaPlaywright: vi.fn(async () => {}),
-  snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
-  snapshotRoleViaPlaywright: vi.fn(async () => ({
-    snapshot: '- button "Role" [ref=e1]',
-    refs: { e1: { role: "button", name: "Role" } },
-    stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
-  })),
-  storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
-  storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
-  traceStartViaPlaywright: vi.fn(async () => {}),
-  traceStopViaPlaywright: vi.fn(async () => {}),
-  takeScreenshotViaPlaywright: vi.fn(async () => ({
-    buffer: Buffer.from("png"),
-  })),
-  typeViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  waitForDownloadViaPlaywright: vi.fn(async () => ({
-    url: "https://example.com/report.pdf",
-    suggestedFilename: "report.pdf",
-    path: "/tmp/report.pdf",
-  })),
-  waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
-  executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
-}));
+const pwMocks = vi.hoisted(() => {
+  const closePlaywrightBrowserConnection = vi.fn(async (_opts?: { cdpUrl?: string }) => {});
+  return {
+    armDialogViaPlaywright: vi.fn(async () => {}),
+    armFileUploadViaPlaywright: vi.fn(async () => {}),
+    uploadViaPlaywright: vi.fn(async () => {}),
+    batchViaPlaywright: vi.fn(async (_opts?: unknown) => ({ results: [] })),
+    clickCoordsViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    clickViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    closePageViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    closePlaywrightBrowserConnection,
+    retirePlaywrightBrowserConnection: vi.fn(() => false),
+    retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
+      retired: false,
+      close: async () => await closePlaywrightBrowserConnection(opts),
+    })),
+    cookiesGetViaPlaywright: vi.fn(async () => ({ cookies: [] })),
+    downloadViaPlaywright: vi.fn(async () => ({
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+      path: "/tmp/report.pdf",
+    })),
+    dragViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
+    fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    getConsoleMessagesViaPlaywright: vi.fn(async () => []),
+    getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+    getObservedBrowserStateViaPlaywright: vi.fn(async () => ({
+      dialogs: { pending: [], recent: [] },
+    })),
+    getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
+    highlightViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
+    pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
+    pressKeyViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    responseBodyViaPlaywright: vi.fn(async () => ({
+      url: "https://example.com/api/data",
+      status: 200,
+      headers: { "content-type": "application/json" },
+      body: '{"ok":true}',
+    })),
+    resizeViewportViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    selectOptionViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    setInputFilesViaPlaywright: vi.fn(async () => {}),
+    snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+    snapshotRoleViaPlaywright: vi.fn(async () => ({
+      snapshot: '- button "Role" [ref=e1]',
+      refs: { e1: { role: "button", name: "Role" } },
+      stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
+    })),
+    storageGetViaPlaywright: vi.fn(async () => ({ values: {} })),
+    storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+    traceStartViaPlaywright: vi.fn(async () => {}),
+    traceStopViaPlaywright: vi.fn(async () => {}),
+    takeScreenshotViaPlaywright: vi.fn(async () => ({
+      buffer: Buffer.from("png"),
+    })),
+    typeViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    waitForDownloadViaPlaywright: vi.fn(async () => ({
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+      path: "/tmp/report.pdf",
+    })),
+    waitForViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
+    executeActViaPlaywright: vi.fn(async (_opts?: ExecuteActMockOptions) => ({})),
+  };
+});
 
 const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   click: {
@@ -242,14 +275,17 @@ const passThroughActDispatch: Record<string, PassThroughActDispatch> = {
   hover: {
     mock: pwMocks.hoverViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   scrollIntoView: {
     mock: pwMocks.scrollIntoViewViaPlaywright,
     fields: ["ref", "selector", "timeoutMs"],
+    includeSsrf: true,
   },
   drag: {
     mock: pwMocks.dragViaPlaywright,
     fields: ["startRef", "startSelector", "endRef", "endSelector", "timeoutMs"],
+    includeSsrf: true,
   },
   select: {
     mock: pwMocks.selectOptionViaPlaywright,
@@ -281,7 +317,8 @@ pwMocks.executeActViaPlaywright.mockImplementation(
     if (!opts) {
       return {};
     }
-    const { cdpUrl, action, targetId, ssrfPolicy, evaluateEnabled, signal } = opts;
+    const { cdpUrl, action, targetId, ssrfPolicy, browserProxyMode, evaluateEnabled, signal } =
+      opts;
     const spec = passThroughActDispatch[action.kind];
     if (spec) {
       await spec.mock(
@@ -291,6 +328,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           action,
           fields: spec.fields,
           ssrfPolicy,
+          browserProxyMode,
           signal,
           includeSsrf: spec.includeSsrf,
           includeSignal: spec.includeSignal,
@@ -308,6 +346,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           cdpUrl,
           targetId,
           ssrfPolicy,
+          browserProxyMode,
           fn: action.fn,
           ref: action.ref,
           timeoutMs: action.timeoutMs,
@@ -323,6 +362,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
           stopOnError: action.stopOnError,
           evaluateEnabled,
           ssrfPolicy,
+          browserProxyMode,
           signal,
         });
         return { results: result.results };
@@ -333,6 +373,7 @@ pwMocks.executeActViaPlaywright.mockImplementation(
   },
 );
 
+/** Returns mocked Playwright-backed Browser tool functions. */
 export function getPwMocks(): Record<string, MockFn> {
   return pwMocks as unknown as Record<string, MockFn>;
 }
@@ -415,6 +456,7 @@ vi.mock("../config/config.js", async () => {
       browser: {
         enabled: true,
         evaluateEnabled: state.cfgEvaluateEnabled,
+        extraArgs: state.cfgExtraArgs,
         color: "#FF4500",
         attachOnly: state.cfgAttachOnly,
         ssrfPolicy: state.cfgSsrfPolicy ?? { dangerouslyAllowPrivateNetwork: true },
@@ -468,6 +510,7 @@ vi.mock("../config/config.js", async () => {
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 
 vi.mock("./chrome.js", () => ({
+  isChromeCdpOwnedByPid: vi.fn(async () => true),
   isChromeCdpReady: vi.fn(async () => state.reachable),
   isChromeReachable: vi.fn(async () => state.reachable),
   launchOpenClawChrome: vi.fn(async (_resolved: unknown, profile: { cdpPort: number }) => {
@@ -501,7 +544,7 @@ vi.mock("./cdp.js", () => ({
   }),
 }));
 
-vi.mock("./pw-ai.js", () => pwMocks);
+vi.mock("./pw-ai.js", () => ({ pwAi: pwMocks }));
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMocks);
 
@@ -521,13 +564,9 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
+const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
 
-async function loadBrowserServerModule() {
-  browserServerModulePromise ??= import("../server.js");
-  return await browserServerModulePromise;
-}
-
+/** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {
   return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
 }
@@ -536,19 +575,17 @@ async function stopBrowserControlServer(): Promise<void> {
   await (await loadBrowserServerModule()).stopBrowserControlServer();
 }
 
+/** Creates a minimal Response-like object for mocked fetch handlers. */
 export function makeResponse(
   body: unknown,
   init?: { ok?: boolean; status?: number; text?: string },
 ): Response {
-  const ok = init?.ok ?? true;
-  const status = init?.status ?? 200;
-  const text = init?.text ?? "";
-  return {
-    ok,
+  const status = init?.status ?? (init?.ok === false ? 500 : 200);
+  const responseBody = init?.text ?? JSON.stringify(body);
+  return new Response(responseBody, {
     status,
-    json: async () => body,
-    text: async () => text,
-  } as unknown as Response;
+    headers: { "content-type": "application/json" },
+  });
 }
 
 function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {
@@ -557,10 +594,12 @@ function mockClearAll(obj: Record<string, { mockClear: () => unknown }>) {
   }
 }
 
+/** Resets harness state, env, and mocks before one Browser control-server test. */
 export async function resetBrowserControlServerTestContext(): Promise<void> {
   state.reachable = false;
   state.cfgAttachOnly = false;
   state.cfgEvaluateEnabled = true;
+  state.cfgExtraArgs = [];
   state.cfgSsrfPolicy = undefined;
   state.cfgDefaultProfile = "openclaw";
   state.cfgProfiles = defaultProfilesForState(state.testPort);
@@ -599,6 +638,7 @@ function restoreGatewayAuthEnv(
   }
 }
 
+/** Restores globals/env and stops the Browser control server after one test. */
 export async function cleanupBrowserControlServerTestContext(): Promise<void> {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -607,6 +647,7 @@ export async function cleanupBrowserControlServerTestContext(): Promise<void> {
   await stopBrowserControlServer();
 }
 
+/** Installs beforeEach/afterEach hooks for Browser control-server tests. */
 export function installBrowserControlServerHooks() {
   const hookTimeoutMs = process.platform === "win32" ? 300_000 : 240_000;
   beforeEach(async () => {

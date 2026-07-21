@@ -1,3 +1,4 @@
+/** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
@@ -15,6 +16,8 @@ function systemdEscapeArg(value: string): string {
   if (!/[\s"\\]/.test(value)) {
     return value;
   }
+  // systemd ExecStart/Environment parsing honors backslash escapes inside
+  // quotes; match that contract for round-trip parser tests.
   return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
 }
 
@@ -78,6 +81,10 @@ export function buildSystemdUnit({
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
+    // Transient child processes may be selected by the OOM killer before the
+    // gateway. Keep the service running when that happens; the child surface is
+    // already responsible for reporting the failed command/session.
+    "OOMPolicy=continue",
     // Keep service children in the same lifecycle so restarts do not leave
     // orphan ACP/runtime workers behind.
     "KillMode=control-group",
@@ -110,6 +117,7 @@ export function parseSystemdEnvAssignment(raw: string): { key: string; value: st
     }
     let out = "";
     let escapeNext = false;
+    // systemd quote parsing consumes one backslash before the next character.
     for (const ch of trimmed.slice(1, -1)) {
       if (escapeNext) {
         out += ch;

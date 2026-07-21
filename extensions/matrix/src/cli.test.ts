@@ -1,6 +1,7 @@
+// Matrix tests cover cli plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMatrixCli, resetMatrixCliStateForTests } from "./cli.js";
+import { registerMatrixCli } from "./cli.js";
 import { formatZonedTimestamp } from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
@@ -35,10 +36,12 @@ const consoleLogMock = vi.fn();
 const consoleErrorMock = vi.fn();
 const stdoutWriteMock = vi.fn();
 
-function mockRecoveryKeyStdin(value: string): void {
+function mockRecoveryKeyStdin(...values: string[]): void {
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockReturnValue(
     (async function* (): AsyncGenerator<Buffer, undefined, unknown> {
-      yield Buffer.from(value);
+      for (const value of values) {
+        yield Buffer.from(value);
+      }
       return undefined;
     })(),
   );
@@ -187,7 +190,6 @@ function mockMatrixVerificationSummary(overrides: Record<string, unknown> = {}) 
 
 describe("matrix CLI verification commands", () => {
   beforeEach(() => {
-    resetMatrixCliStateForTests();
     vi.clearAllMocks();
     process.exitCode = undefined;
     vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => consoleLogMock(...args));
@@ -396,6 +398,20 @@ describe("matrix CLI verification commands", () => {
     expect(process.exitCode).toBe(1);
     expect(consoleErrorMock).toHaveBeenCalledWith(
       "Self-verification failed: --timeout-ms must be an integer",
+    );
+    expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-positive Matrix self-verification timeout values", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "self", "--timeout-ms", "-1"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Self-verification failed: --timeout-ms must be a positive integer",
     );
     expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
   });
@@ -825,6 +841,33 @@ describe("matrix CLI verification commands", () => {
     });
   });
 
+  it("rejects oversized recovery key stdin before backup restore", async () => {
+    mockRecoveryKeyStdin("x".repeat(1024 * 1024), "x");
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Backup restore failed: Matrix recovery key stdin exceeds 1048576 bytes.",
+    );
+    expect(restoreMatrixRoomKeyBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves a multibyte recovery key at the stdin byte limit", async () => {
+    const recoveryKey = "é".repeat((1024 * 1024) / 2);
+    mockRecoveryKeyStdin(recoveryKey);
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "backup", "restore", "--recovery-key-stdin"], {
+      from: "user",
+    });
+
+    expectRecordFields(mockCallArg(restoreMatrixRoomKeyBackupMock), { recoveryKey });
+  });
+
   it("sets non-zero exit code for backup reset failures in JSON mode", async () => {
     resetMatrixRoomKeyBackupMock.mockResolvedValue({
       success: false,
@@ -1075,6 +1118,34 @@ describe("matrix CLI verification commands", () => {
     );
   });
 
+  it("rejects negative Matrix initial sync limits at the CLI boundary", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(
+      [
+        "matrix",
+        "account",
+        "add",
+        "--homeserver",
+        "https://matrix.example.org",
+        "--user-id",
+        "@ops:example.org",
+        "--password",
+        "secret",
+        "--initial-sync-limit",
+        "-1",
+      ],
+      { from: "user" },
+    );
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Account setup failed: --initial-sync-limit must be a non-negative integer",
+    );
+    expect(matrixSetupValidateInputMock).not.toHaveBeenCalled();
+    expect(matrixRuntimeReplaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("enables E2EE and bootstraps verification from matrix account add", async () => {
     matrixRuntimeLoadConfigMock.mockReturnValue({ channels: {} });
     matrixSetupApplyAccountConfigMock.mockImplementation(
@@ -1141,7 +1212,7 @@ describe("matrix CLI verification commands", () => {
     expect(console.log).toHaveBeenCalledWith("Matrix verification bootstrap: complete");
   });
 
-  it("enables E2EE and prints verification status from matrix encryption setup", async () => {
+  it("reads the recovery key from stdin during matrix encryption setup", async () => {
     const cfg = {
       channels: {
         matrix: {
@@ -1176,11 +1247,13 @@ describe("matrix CLI verification commands", () => {
     mockMatrixVerificationStatus({
       recoveryKeyCreatedAt: "2026-03-09T06:00:00.000Z",
     });
+    mockRecoveryKeyStdin("stdin-recovery-key\n");
     const program = buildProgram();
 
-    await program.parseAsync(["matrix", "encryption", "setup", "--account", "ops"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["matrix", "encryption", "setup", "--account", "ops", "--recovery-key-stdin"],
+      { from: "user" },
+    );
 
     const replaceArg = mockCallArg(matrixRuntimeReplaceConfigFileMock) as {
       nextConfig?: CoreConfig;
@@ -1197,7 +1270,7 @@ describe("matrix CLI verification commands", () => {
     };
     expect(bootstrapArg.accountId).toBe("ops");
     expect(bootstrapArg.cfg?.channels?.matrix?.accounts?.ops?.encryption).toBe(true);
-    expect(bootstrapArg.recoveryKey).toBeUndefined();
+    expect(bootstrapArg.recoveryKey).toBe("stdin-recovery-key");
     expect(bootstrapArg.forceResetCrossSigning).toBe(false);
     const statusArg = mockCallArg(getMatrixVerificationStatusMock) as Record<string, unknown>;
     expect(statusArg.accountId).toBe("ops");
@@ -1943,3 +2016,4 @@ describe("matrix CLI verification commands", () => {
     expect(console.log).toHaveBeenCalledWith("Backup trusted by this device: yes");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

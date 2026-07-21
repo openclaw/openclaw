@@ -1,6 +1,7 @@
+// Covers compaction sanitization for toolResult details and runtime context.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 const agentSessionMocks = vi.hoisted(() => ({
@@ -18,12 +19,7 @@ vi.mock("./sessions/index.js", async () => {
 });
 
 let isOversizedForSummary: typeof import("./compaction.js").isOversizedForSummary;
-let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
-
-async function loadFreshCompactionModuleForTest() {
-  vi.resetModules();
-  ({ isOversizedForSummary, summarizeWithFallback } = await import("./compaction.js"));
-}
+let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
@@ -35,6 +31,8 @@ function makeAssistantToolCall(timestamp: number): AssistantMessage {
 }
 
 function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: string }> {
+  // The raw detail intentionally looks prompt-like; it must never reach summary
+  // generation or token oversize checks.
   return {
     role: "toolResult",
     toolCallId: "call_1",
@@ -47,8 +45,12 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 }
 
 describe("compaction toolResult details stripping", () => {
-  beforeEach(async () => {
-    await loadFreshCompactionModuleForTest();
+  beforeAll(async () => {
+    ({ isOversizedForSummary } = await import("./compaction.js"));
+    ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
+  });
+
+  beforeEach(() => {
     agentSessionMocks.generateSummary.mockReset();
     agentSessionMocks.generateSummary.mockResolvedValue("summary");
     agentSessionMocks.estimateTokens.mockReset();
@@ -72,6 +74,8 @@ describe("compaction toolResult details stripping", () => {
     expect(summary).toBe("summary");
     expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
 
+    // Summary generation receives only model-visible fields. Raw detail payloads
+    // are diagnostics, not transcript content.
     const chunk = (
       agentSessionMocks.generateSummary.mock.calls as unknown as Array<[AgentMessage[]]>
     )[0]?.[0];

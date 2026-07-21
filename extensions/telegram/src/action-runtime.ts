@@ -1,3 +1,4 @@
+// Telegram plugin module implements action runtime behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
@@ -10,6 +11,7 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
+import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
@@ -41,6 +43,7 @@ import {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   pinMessageTelegram,
   reactMessageTelegram,
@@ -57,6 +60,7 @@ export const telegramActionRuntime = {
   createForumTopicTelegram,
   deleteMessageTelegram,
   editForumTopicTelegram,
+  editMessageReplyMarkupTelegram,
   editMessageTelegram,
   getCacheStats,
   pinMessageTelegram,
@@ -207,17 +211,22 @@ function readTelegramSendMediaUrls(params: Record<string, unknown>) {
 function resolveTelegramButtonsFromParams(
   params: Record<string, unknown>,
   presentation = normalizeMessagePresentation(params.presentation),
+  options?: { allowWebAppButtons?: boolean },
 ) {
-  return resolveTelegramInlineButtons({
-    presentation,
-    interactive: params.interactive,
-  });
+  return resolveTelegramInlineButtons(
+    {
+      presentation,
+      interactive: params.interactive,
+    },
+    options,
+  );
 }
 
 function readTelegramSendContent(params: {
   args: Record<string, unknown>;
   mediaUrl?: string;
   hasButtons: boolean;
+  hasLocation?: boolean;
   interactive?: unknown;
   presentation?: MessagePresentation;
 }) {
@@ -225,17 +234,26 @@ function readTelegramSendContent(params: {
     readStringParam(params.args, "content", { allowEmpty: true }) ??
     readStringParam(params.args, "message", { allowEmpty: true }) ??
     readStringParam(params.args, "caption", { allowEmpty: true });
+  const unsupportedBlocks =
+    params.presentation?.blocks.filter(
+      (block) => block.type === "chart" || block.type === "table",
+    ) ?? [];
   const presentationText =
     explicitContent == null && params.presentation
       ? renderMessagePresentationFallbackText({ presentation: params.presentation })
-      : undefined;
+      : explicitContent != null && unsupportedBlocks.length > 0
+        ? renderMessagePresentationFallbackText({
+            text: explicitContent,
+            presentation: { ...params.presentation, blocks: unsupportedBlocks },
+          })
+        : undefined;
   const interactiveText =
     explicitContent == null && !params.presentation
       ? resolveTelegramInteractiveTextFallback({ interactive: params.interactive })
       : undefined;
   let content =
-    explicitContent ??
     (presentationText?.trim() ? presentationText : undefined) ??
+    explicitContent ??
     (interactiveText?.trim() ? interactiveText : undefined);
   if ((content == null || content.trim().length === 0) && !params.mediaUrl && params.hasButtons) {
     const fallback = presentationText?.trim() ? presentationText : interactiveText;
@@ -243,7 +261,7 @@ function readTelegramSendContent(params: {
       content = fallback;
     }
   }
-  if (content == null && !params.mediaUrl && !params.hasButtons) {
+  if (content == null && !params.mediaUrl && !params.hasButtons && !params.hasLocation) {
     throw new Error("content required.");
   }
   return content ?? "";
@@ -278,6 +296,8 @@ function buildTelegramActionSendPayload(params: {
   content: string;
   mediaUrls: string[];
   asVoice?: boolean;
+  asVideoNote?: boolean;
+  location?: ReplyPayload["location"];
   pin?: ReturnType<typeof normalizeTelegramDeliveryPin>;
   buttons?: ReturnType<typeof resolveTelegramButtonsFromParams>;
   quoteText?: string;
@@ -293,6 +313,8 @@ function buildTelegramActionSendPayload(params: {
     text: params.content,
     ...(params.mediaUrls.length > 0 ? { mediaUrls: params.mediaUrls } : {}),
     ...(params.asVoice === true ? { audioAsVoice: true } : {}),
+    ...(params.asVideoNote === true ? { videoAsNote: true } : {}),
+    ...(params.location ? { location: params.location } : {}),
     ...(params.pin ? { delivery: { pin: params.pin } } : {}),
     ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
   };
@@ -439,15 +461,26 @@ export async function handleTelegramAction(
     const to = normalizeTelegramOutboundTarget(readStringParam(params, "to", { required: true }));
     const mediaUrls = readTelegramSendMediaUrls(params);
     const firstMediaUrl = mediaUrls[0];
+    const location = normalizeOutboundLocation(params.location);
     const presentation = normalizeMessagePresentation(params.presentation);
-    const buttons = resolveTelegramButtonsFromParams(params, presentation);
+    const buttons = resolveTelegramButtonsFromParams(params, presentation, {
+      allowWebAppButtons: resolveTelegramTargetChatType(to) === "direct",
+    });
     const content = readTelegramSendContent({
       args: params,
       mediaUrl: firstMediaUrl,
       hasButtons: Array.isArray(buttons) && buttons.length > 0,
+      hasLocation: Boolean(location),
       interactive: params.interactive,
       presentation,
     });
+    const asVideoNote = readBooleanParam(params, "asVideoNote") ?? false;
+    if (location && (content.trim() || mediaUrls.length > 0 || asVideoNote)) {
+      throw new Error("Telegram location sends cannot be combined with message text or media.");
+    }
+    if (asVideoNote && mediaUrls.length !== 1) {
+      throw new Error("Telegram video notes require exactly one media attachment.");
+    }
     if (buttons) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
@@ -493,6 +526,7 @@ export async function handleTelegramAction(
       messageThreadId: messageThreadId ?? undefined,
       quoteText: quoteText ?? undefined,
       asVoice: readBooleanParam(params, "asVoice"),
+      asVideoNote,
       silent: readBooleanParam(params, "silent"),
       forceDocument:
         readBooleanParam(params, "forceDocument") ??
@@ -503,6 +537,8 @@ export async function handleTelegramAction(
       content,
       mediaUrls,
       asVoice: sendOptions.asVoice,
+      asVideoNote: sendOptions.asVideoNote,
+      location,
       pin: normalizeTelegramDeliveryPin(params),
       buttons,
       quoteText,
@@ -666,9 +702,15 @@ export async function handleTelegramAction(
     }
     const content =
       readStringParam(params, "content", { allowEmpty: false }) ??
-      readStringParam(params, "message", { required: true, allowEmpty: false });
-    const buttons = resolveTelegramButtonsFromParams(params);
-    if (buttons) {
+      readStringParam(params, "message", { allowEmpty: false });
+    const caption = readStringParam(params, "caption", { allowEmpty: false });
+    const buttons = resolveTelegramButtonsFromParams(params, undefined, {
+      allowWebAppButtons: resolveTelegramTargetChatType(chatId ?? "") === "direct",
+    });
+    if (content == null && caption == null && buttons === undefined) {
+      throw new Error("content required.");
+    }
+    if (buttons !== undefined) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
         accountId: accountId ?? undefined,
@@ -685,15 +727,34 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
+    if (content == null && caption == null && buttons !== undefined) {
+      const result = await telegramActionRuntime.editMessageReplyMarkupTelegram(
+        chatId ?? "",
+        messageId ?? 0,
+        buttons,
+        {
+          cfg,
+          token,
+          accountId: accountId ?? undefined,
+          gatewayClientScopes: options?.gatewayClientScopes,
+        },
+      );
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        chatId: result.chatId,
+      });
+    }
     const result = await telegramActionRuntime.editMessageTelegram(
       chatId ?? "",
       messageId ?? 0,
-      content,
+      caption ?? content ?? "",
       {
         cfg,
         token,
         accountId: accountId ?? undefined,
         buttons,
+        editMode: caption != null ? "caption" : "auto",
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
@@ -863,3 +924,4 @@ export async function handleTelegramAction(
 
   throw new Error(`Unsupported Telegram action: ${String(action)}`);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

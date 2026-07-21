@@ -1,3 +1,5 @@
+// Stages bundled plugin runtime overlays into dist-runtime with SDK aliases and
+// Windows-safe symlink fallbacks.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -81,7 +83,6 @@ const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "qa-lab.js",
   "qa-runtime.js",
   "ssrf-runtime-internal.js",
-  "test-utils.js",
 ];
 
 function tryReadJsonFile(targetPath) {
@@ -139,10 +140,6 @@ function readPublicPluginSdkDistFileNames(params) {
 
   const fileNames = new Set();
   for (const exportKey of Object.keys(packageExports)) {
-    if (exportKey === "./plugin-sdk") {
-      fileNames.add("index.js");
-      continue;
-    }
     if (!exportKey.startsWith("./plugin-sdk/")) {
       continue;
     }
@@ -157,27 +154,16 @@ function readPublicPluginSdkDistFileNames(params) {
 
 function buildRuntimePluginSdkPackageExports(publicDistFileNames) {
   if (!publicDistFileNames) {
-    return {
-      "./plugin-sdk": "./plugin-sdk/index.js",
-    };
+    return {};
   }
 
-  const sortedFileNames = [...publicDistFileNames].toSorted((left, right) => {
-    if (left === "index.js") {
-      return -1;
-    }
-    if (right === "index.js") {
-      return 1;
-    }
-    return left.localeCompare(right);
-  });
+  const sortedFileNames = [...publicDistFileNames].toSorted((left, right) =>
+    left.localeCompare(right),
+  );
   return Object.fromEntries(
     sortedFileNames.map((fileName) => {
       const subpath = fileName.slice(0, -".js".length);
-      return [
-        subpath === "index" ? "./plugin-sdk" : `./plugin-sdk/${subpath}`,
-        `./plugin-sdk/${fileName}`,
-      ];
+      return [`./plugin-sdk/${subpath}`, `./plugin-sdk/${fileName}`];
     }),
   );
 }
@@ -222,6 +208,10 @@ function shouldWrapRuntimeJsFile(sourcePath) {
 
 function isBundledSkillRuntimePath(relativePath) {
   return relativePath === "skills" || relativePath.startsWith("skills/");
+}
+
+function isRawBrowserExtensionAssetPath(relativePath) {
+  return relativePath === "chrome-extension" || relativePath.endsWith("/chrome-extension");
 }
 
 function isPathOrNestedPath(relativePath, nestedPath) {
@@ -288,6 +278,12 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
     const relativePath = path.join(relativeDir, dirent.name).replace(/\\/g, "/");
 
     if (dirent.isDirectory()) {
+      // Unpacked browser extensions are executable static payloads, not Node
+      // modules. Preserve the staged tree byte-for-byte so Chrome can load it.
+      if (isRawBrowserExtensionAssetPath(relativePath)) {
+        copyPathFallback(sourcePath, targetPath);
+        continue;
+      }
       stagePluginRuntimeOverlay(sourcePath, targetPath, relativePath);
       continue;
     }
@@ -319,6 +315,9 @@ function stagePluginRuntimeOverlay(sourceDir, targetDir, relativeDir = "") {
   }
 }
 
+/**
+ * Stages runtime plugin entries and aliases used by packaged bundled plugins.
+ */
 export function stageBundledPluginRuntime(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const distRoot = path.join(repoRoot, "dist");

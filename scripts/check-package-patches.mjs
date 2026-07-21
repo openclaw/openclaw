@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Guards pnpm package patches against unapproved additions.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,10 +8,6 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
-  [
-    "@agentclientprotocol/claude-agent-acp@0.37.0",
-    "patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch",
-  ],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
 ]);
@@ -106,6 +103,9 @@ function collectPatchFileViolations(cwd, violations) {
   }
 }
 
+/**
+ * Collects disallowed package patch declarations and patch files.
+ */
 export function collectPackagePatchViolations(cwd = process.cwd()) {
   const violations = [];
   collectWorkspacePatchViolations(cwd, violations);
@@ -115,11 +115,14 @@ export function collectPackagePatchViolations(cwd = process.cwd()) {
   return violations;
 }
 
+/**
+ * Runs the package patch guard.
+ */
 export async function main() {
   const violations = collectPackagePatchViolations();
   if (violations.length === 0) {
     process.stdout.write(
-      `PASS package patch guard: no new pnpm patches; ${ALLOWED_PATCHED_DEPENDENCIES.size} legacy patches allowlisted.\n`,
+      `PASS package patch guard: no new pnpm patches; ${ALLOWED_PATCHED_DEPENDENCIES.size} approved patches allowlisted.\n`,
     );
     return;
   }
@@ -134,8 +137,10 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }

@@ -1,3 +1,4 @@
+// Google Meet plugin module implements create behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
@@ -147,6 +148,7 @@ export async function createAndJoinMeetFromParams(params: {
     dtmfSequence: normalizeOptionalString(params.raw.dtmfSequence),
     message: normalizeOptionalString(params.raw.message),
     requesterSessionKey: normalizeOptionalString(params.raw.requesterSessionKey),
+    agentId: normalizeOptionalString(params.raw.agentId),
   });
   return {
     ...created,

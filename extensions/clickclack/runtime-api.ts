@@ -1,3 +1,6 @@
+/**
+ * Public runtime injection surface used by the bundled ClickClack entry.
+ */
 export {
   type ClickClackAccountConfig,
   type ClickClackEvent,
@@ -9,3 +12,4 @@ export {
   resolveClickClackAccount,
   setClickClackRuntime,
 } from "./api.js";
+export { registerClickClackDiscussions } from "./src/discussions/register.js";

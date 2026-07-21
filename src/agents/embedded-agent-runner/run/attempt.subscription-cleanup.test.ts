@@ -1,11 +1,11 @@
+// Coverage for ordered cleanup of embedded attempt subscriptions and resources.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
-import {
-  EMBEDDED_ABORT_SETTLE_TIMEOUT_MS,
-  cleanupEmbeddedAttemptResources,
-} from "./attempt.subscription-cleanup.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
+import { cleanupEmbeddedAttemptResources } from "./attempt.subscription-cleanup.js";
 
 function createDeferred<T>() {
+  // Manual deferreds let cleanup tests prove ordering around abort settlement.
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
   const promise = new Promise<T>((resolvePromise, rejectPromise) => {
@@ -22,6 +22,8 @@ describe("cleanupEmbeddedAttemptResources", () => {
   });
 
   it("waits for aborted prompt settlement before flushing and releasing the lock", async () => {
+    // After an abort, pending prompt work gets a short chance to settle before
+    // session flush/release/dispose run.
     const order: string[] = [];
     const settle = createDeferred<void>();
 
@@ -87,7 +89,8 @@ describe("cleanupEmbeddedAttemptResources", () => {
       sessionId: "session-1",
     });
 
-    await vi.advanceTimersByTimeAsync(EMBEDDED_ABORT_SETTLE_TIMEOUT_MS - 1);
+    const abortSettleTimeoutMs = resolveEmbeddedAbortSettleTimeoutMs();
+    await vi.advanceTimersByTimeAsync(abortSettleTimeoutMs - 1);
     expect(order).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(1);
@@ -97,6 +100,8 @@ describe("cleanupEmbeddedAttemptResources", () => {
   });
 
   it("releases the lock before runtime teardown can hang", async () => {
+    // Bundle runtime disposal can hang; release transcript locks first so other
+    // turns are not blocked by diagnostic cleanup.
     const order: string[] = [];
     let markRuntimeDisposeStarted!: () => void;
     const runtimeDisposeStarted = new Promise<void>((resolve) => {

@@ -1,3 +1,8 @@
+/**
+ * Channel message capability derivation.
+ *
+ * Computes durable-final delivery requirements from a concrete outbound payload.
+ */
 import type {
   DeriveDurableFinalDeliveryRequirementsParams,
   DurableFinalDeliveryCapability,
@@ -26,6 +31,7 @@ function setRequired(
   }
 }
 
+/** Derives the adapter capabilities core needs before it can require durable final delivery. */
 export function deriveDurableFinalDeliveryRequirements(
   params: DeriveDurableFinalDeliveryRequirementsParams,
 ): DurableFinalDeliveryRequirementMap {

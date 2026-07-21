@@ -1,3 +1,4 @@
+// Builds base config schema metadata shared across generated config surfaces.
 import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { VERSION } from "../version.js";
 import { FIELD_HELP } from "./schema.help.js";
@@ -32,7 +33,7 @@ type JsonSchemaObject = Record<string, unknown> & {
   allOf?: JsonSchemaObject[];
 };
 
-const LEGACY_HIDDEN_PUBLIC_PATHS = ["canvasHost", "hooks.internal.handlers"] as const;
+const LEGACY_HIDDEN_PUBLIC_PATHS = ["hooks.internal.handlers"] as const;
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject(value) as JsonSchemaObject | null;
@@ -145,7 +146,7 @@ function applyNodeDocumentation(
   }
 }
 
-export type BaseConfigSchemaResponse = {
+type BaseConfigSchemaResponse = {
   schema: ConfigSchema;
   uiHints: ConfigUiHints;
   version: string;

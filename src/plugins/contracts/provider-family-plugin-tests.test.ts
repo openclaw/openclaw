@@ -1,6 +1,6 @@
+// Provider family plugin tests cover grouped provider-family contract cases.
 import fs from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
@@ -19,8 +19,8 @@ type ExpectedSharedFamilyContract = {
   toolCompatFamilies?: readonly string[];
 };
 
-const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const REPO_ROOT = resolve(SRC_ROOT, "..");
+const REPO_ROOT = resolve(process.cwd());
+const BUNDLED_SOURCE_EXTENSIONS_ROOT = resolve(REPO_ROOT, "extensions");
 const SHARED_FAMILY_HOOK_PATTERNS: ReadonlyArray<{
   kind: SharedFamilyHookKind;
   regex: RegExp;
@@ -32,6 +32,7 @@ const SHARED_FAMILY_HOOK_PATTERNS: ReadonlyArray<{
 const PROVIDER_BOUNDARY_TEST_SIGNALS = [
   /\bregister(?:Single)?ProviderPlugin\s*\(/u,
   /\bcreateTestPluginApi\s*\(/u,
+  /\bcapturePluginRegistration\s*\(/u,
   /\bexpectPassthroughReplayPolicy\s*\(/u,
 ] as const;
 const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedSharedFamilyContract> = {
@@ -41,8 +42,10 @@ const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedShared
   },
   minimax: {
     replayFamilies: ["hybrid-anthropic-openai"],
+    streamFamilies: ["minimax-fast-mode"],
   },
   openai: {
+    streamFamilies: ["openai-responses-defaults"],
     toolCompatFamilies: ["openai"],
   },
 };
@@ -111,7 +114,14 @@ function listBundledPluginRoots() {
   if (bundledPluginRootsCache) {
     return bundledPluginRootsCache;
   }
-  bundledPluginRootsCache = loadPluginManifestRegistry({})
+  bundledPluginRootsCache = loadPluginManifestRegistry({
+    workspaceDir: REPO_ROOT,
+    env: {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: BUNDLED_SOURCE_EXTENSIONS_ROOT,
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    },
+  })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => ({
       pluginId: plugin.id,

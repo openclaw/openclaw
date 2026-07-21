@@ -1,3 +1,4 @@
+// Handles auth directives that choose provider auth profiles for a reply.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import {
@@ -16,9 +17,11 @@ import {
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef } from "../../config/types.secrets.js";
+import { maskApiKey } from "../../security/secret-mask.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
-import { maskApiKey } from "../../utils/mask-api-key.js";
 
+/** Controls how much auth provenance is shown in directive status output. */
 export type ModelAuthDetailMode = "compact" | "verbose";
 
 function resolveStoredCredentialLabel(params: {
@@ -42,10 +45,11 @@ function formatExpirationLabel(
   formatUntil: (timestampMs: number) => string,
   compactExpiredPrefix = " expired",
 ) {
-  if (typeof expires !== "number" || !Number.isFinite(expires) || expires <= 0) {
+  const timestampMs = asDateTimestampMs(expires);
+  if (timestampMs === undefined || timestampMs <= 0) {
     return "";
   }
-  return expires <= now ? compactExpiredPrefix : ` exp ${formatUntil(expires)}`;
+  return timestampMs <= now ? compactExpiredPrefix : ` exp ${formatUntil(timestampMs)}`;
 }
 
 function formatFlagsSuffix(flags: string[]) {
@@ -56,6 +60,7 @@ function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential
   return value === "api_key" || value === "oauth" || value === "token";
 }
 
+/** Resolves the displayed auth source for a provider without exposing secrets. */
 export const resolveAuthLabel = async (
   provider: string,
   cfg: OpenClawConfig,
@@ -226,6 +231,7 @@ export const resolveAuthLabel = async (
     };
   }
 
+  // Auth profiles win over environment/config keys because they encode provider order.
   const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
   if (envKey) {
     const isOAuthEnv =
@@ -244,6 +250,7 @@ export const resolveAuthLabel = async (
   return { label: "missing", source: "missing" };
 };
 
+/** Formats an auth label plus source for one-line status output. */
 export const formatAuthLabel = (auth: { label: string; source: string }) => {
   if (!auth.source || auth.source === auth.label || auth.source === "missing") {
     return auth.label;

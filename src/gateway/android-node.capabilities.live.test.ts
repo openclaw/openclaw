@@ -1,7 +1,13 @@
+// Android node capability live tests verify paired node command allowlists and remote policy behavior.
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { unwrapRemoteConfigSnapshot } from "../../test/helpers/gateway/android-node-capabilities-policy-config.js";
 import { shouldFetchRemotePolicyConfig } from "../../test/helpers/gateway/android-node-capabilities-policy-source.js";
+import {
+  ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+  findMissingRequiredAndroidNodeCommands,
+} from "../../test/helpers/gateway/android-node-capabilities-required-commands.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -99,6 +105,36 @@ function assertObjectPayload(command: string, payload: unknown): Record<string, 
   return obj;
 }
 
+const VALID_A2UI_JSONL = [
+  JSON.stringify({
+    surfaceUpdate: {
+      surfaceId: "main",
+      components: [
+        {
+          id: "root",
+          component: { Column: { children: { explicitList: ["text"] } } },
+        },
+        {
+          id: "text",
+          component: {
+            Text: {
+              text: { literalString: "Android Canvas live test" },
+              usageHint: "body",
+            },
+          },
+        },
+      ],
+    },
+  }),
+  JSON.stringify({ beginRendering: { surfaceId: "main", root: "root" } }),
+].join("\n");
+
+function assertA2uiPushPayload(command: string, payload: unknown) {
+  const obj = assertObjectPayload(command, payload);
+  expect(obj.ok).toBe(true);
+  expect(readStringArray(obj.surfaces)).toContain("main");
+}
+
 const COMMAND_PROFILES: Record<string, CommandProfile> = {
   "canvas.present": {
     buildParams: () => ({ url: "about:blank" }),
@@ -135,14 +171,20 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     },
   },
   "canvas.a2ui.push": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.push", payload);
+    },
   },
   "canvas.a2ui.pushJSONL": {
-    buildParams: () => ({ jsonl: '{"beginRendering":{}}\n' }),
+    buildParams: () => ({ jsonl: VALID_A2UI_JSONL }),
     timeoutMs: 30_000,
     outcome: "success",
+    onSuccess: (payload) => {
+      assertA2uiPushPayload("canvas.a2ui.pushJSONL", payload);
+    },
   },
   "canvas.a2ui.reset": {
     buildParams: () => ({}),
@@ -218,6 +260,15 @@ const COMMAND_PROFILES: Record<string, CommandProfile> = {
     onSuccess: (payload) => {
       const obj = assertObjectPayload("device.health", payload);
       expectRecord(obj.memory, "device.health memory payload");
+    },
+  },
+  "device.apps": {
+    buildParams: () => ({ query: "calendar", includeSystem: true, limit: 5 }),
+    timeoutMs: 20_000,
+    outcome: "success",
+    onSuccess: (payload) => {
+      const obj = assertObjectPayload("device.apps", payload);
+      expect(Array.isArray(obj.apps)).toBe(true);
     },
   },
   "notifications.list": {
@@ -428,11 +479,14 @@ function selectTargetNode(nodes: NodeListNode[]): NodeListNode {
     throw new Error("no Android node found in node.list");
   }
 
-  return androidNodes.slice().toSorted((a, b) => {
-    const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
-    const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
-    return bMs - aMs;
-  })[0];
+  return expectDefined(
+    androidNodes.slice().toSorted((a, b) => {
+      const aMs = typeof a.connectedAtMs === "number" ? a.connectedAtMs : 0;
+      const bMs = typeof b.connectedAtMs === "number" ? b.connectedAtMs : 0;
+      return bMs - aMs;
+    })[0],
+    "androidNodes.slice().toSorted((a, b) => { const aMs = typeof a.connec... test invariant",
+  );
 }
 
 async function invokeNodeCommand(params: {
@@ -567,6 +621,21 @@ describeLive("android node capability integration (preconditioned)", () => {
         `unmapped advertised commands: ${missingProfiles.join(", ")} (update COMMAND_PROFILES before running this suite)`,
       );
     }
+
+    const missingRequiredCommands = findMissingRequiredAndroidNodeCommands({
+      commandsToRun,
+      requiredCommands: ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS,
+    });
+    if (missingRequiredCommands.length > 0) {
+      throw new Error(
+        [
+          `Android node missing required non-interactive command(s): ${missingRequiredCommands.join(", ")}`,
+          `runnable after policy filtering (${commandsToRun.length}/${ANDROID_NODE_REQUIRED_NON_INTERACTIVE_COMMANDS.length}): ${commandsToRun.join(", ")}`,
+          `advertised by node.describe: ${commands.join(", ")}`,
+          "precondition: update the Android node, or fix gateway.nodes allowCommands/denyCommands before running this suite",
+        ].join("\n"),
+      );
+    }
   }, 60_000);
 
   afterAll(() => {
@@ -576,7 +645,10 @@ describeLive("android node capability integration (preconditioned)", () => {
 
   const profiledCommands = Object.keys(COMMAND_PROFILES).toSorted();
   for (const command of profiledCommands) {
-    const profile = COMMAND_PROFILES[command];
+    const profile = expectDefined(
+      COMMAND_PROFILES[command],
+      "COMMAND_PROFILES[command] test invariant",
+    );
     const timeout = Math.max(20_000, profile.timeoutMs ?? 20_000) + 15_000;
     it(`command: ${command}`, { timeout }, async () => {
       if (!client) {

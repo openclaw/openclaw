@@ -1,6 +1,7 @@
-import {
-  type PluginDoctorStateMigration,
-  type PluginDoctorStateMigrationContext,
+// Workboard API module exposes the plugin public contract.
+import type {
+  PluginDoctorStateMigration,
+  PluginDoctorStateMigrationContext,
 } from "openclaw/plugin-sdk/runtime-doctor";
 import type {
   PersistedWorkboardAttachment,

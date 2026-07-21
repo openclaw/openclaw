@@ -1,14 +1,19 @@
+// Gateway plugin startup bootstrap.
+// Runs startup maintenance, loads plugin runtime, and prepares advertised methods.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  collectRegisteredEmbeddingProviderIds,
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+} from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginRegistryParams } from "../plugins/registry-types.js";
+import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
-import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
+import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation-runtime-config.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 
 type GatewayPluginBootstrapLog = {
@@ -22,10 +27,13 @@ type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
 
+/** Returns the config snapshot used by channel/plugin startup maintenance. */
 export function resolveGatewayStartupMaintenanceConfig(params: {
   cfgAtStart: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
 }): OpenClawConfig {
+  // Early config recovery may supply channel blocks after the start snapshot; startup
+  // maintenance needs those owner configs even when the original snapshot was sparse.
   return params.cfgAtStart.channels === undefined &&
     params.startupRuntimeConfig.channels !== undefined
     ? {
@@ -35,11 +43,13 @@ export function resolveGatewayStartupMaintenanceConfig(params: {
     : params.cfgAtStart;
 }
 
+/** Builds plugin startup state and gateway method lists before the server binds. */
 export async function prepareGatewayPluginBootstrap(params: {
   cfgAtStart: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   startupRuntimeConfig: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  workerProviderIds?: readonly string[];
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
@@ -72,24 +82,46 @@ export async function prepareGatewayPluginBootstrap(params: {
           log: params.log,
         }),
       );
+      const { migrateLegacyDevicePairingStore } =
+        await import("../infra/device-pairing-migration.js");
+      const { migrateLegacyNodePairingStore } = await import("../infra/node-pairing-migration.js");
+      startupTasks.push(
+        // The device store import must complete before the node-surface fold:
+        // the fold writes onto device records in SQLite and would drop every
+        // legacy node row as an orphan if the devices were not imported yet.
+        migrateLegacyDevicePairingStore({ log: params.log }).then(
+          () =>
+            migrateLegacyNodePairingStore({ log: params.log }).then(
+              () => undefined,
+              (error: unknown) => {
+                // A failed fold must not block gateway startup; the legacy
+                // files stay in place and the next boot retries.
+                params.log.warn(`node pairing store migration failed: ${String(error)}`);
+              },
+            ),
+          (error: unknown) => {
+            params.log.warn(`device pairing store migration failed: ${String(error)}`);
+          },
+        ),
+      );
     }
     await Promise.all(startupTasks);
   }
 
   initSubagentRegistry();
 
+  // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
+  // defaults injected while loading runtime config; runtime-only plugin config still merges in.
   const gatewayPluginConfig = params.minimalTestGateway
     ? params.cfgAtStart
-    : mergeActivationSectionsIntoRuntimeConfig({
+    : resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.cfgAtStart,
-        activationConfig: applyPluginAutoEnable({
-          config: activationSourceConfig,
-          env: process.env,
-          ...(params.pluginMetadataSnapshot?.manifestRegistry
-            ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
-            : {}),
-          discovery: params.pluginMetadataSnapshot?.discovery,
-        }).config,
+        activationSourceConfig,
+        env: process.env,
+        ...(params.pluginMetadataSnapshot?.manifestRegistry
+          ? { manifestRegistry: params.pluginMetadataSnapshot.manifestRegistry }
+          : {}),
+        discovery: params.pluginMetadataSnapshot?.discovery,
       });
   const pluginsGloballyDisabled = gatewayPluginConfig.plugins?.enabled === false;
   const defaultAgentId = resolveDefaultAgentId(gatewayPluginConfig);
@@ -103,6 +135,7 @@ export async function prepareGatewayPluginBootstrap(params: {
           env: process.env,
           activationSourceConfig,
           metadataSnapshot: params.pluginMetadataSnapshot,
+          workerProviderIds: params.workerProviderIds ?? [],
         });
   const deferredConfiguredChannelPluginIds = [
     ...(pluginLookUpTable?.startup.configuredDeferredChannelPluginIds ?? []),
@@ -112,13 +145,15 @@ export async function prepareGatewayPluginBootstrap(params: {
   const baseMethods = listGatewayMethods();
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   const emptyPluginRegistry = createEmptyPluginRegistry();
-  let pluginRegistry = emptyPluginRegistry;
+  let pluginRegistry;
   let baseGatewayMethods = baseMethods;
   const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
   const shouldLoadSetupRuntimePlugins =
     params.loadSetupRuntimePlugins === true && deferredConfiguredChannelPluginIds.length > 0;
 
   if (!params.minimalTestGateway && shouldLoadSetupRuntimePlugins) {
+    // Pre-bind bootstrap only loads deferred channel plugins that expose setup runtime hooks.
+    // Full plugin handlers are loaded later so startup does not register duplicate methods.
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
       {
         cfg: gatewayPluginConfig,
@@ -134,6 +169,8 @@ export async function prepareGatewayPluginBootstrap(params: {
       },
     ));
   } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+    // Normal bootstrap loads every startup plugin and records that runtime handlers are ready
+    // before the gateway exposes the method list.
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
       {
         cfg: gatewayPluginConfig,
@@ -149,11 +186,16 @@ export async function prepareGatewayPluginBootstrap(params: {
       },
     ));
   } else {
+    // Minimal gateway tests reuse an already-active registry when present; production no-load
+    // paths install a fresh empty registry so stale plugin handlers cannot leak across starts.
     pluginRegistry = params.minimalTestGateway
       ? (getActivePluginRegistry() ?? emptyPluginRegistry)
       : emptyPluginRegistry;
     setActivePluginRegistry(pluginRegistry);
   }
+
+  const runtimePluginsLoaded =
+    !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins;
 
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
@@ -164,11 +206,33 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
-    runtimePluginsLoaded:
-      !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins,
+    runtimePluginsLoaded,
   };
 }
 
+/**
+ * Warn when `agents.*.memorySearch.provider` selects a memory embedding provider
+ * that no loaded plugin registered. Without the owning plugin, `active-memory`
+ * cannot embed and silently falls back to keyword/FTS-only recall.
+ */
+export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
+  config: OpenClawConfig;
+  pluginRegistry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>;
+  log: Pick<GatewayPluginBootstrapLog, "warn">;
+}): void {
+  const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviders({
+    config: params.config,
+    registeredProviderIds: collectRegisteredEmbeddingProviderIds(params.pluginRegistry),
+  });
+  for (const provider of unregistered) {
+    const path = `memorySearch.${provider.source}`;
+    params.log.warn(
+      `${path}="${provider.configuredId}" is configured, but no loaded plugin registered a memory embedding provider that can serve "${provider.configuredId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${provider.configuredId}" is installed and enabled.`,
+    );
+  }
+}
+
+/** Loads startup plugin runtimes through the deferred bootstrap boundary. */
 export async function loadGatewayStartupPluginRuntime(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -183,8 +247,10 @@ export async function loadGatewayStartupPluginRuntime(params: {
   suppressPluginInfoLogs?: boolean;
   startupTrace?: GatewayStartupTrace;
 }) {
+  // Keep server-plugin-bootstrap behind one lazy boundary; startup config tests can exercise
+  // planning without importing plugin package runtimes.
   const { loadGatewayStartupPlugins } = await import("./server-plugin-bootstrap.js");
-  return loadGatewayStartupPlugins({
+  const loaded = loadGatewayStartupPlugins({
     cfg: params.cfg,
     activationSourceConfig: params.activationSourceConfig,
     workspaceDir: params.workspaceDir,
@@ -200,4 +266,15 @@ export async function loadGatewayStartupPluginRuntime(params: {
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
     startupTrace: params.startupTrace,
   });
+  if (params.preferSetupRuntimeForChannelPlugins !== true) {
+    // Surface configured memory embedding providers after the full startup
+    // runtime load; setup-runtime pre-bind loads intentionally register only
+    // early channel hooks and would produce false missing-provider warnings.
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: params.cfg,
+      pluginRegistry: loaded.pluginRegistry,
+      log: params.log,
+    });
+  }
+  return loaded;
 }

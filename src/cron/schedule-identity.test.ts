@@ -1,3 +1,4 @@
+// Schedule identity tests cover stable identity derivation for cron schedules.
 import { describe, expect, it } from "vitest";
 import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-identity.js";
 
@@ -52,5 +53,39 @@ describe("tryCronScheduleIdentity", () => {
         },
       ),
     ).toBe(true);
+  });
+
+  it("normalizes pacing bounds and treats changes as scheduling input changes", () => {
+    const schedule = { kind: "every" as const, everyMs: 60_000, anchorMs: 123 };
+
+    expect(
+      cronSchedulingInputsEqual(
+        { schedule, pacing: { min: "60m", max: "4h" } },
+        { schedule, pacing: { min: "1h", max: "240m" } },
+      ),
+    ).toBe(true);
+    expect(
+      cronSchedulingInputsEqual(
+        { schedule, pacing: { min: "1h" } },
+        { schedule, pacing: { min: "2h" } },
+      ),
+    ).toBe(false);
+    expect(cronSchedulingInputsEqual({ schedule, pacing: { min: "1h" } }, { schedule })).toBe(
+      false,
+    );
+  });
+
+  it("tracks trigger presence without depending on trigger script text", () => {
+    const schedule = { kind: "cron" as const, expr: "*/5 * * * *" };
+
+    expect(
+      cronSchedulingInputsEqual(
+        { schedule, trigger: { script: "return true" } },
+        { schedule, trigger: { script: "return false" } },
+      ),
+    ).toBe(true);
+    expect(
+      cronSchedulingInputsEqual({ schedule }, { schedule, trigger: { script: "return true" } }),
+    ).toBe(false);
   });
 });

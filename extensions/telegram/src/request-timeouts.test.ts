@@ -1,3 +1,4 @@
+// Telegram tests cover request timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -48,8 +49,13 @@ describe("resolveTelegramRequestTimeoutMs", () => {
     expect(resolveTelegramRequestTimeoutMs("getme", 10)).toBe(15_000);
   });
 
-  it("does not assign hard timeouts to unrelated Telegram methods", () => {
-    expect(resolveTelegramRequestTimeoutMs("answercallbackquery")).toBeUndefined();
+  it("uses the outbound guard for unlisted Telegram methods", () => {
+    expect(resolveTelegramRequestTimeoutMs("answercallbackquery")).toBe(60_000);
+    expect(resolveTelegramRequestTimeoutMs("answercallbackquery", 10)).toBe(60_000);
+    expect(resolveTelegramRequestTimeoutMs("answercallbackquery", 90)).toBe(90_000);
+  });
+
+  it("does not assign a timeout when no Telegram method can be identified", () => {
     expect(resolveTelegramRequestTimeoutMs(null)).toBeUndefined();
   });
 });

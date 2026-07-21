@@ -1,3 +1,4 @@
+// Covers plugin config state normalization and reset behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   createPluginActivationSource,
@@ -206,6 +207,20 @@ describe("normalizePluginsConfig", () => {
     expect(result.deny).toEqual(["unknown-plugin-three"]);
     expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
     expect(discoverPlugins).not.toHaveBeenCalled();
+  });
+
+  it("normalizes unknown plugin ids to lowercase canonical keys", () => {
+    const result = normalizePluginsConfig({
+      allow: [" Demo-Plugin "],
+      deny: [" OTHER-PLUGIN "],
+      entries: {
+        " CODEX ": { enabled: true },
+      },
+    });
+
+    expect(result.allow).toEqual(["demo-plugin"]);
+    expect(result.deny).toEqual(["other-plugin"]);
+    expect(result.entries.codex?.enabled).toBe(true);
   });
 
   it("does not consult discovery or manifests for alias lookup", async () => {

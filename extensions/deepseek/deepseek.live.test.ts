@@ -1,3 +1,4 @@
+// Deepseek tests cover deepseek plugin behavior.
 import {
   completeSimple,
   streamSimple,
@@ -9,7 +10,7 @@ import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildDeepSeekProvider } from "./provider-catalog.js";

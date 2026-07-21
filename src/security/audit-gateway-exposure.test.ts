@@ -1,3 +1,4 @@
+// Covers gateway exposure audit classification.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectGatewayConfigFindings } from "./audit-gateway-config.js";
@@ -37,6 +38,15 @@ function requireFinding(
 }
 
 describe("security audit gateway exposure findings", () => {
+  it("warns when the MCP Apps bridge is enabled", () => {
+    const cfg: OpenClawConfig = { mcp: { apps: { enabled: true } } };
+    expect(collectGatewayConfigFindings(cfg, cfg, {})).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ checkId: "mcp.apps.enabled", severity: "warn" }),
+      ]),
+    );
+  });
+
   it("warns on insecure or dangerous flags", () => {
     const cases = [
       {
@@ -156,7 +166,7 @@ describe("security audit gateway exposure findings", () => {
     const finding = requireFinding(findings, expectedFinding.checkId, expectedFinding.checkId);
     expect(finding.severity).toBe(expectedFinding.severity);
     if (expectedNoFinding) {
-      expect(findings.map((finding) => finding.checkId)).not.toContain(expectedNoFinding);
+      expect(findings.map((findingLocal) => findingLocal.checkId)).not.toContain(expectedNoFinding);
     }
   });
 
@@ -446,6 +456,44 @@ describe("security audit gateway exposure findings", () => {
         expectedCheckId: "gateway.trusted_proxy_allow_loopback",
         expectedSeverity: "warn",
       },
+      {
+        name: "browser device auto-approval enabled",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+                deviceAutoApprove: { enabled: true },
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_device_auto_approve",
+        expectedSeverity: "warn",
+      },
+      {
+        name: "browser device auto-approval grants admin",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: ["nick@example.com"],
+                deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_device_auto_approve_admin",
+        expectedSeverity: "critical",
+      },
     ];
 
     for (const testCase of cases) {
@@ -460,5 +508,59 @@ describe("security audit gateway exposure findings", () => {
         expect(checkIds).not.toContain("gateway.auth_no_rate_limit");
       }
     }
+  });
+
+  it("explains the trusted-proxy admin auto-approval impact and alternatives", () => {
+    const cfg = {
+      gateway: {
+        bind: "lan",
+        trustedProxies: ["10.0.0.1"],
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            allowUsers: ["nick@example.com"],
+            deviceAutoApprove: { enabled: true, scopes: [" operator.admin "] },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      requireFinding(
+        collectGatewayConfigFindings(cfg, cfg, {}),
+        "gateway.trusted_proxy_device_auto_approve_admin",
+        "trusted-proxy admin device auto-approval",
+      ),
+    ).toEqual({
+      checkId: "gateway.trusted_proxy_device_auto_approve_admin",
+      severity: "critical",
+      title: "Trusted-proxy device auto-approval allows full admin",
+      detail:
+        "gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin, so every proxy-authenticated user can auto-approve a new browser device with full admin; requests without scopes receive full admin automatically.",
+      remediation:
+        "Remove operator.admin and approve admin access manually, or use per-identity roles when they become available.",
+    });
+  });
+
+  it("does not report dormant trusted-proxy admin auto-approval config", () => {
+    const cfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "test",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            deviceAutoApprove: { enabled: true, scopes: ["operator.admin"] },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      collectGatewayConfigFindings(cfg, cfg, {}).some(
+        (finding) => finding.checkId === "gateway.trusted_proxy_device_auto_approve_admin",
+      ),
+    ).toBe(false);
   });
 });

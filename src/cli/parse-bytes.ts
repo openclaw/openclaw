@@ -1,3 +1,4 @@
+// Byte-size parser shared by CLI flags and config schemas.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -27,6 +28,7 @@ function invalidByteSize(raw: string, reason?: string): Error {
   return new Error(`${prefix} Use values like 512kb, 10mb, 1gb, or 500.`);
 }
 
+/** Parse a non-negative byte size with optional binary units like kb, mb, gb, or tb. */
 export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   const trimmed = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "");
   if (!trimmed) {
@@ -50,7 +52,8 @@ export function parseByteSize(raw: string, opts?: BytesParseOptions): number {
   }
 
   const bytes = Math.round(value * multiplier);
-  if (!Number.isFinite(bytes)) {
+  // Validate the rounded byte count; fractional inputs may safely round back into range.
+  if (!Number.isSafeInteger(bytes)) {
     throw invalidByteSize(raw);
   }
   return bytes;

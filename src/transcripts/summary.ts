@@ -1,6 +1,15 @@
+// Builds transcript summaries and normalized transcript metadata.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 
+/**
+ * Lightweight transcript summarization and markdown rendering.
+ *
+ * This is a deterministic heuristic summary used for captured/imported
+ * transcripts when no model-backed summarizer is involved.
+ */
+/** Summary artifact written alongside transcript sessions. */
 export type TranscriptsSummary = {
   sessionId: string;
   title: string;
@@ -33,6 +42,20 @@ function collectMatches(utterances: TranscriptUtterance[], pattern: RegExp): str
     .slice(0, 12);
 }
 
+function sanitizeUtterance(utterance: TranscriptUtterance): TranscriptUtterance {
+  const sanitized: TranscriptUtterance = {
+    ...utterance,
+    text: sanitizeTerminalText(utterance.text),
+  };
+  if (utterance.speaker) {
+    sanitized.speaker = {
+      ...utterance.speaker,
+      label: sanitizeTerminalText(utterance.speaker.label),
+    };
+  }
+  return sanitized;
+}
+
 function formatSpeakerLine(utterance: TranscriptUtterance): string {
   const text = utterance.text.trim();
   if (!text) {
@@ -46,21 +69,23 @@ function formatTranscript(utterances: TranscriptUtterance[]): string[] {
   return utterances.map(formatSpeakerLine).filter(Boolean);
 }
 
+/** Build a deterministic summary from transcript utterances. */
 export function summarizeTranscripts(params: {
   session: TranscriptSessionDescriptor;
   utterances: TranscriptUtterance[];
 }): TranscriptsSummary {
-  const title = params.session.title?.trim() || "Transcripts";
-  const overview = firstSentences(params.utterances, 4) || "No transcript captured yet.";
+  const title = sanitizeTerminalText(params.session.title ?? "").trim() || "Transcripts";
+  const utterances = params.utterances.map(sanitizeUtterance);
+  const overview = firstSentences(utterances, 4) || "No transcript captured yet.";
   return {
     sessionId: params.session.sessionId,
     title,
     generatedAt: new Date().toISOString(),
     overview,
-    transcript: formatTranscript(params.utterances),
-    decisions: collectMatches(params.utterances, DECISION_PATTERNS),
-    actionItems: collectMatches(params.utterances, ACTION_PATTERNS),
-    risks: collectMatches(params.utterances, RISK_PATTERNS),
+    transcript: formatTranscript(utterances),
+    decisions: collectMatches(utterances, DECISION_PATTERNS),
+    actionItems: collectMatches(utterances, ACTION_PATTERNS),
+    risks: collectMatches(utterances, RISK_PATTERNS),
     utteranceCount: params.utterances.length,
   };
 }
@@ -69,12 +94,13 @@ function renderList(items: string[]): string {
   return items.length > 0 ? items.map((item) => `- ${item}`).join("\n") : "- None captured";
 }
 
+/** Render a transcript summary as markdown for local artifacts. */
 export function renderTranscriptsMarkdown(summary: TranscriptsSummary): string {
   return [
     `# ${summary.title}`,
     "",
     `Generated: ${summary.generatedAt}`,
-    `Session: ${summary.sessionId}`,
+    `Session: ${sanitizeTerminalText(summary.sessionId)}`,
     "",
     "## Overview",
     summary.overview,

@@ -1,3 +1,4 @@
+// Matrix API module exposes the plugin public contract.
 export {
   type MatrixResolvedStringField,
   type MatrixResolvedStringValues,
@@ -24,8 +25,6 @@ export {
   resolveMatrixCredentialsFilename,
   resolveMatrixCredentialsPath,
   resolveMatrixHomeserverKey,
-  resolveMatrixLegacyFlatStoragePaths,
-  resolveMatrixLegacyFlatStoreRoot,
   sanitizeMatrixPathSegment,
 } from "./src/storage-paths.js";
 export { ensureMatrixSdkInstalled, isMatrixSdkAvailable } from "./src/matrix/deps.js";
@@ -35,7 +34,6 @@ export {
   createPinnedDispatcher,
   resolvePinnedHostnameWithPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  ssrfPolicyFromAllowPrivateNetwork,
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";

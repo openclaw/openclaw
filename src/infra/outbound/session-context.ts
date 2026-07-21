@@ -1,7 +1,10 @@
+// Outbound session context carries canonical hook/session policy keys plus
+// requester metadata used by delivery policies and media roots.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 
 export type OutboundSessionContext = {
@@ -33,6 +36,13 @@ export type OutboundSessionContext = {
   policyKey?: string;
   /** Explicit conversation type for policy resolution when a session key is generic. */
   conversationType?: SilentReplyConversationType;
+  /**
+   * Caller-declared destination conversation kind for metadata-only audit
+   * projection. Never derived from session-key parsing: policy keys can name
+   * an acted-on session that is not the delivery destination, and a wrong
+   * "direct" here over-collects under audit.messages="direct".
+   */
+  conversationKind?: "direct" | "group" | "channel";
   /** Active agent id used for workspace-scoped media roots. */
   agentId?: string;
   /** Originating account id used for requester-scoped group policy resolution. */
@@ -47,6 +57,7 @@ export type OutboundSessionContext = {
   requesterSenderE164?: string;
 };
 
+/** Builds the outbound delivery session context, omitting empty policy fields. */
 export function buildOutboundSessionContext(params: {
   cfg: OpenClawConfig;
   sessionKey?: string | null;
@@ -62,7 +73,20 @@ export function buildOutboundSessionContext(params: {
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const policyKey = normalizeOptionalString(params.policySessionKey);
-  const normalizedChatType = normalizeChatType(params.conversationType ?? undefined);
+  const deliveryRoute = parseSessionDeliveryRoute(policyKey ?? key);
+  const declaredChatType = normalizeChatType(params.conversationType ?? undefined);
+  const normalizedChatType = declaredChatType ?? normalizeChatType(deliveryRoute?.peerKind);
+  // conversationKind feeds the metadata-only audit projection and must carry
+  // only caller-declared destination facts. Session-key parses can name a
+  // policy/acted-on session that is not this delivery's destination (native
+  // command target overrides); a guessed "direct" would over-collect under
+  // audit.messages="direct". Destination-gated parsing lives in outbound-audit.
+  const conversationKind =
+    declaredChatType ??
+    (params.isGroup === true ? "group" : params.isGroup === false ? "direct" : undefined);
+  // conversationType keeps the historical policy derivation (declared type,
+  // then session-key parse, then isGroup) and intentionally folds channels
+  // into groups for silent-reply policy.
   const conversationType: SilentReplyConversationType | undefined =
     normalizedChatType === "group" || normalizedChatType === "channel"
       ? "group"
@@ -82,11 +106,14 @@ export function buildOutboundSessionContext(params: {
   const derivedAgentId = key
     ? resolveSessionAgentId({ sessionKey: key, config: params.cfg })
     : undefined;
+  // Prefer explicit caller ownership, but derive from the canonical session key
+  // so redirected deliveries still get workspace-scoped media policy.
   const agentId = explicitAgentId ?? derivedAgentId;
   if (
     !key &&
     !policyKey &&
     !conversationType &&
+    !conversationKind &&
     !agentId &&
     !requesterAccountId &&
     !requesterSenderId &&
@@ -100,6 +127,7 @@ export function buildOutboundSessionContext(params: {
     ...(key ? { key } : {}),
     ...(policyKey ? { policyKey } : {}),
     ...(conversationType ? { conversationType } : {}),
+    ...(conversationKind ? { conversationKind } : {}),
     ...(agentId ? { agentId } : {}),
     ...(requesterAccountId ? { requesterAccountId } : {}),
     ...(requesterSenderId ? { requesterSenderId } : {}),

@@ -1,3 +1,4 @@
+// Line tests cover setup surface plugin behavior.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
@@ -14,16 +15,18 @@ import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { probeLineBot } from "./probe.js";
-import { clearLineRuntime, setLineRuntime } from "./runtime.js";
+import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
-import { lineStatusAdapter } from "./status.js";
 
 const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
-  const getBotInfoMock = vi.fn();
-  const MessagingApiClientMock = vi.fn(function () {
-    return { getBotInfo: getBotInfoMock };
+  const getBotInfoMockLocal = vi.fn();
+  const MessagingApiClientMockLocal = vi.fn(function () {
+    return { getBotInfo: getBotInfoMockLocal };
   });
-  return { getBotInfoMock, MessagingApiClientMock };
+  return {
+    getBotInfoMock: getBotInfoMockLocal,
+    MessagingApiClientMock: MessagingApiClientMockLocal,
+  };
 });
 
 vi.mock("@line/bot-sdk", () => ({
@@ -314,7 +317,6 @@ describe("probeLineBot", () => {
   });
 
   afterEach(() => {
-    clearLineRuntime();
     vi.useRealTimers();
     getBotInfoMock.mockClear();
   });
@@ -348,6 +350,8 @@ describe("probeLineBot", () => {
 
 describe("linePlugin status.probeAccount", () => {
   it("falls back to the direct probe helper when runtime is not initialized", async () => {
+    vi.resetModules();
+    const { lineStatusAdapter } = await import("./status.js");
     MessagingApiClientMock.mockReset();
     MessagingApiClientMock.mockImplementation(function () {
       return { getBotInfo: getBotInfoMock };
@@ -370,8 +374,6 @@ describe("linePlugin status.probeAccount", () => {
       } as ResolvedLineAccount,
       timeoutMs: 50,
     };
-
-    clearLineRuntime();
 
     await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual(
       await probeLineBot("token", 50),

@@ -1,4 +1,9 @@
+/**
+ * Shared token/cost formatting and pricing lookup helpers for CLI, TUI, gateway, and status output.
+ * Keep this module synchronous; request paths call it while rendering usage summaries.
+ */
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { modelKey, normalizeModelRef, normalizeProviderId } from "../agents/model-selection.js";
@@ -8,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+export { formatTokenCount } from "./token-format.js";
 
 /**
  * A single tier in a tiered-pricing schedule.  Prices are expressed as
@@ -17,7 +23,7 @@ import { tryReadJsonSync } from "../infra/json-files.js";
  * token counts.  The tiers MUST be sorted in ascending `range[0]` order
  * with no gaps.
  */
-export type PricingTier = {
+type PricingTier = {
   input: number;
   output: number;
   cacheRead: number;
@@ -34,6 +40,7 @@ type RawPricingTier = {
   range: [number, number] | [number];
 };
 
+/** Per-million-token model pricing used by usage summaries and cost estimates. */
 export type ModelCostConfig = {
   input: number;
   output: number;
@@ -46,7 +53,7 @@ export type ModelCostConfig = {
   tieredPricing?: PricingTier[];
 };
 
-export type UsageTotals = {
+type UsageTotals = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -84,9 +91,10 @@ type RawModelCostConfig = Omit<ModelCostConfig, "tieredPricing"> & {
 };
 
 const EMPTY_PROVIDER_COST_INDEX = new Map<string, ModelCostConfig>();
+const MODELS_JSON_COST_CACHE_LIMIT = 128;
 const MODEL_KEY_CACHE_LIMIT = 4096;
 
-let modelsJsonCostCache: ModelsJsonCostCache | null = null;
+let modelsJsonCostCacheByAgentDir = new Map<string, ModelsJsonCostCache>();
 let providerCostIndexByConfig = new WeakMap<
   Record<string, ModelProviderConfig>,
   ProviderCostIndexCacheEntry
@@ -94,31 +102,10 @@ let providerCostIndexByConfig = new WeakMap<
 let modelKeyCache = new Map<string, string | null>();
 let sortedPricingTiersByInput = new WeakMap<PricingTier[], PricingTier[]>();
 
-export function formatTokenCount(value?: number): string {
-  if (value === undefined || !Number.isFinite(value)) {
-    return "0";
-  }
-  const safe = Math.max(0, value);
-  if (safe >= 1_000_000) {
-    return `${(safe / 1_000_000).toFixed(1)}m`;
-  }
-  if (safe >= 1_000) {
-    const precision = safe >= 10_000 ? 0 : 1;
-    const formattedThousands = (safe / 1_000).toFixed(precision);
-    if (Number(formattedThousands) >= 1_000) {
-      return `${(safe / 1_000_000).toFixed(1)}m`;
-    }
-    return `${formattedThousands}k`;
-  }
-  return String(Math.round(safe));
-}
-
+/** Formats a USD amount for usage summaries, keeping tiny costs visible. */
 export function formatUsd(value?: number): string | undefined {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
-  }
-  if (value >= 1) {
-    return `$${value.toFixed(2)}`;
   }
   if (value >= 0.01) {
     return `$${value.toFixed(2)}`;
@@ -359,12 +346,15 @@ function getProviderCostIndex(
 }
 
 function loadModelsJsonCostIndex(options?: {
+  agentDir?: string;
   allowPluginNormalization?: boolean;
 }): Map<string, ModelCostConfig> {
   const useRawEntries = options?.allowPluginNormalization === false;
-  const modelsPath = path.join(resolveDefaultAgentDir({}), "models.json");
+  const agentDir = options?.agentDir ?? resolveDefaultAgentDir({});
+  const modelsPath = path.join(agentDir, "models.json");
   try {
-    if (!modelsJsonCostCache || modelsJsonCostCache.path !== modelsPath) {
+    let modelsJsonCostCache = modelsJsonCostCacheByAgentDir.get(agentDir);
+    if (!modelsJsonCostCache) {
       const parsed = tryReadJsonSync<{
         providers?: Record<string, ModelProviderConfig>;
       }>(modelsPath);
@@ -377,6 +367,13 @@ function loadModelsJsonCostIndex(options?: {
         normalizedEntries: null,
         rawEntries: null,
       };
+      if (modelsJsonCostCacheByAgentDir.size >= MODELS_JSON_COST_CACHE_LIMIT) {
+        const oldestAgentDir = modelsJsonCostCacheByAgentDir.keys().next().value;
+        if (oldestAgentDir !== undefined) {
+          modelsJsonCostCacheByAgentDir.delete(oldestAgentDir);
+        }
+      }
+      modelsJsonCostCacheByAgentDir.set(agentDir, modelsJsonCostCache);
     }
 
     if (useRawEntries) {
@@ -586,22 +583,36 @@ function serializeCostIndex(
   return Array.from(entries.entries()).toSorted(([a], [b]) => a.localeCompare(b));
 }
 
-export function resolveModelCostConfigFingerprint(config?: OpenClawConfig): string {
+/**
+ * Fingerprints all model-pricing sources that can affect usage cost estimates.
+ * Consumers cache this value to know when resolved cost entries need recomputation.
+ */
+export function resolveModelCostConfigFingerprint(
+  config?: OpenClawConfig,
+  agentDir?: string,
+): string {
   return stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(
       getProviderCostIndex(config?.models?.providers, { allowPluginNormalization: false }),
     ),
     configuredNormalized: serializeCostIndex(getProviderCostIndex(config?.models?.providers)),
-    modelsJsonRaw: serializeCostIndex(loadModelsJsonCostIndex({ allowPluginNormalization: false })),
-    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex()),
+    modelsJsonRaw: serializeCostIndex(
+      loadModelsJsonCostIndex({ agentDir, allowPluginNormalization: false }),
+    ),
+    modelsJsonNormalized: serializeCostIndex(loadModelsJsonCostIndex({ agentDir })),
     gatewayPricing: getGatewayModelPricingCacheFingerprint(),
   });
 }
 
+/**
+ * Resolves pricing for a provider/model pair from local models.json, configured models, then gateway cache.
+ * Direct keys win before plugin normalization so configured pricing does not trigger provider discovery.
+ */
 export function resolveModelCostConfig(params: {
   provider?: string;
   model?: string;
   config?: OpenClawConfig;
+  agentDir?: string;
   allowPluginNormalization?: boolean;
 }): ModelCostConfig | undefined {
   const rawKey = toDirectModelKey(params);
@@ -612,6 +623,7 @@ export function resolveModelCostConfig(params: {
   // Favor direct configured keys first so local pricing/status lookups stay
   // synchronous and do not drag plugin/provider discovery into the hot path.
   const rawModelsJsonCost = loadModelsJsonCostIndex({
+    agentDir: params.agentDir,
     allowPluginNormalization: false,
   }).get(rawKey);
   if (rawModelsJsonCost) {
@@ -633,7 +645,7 @@ export function resolveModelCostConfig(params: {
   if (shouldUseNormalizedCostLookup(params)) {
     const key = toResolvedModelKey(params);
     if (key && key !== rawKey) {
-      const modelsJsonCost = loadModelsJsonCostIndex().get(key);
+      const modelsJsonCost = loadModelsJsonCostIndex({ agentDir: params.agentDir }).get(key);
       if (modelsJsonCost) {
         return modelsJsonCost;
       }
@@ -668,7 +680,7 @@ function selectPricingTier(tiers: PricingTier[], input: number): PricingTier | u
   }
 
   for (let index = sortedTiers.length - 1; index >= 0; index -= 1) {
-    const tier = sortedTiers[index];
+    const tier = expectDefined(sortedTiers[index], "sorted tiers entry at index");
     if (input >= tier.range[0]) {
       return tier;
     }
@@ -707,6 +719,10 @@ function computeTieredCost(
   );
 }
 
+/**
+ * Estimates USD usage cost from normalized token totals.
+ * Tiered pricing selects one whole-request tier by input size; it does not blend tiers.
+ */
 export function estimateUsageCost(params: {
   usage?: NormalizedUsage | UsageTotals | null;
   cost?: ModelCostConfig;
@@ -739,7 +755,7 @@ export function estimateUsageCost(params: {
 }
 
 export function resetUsageFormatCachesForTest(): void {
-  modelsJsonCostCache = null;
+  modelsJsonCostCacheByAgentDir = new Map();
   providerCostIndexByConfig = new WeakMap();
   modelKeyCache = new Map();
   sortedPricingTiersByInput = new WeakMap();

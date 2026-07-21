@@ -1,3 +1,4 @@
+// Litellm tests cover index plugin behavior.
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,8 +17,8 @@ const LITELLM_DEFAULT_MODEL = {
     cacheRead: 0,
     cacheWrite: 0,
   },
-  contextWindow: 128_000,
-  maxTokens: 8_192,
+  contextWindow: 1_000_000,
+  maxTokens: 128_000,
 };
 
 function registerProvider() {

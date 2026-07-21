@@ -1,3 +1,5 @@
+// Message planning expands normalized payloads into ordered text/media send
+// units while preserving reply-to consumption rules.
 import {
   chunkByParagraph,
   chunkMarkdownTextWithMode,
@@ -6,14 +8,22 @@ import {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { ReplyToOverride } from "./reply-policy.js";
 
+/**
+ * Per-send overrides carried from outbound planning into channel delivery.
+ */
 export type OutboundMessageSendOverrides = ReplyToOverride & {
   threadId?: string | number | null;
   audioAsVoice?: boolean;
   forceDocument?: boolean;
   formatting?: OutboundDeliveryFormattingOptions;
+  /** Stable zero-based platform-send index within one durable payload. */
+  deliveryPartIndex?: number;
 };
 
-export type OutboundMessageUnit =
+/**
+ * Planned outbound delivery unit after text chunking or media expansion.
+ */
+type OutboundMessageUnit =
   | {
       kind: "text";
       text: string;
@@ -26,7 +36,10 @@ export type OutboundMessageUnit =
       overrides: OutboundMessageSendOverrides;
     };
 
-export type OutboundMessageChunker = (
+/**
+ * Splits outbound text with optional formatting-aware context.
+ */
+type OutboundMessageChunker = (
   text: string,
   limit: number,
   ctx?: { formatting?: OutboundDeliveryFormattingOptions },
@@ -34,10 +47,37 @@ export type OutboundMessageChunker = (
 
 type PlanReplyToConsumption = <T extends OutboundMessageSendOverrides>(overrides: T) => T;
 
+type DurableMediaFanoutContext = {
+  channel: string;
+  requiredUnknownSendReconciliation?: boolean;
+  renderedBatchPlan?: { items: Array<{ mediaUrls: readonly string[] }> };
+};
+
+type MediaFanoutSummary = { mediaUrls: readonly unknown[] };
+
+export function assertStableMediaFanout(
+  params: DurableMediaFanoutContext,
+  payloadIndex: number,
+  originalMediaCount: number,
+  effective: MediaFanoutSummary,
+): void {
+  if (!params.requiredUnknownSendReconciliation) {
+    return;
+  }
+  const plannedMediaCount =
+    params.renderedBatchPlan?.items[payloadIndex]?.mediaUrls.length ?? originalMediaCount;
+  if (plannedMediaCount !== effective.mediaUrls.length) {
+    throw new Error(
+      `Required durable message send changed platform fan-out after outbound transforms for ${params.channel}`,
+    );
+  }
+}
+
 function withPlannedReplyTo(
   overrides: OutboundMessageSendOverrides,
   consumeReplyTo?: PlanReplyToConsumption,
 ): OutboundMessageSendOverrides {
+  // Reply-to policies can be single-use; clone overrides before consuming the implicit slot.
   return consumeReplyTo ? consumeReplyTo({ ...overrides }) : { ...overrides };
 }
 
@@ -61,6 +101,9 @@ function chunkTextForPlan(params: {
     : params.chunker(params.text, params.limit);
 }
 
+/**
+ * Plans text sends, preserving reply-to policy across chunked delivery units.
+ */
 export function planOutboundTextMessageUnits(params: {
   text: string;
   overrides: OutboundMessageSendOverrides;
@@ -72,13 +115,16 @@ export function planOutboundTextMessageUnits(params: {
   formatting?: OutboundDeliveryFormattingOptions;
   consumeReplyTo?: PlanReplyToConsumption;
 }): OutboundMessageUnit[] {
-  const planTextUnit = (text: string): OutboundMessageUnit => ({
+  const planTextUnit = (text: string, deliveryPartIndex: number): OutboundMessageUnit => ({
     kind: "text",
     text,
-    overrides: withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+    overrides: {
+      ...withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+      deliveryPartIndex,
+    },
   });
-  const planChunkedTextUnit = (text: string): OutboundMessageUnit => {
-    const unit = planTextUnit(text);
+  const planChunkedTextUnit = (text: string, deliveryPartIndex: number): OutboundMessageUnit => {
+    const unit = planTextUnit(text, deliveryPartIndex);
     return {
       ...unit,
       overrides: withChunkedTextFormatting(unit.overrides, params.chunkedTextFormatting),
@@ -86,7 +132,7 @@ export function planOutboundTextMessageUnits(params: {
   };
 
   if (!params.chunker || params.textLimit === undefined) {
-    return [planTextUnit(params.text)];
+    return [planTextUnit(params.text, 0)];
   }
 
   if (params.chunkMode === "newline") {
@@ -111,7 +157,7 @@ export function planOutboundTextMessageUnits(params: {
         chunks.push(blockChunk);
       }
       for (const chunk of chunks) {
-        units.push(planChunkedTextUnit(chunk));
+        units.push(planChunkedTextUnit(chunk, units.length));
       }
     }
     return units;
@@ -125,6 +171,9 @@ export function planOutboundTextMessageUnits(params: {
   }).map(planChunkedTextUnit);
 }
 
+/**
+ * Plans media sends with a caption only on the leading media unit.
+ */
 export function planOutboundMediaMessageUnits(params: {
   caption: string;
   mediaUrls: readonly string[];
@@ -135,6 +184,9 @@ export function planOutboundMediaMessageUnits(params: {
     kind: "media" as const,
     mediaUrl,
     ...(index === 0 ? { caption: params.caption } : {}),
-    overrides: withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+    overrides: {
+      ...withPlannedReplyTo(params.overrides, params.consumeReplyTo),
+      deliveryPartIndex: index,
+    },
   }));
 }

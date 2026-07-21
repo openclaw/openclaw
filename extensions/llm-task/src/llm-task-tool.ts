@@ -1,9 +1,11 @@
+// Llm Task plugin module implements llm task tool behavior.
 import path from "node:path";
 import { buildModelAliasIndex, resolveModelRefFromString } from "openclaw/plugin-sdk/agent-runtime";
 import {
   optionalFiniteNumberSchema,
   optionalPositiveIntegerSchema,
 } from "openclaw/plugin-sdk/channel-actions";
+import { resolveEffectiveAgentRuntime } from "openclaw/plugin-sdk/command-auth-native";
 import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
@@ -147,7 +149,7 @@ function supportsThinkingPolicyLevel(
   policy: ThinkingPolicy,
   level: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]>,
 ): boolean {
-  return !!level && policy.levels.some((entry) => entry.id === level);
+  return Boolean(level) && policy.levels.some((entry) => entry.id === level);
 }
 
 export function createLlmTaskTool(api: OpenClawPluginApi) {
@@ -209,12 +211,22 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
         );
       }
 
+      const agentRuntime = resolveEffectiveAgentRuntime({
+        cfg: api.config ?? {},
+        provider,
+        modelId: model,
+      });
+
       const thinkingRaw =
         typeof params.thinking === "string" && params.thinking.trim() ? params.thinking : undefined;
       let thinkLevel: ReturnType<OpenClawPluginApi["runtime"]["agent"]["normalizeThinkingLevel"]> =
         undefined;
       if (thinkingRaw) {
-        const thinkingPolicy = api.runtime.agent.resolveThinkingPolicy({ provider, model });
+        const thinkingPolicy = api.runtime.agent.resolveThinkingPolicy({
+          provider,
+          model,
+          agentRuntime,
+        });
         const thinkingLevelsHint = formatThinkingPolicy(thinkingPolicy);
         thinkLevel = api.runtime.agent.normalizeThinkingLevel(thinkingRaw);
         if (!thinkLevel) {
@@ -277,6 +289,7 @@ export function createLlmTaskTool(api: OpenClawPluginApi) {
             model,
             authProfileId,
             authProfileIdSource: authProfileId ? "user" : "auto",
+            agentHarnessRuntimeOverride: agentRuntime,
             thinkLevel,
             streamParams,
             disableTools: true,

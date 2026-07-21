@@ -1,3 +1,4 @@
+// Node CLI register tests cover node command registration and option wiring.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodeCli } from "./register.js";
@@ -6,6 +7,7 @@ type LoadNodeHostConfig = typeof import("../../node-host/config.js").loadNodeHos
 
 const daemonMocks = vi.hoisted(() => ({
   defaultRuntime: {
+    log: vi.fn(),
     error: vi.fn(),
     exit: vi.fn(),
   },
@@ -132,5 +134,40 @@ describe("registerNodeCli", () => {
         gatewayTlsFingerprint: undefined,
       }),
     );
+  });
+
+  it("passes an explicit plaintext selection to the node host", async () => {
+    daemonMocks.loadNodeHostConfig.mockResolvedValue({
+      version: 1,
+      nodeId: "node-existing",
+      gateway: {
+        host: "10.0.0.2",
+        port: 19001,
+        tls: true,
+        tlsFingerprint: "saved-fingerprint",
+      },
+    });
+
+    await createProgram().parseAsync(["node", "run", "--no-tls"], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayTls: false,
+        gatewayTlsFingerprint: undefined,
+      }),
+    );
+  });
+
+  it("rejects a TLS fingerprint with an explicit plaintext selection", async () => {
+    await createProgram().parseAsync(
+      ["node", "run", "--no-tls", "--tls-fingerprint", "sha256:fingerprint"],
+      { from: "user" },
+    );
+
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.defaultRuntime.error).toHaveBeenCalledWith(
+      "--no-tls cannot be combined with --tls-fingerprint",
+    );
+    expect(daemonMocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 });

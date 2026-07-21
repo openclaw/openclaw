@@ -1,3 +1,4 @@
+// Normalization Core tests cover number coercion behavior.
 import { describe, expect, test } from "vitest";
 import {
   asDateTimestampMs,
@@ -94,6 +95,7 @@ describe("number-coercion", () => {
     expect(finiteSecondsToTimerSafeMilliseconds(1.5)).toBe(1_500);
     expect(finiteSecondsToTimerSafeMilliseconds(1.5, { floorSeconds: true })).toBe(1_000);
     expect(finiteSecondsToTimerSafeMilliseconds(10_000_000)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(finiteSecondsToTimerSafeMilliseconds(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
     expect(finiteSecondsToTimerSafeMilliseconds("10")).toBeUndefined();
     expect(finiteSecondsToTimerSafeMilliseconds(Number.POSITIVE_INFINITY)).toBeUndefined();
     expect(clampTimerTimeoutMs(0, 10)).toBe(10);

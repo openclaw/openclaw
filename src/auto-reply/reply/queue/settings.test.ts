@@ -1,3 +1,4 @@
+// Tests queue setting normalization and directive parsing.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveQueueSettings } from "./settings.js";
@@ -38,7 +39,6 @@ describe("resolveQueueSettings", () => {
           messages: {
             queue: {
               mode: "followup",
-              debounceMs: 750,
               byChannel: {
                 discord: "collect",
               },
@@ -49,7 +49,7 @@ describe("resolveQueueSettings", () => {
       }),
     ).toEqual({
       mode: "collect",
-      debounceMs: 750,
+      debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",
     });

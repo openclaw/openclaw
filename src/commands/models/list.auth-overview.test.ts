@@ -1,3 +1,4 @@
+// Model auth overview tests cover provider auth overview rows for model listings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
@@ -96,6 +97,31 @@ describe("resolveProviderAuthOverview", () => {
   beforeEach(() => {
     persistedStores.clear();
     vi.mocked(resolveEnvApiKey).mockClear();
+  });
+
+  it("projects synthetic auth to value/source and drops runtime credential fields", () => {
+    // #104713: status callers pass their richer runtime object (credential,
+    // mode, expiresAt); the overview must not let those reach JSON output.
+    const runtimeSyntheticAuth = {
+      value: "plugin-owned",
+      source: "xAI plugin config",
+      credential: "xai-raw-credential-material",
+      mode: "api-key",
+      expiresAt: Date.now() + 60_000,
+    };
+    const overview = resolveProviderAuthOverview({
+      provider: "xai",
+      cfg: {},
+      store: { version: 1, profiles: {} } as never,
+      modelsPath: "/tmp/models.json",
+      syntheticAuth: runtimeSyntheticAuth,
+    });
+
+    expect(overview.syntheticAuth).toStrictEqual({
+      value: "plugin-owned",
+      source: "xAI plugin config",
+    });
+    expect(JSON.stringify(overview)).not.toContain("xai-raw-credential-material");
   });
 
   it("labels token profiles that only have tokenRef", () => {

@@ -1,9 +1,13 @@
+// Discord tests cover channel access plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   resolveDiscordChannelInfoSafe,
-  resolveDiscordChannelOwnerIdSafe,
   resolveDiscordChannelParentIdSafe,
 } from "./channel-access.js";
+
+function resolveDiscordChannelOwnerIdSafe(channel: unknown) {
+  return resolveDiscordChannelInfoSafe(channel).ownerId;
+}
 
 describe("resolveDiscordChannelOwnerIdSafe", () => {
   it("reads camelCase ownerId directly", () => {

@@ -1,3 +1,4 @@
+// Msteams tests cover outbound plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -125,7 +126,7 @@ describe("msteamsOutbound cfg threading", () => {
   });
 
   it("passes resolved cfg to sendMessageMSTeams for text sends", async () => {
-    const cfg = {
+    const cfgResult = {
       channels: {
         msteams: {
           appId: "resolved-app-id",
@@ -134,20 +135,20 @@ describe("msteamsOutbound cfg threading", () => {
     } as OpenClawConfig;
 
     await requireSendText()({
-      cfg,
+      cfg: cfgResult,
       to: "conversation:abc",
       text: "hello",
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
+      cfg: cfgResult,
       to: "conversation:abc",
       text: "hello",
     });
   });
 
   it("passes resolved cfg and media roots for media sends", async () => {
-    const cfg = {
+    const cfgValue = {
       channels: {
         msteams: {
           appId: "resolved-app-id",
@@ -156,7 +157,7 @@ describe("msteamsOutbound cfg threading", () => {
     } as OpenClawConfig;
 
     await requireSendMedia()({
-      cfg,
+      cfg: cfgValue,
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -164,7 +165,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
-      cfg,
+      cfg: cfgValue,
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -222,13 +223,78 @@ describe("msteamsOutbound cfg threading", () => {
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
       to: "conversation:abc",
-      card: (rendered?.channelData?.msteams as { presentationCard: unknown }).presentationCard,
+      card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
     expect(result).toEqual({
       channel: "msteams",
       messageId: "msg-card-1",
       conversationId: "conv-card-1",
     });
+  });
+
+  it("renders typed URL actions and omits unresolved approval actions", async () => {
+    const presentation = {
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [
+            {
+              label: "Review",
+              action: { type: "url" as const, url: "https://example.com/review" },
+            },
+            {
+              label: "Open app",
+              action: { type: "web-app" as const, url: "https://example.com/app" },
+            },
+            {
+              label: "Hosted widget",
+              action: {
+                type: "web-app" as const,
+                widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
+              },
+            },
+            {
+              label: "Allow",
+              action: {
+                type: "approval" as const,
+                approvalId: "approval-1",
+                approvalKind: "exec" as const,
+                decision: "allow-once" as const,
+              },
+              value: "/approve approval-1 allow-once",
+            },
+          ],
+        },
+      ],
+    };
+    const payload = { presentation };
+    const rendered = await requireRenderPresentation()({
+      payload,
+      presentation,
+      ctx: {
+        cfg,
+        to: "conversation:abc",
+        text: "",
+        payload,
+      },
+    });
+
+    const card = (rendered?.channelData?.msteams as { presentationCard?: unknown } | undefined)
+      ?.presentationCard as { actions?: unknown[] } | undefined;
+    expect(card?.actions).toEqual([
+      {
+        type: "Action.OpenUrl",
+        title: "Review",
+        url: "https://example.com/review",
+      },
+      {
+        type: "Action.OpenUrl",
+        title: "Open app",
+        url: "https://example.com/app",
+      },
+    ]);
+    expect(JSON.stringify(card)).not.toContain("approval-1");
+    expect(JSON.stringify(card)).not.toContain("/approve");
   });
 
   it("falls back to text/media delivery when payload rendering did not produce a card", async () => {
@@ -351,7 +417,7 @@ describe("msteamsOutbound cfg threading", () => {
   });
 
   it("passes resolved cfg to sendPollMSTeams and stores poll metadata", async () => {
-    const cfg = {
+    const cfgLocal = {
       channels: {
         msteams: {
           appId: "resolved-app-id",
@@ -360,7 +426,7 @@ describe("msteamsOutbound cfg threading", () => {
     } as OpenClawConfig;
 
     await requireSendPoll()({
-      cfg,
+      cfg: cfgLocal,
       to: "conversation:abc",
       poll: {
         question: "Snack?",
@@ -369,7 +435,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
-      cfg,
+      cfg: cfgLocal,
       to: "conversation:abc",
       question: "Snack?",
       options: ["Pizza", "Sushi"],

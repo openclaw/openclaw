@@ -1,7 +1,9 @@
+// Verifies OpenClaw plugin tools are resolved with browser/runtime context.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "./auth-profiles/runtime-snapshots.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -13,6 +15,7 @@ vi.mock("../plugins/tools.js", () => ({
 }));
 
 function firstResolvePluginToolsParams(): Record<string, unknown> {
+  // Captures the plugin runtime contract passed from OpenClaw tool resolution.
   const call = hoisted.resolvePluginTools.mock.calls[0];
   if (!call) {
     throw new Error("Expected plugin tool resolution");
@@ -224,6 +227,7 @@ describe("createOpenClawTools browser plugin integration", () => {
   });
 
   it("does not pass a stale active snapshot as plugin runtime config for a resolved run config", () => {
+    // Resolved run config must win over any process-global runtime snapshot.
     const staleSourceConfig = {
       plugins: {
         allow: ["old-plugin"],
@@ -254,6 +258,7 @@ describe("createOpenClawTools browser plugin integration", () => {
       sourceConfig: staleSourceConfig,
       config: staleRuntimeConfig,
       authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
       warnings: [],
       webTools: {
         search: {

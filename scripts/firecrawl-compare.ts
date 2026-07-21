@@ -1,7 +1,8 @@
+// Firecrawl Compare script supports OpenClaw repository automation.
 import { pathToFileURL } from "node:url";
 import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
-import { extractReadableContent } from "../src/agents/tools/web-tools.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { extractReadableContent } from "../src/web-fetch/content-extractors.runtime.js";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 
 const DEFAULT_URLS = [
@@ -91,7 +92,7 @@ async function run() {
 
   for (const url of targets) {
     console.log(`\n=== ${url}`);
-    let localStatus = "skipped";
+    let localStatus;
     let localTitle = "";
     let localText = "";
     let localError: string | undefined;
@@ -165,7 +166,7 @@ async function run() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  run().catch((error) => {
+  run().catch((error: unknown) => {
     console.error(error);
     process.exit(1);
   });

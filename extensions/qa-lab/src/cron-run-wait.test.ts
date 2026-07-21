@@ -1,3 +1,4 @@
+// Qa Lab tests cover cron run wait plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
 
@@ -47,6 +48,26 @@ describe("waitForCronRunCompletion", () => {
         afterTs: 150,
         timeoutMs: 5,
         intervalMs: 0,
+      }),
+    ).rejects.toThrow(/timed out waiting for cron run completion/);
+  });
+
+  it("keeps oversized poll intervals within the overall timeout", async () => {
+    const callGateway = vi
+      .fn<
+        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
+      >()
+      .mockResolvedValue({
+        entries: [{ ts: 100, status: "ok", summary: "older run" }],
+      });
+
+    await expect(
+      waitForCronRunCompletion({
+        callGateway,
+        jobId: "dreaming-job",
+        afterTs: 150,
+        timeoutMs: 5,
+        intervalMs: Number.MAX_SAFE_INTEGER,
       }),
     ).rejects.toThrow(/timed out waiting for cron run completion/);
   });

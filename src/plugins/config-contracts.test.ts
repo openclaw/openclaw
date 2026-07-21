@@ -1,3 +1,4 @@
+// Covers plugin config contract validation and ownership boundaries.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 
@@ -50,7 +51,6 @@ function createPluginRecord(
     rootDir: `/tmp/${overrides.id}`,
     manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
     channelConfigs: undefined,
-    providerAuthEnvVars: undefined,
     configUiHints: undefined,
     configSchema: undefined,
     configContracts: undefined,
@@ -69,7 +69,6 @@ function createPluginRecord(
     providers: [],
     modelSupport: undefined,
     cliBackends: [],
-    channelEnvVars: undefined,
     providerAuthAliases: undefined,
     providerAuthChoices: undefined,
     skills: [],

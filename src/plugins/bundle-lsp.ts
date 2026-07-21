@@ -1,3 +1,4 @@
+// Bundles language-server metadata exposed by plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
@@ -14,15 +15,19 @@ import {
   mergeBundlePathLists,
   normalizeBundlePathList,
 } from "./bundle-manifest.js";
+import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 
+/** LSP server config block loaded from plugin bundle metadata. */
 export type BundleLspServerConfig = Record<string, unknown>;
 
-export type BundleLspConfig = {
+/** Merged LSP config contributed by enabled plugin bundles. */
+type BundleLspConfig = {
   lspServers: Record<string, BundleLspServerConfig>;
 };
 
-export type BundleLspRuntimeSupport = {
+/** Runtime support summary for bundle-declared LSP servers. */
+type BundleLspRuntimeSupport = {
   hasStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];
@@ -124,6 +129,7 @@ function loadBundleLspConfig(params: {
   return { config: merged, diagnostics };
 }
 
+/** Inspects whether one plugin bundle has supported LSP runtime servers. */
 export function inspectBundleLspRuntimeSupport(params: {
   pluginId: string;
   rootDir: string;
@@ -141,13 +147,16 @@ export function inspectBundleLspRuntimeSupport(params: {
   };
 }
 
+/** Loads and merges enabled bundle LSP config across plugin manifests. */
 export function loadEnabledBundleLspConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): { config: BundleLspConfig; diagnostics: Array<{ pluginId: string; message: string }> } {
   return loadEnabledBundleConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
     createEmptyConfig: () => ({ lspServers: {} }),
     loadBundleConfig: loadBundleLspConfig,
     createDiagnostic: (pluginId, message) => ({ pluginId, message }),

@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isProviderAuthProfileConfigured,
@@ -72,6 +73,10 @@ const OPENAI_REALTIME_TRANSCRIPTION_CONNECT_TIMEOUT_MS = 10_000;
 const OPENAI_REALTIME_TRANSCRIPTION_MAX_RECONNECT_ATTEMPTS = 5;
 const OPENAI_REALTIME_TRANSCRIPTION_RECONNECT_DELAY_MS = 1000;
 const OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL = "gpt-4o-transcribe";
+const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
+  "OpenAI Realtime transcription requires an OpenAI Platform API key";
+const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
+  "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
 
 function normalizeProviderConfig(
   config: RealtimeTranscriptionProviderConfig,
@@ -138,23 +143,28 @@ function buildOpenAIRealtimeTranscriptionSessionPayload(
 async function resolveOpenAIRealtimeTranscriptionAuthorization(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): Promise<string> {
-  const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
-  if (apiKey) {
-    return apiKey;
+  if (config.apiKey) {
+    return config.apiKey;
   }
   const authToken = await resolveProviderAuthProfileApiKey({
     provider: "openai",
     cfg: config.cfg,
+    profileTypes: ["api_key"],
   });
-  if (!authToken) {
-    throw new Error("OpenAI API key or Codex OAuth missing");
+  if (authToken) {
+    const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
+      authToken,
+      auditContext: "openai-realtime-transcription-session",
+      session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
+      authRejectedMessage: OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED,
+    });
+    return clientSecret.value;
   }
-  const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
-    authToken,
-    auditContext: "openai-realtime-transcription-session",
-    session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
-  });
-  return clientSecret.value;
+  const envApiKey = process.env.OPENAI_API_KEY?.trim();
+  if (envApiKey) {
+    return envApiKey;
+  }
+  throw new Error(OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED);
 }
 
 function createOpenAIRealtimeTranscriptionSession(
@@ -199,11 +209,9 @@ function createOpenAIRealtimeTranscriptionSession(
         } else {
           config.onError?.(error);
         }
-        return;
       }
 
       default:
-        return;
     }
   };
 
@@ -260,8 +268,8 @@ export function buildOpenAIRealtimeTranscriptionProvider(): RealtimeTranscriptio
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||
-        process.env.OPENAI_API_KEY ||
-        isProviderAuthProfileConfigured({ provider: "openai", cfg }),
+        process.env.OPENAI_API_KEY?.trim() ||
+        isProviderAuthProfileConfigured({ provider: "openai", cfg, profileTypes: ["api_key"] }),
       ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);

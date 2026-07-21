@@ -1,3 +1,4 @@
+// Tests bash stop command handling and active-process cancellation.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
@@ -121,6 +122,15 @@ describe("handleBashChatCommand stop", () => {
 
     expect(result.text).toContain("No running bash job found");
     expect(killProcessTreeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not split boundary emoji in missing session snippets", async () => {
+    getSessionMock.mockReturnValue(undefined);
+    getFinishedSessionMock.mockReturnValue(undefined);
+
+    const result = await handleBashChatCommand(buildParams("/bash stop 1234567😀tail"));
+
+    expect(result.text).toBe("⚙️ No running bash job found for 1234567….");
   });
 
   it("fails stop when session has no pid", async () => {

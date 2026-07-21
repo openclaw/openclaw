@@ -1,3 +1,4 @@
+// Searxng tests cover searxng search provider plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveSearxngBaseUrl,
@@ -89,6 +90,28 @@ describe("searxng web search provider", () => {
       count: 4,
       categories: "general,news",
       language: "en",
+    });
+  });
+
+  it("forwards the execution abort signal to the SearXNG client", async () => {
+    const provider = createSearxngWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+
+    await tool.execute({ query: "openclaw docs" }, { signal: controller.signal });
+
+    expect(runSearxngSearch).toHaveBeenCalledWith({
+      config: { test: true },
+      query: "openclaw docs",
+      count: undefined,
+      categories: undefined,
+      language: undefined,
+      signal: controller.signal,
     });
   });
 

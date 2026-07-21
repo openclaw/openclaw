@@ -1,3 +1,4 @@
+// Message send tests cover outbound channel message dispatch and error handling.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
@@ -182,6 +183,38 @@ describe("withDurableMessageSendContext", () => {
           hasChannelData: true,
         },
       ],
+    });
+  });
+
+  it("records portable locations as structured payload data", async () => {
+    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      params.onDeliveryIntent?.({
+        id: "intent-location",
+        channel: "telegram",
+        to: "chat-1",
+        queuePolicy: "required",
+      });
+      return [{ channel: "telegram", messageId: "loc-1" }];
+    });
+    let intent: unknown;
+
+    await withDurableMessageSendContext(
+      {
+        cfg,
+        channel: "telegram",
+        to: "chat-1",
+        payloads: [{ location: { latitude: 1, longitude: 2 } }],
+      },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        await ctx.send(rendered);
+        intent = ctx.intent;
+      },
+    );
+
+    expect((intent as DurableMessageSendIntent | undefined)?.renderedBatch?.plan).toMatchObject({
+      channelDataCount: 1,
+      items: [{ kinds: ["channelData"], hasChannelData: true }],
     });
   });
 

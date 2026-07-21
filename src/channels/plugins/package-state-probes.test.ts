@@ -1,3 +1,4 @@
+// Package state probe tests cover channel plugin package install and runtime status probes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -81,6 +82,42 @@ describe("channel package-state probes", () => {
         channelId: "vendor-alias-chat-plugin",
         cfg: {},
         env: { ALIAS_CHAT_TOKEN: "token" },
+      }),
+    ).toBe(false);
+  });
+
+  it("uses manifest env metadata without loading a configured-state module", () => {
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        ...makeBundledChannelCatalogEntry({
+          pluginId: "env-chat",
+          channelId: "env-chat",
+        }),
+        channel: {
+          id: "env-chat",
+          configuredState: {
+            env: { allOf: ["ENV_CHAT_TOKEN"] },
+            specifier: "./missing-configured-state",
+            exportName: "missingConfiguredState",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env: { ENV_CHAT_TOKEN: "token" },
+      }),
+    ).toBe(true);
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "configuredState",
+        channelId: "env-chat",
+        cfg: {},
+        env: { ENV_CHAT_TOKEN: " " },
       }),
     ).toBe(false);
   });

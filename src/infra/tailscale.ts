@@ -1,3 +1,4 @@
+// Integrates with the local Tailscale CLI for tailnet setup and sharing.
 import { existsSync } from "node:fs";
 import {
   asDateTimestampMs,
@@ -8,13 +9,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { promptYesNo } from "../cli/prompt.js";
-import { danger, info, logVerbose, shouldLogVerbose, warn } from "../globals.js";
+import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { ensureBinary } from "./binaries.js";
+import { toErrorObject } from "./errors.js";
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -42,11 +39,7 @@ export async function findTailscaleBinary(): Promise<string | null> {
       return false;
     }
     try {
-      // Use Promise.race with runExec to implement timeout
-      await Promise.race([
-        runExec(path, ["--version"], { timeoutMs: 3000 }),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), 3000)),
-      ]);
+      await runExec(path, ["--version"], { timeoutMs: 3000 });
       return true;
     } catch {
       return false;
@@ -140,8 +133,9 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
       if (dns && dns.length > 0) {
         return dns.replace(/\.$/, "");
       }
-      if (ips.length > 0) {
-        return ips[0];
+      const [firstIp] = ips;
+      if (firstIp !== undefined) {
+        return firstIp;
       }
       throw new Error("Could not determine Tailscale DNS or IP");
     } catch (err) {
@@ -149,7 +143,10 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
     }
   }
 
-  throw lastError ?? new Error("Could not determine Tailscale DNS or IP");
+  throw toErrorObject(
+    lastError ?? new Error("Could not determine Tailscale DNS or IP"),
+    "Non-Error thrown",
+  );
 }
 
 /**
@@ -158,9 +155,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
  */
 let cachedTailscaleBinary: string | null = null;
 
-export function getTestTailscaleBinaryOverride(
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
+function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
   const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
   if (!forcedBinary) {
     return null;
@@ -182,57 +177,6 @@ async function getTailscaleBinary(): Promise<string> {
   }
   cachedTailscaleBinary = await findTailscaleBinary();
   return cachedTailscaleBinary ?? "tailscale";
-}
-
-export async function ensureGoInstalled(
-  exec: typeof runExec = runExec,
-  prompt: typeof promptYesNo = promptYesNo,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  // Ensure Go toolchain is present; offer Homebrew install if missing.
-  const hasGo = await exec("go", ["version"]).then(
-    () => true,
-    () => false,
-  );
-  if (hasGo) {
-    return;
-  }
-  const install = await prompt(
-    "Go is not installed. Install via Homebrew (brew install go)?",
-    true,
-  );
-  if (!install) {
-    runtime.error("Go is required to build tailscaled from source. Aborting.");
-    runtime.exit(1);
-  }
-  logVerbose("Installing Go via Homebrew…");
-  await exec("brew", ["install", "go"]);
-}
-
-export async function ensureTailscaledInstalled(
-  exec: typeof runExec = runExec,
-  prompt: typeof promptYesNo = promptYesNo,
-  runtime: RuntimeEnv = defaultRuntime,
-) {
-  // Ensure tailscaled binary exists; install via Homebrew tailscale if missing.
-  const hasTailscaled = await exec("tailscaled", ["--version"]).then(
-    () => true,
-    () => false,
-  );
-  if (hasTailscaled) {
-    return;
-  }
-
-  const install = await prompt(
-    "tailscaled not found. Install via Homebrew (tailscale package)?",
-    true,
-  );
-  if (!install) {
-    runtime.error("tailscaled is required for user-space funnel. Aborting.");
-    runtime.exit(1);
-  }
-  logVerbose("Installing tailscaled via Homebrew…");
-  await exec("brew", ["install", "tailscale"]);
 }
 
 type ExecErrorDetails = {
@@ -309,127 +253,45 @@ async function execWithSudoFallback(
   }
 }
 
-export async function ensureFunnel(
+export async function enableTailscaleServe(
   port: number,
   exec: typeof runExec = runExec,
-  runtime: RuntimeEnv = defaultRuntime,
-  prompt: typeof promptYesNo = promptYesNo,
+  serviceName?: string,
 ) {
-  // Ensure Funnel is enabled and publish the webhook port.
-  try {
-    const tailscaleBin = await getTailscaleBinary();
-    const statusOut = (await exec(tailscaleBin, ["funnel", "status", "--json"])).stdout.trim();
-    const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
-    if (!parsed || Object.keys(parsed).length === 0) {
-      runtime.error(danger("Tailscale Funnel is not enabled on this tailnet/device."));
-      runtime.error(
-        info(
-          "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
-        ),
-      );
-      runtime.error(
-        info(
-          "macOS user-space tailscaled docs: https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS",
-        ),
-      );
-      const proceed = await prompt("Attempt local setup with user-space tailscaled?", true);
-      if (!proceed) {
-        runtime.exit(1);
-      }
-      await ensureBinary("brew", exec, runtime);
-      await ensureGoInstalled(exec, prompt, runtime);
-      await ensureTailscaledInstalled(exec, prompt, runtime);
-    }
-
-    logVerbose(`Enabling funnel on port ${port}…`);
-    // Attempt with fallback
-    const { stdout } = await execWithSudoFallback(
-      exec,
-      tailscaleBin,
-      ["funnel", "--yes", "--bg", `${port}`],
-      {
-        maxBuffer: 200_000,
-        timeoutMs: 15_000,
-      },
-    );
-    if (stdout.trim()) {
-      console.log(stdout.trim());
-    }
-  } catch (err) {
-    const errOutput = err as { stdout?: unknown; stderr?: unknown };
-    const stdout = typeof errOutput.stdout === "string" ? errOutput.stdout : "";
-    const stderr = typeof errOutput.stderr === "string" ? errOutput.stderr : "";
-    if (stdout.includes("Funnel is not enabled")) {
-      console.error(danger("Funnel is not enabled on this tailnet/device."));
-      const linkMatch = stdout.match(/https?:\/\/\S+/);
-      if (linkMatch) {
-        console.error(info(`Enable it here: ${linkMatch[0]}`));
-      } else {
-        console.error(
-          info(
-            "Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)",
-          ),
-        );
-      }
-    }
-    if (stderr.includes("client version") || stdout.includes("client version")) {
-      console.error(
-        warn(
-          "Tailscale client/server version mismatch detected; try updating tailscale/tailscaled.",
-        ),
-      );
-    }
-    runtime.error("Failed to enable Tailscale Funnel. Is it allowed on your tailnet?");
-    runtime.error(
-      info(
-        `Tip: Funnel is optional for OpenClaw. You can keep running the web gateway without it: \`${formatCliCommand("openclaw gateway")}\``,
-      ),
-    );
-    if (shouldLogVerbose()) {
-      const rich = isRich();
-      if (stdout.trim()) {
-        runtime.error(colorize(rich, theme.muted, `stdout: ${stdout.trim()}`));
-      }
-      if (stderr.trim()) {
-        runtime.error(colorize(rich, theme.muted, `stderr: ${stderr.trim()}`));
-      }
-      runtime.error(err as Error);
-    }
-    runtime.exit(1);
-  }
-}
-
-export async function enableTailscaleServe(port: number, exec: typeof runExec = runExec) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    ["serve", ...(serviceName ? [`--service=${serviceName}`] : []), "--bg", "--yes", `${port}`],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function hasTailscaleFunnelRouteForPort(
   port: number,
   exec: typeof runExec = runExec,
 ): Promise<boolean> {
+  let stdout: string;
   try {
     const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+    const result = await exec(tailscaleBin, ["funnel", "status", "--json"], {
       maxBuffer: 200_000,
       timeoutMs: 5_000,
     });
-    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-    return tailscaleFunnelStatusCoversPort(parsed, port);
+    stdout = result.stdout;
   } catch {
     return false;
   }
+  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+  return tailscaleFunnelStatusCoversPort(parsed, port);
 }
 
 const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
-export function tailscaleFunnelStatusCoversPort(
-  status: Record<string, unknown>,
-  port: number,
-): boolean {
+function tailscaleFunnelStatusCoversPort(status: Record<string, unknown>, port: number): boolean {
   for (const proxy of funnelStatusBackendsForPort(status)) {
     if (tailscaleProxyMatchesLoopbackPort(proxy, port)) {
       return true;
@@ -498,12 +360,17 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
   return backends;
 }
 
-export async function disableTailscaleServe(exec: typeof runExec = runExec) {
+export async function disableTailscaleServe(exec: typeof runExec = runExec, serviceName?: string) {
   const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["serve", "reset"], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
+  await execWithSudoFallback(
+    exec,
+    tailscaleBin,
+    serviceName ? ["serve", "clear", serviceName] : ["serve", "reset"],
+    {
+      maxBuffer: 200_000,
+      timeoutMs: 15_000,
+    },
+  );
 }
 
 export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
@@ -586,11 +453,11 @@ export async function readTailscaleWhoisIdentity(
   const errorTtlMs = opts?.errorTtlMs ?? 5_000;
   try {
     const tailscaleBin = await getTailscaleBinary();
-    const { stdout } = await exec(tailscaleBin, ["whois", "--json", normalized], {
+    const result = await exec(tailscaleBin, ["whois", "--json", normalized], {
       timeoutMs: opts?.timeoutMs ?? 5_000,
       maxBuffer: 200_000,
     });
-    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    const parsed = result.stdout ? parsePossiblyNoisyJsonObject(result.stdout) : {};
     const identity = parseWhoisIdentity(parsed);
     writeCachedWhois(normalized, identity, cacheTtlMs);
     return identity;

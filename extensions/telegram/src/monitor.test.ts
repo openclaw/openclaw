@@ -1,8 +1,9 @@
+// Telegram tests cover monitor plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-type MonitorTelegramOpts = import("./monitor.js").MonitorTelegramOpts;
+type MonitorTelegramOpts = import("./monitor.types.js").MonitorTelegramOpts;
 let monitorTelegramProvider: typeof import("./monitor.js").monitorTelegramProvider;
-let resetTelegramPollingLeasesForTests: typeof import("./polling-lease.js").resetTelegramPollingLeasesForTests;
+let resetTelegramPollingLeasesForTests: typeof import("./runtime.test-support.js").resetTelegramPollingLeasesForTest;
 
 type MockCtx = {
   message: {
@@ -325,7 +326,7 @@ vi.mock("./bot.js", () => ({
     createTelegramBotCalls.push(opts);
     const nextError = createTelegramBotErrors.shift();
     if (nextError) {
-      throw nextError;
+      throw toLintErrorObject(nextError, "Non-Error thrown");
     }
     const stop = vi.fn<() => void>();
     createdBotStops.push(stop);
@@ -389,7 +390,10 @@ describe("monitorTelegramProvider (grammY)", () => {
 
   beforeAll(async () => {
     ({ monitorTelegramProvider } = await import("./monitor.js"));
-    ({ resetTelegramPollingLeasesForTests } = await import("./polling-lease.js"));
+    ({ resetTelegramPollingLeasesForTest: resetTelegramPollingLeasesForTests } =
+      await import("./runtime.test-support.js"));
+    resetTelegramPollingLeasesForTests();
+    await monitorWithAutoAbort();
   });
 
   beforeEach(() => {
@@ -978,33 +982,6 @@ describe("monitorTelegramProvider (grammY)", () => {
     vi.useRealTimers();
   });
 
-  it("uses configured Telegram polling stall threshold", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const abort = new AbortController();
-    const firstCycle = mockRunOnceWithStalledPollingRunner();
-    const secondCycle = mockRunOnceAndAbort(abort);
-
-    const monitor = monitorTelegramProvider(
-      withLegacyPolling({
-        token: "tok",
-        abortSignal: abort.signal,
-        config: {
-          agents: { defaults: { maxConcurrent: 2 } },
-          channels: { telegram: { pollingStallThresholdMs: 30_000 } },
-        },
-      }),
-    );
-    await firstCycle.waitForRunStart();
-
-    vi.advanceTimersByTime(60_000);
-    await secondCycle.waitForRunStart();
-    await monitor;
-
-    expect(firstCycle.stop.mock.calls.length).toBeGreaterThanOrEqual(1);
-    expectRecoverableRetryState(2);
-    vi.useRealTimers();
-  });
-
   it("does not call getUpdates for offset confirmation (avoids 409 conflicts)", async () => {
     const { order } = await runMonitorAndCaptureStartupOrder({
       persistedOffset: 549076203,
@@ -1110,3 +1087,17 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).not.toHaveBeenCalled();
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

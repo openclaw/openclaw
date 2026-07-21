@@ -1,12 +1,16 @@
+// Plugin host hook methods expose plugin UI descriptors and validate plugin
+// session action payload/result JSON against declared schemas.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  missingScopeErrorShape,
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
+  validatePluginsUiDescriptorsResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -26,6 +30,7 @@ function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationErro
   return errors.map((error) => error.text).join("; ");
 }
 
+/** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
 function validatePluginSessionActionJsonFields(
   result: Record<string, unknown>,
 ): string | undefined {
@@ -37,6 +42,7 @@ function validatePluginSessionActionJsonFields(
   return undefined;
 }
 
+/** Gateway handlers for plugin-declared Control UI descriptors and session actions. */
 export const pluginHostHookHandlers: GatewayRequestHandlers = {
   "plugins.uiDescriptors": ({ params, respond }) => {
     if (!validatePluginsUiDescriptorsParams(params)) {
@@ -50,13 +56,44 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) =>
-      Object.assign({}, entry.descriptor, {
+    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) => {
+      const descriptor: Record<string, unknown> = {
+        id: entry.descriptor.id,
         pluginId: entry.pluginId,
         pluginName: entry.pluginName,
-      }),
-    );
-    respond(true, { ok: true, descriptors }, undefined);
+        surface: entry.descriptor.surface,
+        label: entry.descriptor.label,
+      };
+      if (entry.descriptor.description !== undefined) {
+        descriptor.description = entry.descriptor.description;
+      }
+      if (entry.descriptor.placement !== undefined) {
+        descriptor.placement = entry.descriptor.placement;
+      }
+      if (entry.descriptor.schema !== undefined) {
+        descriptor.schema = entry.descriptor.schema;
+      }
+      if (entry.descriptor.requiredScopes !== undefined) {
+        descriptor.requiredScopes = entry.descriptor.requiredScopes;
+      }
+      return descriptor;
+    });
+    const result = { ok: true, descriptors };
+    if (!validatePluginsUiDescriptorsResult(result)) {
+      log.warn("invalid plugins.uiDescriptors result", {
+        errors: validatePluginsUiDescriptorsResult.errors,
+      });
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `invalid plugins.uiDescriptors result: ${formatValidationErrors(validatePluginsUiDescriptorsResult.errors)}`,
+        ),
+      );
+      return;
+    }
+    respond(true, result, undefined);
   },
   "plugins.sessionAction": async ({ params, client, respond }) => {
     if (!validatePluginsSessionActionParams(params)) {
@@ -108,6 +145,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       registration.action.requiredScopes && registration.action.requiredScopes.length > 0
         ? registration.action.requiredScopes
         : [WRITE_SCOPE];
+    // Plugin actions default to write access, while read-only actions can opt
+    // down. Admin bypasses all checks and write includes read for UI callers.
     const missingScope = requiredScopes.find(
       (scope) =>
         !hasAdmin &&
@@ -115,11 +154,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         !(scope === READ_SCOPE && scopes.includes(WRITE_SCOPE)),
     );
     if (missingScope) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${missingScope}`),
-      );
+      respond(false, undefined, missingScopeErrorShape({ missingScope, requiredScopes }));
       return;
     }
     try {
@@ -149,6 +184,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        // Schemas are plugin-provided data; validate their shape before passing
+        // them into the shared schema evaluator so malformed plugins fail cleanly.
         const validation = validateJsonSchemaValue({
           schema: registration.action.schema as JsonSchemaValue,
           cacheKey: `plugin-session-action:${pluginId}:${actionId}`,

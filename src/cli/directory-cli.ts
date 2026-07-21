@@ -1,3 +1,4 @@
+// Directory CLI for chat-channel identity lookup: self, peers, groups, and group members.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
@@ -14,9 +15,9 @@ import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { danger } from "../globals.js";
 import { resolveMessageChannelSelection } from "../infra/outbound/channel-selection.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatHelpExamples } from "./help-format.js";
-import { commitConfigWithPendingPluginInstalls } from "./plugins-install-record-commit.js";
 
 function parseLimit(value: unknown): number | null {
   if (value === undefined || value === null || value === "") {
@@ -60,6 +61,7 @@ function printDirectoryList(params: {
   );
 }
 
+/** Register directory lookup commands and shared channel/account resolution. */
 export function registerDirectoryCli(program: Command) {
   const directory = program
     .command("directory")
@@ -112,12 +114,15 @@ export function registerDirectoryCli(program: Command) {
       : null;
     if (resolvedExplicit?.configChanged) {
       cfg = resolvedExplicit.cfg;
+      // Installing an explicit channel can update plugin records; commit before directory calls
+      // so subsequent registry reads see the channel the user just selected.
       const committed = await commitConfigWithPendingPluginInstalls({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,
       });
       cfg = committed.config;
     } else if (autoEnabled.changes.length > 0) {
+      // Auto-enable changes are config-only and must be persisted before later CLI invocations.
       await replaceConfigFile({
         nextConfig: cfg,
         baseHash: (await sourceSnapshotPromise)?.hash,

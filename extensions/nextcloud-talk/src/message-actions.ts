@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements message actions behavior.
 import {
   jsonResult,
   readStringParam,
@@ -40,7 +41,7 @@ export const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {
     return { actions };
   },
 
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) => action === "react",
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {

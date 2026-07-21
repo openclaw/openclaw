@@ -1,25 +1,44 @@
+/**
+ * Loaded channel plugin registry view.
+ *
+ * Normalizes and sorts active plugin runtime state for channel registry callers.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ActiveChannelPluginRuntimeShape,
   ActivePluginChannelRegistration,
 } from "../../plugins/channel-registry-state.types.js";
-import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
+import {
+  getActivePluginChannelRegistrySnapshotFromState,
+  type ActivePluginChannelRegistrySnapshot,
+} from "../../plugins/runtime-channel-state.js";
 import { CHAT_CHANNEL_ORDER } from "../registry.js";
+import type { ChannelPlugin } from "./types.plugin.js";
+import type { ChannelId } from "./types.public.js";
 
-export type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
+/**
+ * Loaded channel plugin shape after id/meta normalization.
+ */
+type LoadedChannelPlugin = ActiveChannelPluginRuntimeShape & {
   id: string;
   meta: NonNullable<ActiveChannelPluginRuntimeShape["meta"]>;
 };
 
-export type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
+/**
+ * Loaded channel registry entry with a normalized plugin payload.
+ */
+type LoadedChannelPluginEntry = ActivePluginChannelRegistration & {
   plugin: LoadedChannelPlugin;
 };
 
 type ChannelPluginView = {
+  snapshot: ActivePluginChannelRegistrySnapshot;
   sorted: LoadedChannelPlugin[];
   byId: Map<string, LoadedChannelPlugin>;
   entriesById: Map<string, LoadedChannelPluginEntry>;
 };
+
+let cachedChannelPluginView: ChannelPluginView | undefined;
 
 function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,
@@ -29,6 +48,8 @@ function coerceLoadedChannelPlugin(
     return null;
   }
   if (!plugin.meta || typeof plugin.meta !== "object") {
+    // Loaded plugin metadata is optional at the runtime-state boundary, but
+    // channel sorting expects an object so normalize it once at read time.
     plugin.meta = {};
   }
   return plugin as LoadedChannelPlugin;
@@ -49,7 +70,12 @@ function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] 
 }
 
 function resolveChannelPlugins(): ChannelPluginView {
-  const registry = getActivePluginChannelRegistryFromState();
+  const snapshot = getActivePluginChannelRegistrySnapshotFromState();
+  const cached = cachedChannelPluginView;
+  if (cached?.snapshot === snapshot) {
+    return cached;
+  }
+  const registry = snapshot.registry;
 
   const channelPlugins: LoadedChannelPlugin[] = [];
   const pluginEntries: LoadedChannelPluginEntry[] = [];
@@ -66,6 +92,8 @@ function resolveChannelPlugins(): ChannelPluginView {
   const sorted = dedupeChannels(channelPlugins).toSorted((a, b) => {
     const indexA = CHAT_CHANNEL_ORDER.indexOf(a.id);
     const indexB = CHAT_CHANNEL_ORDER.indexOf(b.id);
+    // Explicit plugin order wins; known built-ins keep their product order;
+    // unknown extension channels sort after them by id for deterministic lists.
     const orderA = a.meta.order ?? (indexA === -1 ? 999 : indexA);
     const orderB = b.meta.order ?? (indexB === -1 ? 999 : indexB);
     if (orderA !== orderB) {
@@ -84,17 +112,27 @@ function resolveChannelPlugins(): ChannelPluginView {
     }
   }
 
-  return {
+  // The runtime owns snapshot invalidation across active and pinned registry
+  // changes. Share one derived view until that lifecycle snapshot changes.
+  cachedChannelPluginView = {
+    snapshot,
     sorted,
     byId,
     entriesById,
   };
+  return cachedChannelPluginView;
 }
 
+/**
+ * Lists loaded channel plugins in deterministic display/runtime order.
+ */
 export function listLoadedChannelPlugins(): LoadedChannelPlugin[] {
   return resolveChannelPlugins().sorted.slice();
 }
 
+/**
+ * Returns a loaded channel plugin by normalized id.
+ */
 export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
@@ -103,6 +141,14 @@ export function getLoadedChannelPluginById(id: string): LoadedChannelPlugin | un
   return resolveChannelPlugins().byId.get(resolvedId);
 }
 
+/** Returns one loaded channel plugin without triggering bundled discovery. */
+export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
+  return getLoadedChannelPluginById(id) as ChannelPlugin | undefined;
+}
+
+/**
+ * Returns the loaded channel registry entry by normalized plugin id.
+ */
 export function getLoadedChannelPluginEntryById(id: string): LoadedChannelPluginEntry | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {

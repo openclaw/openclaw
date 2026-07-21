@@ -1,3 +1,4 @@
+// Assertions for minimal OpenAI web-search E2E scenarios.
 import fs from "node:fs";
 import { readTextFileTail, tailText } from "../text-file-utils.mjs";
 
@@ -45,7 +46,7 @@ function scanSuccessRequest(logPath) {
       return;
     }
     const entry = JSON.parse(trimmed);
-    if (entry.path !== "/v1/responses") {
+    if (entry.method !== "POST" || entry.path !== "/v1/responses") {
       return;
     }
     responseCount += 1;
@@ -64,42 +65,6 @@ function scanSuccessRequest(logPath) {
   return { responseCount, success, recentResponses };
 }
 
-function assertPatchBehavior() {
-  return import("../../../../dist/extensions/openai/native-web-search.js").then(
-    ({ patchOpenAINativeWebSearchPayload }) => {
-      const injectedPayload = {
-        reasoning: { effort: "minimal", summary: "auto" },
-      };
-      const injectedResult = patchOpenAINativeWebSearchPayload(injectedPayload);
-      if (injectedResult !== "injected") {
-        throw new Error(`expected native web_search injection, got ${injectedResult}`);
-      }
-      if (injectedPayload.reasoning.effort !== "low") {
-        throw new Error(
-          `expected injected native web_search to raise minimal reasoning to low, got ${JSON.stringify(injectedPayload.reasoning)}`,
-        );
-      }
-      if (!injectedPayload.tools?.some((tool) => tool?.type === "web_search")) {
-        throw new Error(`native web_search was not injected: ${JSON.stringify(injectedPayload)}`);
-      }
-
-      const existingNativePayload = {
-        tools: [{ type: "web_search" }],
-        reasoning: { effort: "minimal" },
-      };
-      const existingResult = patchOpenAINativeWebSearchPayload(existingNativePayload);
-      if (existingResult !== "native_tool_already_present") {
-        throw new Error(`expected existing native web_search, got ${existingResult}`);
-      }
-      if (existingNativePayload.reasoning.effort !== "low") {
-        throw new Error(
-          `expected existing native web_search to raise minimal reasoning to low, got ${JSON.stringify(existingNativePayload.reasoning)}`,
-        );
-      }
-    },
-  );
-}
-
 function assertSuccessRequest() {
   const logPath = process.argv[3];
   const { responseCount, success, recentResponses } = scanSuccessRequest(logPath);
@@ -114,15 +79,10 @@ function assertSuccessRequest() {
     );
   }
   const tools = Array.isArray(success.body.tools) ? success.body.tools : [];
-  const hasWebSearch = tools.some(
-    (tool) =>
-      tool?.type === "web_search" ||
-      (tool?.type === "function" &&
-        (tool?.name === "web_search" || tool?.function?.name === "web_search")),
-  );
-  if (!hasWebSearch) {
+  const hasNativeWebSearch = tools.some((tool) => tool?.type === "web_search");
+  if (!hasNativeWebSearch) {
     throw new Error(
-      `success request did not include web_search. Body: ${JSON.stringify(success.body)}`,
+      `success request did not include native web_search. Body: ${JSON.stringify(success.body)}`,
     );
   }
   if (success.body.reasoning?.effort === "minimal") {
@@ -133,7 +93,6 @@ function assertSuccessRequest() {
 }
 
 const commands = {
-  "assert-patch-behavior": assertPatchBehavior,
   "assert-success-request": assertSuccessRequest,
 };
 

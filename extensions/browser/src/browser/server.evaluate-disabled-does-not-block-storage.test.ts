@@ -1,3 +1,4 @@
+// Browser tests cover server.evaluate disabled does not block storage plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePort } from "./test-port.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
@@ -8,13 +9,21 @@ let prevGatewayPort: string | undefined;
 let prevGatewayToken: string | undefined;
 let prevGatewayPassword: string | undefined;
 
-const pwMocks = vi.hoisted(() => ({
-  cookiesGetViaPlaywright: vi.fn(async () => ({
-    cookies: [{ name: "session", value: "abc123" }],
-  })),
-  storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
-  evaluateViaPlaywright: vi.fn(async () => "ok"),
-}));
+const pwMocks = vi.hoisted(() => {
+  const closePlaywrightBrowserConnection = vi.fn(async (_opts?: { cdpUrl?: string }) => {});
+  return {
+    closePlaywrightBrowserConnection,
+    cookiesGetViaPlaywright: vi.fn(async () => ({
+      cookies: [{ name: "session", value: "abc123" }],
+    })),
+    storageGetViaPlaywright: vi.fn(async () => ({ values: { token: "value" } })),
+    evaluateViaPlaywright: vi.fn(async () => "ok"),
+    retirePlaywrightBrowserConnectionExact: vi.fn((opts: { cdpUrl: string }) => ({
+      retired: true,
+      close: async () => await closePlaywrightBrowserConnection(opts),
+    })),
+  };
+});
 
 const routeCtxMocks = vi.hoisted(() => {
   const profileCtx = {
@@ -57,6 +66,7 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("./pw-ai-module.js", () => ({
+  getLoadedPwAiModule: () => pwMocks,
   getPwAiModule: vi.fn(async () => pwMocks),
 }));
 

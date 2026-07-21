@@ -1,14 +1,15 @@
+// Hook content wrapping tests cover isolated agent message wrapping for hooks.
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
+import { makeCfg } from "./isolated-agent.test-harness.js";
 import {
   DEFAULT_MESSAGE,
   GMAIL_MODEL,
   runCronTurn,
   withTempHome,
 } from "./isolated-agent.turn-test-helpers.js";
-import { makeCfg } from "./isolated-agent.test-harness.js";
 import { resolveCronModelSelection } from "./isolated-agent/model-selection.js";
 import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
@@ -23,11 +24,24 @@ function lastEmbeddedPrompt(): string {
 }
 
 describe("runCronIsolatedAgentTurn hook content wrapping", () => {
+  beforeAll(async () => {
+    process.env.OPENCLAW_TEST_FAST = "1";
+    vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
+    vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: { kind: "agentTurn", message: "warm runtime" },
+        message: "warm runtime",
+        sessionKey: "hook:gmail:warm-runtime",
+      });
+    });
+  });
+
   beforeEach(() => {
     process.env.OPENCLAW_TEST_FAST = "1";
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedAgent).mockClear();
-    vi.mocked(loadModelCatalog).mockResolvedValue([]);
+    vi.mocked(loadPreparedModelCatalog).mockResolvedValue([]);
   });
 
   it("wraps external hook content by default", async () => {
@@ -77,6 +91,7 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
 
       const resolved = await resolveCronModelSelection({
         cfg,
+        catalogConfig: cfg,
         cfgWithAgentDefaults: cfg,
         sessionEntry: {},
         payload: {
@@ -86,6 +101,8 @@ describe("runCronIsolatedAgentTurn hook content wrapping", () => {
         },
         isGmailHook: true,
         agentId: "main",
+        agentDir: `${home}/agents/main/agent`,
+        workspaceDir: `${home}/workspace`,
       });
 
       expect(resolved).toEqual({

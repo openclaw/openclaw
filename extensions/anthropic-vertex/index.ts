@@ -1,7 +1,11 @@
+/**
+ * Anthropic Vertex provider plugin entry. It registers implicit ADC-backed
+ * catalog discovery, Anthropic replay policy, thinking profiles, and auth markers.
+ */
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
-  NATIVE_ANTHROPIC_REPLAY_HOOKS,
+  buildProviderReplayFamilyHooks,
   resolveClaudeThinkingProfile,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -10,10 +14,12 @@ import {
   resolveAnthropicVertexConfigApiKey,
   resolveImplicitAnthropicVertexProvider,
 } from "./api.js";
+import { normalizeAnthropicVertexResolvedModel } from "./provider-catalog.js";
 
 const PROVIDER_ID = "anthropic-vertex";
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 
+/** Provider entry for Anthropic Claude models served through Google Vertex AI. */
 export default definePluginEntry({
   id: PROVIDER_ID,
   name: "Anthropic Vertex Provider",
@@ -42,8 +48,11 @@ export default definePluginEntry({
         },
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
-      ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
-      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
+      ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
+      normalizeResolvedModel: ({ modelId, model }) =>
+        normalizeAnthropicVertexResolvedModel(modelId, model),
+      resolveThinkingProfile: ({ modelId, params }) =>
+        resolveClaudeThinkingProfile(modelId, params, { includeNativeMax: true }),
       resolveSyntheticAuth: () => {
         if (!hasAnthropicVertexAvailableAuth()) {
           return undefined;

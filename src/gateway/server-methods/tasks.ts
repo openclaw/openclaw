@@ -1,3 +1,5 @@
+// Task gateway methods expose detached task list/get/cancel operations with
+// bounded public summaries over the runtime task registry.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -10,30 +12,16 @@ import {
   validateTasksListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { cancelDetachedTaskRunById } from "../../tasks/detached-task-runtime.js";
-import { getTaskById, listTaskRecords } from "../../tasks/runtime-internal.js";
+import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
+import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import {
-  TASK_STATUS_DETAIL_MAX_CHARS,
-  formatTaskStatusTitle,
-  sanitizeTaskStatusText,
-} from "../../tasks/task-status.js";
+import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
 
 type TaskLedgerStatus = TaskSummary["status"];
-
-const TASK_STATUS_TO_LEDGER_STATUS: Record<TaskStatus, TaskLedgerStatus> = {
-  queued: "queued",
-  running: "running",
-  succeeded: "completed",
-  failed: "failed",
-  timed_out: "timed_out",
-  cancelled: "cancelled",
-  lost: "failed",
-};
 
 const LEDGER_STATUS_TO_TASK_STATUSES: Record<TaskLedgerStatus, TaskStatus[]> = {
   queued: ["queued"],
@@ -44,50 +32,6 @@ const LEDGER_STATUS_TO_TASK_STATUSES: Record<TaskLedgerStatus, TaskStatus[]> = {
   cancelled: ["cancelled"],
 };
 
-function taskUpdatedAt(task: TaskRecord): number {
-  return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
-}
-
-function sanitizeOptionalTaskText(
-  value: unknown,
-  opts?: { errorContext?: boolean },
-): string | undefined {
-  const sanitized = sanitizeTaskStatusText(value, {
-    errorContext: opts?.errorContext,
-    maxChars: TASK_STATUS_DETAIL_MAX_CHARS,
-  });
-  return sanitized || undefined;
-}
-
-function mapTaskSummary(task: TaskRecord): TaskSummary {
-  const progressSummary = sanitizeOptionalTaskText(task.progressSummary);
-  const terminalSummary = sanitizeOptionalTaskText(task.terminalSummary, { errorContext: true });
-  const error = sanitizeOptionalTaskText(task.error, { errorContext: true });
-  return {
-    id: task.taskId,
-    taskId: task.taskId,
-    kind: task.taskKind ?? task.runtime,
-    runtime: task.runtime,
-    status: TASK_STATUS_TO_LEDGER_STATUS[task.status],
-    title: formatTaskStatusTitle(task),
-    ...(task.agentId ? { agentId: task.agentId } : {}),
-    sessionKey: task.requesterSessionKey,
-    ...(task.childSessionKey ? { childSessionKey: task.childSessionKey } : {}),
-    ownerKey: task.ownerKey,
-    ...(task.runId ? { runId: task.runId } : {}),
-    ...(task.parentFlowId ? { flowId: task.parentFlowId } : {}),
-    ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
-    ...(task.sourceId ? { sourceId: task.sourceId } : {}),
-    createdAt: task.createdAt,
-    updatedAt: taskUpdatedAt(task),
-    ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
-    ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
-    ...(progressSummary ? { progressSummary } : {}),
-    ...(terminalSummary ? { terminalSummary } : {}),
-    ...(error ? { error } : {}),
-  };
-}
-
 function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskStatus> | null {
   if (!status) {
     return null;
@@ -96,6 +40,8 @@ function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskS
   return new Set(statuses.flatMap((value) => LEDGER_STATUS_TO_TASK_STATUSES[value] ?? []));
 }
 
+// Session filtering needs all ownership keys because detached child runs may be
+// queried from the requester, child session, or owner/control-plane view.
 function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): boolean {
   const normalized = normalizeOptionalString(sessionKey);
   if (!normalized) {
@@ -106,19 +52,26 @@ function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): b
   );
 }
 
+// Explicit `task.agentId` is authoritative: a task that records its own agent
+// must not also match other agents through the session-key fallback. Only
+// records that predate a direct `agentId` recover the owning agent from
+// session-style keys instead of being hidden.
 function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
   const normalized = normalizeOptionalString(agentId);
   if (!normalized) {
     return true;
   }
-  if (normalizeOptionalString(task.agentId) === normalized) {
-    return true;
+  const explicitAgentId = normalizeOptionalString(task.agentId);
+  if (explicitAgentId) {
+    return explicitAgentId === normalized;
   }
   return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
     (candidate) => parseAgentSessionKey(candidate)?.agentId === normalized,
   );
 }
 
+// Cursor strings are offsets, not opaque tokens; reject malformed values so a
+// client cannot silently restart pagination at the first page.
 function parseCursor(cursor: string | undefined): number | null {
   if (!cursor) {
     return 0;
@@ -130,6 +83,8 @@ function parseCursor(cursor: string | undefined): number | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+// Control UI task methods expose the stable gateway protocol shape; helpers
+// above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
   "tasks.list": ({ params, respond }) => {
     if (!validateTasksListParams(params)) {
@@ -154,12 +109,26 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    const filtered = listTaskRecords().filter((task) => {
-      if (statusFilter && !statusFilter.has(task.status)) {
-        return false;
-      }
-      return taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey);
-    });
+    // The ledger view pages by last activity so an old long-running task that
+    // just finished still surfaces on the first page instead of hiding behind
+    // newer-created records. Start from a cloned insertion-order snapshot so
+    // this sort does not first pay for the registry's discarded createdAt sort.
+    const filtered = listTaskRecordsUnsorted()
+      .filter((task) => {
+        if (statusFilter && !statusFilter.has(task.status)) {
+          return false;
+        }
+        return (
+          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
+        );
+      })
+      .toSorted((left, right) => {
+        const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+        if (updatedDiff !== 0) {
+          return updatedDiff;
+        }
+        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+      });
     const page = filtered.slice(cursor, cursor + limit);
     const nextOffset = cursor + page.length;
     respond(true, {
@@ -189,7 +158,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, { task: mapTaskSummary(task) });
+    // The potentially longer task input is lookup-only. List and event payloads
+    // stay compact while detail views can show the operator what was requested.
+    respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
   "tasks.cancel": async ({ params, respond, context }) => {
     if (!validateTasksCancelParams(params)) {

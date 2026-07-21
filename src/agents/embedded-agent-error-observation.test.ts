@@ -1,9 +1,10 @@
+// Covers sanitized provider-error observation fields for embedded-agent runs.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 
@@ -16,6 +17,8 @@ afterEach(() => {
 
 describe("buildApiErrorObservationFields", () => {
   it("redacts request ids and exposes stable hashes instead of raw payloads", () => {
+    // Raw request ids are sensitive trace handles; diagnostics use hashes so
+    // equivalent failures can still be correlated safely.
     const observed = buildApiErrorObservationFields(
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_overload"}',
     );
@@ -87,6 +90,8 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("keeps fingerprints stable across request ids for equivalent errors", () => {
+    // Fingerprints intentionally ignore request ids, while raw hashes keep the
+    // exact sanitized payload distinct.
     const first = buildApiErrorObservationFields(
       '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"},"request_id":"req_001"}',
     );
@@ -99,25 +104,42 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("truncates oversized raw and provider previews", () => {
-    const longMessage = "X".repeat(260);
+    const longMessage = `${"X".repeat(199)}🚀tail`;
     const observed = buildApiErrorObservationFields(
       `{"type":"error","error":{"type":"server_error","message":"${longMessage}"},"request_id":"req_long"}`,
     );
 
     expect(observed.rawErrorPreview).toBeTypeOf("string");
-    expect(observed.providerErrorMessagePreview).toBeTypeOf("string");
+    expect(observed.providerErrorMessagePreview).toBe(`${"X".repeat(199)}…`);
     expect(observed.rawErrorPreview?.length).toBeLessThanOrEqual(401);
     expect(observed.providerErrorMessagePreview?.length).toBeLessThanOrEqual(201);
     expect(observed.providerErrorMessagePreview?.endsWith("…")).toBe(true);
   });
 
   it("caps oversized raw inputs before hashing and fingerprinting", () => {
-    const oversized = "X".repeat(70_000);
-    const bounded = "X".repeat(64_000);
+    // Hashing a bounded prefix keeps diagnostic work predictable for huge
+    // provider payloads.
+    const oversized = `${"X".repeat(63_999)}🚀tail`;
+    const bounded = "X".repeat(63_999);
 
     const observed = buildApiErrorObservationFields(oversized);
     const boundedObserved = buildApiErrorObservationFields(bounded);
     expect(observed.rawErrorHash).toBe(boundedObserved.rawErrorHash);
+    expect(observed.rawErrorFingerprint).toBe(boundedObserved.rawErrorFingerprint);
+  });
+
+  it("keeps fingerprint message bounds on a UTF-16 boundary", () => {
+    const prefix = "X".repeat(7_999);
+    const observed = buildApiErrorObservationFields(
+      JSON.stringify({
+        type: "error",
+        error: { type: "server_error", message: `${prefix}🚀tail` },
+      }),
+    );
+    const boundedObserved = buildApiErrorObservationFields(
+      JSON.stringify({ type: "error", error: { type: "server_error", message: prefix } }),
+    );
+
     expect(observed.rawErrorFingerprint).toBe(boundedObserved.rawErrorFingerprint);
   });
 
@@ -143,6 +165,8 @@ describe("buildApiErrorObservationFields", () => {
   });
 
   it("fails closed when observation sanitization throws", () => {
+    // Observation helpers run on error paths; sanitization failures should drop
+    // metadata rather than leak raw provider text.
     vi.spyOn(loggingConfigModule, "readLoggingConfig").mockImplementation(() => {
       throw new Error("boom");
     });

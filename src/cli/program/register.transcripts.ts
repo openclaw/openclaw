@@ -1,8 +1,11 @@
+// `openclaw transcripts`: local state inspector for stored transcript metadata and summaries.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 
 type TranscriptsCliOptions = {
@@ -44,8 +47,9 @@ function sessionDir(date: string, sessionId: string): string {
   return path.join(stateRootDir(), date, safeSegment(sessionId));
 }
 
-function readDateFromSessionDir(sessionDir: string): string {
-  const candidate = path.basename(path.dirname(sessionDir));
+// Selectors are date-qualified when duplicate session ids can exist across transcript days.
+function readDateFromSessionDir(sessionDirValue: string): string {
+  const candidate = path.basename(path.dirname(sessionDirValue));
   if (!/^\d{4}-\d{2}-\d{2}$/.test(candidate)) {
     throw new Error(`invalid transcripts date directory: ${candidate}`);
   }
@@ -53,7 +57,7 @@ function readDateFromSessionDir(sessionDir: string): string {
 }
 
 function formatSelector(entry: StoredTranscriptsSession): string {
-  return `${entry.date}/${entry.session.sessionId}`;
+  return `${entry.date}/${safeSegment(entry.session.sessionId)}`;
 }
 
 function parseQualifiedSelector(selector: string): { date: string; sessionId: string } | null {
@@ -69,7 +73,12 @@ function writeLine(value: string): void {
 }
 
 function writeJson(value: unknown): void {
-  writeLine(JSON.stringify(value, null, 2));
+  writeLine(
+    JSON.stringify(value, null, 2).replace(
+      /[\u007f-\u009f]/g,
+      (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+    ),
+  );
 }
 
 function isNodeError(err: unknown, code: string): boolean {
@@ -92,22 +101,18 @@ async function readJsonFile<T>(filePath: string): Promise<T> {
   return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
 }
 
-function formatErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
-}
-
 async function readStoredSession(
-  sessionDir: string,
+  sessionDirLocal: string,
   options: { ignoreInvalid?: boolean } = {},
 ): Promise<StoredTranscriptsSession | null> {
-  const metadataPath = path.join(sessionDir, "metadata.json");
+  const metadataPath = path.join(sessionDirLocal, "metadata.json");
   try {
     const session = await readJsonFile<TranscriptSessionDescriptor>(metadataPath);
-    const summaryPath = path.join(sessionDir, "summary.md");
+    const summaryPath = path.join(sessionDirLocal, "summary.md");
     return {
       session,
-      sessionDir,
-      date: readDateFromSessionDir(sessionDir),
+      sessionDir: sessionDirLocal,
+      date: readDateFromSessionDir(sessionDirLocal),
       summaryPath,
       hasSummary: await pathExists(summaryPath),
     };
@@ -157,7 +162,7 @@ function assertRequestedSession(
   entry: StoredTranscriptsSession,
   sessionId: string,
 ): StoredTranscriptsSession {
-  if (entry.session.sessionId !== sessionId) {
+  if (entry.session.sessionId !== sessionId && safeSegment(entry.session.sessionId) !== sessionId) {
     throw new Error(
       `transcripts metadata mismatch for ${sessionId}: found ${entry.session.sessionId}`,
     );
@@ -181,7 +186,10 @@ async function requireStoredSession(selector: string): Promise<StoredTranscripts
     return assertRequestedSession(session, selector);
   }
   const sessions = await listStoredSessions();
-  const matches = sessions.filter((entry) => entry.session.sessionId === selector);
+  const matches = sessions.filter(
+    (entry) =>
+      entry.session.sessionId === selector || safeSegment(entry.session.sessionId) === selector,
+  );
   if (matches.length === 1 && matches[0]) {
     return assertRequestedSession(matches[0], selector);
   }
@@ -212,10 +220,14 @@ async function listStoredSessions(): Promise<StoredTranscriptsSession[]> {
 }
 
 function formatSessionLine(entry: StoredTranscriptsSession): string {
-  const title = entry.session.title?.trim() || "Transcripts";
-  const started = entry.session.startedAt || "unknown";
-  const summary = entry.hasSummary ? entry.summaryPath : "no summary.md";
+  const title = sanitizeTerminalText(entry.session.title?.trim() || "Transcripts");
+  const started = sanitizeTerminalText(entry.session.startedAt || "unknown");
+  const summary = sanitizeTerminalText(entry.hasSummary ? entry.summaryPath : "no summary.md");
   return `${formatSelector(entry)}\t${started}\t${title}\t${summary}`;
+}
+
+function sanitizeMarkdownForTerminal(markdown: string): string {
+  return markdown.split("\n").map(sanitizeTerminalText).join("\n");
 }
 
 async function listCommand(options: TranscriptsCliOptions): Promise<void> {
@@ -262,7 +274,7 @@ async function showCommand(sessionId: string, options: TranscriptsCliOptions): P
   if (!session.hasSummary) {
     throw new Error(`summary.md not found for transcripts session: ${sessionId}`);
   }
-  process.stdout.write(await fs.readFile(session.summaryPath, "utf8"));
+  process.stdout.write(sanitizeMarkdownForTerminal(await fs.readFile(session.summaryPath, "utf8")));
 }
 
 async function pathCommand(selector: string, options: TranscriptsPathOptions): Promise<void> {
@@ -286,6 +298,7 @@ async function pathCommand(selector: string, options: TranscriptsPathOptions): P
   writeLine(selectedPath);
 }
 
+/** Register transcript list/show/path inspection commands. */
 export function registerTranscriptsCli(program: Command): void {
   const transcripts = program.command("transcripts").description("Inspect stored transcripts");
 

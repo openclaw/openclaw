@@ -1,3 +1,4 @@
+// Telegram tests cover exec approvals plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,8 @@ import type {
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   getTelegramExecApprovalApprovers,
@@ -15,7 +18,6 @@ import {
   isTelegramExecApprovalTargetRecipient,
   resolveTelegramExecApprovalTarget,
   shouldHandleTelegramExecApprovalRequest,
-  shouldEnableTelegramExecApprovalButtons,
   shouldInjectTelegramExecApprovalButtons,
 } from "./exec-approvals.js";
 
@@ -26,6 +28,7 @@ type TelegramExecApprovalRequest = Parameters<
 >[0]["request"];
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -228,26 +231,24 @@ describe("telegram exec approvals", () => {
     ).toBe(true);
   });
 
-  it("scopes non-telegram turn sources to the stored telegram account", () => {
+  it("scopes non-telegram turn sources to the stored telegram account", async () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
-    fs.writeFileSync(
+    await upsertSessionEntry({
       storePath,
-      JSON.stringify({
-        "agent:ops:telegram:direct:123": {
-          sessionId: "main",
-          updatedAt: 1,
-          origin: {
-            provider: "telegram",
-            accountId: "ops",
-          },
-          lastChannel: "slack",
-          lastTo: "channel:C999",
-          lastAccountId: "work",
+      sessionKey: "agent:ops:telegram:direct:123",
+      entry: {
+        sessionId: "main",
+        updatedAt: 1,
+        origin: {
+          provider: "telegram",
+          accountId: "ops",
         },
-      }),
-      "utf-8",
-    );
+        lastChannel: "slack",
+        lastTo: "channel:C999",
+        lastAccountId: "work",
+      },
+    });
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
     const request = makeForeignChannelApprovalRequest({
       id: "req-2",
@@ -451,34 +452,6 @@ describe("telegram exec approvals", () => {
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: channelCfg, to: "123" })).toBe(false);
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: bothCfg, to: "123" })).toBe(true);
     expect(shouldInjectTelegramExecApprovalButtons({ cfg: bothCfg, to: "-100123" })).toBe(true);
-  });
-
-  it("does not require generic inlineButtons capability to enable exec approval buttons", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          capabilities: ["vision"],
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(shouldEnableTelegramExecApprovalButtons({ cfg, to: "123" })).toBe(true);
-  });
-
-  it("still respects explicit inlineButtons off for exec approval buttons", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "tok",
-          capabilities: { inlineButtons: "off" },
-          execApprovals: { enabled: true, approvers: ["123"], target: "dm" },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(shouldEnableTelegramExecApprovalButtons({ cfg, to: "123" })).toBe(false);
   });
 
   describe("isTelegramExecApprovalTargetRecipient", () => {

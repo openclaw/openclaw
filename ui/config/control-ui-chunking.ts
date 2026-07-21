@@ -1,8 +1,9 @@
-export function normalizeModuleId(id: string): string {
+// Control UI config module wires control ui chunking behavior.
+function normalizeModuleId(id: string): string {
   return id.replace(/\\/g, "/");
 }
 
-export function moduleIdIncludesPackage(id: string, packageName: string): boolean {
+function moduleIdIncludesPackage(id: string, packageName: string): boolean {
   const normalized = normalizeModuleId(id);
   return (
     normalized.includes(`/node_modules/${packageName}/`) ||
@@ -10,7 +11,24 @@ export function moduleIdIncludesPackage(id: string, packageName: string): boolea
   );
 }
 
-export function controlUiManualChunk(id: string): string | undefined {
+export function controlUiStableChunkName(id: string): string | undefined {
+  const normalized = normalizeModuleId(id);
+
+  // These entry-and-route helpers must stay together; separate shared chunks
+  // turn small route-graph changes into extra startup preload requests.
+  if (
+    normalized.endsWith("/ui/src/components/config-form.shared.ts") ||
+    normalized.endsWith("/ui/src/lib/clipboard.ts") ||
+    normalized.endsWith("/ui/src/build-info-normalizers.ts") ||
+    normalized.endsWith("/ui/src/build-info.ts")
+  ) {
+    return "control-ui-shared";
+  }
+
+  if (normalized.endsWith("/ui/src/lib/gateway-methods.ts")) {
+    return "gateway-runtime";
+  }
+
   if (
     moduleIdIncludesPackage(id, "lit") ||
     moduleIdIncludesPackage(id, "lit-html") ||
@@ -47,3 +65,23 @@ export function controlUiManualChunk(id: string): string | undefined {
 
   return undefined;
 }
+
+export const controlUiCodeSplitting = {
+  includeDependenciesRecursively: false,
+  groups: [
+    {
+      name: (id: string) => controlUiStableChunkName(id) ?? null,
+      test: (id: string) => controlUiStableChunkName(id) !== undefined,
+      priority: 20,
+    },
+    {
+      name: (id: string) =>
+        normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+      tags: ["$initial"] as ["$initial"],
+      priority: 10,
+      // 448 KiB packs the core graph into fewer chunks; the previous 400 KiB
+      // boundary split one core chunk in two, costing ~1.4 KiB startup gzip.
+      maxSize: 448 * 1024,
+    },
+  ],
+};

@@ -1,3 +1,4 @@
+// Verifies talk-mode config normalization behavior.
 import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../test-utils/talk-test-provider.js";
 import { buildTalkConfigResponse, normalizeTalkSection } from "./talk.js";
@@ -47,6 +48,10 @@ describe("talk normalization", () => {
         speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: " low ",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
       },
@@ -73,11 +78,28 @@ describe("talk normalization", () => {
         speakerVoiceId: "voice-123",
         mode: "realtime",
         transport: "webrtc",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
         brain: "agent-consult",
         consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
+  });
+
+  it("drops invalid realtime voice detection defaults", () => {
+    const normalized = normalizeTalkSection({
+      realtime: {
+        vadThreshold: 1.5,
+        silenceDurationMs: 0,
+        prefixPaddingMs: -1,
+        reasoningEffort: "   ",
+      },
+    } as never);
+
+    expect(normalized).toBeUndefined();
   });
 
   it("merges duplicate provider ids after trimming", () => {
@@ -155,19 +177,6 @@ describe("talk normalization", () => {
     expect(payload?.realtime?.instructions).toBe("Speak with crisp diction.");
   });
 
-  it("maps legacy realtime voice to speakerVoice while preserving legacy output", () => {
-    const normalized = normalizeTalkSection({
-      realtime: {
-        voice: " alloy ",
-      },
-    });
-
-    expect(normalized?.realtime).toEqual({
-      speakerVoice: "alloy",
-      voice: "alloy",
-    });
-  });
-
   it("does not report an active provider when the configured speech provider cannot resolve", () => {
     const mismatchPayload = buildTalkConfigResponse({
       provider: "acme",
@@ -206,6 +215,21 @@ describe("talk normalization", () => {
       },
     });
   });
+
+  it.each(["constructor", "__proto__"])(
+    "does not resolve inherited Object.prototype provider key %s",
+    (provider) => {
+      const payload = buildTalkConfigResponse({
+        provider,
+        providers: {
+          elevenlabs: { voiceId: "voice-123" },
+        },
+      });
+
+      expect(payload?.resolved).toBeUndefined();
+      expect(payload?.provider).toBeUndefined();
+    },
+  );
 
   it("preserves SecretRef apiKey values during normalization", () => {
     const normalized = normalizeTalkSection({

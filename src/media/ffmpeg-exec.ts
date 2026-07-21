@@ -1,16 +1,15 @@
-import { execFile, type ExecFileOptions } from "node:child_process";
-import { promisify } from "node:util";
+// FFmpeg exec helpers run ffmpeg and ffprobe with normalized errors.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import { runExec, type RunExecOptions } from "../process/exec.js";
 import {
   MEDIA_FFMPEG_MAX_BUFFER_BYTES,
   MEDIA_FFMPEG_TIMEOUT_MS,
   MEDIA_FFPROBE_TIMEOUT_MS,
 } from "./ffmpeg-limits.js";
 
-const execFileAsync = promisify(execFile);
-
-export type MediaExecOptions = {
+/** Process limits and optional stdin payload for ffmpeg/ffprobe helper calls. */
+type MediaExecOptions = {
   timeoutMs?: number;
   maxBufferBytes?: number;
   input?: Buffer | string;
@@ -19,10 +18,12 @@ export type MediaExecOptions = {
 function resolveExecOptions(
   defaultTimeoutMs: number,
   options: MediaExecOptions | undefined,
-): ExecFileOptions {
+): RunExecOptions {
   return {
-    timeout: options?.timeoutMs ?? defaultTimeoutMs,
+    input: options?.input,
+    logOutput: false,
     maxBuffer: options?.maxBufferBytes ?? MEDIA_FFMPEG_MAX_BUFFER_BYTES,
+    timeoutMs: options?.timeoutMs ?? defaultTimeoutMs,
   };
 }
 
@@ -41,51 +42,33 @@ function requireSystemBin(name: string): string {
   return resolved;
 }
 
+/** Resolves ffmpeg from trusted system paths before command execution. */
 export function resolveFfmpegBin(): string {
   return requireSystemBin("ffmpeg");
 }
 
-function isBrokenPipeError(error: Error): boolean {
-  return (error as NodeJS.ErrnoException).code === "EPIPE";
-}
-
+/** Runs ffprobe with optional stdin input. */
 export async function runFfprobe(args: string[], options?: MediaExecOptions): Promise<string> {
-  const execOptions = resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options);
-  if (options?.input == null) {
-    const { stdout } = await execFileAsync(requireSystemBin("ffprobe"), args, execOptions);
-    return stdout.toString();
-  }
-
-  return await new Promise<string>((resolve, reject) => {
-    let stdinWriteError: Error | undefined;
-    const proc = execFile(requireSystemBin("ffprobe"), args, execOptions, (err, stdout) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      if (stdinWriteError && !isBrokenPipeError(stdinWriteError)) {
-        reject(stdinWriteError);
-        return;
-      }
-      resolve(stdout.toString());
-    });
-    proc.stdin?.once("error", (err: Error) => {
-      stdinWriteError = err;
-    });
-    proc.stdin?.end(options.input);
-  });
+  const { stdout } = await runExec(
+    requireSystemBin("ffprobe"),
+    args,
+    resolveExecOptions(MEDIA_FFPROBE_TIMEOUT_MS, options),
+  );
+  return stdout;
 }
 
+/** Runs ffmpeg with bounded timeout and buffer settings. */
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
-  const { stdout } = await execFileAsync(
+  const { stdout } = await runExec(
     resolveFfmpegBin(),
     args,
     resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
   );
-  return stdout.toString();
+  return stdout;
 }
 
-export function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
+/** Splits ffprobe CSV-ish output into normalized lowercase fields. */
+function parseFfprobeCsvFields(stdout: string, maxFields: number): string[] {
   return stdout
     .trim()
     .split(/[,\r\n]+/, maxFields)
@@ -100,6 +83,7 @@ function parseFfprobeSampleRateHz(value: string | undefined): number | null {
   return Number.isSafeInteger(sampleRate) && sampleRate > 0 ? sampleRate : null;
 }
 
+/** Parses codec and positive sample rate from compact ffprobe stream output. */
 export function parseFfprobeCodecAndSampleRate(stdout: string): {
   codec: string | null;
   sampleRateHz: number | null;

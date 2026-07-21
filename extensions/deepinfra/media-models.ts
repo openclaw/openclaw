@@ -1,3 +1,4 @@
+// Deepinfra plugin module implements media models behavior.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { DEEPINFRA_BASE_URL } from "./provider-models.js";
 
@@ -15,7 +16,6 @@ export const DEEPINFRA_VIDEO_DURATIONS = [5, 8] as const;
 // supplied. First entry is the default. Prefer discoverDeepInfraSurfaces().
 export const DEEPINFRA_IMAGE_FALLBACK_MODELS = [
   "black-forest-labs/FLUX-1-schnell",
-  "run-diffusion/Juggernaut-Lightning-Flux",
   "black-forest-labs/FLUX-1-dev",
   "Qwen/Qwen-Image-Max",
   "stabilityai/sdxl-turbo",

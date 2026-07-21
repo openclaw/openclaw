@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for building approval replies and exec approval presentations.
+ */
 export {
   buildApprovalInteractiveReplyFromActionDescriptors,
   buildApprovalPresentation,
@@ -5,6 +8,8 @@ export {
   buildExecApprovalPresentation,
   buildExecApprovalActionDescriptors,
   buildExecApprovalPendingReplyPayload,
+  buildTypedApprovalPresentation,
+  buildTypedExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,
   getExecApprovalReplyMetadata,
   parseExecApprovalCommandText,
@@ -19,4 +24,7 @@ export {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalDecision,
 } from "../infra/exec-approvals.js";
-export { buildPluginApprovalPendingReplyPayload } from "./approval-renderers.js";
+export {
+  buildPluginApprovalPendingReplyPayload,
+  buildTypedPluginApprovalPendingReplyPayload,
+} from "./approval-renderers.js";

@@ -1,18 +1,18 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.5.30",
+  "version": "2026.7.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/line",
-      "version": "2026.5.30",
+      "version": "2026.7.2",
       "dependencies": {
-        "@line/bot-sdk": "11.0.0",
+        "@line/bot-sdk": "11.1.0",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.30"
+        "openclaw": ">=2026.7.2"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -21,30 +21,30 @@
       }
     },
     "node_modules/@line/bot-sdk": {
-      "version": "11.0.0",
-      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.0.0.tgz",
-      "integrity": "sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==",
+      "version": "11.1.0",
+      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.1.0.tgz",
+      "integrity": "sha512-i8EQziuuvNitMrqSHQfzmjiyz9CBA7KjhmAJhCWhZzbI0kElfbaOOVhxEYxJGul5Aar9dv6HrHUgPeDLNIghEQ==",
       "license": "Apache-2.0",
       "dependencies": {
         "@types/node": "^24.0.0"
       },
       "engines": {
-        "node": ">=20"
+        "node": ">=22"
       }
     },
     "node_modules/@types/node": {
-      "version": "24.12.4",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.12.4.tgz",
-      "integrity": "sha512-GUUEShf+PBCGW2KaXwcIt3Yk+e3pkKwWKb9GSyM9WQVE+ep2jzmHdGsHzu4wgcZy5fN9FBdVzjpBQsYlpfpgLA==",
+      "version": "24.13.2",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.13.2.tgz",
+      "integrity": "sha512-fRa09kZTgu8o71KFcDjUFuc7F+dEbZYZmkI0mg5YBTRs0yMKjYHsq/c0urDKeDb+D5qVgXOdFcuu+DZPKOITwA==",
       "license": "MIT",
       "dependencies": {
-        "undici-types": "~7.16.0"
+        "undici-types": "~7.18.0"
       }
     },
     "node_modules/undici-types": {
-      "version": "7.16.0",
-      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.16.0.tgz",
-      "integrity": "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==",
+      "version": "7.18.2",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.18.2.tgz",
+      "integrity": "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==",
       "license": "MIT"
     },
     "node_modules/zod": {

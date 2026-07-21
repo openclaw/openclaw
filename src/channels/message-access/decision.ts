@@ -1,6 +1,14 @@
+/**
+ * Channel ingress decision graph builder.
+ *
+ * Evaluates route, sender, command, and mention gates into one admission decision.
+ */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
-import { resolveInboundMentionDecision } from "../mention-gating.js";
+import {
+  allowedImplicitMentionKindsFromConfig,
+  resolveInboundMentionDecision,
+} from "../mention-gating.js";
 import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
 import {
   applyEventAuthModeToSenderGate,
@@ -31,6 +39,8 @@ function decisiveDecision(params: {
 }
 
 function routeGates(state: ChannelIngressState): AccessGraphGate[] {
+  // Route gates run first because a matched route can block dispatch before sender,
+  // command, or mention policy needs to evaluate.
   return state.routeFacts.map((route) => ({
     id: route.id,
     phase: "route",
@@ -43,6 +53,8 @@ function routeGates(state: ChannelIngressState): AccessGraphGate[] {
 }
 
 function routeSenderEmptyGate(state: ChannelIngressState): AccessGraphGate | null {
+  // deny-when-empty route sender policy means the route matched but has no sender list to
+  // authorize against, so it becomes an explicit route block.
   const route = state.routeFacts.find(
     (fact) =>
       fact.senderPolicy === "deny-when-empty" &&
@@ -83,6 +95,8 @@ function commandGate(params: {
     };
   }
   const useAccessGroups = command.useAccessGroups ?? true;
+  // Command authorization combines owner and group allowlists after mutable-id policy so
+  // command control cannot be granted by identifiers the current policy rejects.
   const owner = applyMutableIdentifierPolicy(params.state.allowlists.commandOwner, params.policy);
   const group = applyMutableIdentifierPolicy(params.state.allowlists.commandGroup, params.policy);
   const authorized = resolveCommandAuthorizedFromAuthorizers({
@@ -145,12 +159,15 @@ function eventGate(params: {
     return eventResult(true, "event_authorized");
   }
   if (authMode === "command") {
+    // Command-auth events, such as button or slash command callbacks, inherit the command gate
+    // result instead of re-checking the sender allowlist.
     return eventResult(
       params.commandGate.allowed,
       params.commandGate.allowed ? "event_authorized" : "event_unauthorized",
     );
   }
   if (authMode === "origin-subject") {
+    // Origin-subject mode is used for callbacks tied to a prior message/user identity.
     if (!params.state.event.hasOriginSubject) {
       return eventResult(false, "origin_subject_missing");
     }
@@ -171,13 +188,12 @@ function activationMetadata(params: {
   shouldBypassMention?: boolean;
 }) {
   const mentionFacts = params.mentionFacts;
+  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(params.activation);
   return {
     hasMentionFacts: mentionFacts != null,
     requireMention: params.activation?.requireMention ?? false,
     allowTextCommands: params.activation?.allowTextCommands ?? false,
-    ...(params.activation?.allowedImplicitMentionKinds !== undefined
-      ? { allowedImplicitMentionKinds: params.activation.allowedImplicitMentionKinds }
-      : {}),
+    ...(allowedImplicitMentionKinds !== undefined ? { allowedImplicitMentionKinds } : {}),
     ...(params.activation?.order ? { order: params.activation.order } : {}),
     shouldSkip: params.shouldSkip,
     ...(mentionFacts?.canDetectMention !== undefined
@@ -201,6 +217,15 @@ function activationMetadata(params: {
   };
 }
 
+function resolveAllowedImplicitMentionKinds(activation: ChannelIngressPolicyInput["activation"]) {
+  return (
+    activation?.allowedImplicitMentionKinds ??
+    (activation?.implicitMentions
+      ? allowedImplicitMentionKindsFromConfig(activation.implicitMentions)
+      : undefined)
+  );
+}
+
 function activationGate(params: {
   state: ChannelIngressState;
   policy: ChannelIngressPolicyInput;
@@ -208,6 +233,7 @@ function activationGate(params: {
 }): AccessGraphGate {
   const activation = params.policy.activation;
   const mentionFacts = params.state.mentionFacts;
+  const allowedImplicitMentionKinds = resolveAllowedImplicitMentionKinds(activation);
   const activationResult = (input: {
     shouldSkip: boolean;
     effectiveWasMentioned?: boolean;
@@ -228,6 +254,7 @@ function activationGate(params: {
     }),
   });
   if (!activation || !mentionFacts) {
+    // Without activation policy or mention facts, sender/event authorization is enough.
     return activationResult({
       shouldSkip: false,
       effectiveWasMentioned:
@@ -240,7 +267,7 @@ function activationGate(params: {
     policy: {
       isGroup: params.state.conversationKind !== "direct",
       requireMention: activation.requireMention,
-      allowedImplicitMentionKinds: activation.allowedImplicitMentionKinds,
+      allowedImplicitMentionKinds,
       allowTextCommands: activation.allowTextCommands,
       hasControlCommand: params.policy.command?.hasControlCommand ?? false,
       commandAuthorized: params.commandGate.allowed,
@@ -267,6 +294,8 @@ export function decideChannelIngress(
     return decisiveDecision({ admission: "drop", decision: "block", gate: routeBlock, gates });
   }
 
+  // Some channels want mention gating before sender checks so unmentioned room chatter can
+  // short-circuit without exposing sender allowlist diagnostics.
   const activationBeforeSender =
     policy.activation?.order === "before-sender" && !policy.activation.allowTextCommands
       ? activationGate({
@@ -291,6 +320,7 @@ export function decideChannelIngress(
     state.conversationKind === "direct"
       ? senderGateForDirect({ state, policy })
       : senderGateForGroup({ state, policy });
+  // Event auth mode can relax or tighten how sender gates affect non-message events.
   const eventModeSender = applyEventAuthModeToSenderGate({ state, senderGate: sender });
   gates.push(eventModeSender);
   if (!eventModeSender.allowed) {

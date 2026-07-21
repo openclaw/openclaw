@@ -1,3 +1,4 @@
+// Diffs plugin module implements browser behavior.
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,24 +68,33 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
     theme: DiffTheme;
     image: DiffRenderOptions["image"];
   }): Promise<string> {
-    const lease = await acquireSharedBrowser({
-      config: this.config,
-      idleMs: this.browserIdleMs,
-    });
+    let lease: BrowserLease;
+    try {
+      lease = await acquireSharedBrowser({
+        config: this.config,
+        idleMs: this.browserIdleMs,
+      });
+    } catch (error) {
+      throw buildBrowserUnavailableError(error);
+    }
     let page: Awaited<ReturnType<BrowserInstance["newPage"]>> | undefined;
     let currentScale = params.image.scale;
     const maxRetries = 2;
 
     try {
       for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-        page = await lease.browser.newPage({
-          viewport: {
-            width: Math.max(Math.ceil(params.image.maxWidth + 240), 1200),
-            height: 900,
-          },
-          deviceScaleFactor: currentScale,
-          colorScheme: params.theme,
-        });
+        try {
+          page = await lease.browser.newPage({
+            viewport: {
+              width: Math.max(Math.ceil(params.image.maxWidth + 240), 1200),
+              height: 900,
+            },
+            deviceScaleFactor: currentScale,
+            colorScheme: params.theme,
+          });
+        } catch (error) {
+          throw buildBrowserUnavailableError(error);
+        }
         await page.route("**/*", async (route) => {
           const requestUrl = route.request().url();
           if (requestUrl === "about:blank" || requestUrl.startsWith("data:")) {
@@ -176,15 +186,15 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
           await page.evaluate(() => {
             const html = document.documentElement;
             const body = document.body;
-            const frame = document.querySelector(".oc-frame");
+            const frameLocal = document.querySelector(".oc-frame");
 
             html.style.background = "transparent";
             body.style.margin = "0";
             body.style.padding = "0";
             body.style.background = "transparent";
             body.style.setProperty("-webkit-print-color-adjust", "exact");
-            if (frame instanceof HTMLElement) {
-              frame.style.margin = "0";
+            if (frameLocal instanceof HTMLElement) {
+              frameLocal.style.margin = "0";
             }
           });
 
@@ -275,20 +285,19 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
         return params.outputPath;
       }
       throw new Error(IMAGE_SIZE_LIMIT_ERROR);
-    } catch (error) {
-      if (error instanceof Error && error.message === IMAGE_SIZE_LIMIT_ERROR) {
-        throw error;
-      }
-      const reason = formatErrorMessage(error);
-      throw new Error(
-        `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
-        { cause: error },
-      );
     } finally {
       await page?.close().catch(() => {});
       await lease.release();
     }
   }
+}
+
+function buildBrowserUnavailableError(error: unknown): Error {
+  const reason = formatErrorMessage(error);
+  return new Error(
+    `Diff PNG/PDF rendering requires a Chromium-compatible browser. Set browser.executablePath or install Chrome/Chromium. ${reason}`,
+    { cause: error },
+  );
 }
 
 async function writeExternalArtifactFile(params: {
@@ -302,11 +311,6 @@ async function writeExternalArtifactFile(params: {
     path: path.basename(params.outputPath),
     write: params.write,
   });
-}
-
-export async function resetSharedBrowserStateForTests(): Promise<void> {
-  executablePathCache = null;
-  await closeSharedBrowser();
 }
 
 function injectBaseHref(html: string): string {
@@ -331,7 +335,7 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
     return await executablePathCache.valuePromise;
   }
 
-  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error) => {
+  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error: unknown) => {
     if (executablePathCache?.valuePromise === valuePromise) {
       executablePathCache = null;
     }
@@ -405,7 +409,7 @@ async function acquireSharedBrowser(params: {
         }
         return browser;
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         if (sharedBrowserState?.browserPromise === browserPromise) {
           sharedBrowserState = null;
         }
@@ -448,6 +452,7 @@ function scheduleIdleBrowserClose(state: SharedBrowserState, idleMs: number): vo
       void closeSharedBrowser();
     }
   }, idleMs);
+  state.idleTimer.unref();
 }
 
 function clearIdleTimer(state: SharedBrowserState): void {

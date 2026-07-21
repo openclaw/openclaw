@@ -1,9 +1,8 @@
+/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
-import {
-  stylePromptHint,
-  stylePromptMessage,
-  stylePromptTitle,
-} from "../../../packages/terminal-core/src/prompt-style.js";
+import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
+import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
+import { stylePromptTitle } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -14,7 +13,6 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
-import { getEnvApiKey } from "../../llm/env-api-keys.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { pad, truncate } from "./list.format.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -24,13 +22,7 @@ const MODEL_PAD = 42;
 const CTX_PAD = 8;
 
 const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
-  clackMultiselect({
-    ...params,
-    message: stylePromptMessage(params.message),
-    options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
-    ),
-  });
+  clackMultiselect(styleSelectParams(params));
 
 function guardPromptCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
@@ -190,6 +182,7 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
+/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -244,6 +237,8 @@ export async function modelsScanCommand(
           "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
         );
       }
+      // Without a key, keep the command useful as catalog discovery only; writes
+      // stay blocked because metadata-only rows have not proven runtime support.
       probe = false;
     }
   }

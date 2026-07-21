@@ -1,3 +1,4 @@
+// Signal plugin module implements message actions behavior.
 import { resolveReactionMessageId } from "openclaw/plugin-sdk/channel-actions";
 import { createActionGate, jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
@@ -95,7 +96,19 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
 
     return { actions: Array.from(actions) };
   },
-  supportsAction: ({ action }) => action !== "send",
+  supportsAction: ({ action }) => action === "react",
+  prepareSendPayload: ({ ctx, payload, replyToId, replyToIdSource }) => {
+    if (ctx.action !== "send") {
+      return null;
+    }
+    const normalizedReplyToId = replyToId?.trim();
+    if (!normalizedReplyToId) {
+      return payload;
+    }
+    return replyToIdSource === "implicit"
+      ? payload
+      : { ...payload, replyToId: normalizedReplyToId };
+  },
 
   handleAction: async ({ action, params, cfg, accountId, toolContext }) => {
     if (action === "send") {

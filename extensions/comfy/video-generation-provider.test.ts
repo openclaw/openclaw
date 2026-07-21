@@ -1,3 +1,4 @@
+// Comfy tests cover video generation provider plugin behavior.
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -6,10 +7,8 @@ import {
   mockComfyProviderApiKey,
   parseComfyJsonBody,
 } from "./test-helpers.js";
-import {
-  setComfyFetchGuardForTesting,
-  buildComfyVideoGenerationProvider,
-} from "./video-generation-provider.js";
+import { setComfyFetchGuardForTesting } from "./test-support.js";
+import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),

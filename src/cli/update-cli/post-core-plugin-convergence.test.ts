@@ -1,6 +1,8 @@
+// Post-core plugin convergence tests cover update convergence checks after core updates.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -27,8 +29,11 @@ vi.mock("./plugin-payload-validation.js", () => ({
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { VERSION } from "../../version.js";
 import {
-  convergenceWarningsToOutcomes,
   filterRecordsToActive,
+  runActivePluginPayloadSmokeCheck,
+} from "./active-plugin-payload-validation.js";
+import {
+  convergenceWarningsToOutcomes,
   runPostCorePluginConvergence,
 } from "./post-core-plugin-convergence.js";
 
@@ -106,6 +111,28 @@ describe("runPostCorePluginConvergence", () => {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });
+  });
+
+  it("checks active payloads without running repair or peer-link convergence", async () => {
+    const cfg = {
+      plugins: {
+        deny: ["disabled"],
+        entries: { active: { enabled: true }, disabled: { enabled: true } },
+      },
+    } as unknown as OpenClawConfig;
+    const records = {
+      active: { source: "npm" as const, installPath: "/p/active" },
+      disabled: { source: "npm" as const, installPath: "/p/disabled" },
+    };
+
+    await runActivePluginPayloadSmokeCheck({ cfg, records, env: { OPENCLAW_STATE_DIR: "/state" } });
+
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: { active: records.active },
+      env: { OPENCLAW_STATE_DIR: "/state" },
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).not.toHaveBeenCalled();
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).not.toHaveBeenCalled();
   });
 
   it("uses the candidate runtime version over a stale inherited host version", async () => {
@@ -187,17 +214,24 @@ describe("runPostCorePluginConvergence", () => {
     expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(1, {
       npmRoot: "/tmp/openclaw-state/npm",
       logger: {},
+      onPackageReadError: expect.any(Function),
     });
     expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
       npmRoot: "/tmp/openclaw-state/npm/projects/codex",
       logger: {},
+      onPackageReadError: expect.any(Function),
     });
     expect(result.changes).toEqual([
       "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
     ]);
     expect(
       mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mock.invocationCallOrder[0],
-    ).toBeLessThan(mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0]);
+    ).toBeLessThan(
+      expectDefined(
+        mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0],
+        "mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0] test invariant",
+      ),
+    );
   });
 
   it("forwards baselineInstallRecords to repair so sync/npm in-memory mutations are preserved", async () => {
@@ -275,7 +309,30 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
-  it("flags errored=true and surfaces actionable guidance when repair warns", async () => {
+  it("forwards ClawHub risk acknowledgement options to repair", async () => {
+    const cfg = {
+      plugins: { entries: { matrix: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    const onClawHubRisk = vi.fn(async () => true);
+    await runPostCorePluginConvergence({
+      cfg,
+      env: {},
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledTimes(1);
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg,
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
+    });
+  });
+
+  it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [
@@ -289,16 +346,111 @@ describe("runPostCorePluginConvergence", () => {
       } as unknown as OpenClawConfig,
       env: {},
     });
-    expect(result.errored).toBe(true);
+    expect(result.errored).toBe(false);
     expect(result.warnings).toStrictEqual([
       {
         reason:
           'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
         message:
           'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
-        guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
       },
     ]);
+  });
+
+  it("keeps failed configured-plugin repair fetches nonblocking", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+      ],
+      failedPluginIds: ["matrix"],
+      records: {},
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { matrix: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(result.warnings).toStrictEqual([
+      {
+        reason:
+          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+        message:
+          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
+      },
+    ]);
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
+  });
+
+  it("keeps inactive repair failures nonblocking", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+      ],
+      failedPluginIds: ["discord"],
+      records: {
+        discord: {
+          source: "npm",
+          spec: "@acme/discord",
+          installPath: "/p/discord",
+        },
+      },
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: {
+          deny: ["discord"],
+          entries: { discord: { enabled: true } },
+        },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
+  });
+
+  it("surfaces repair notices without marking convergence errored", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: ['Installed missing configured plugin "discord".'],
+      notices: [
+        'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+      ],
+      warnings: [],
+      records: { discord: { source: "clawhub", installPath: "/p/discord" } },
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { discord: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      {
+        reason:
+          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+        message:
+          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+        guidance: [],
+      },
+    ]);
+    expect(convergenceWarningsToOutcomes(result)).toStrictEqual({
+      warnings: result.notices,
+      outcomes: [],
+      errored: false,
+    });
   });
 
   it("flags errored=true when smoke check finds a missing main entry", async () => {
@@ -333,7 +485,7 @@ describe("runPostCorePluginConvergence", () => {
         message:
           'Plugin "brave" failed post-core payload smoke check (missing-main-entry): Plugin main entry "dist/index.js" not found at /p/brave/dist/index.js',
         guidance: [
-          "Run `openclaw doctor --fix` to retry plugin repair.",
+          "Run `openclaw update repair` to retry plugin repair.",
           "Run `openclaw plugins inspect brave --runtime --json` for details.",
         ],
       },
@@ -370,11 +522,157 @@ describe("runPostCorePluginConvergence", () => {
         message:
           'Plugin "brave" failed post-core payload smoke check (missing-install-path): Install path is missing from the plugin install record.',
         guidance: [
-          "Run `openclaw doctor --fix` to retry plugin repair.",
+          "Run `openclaw update repair` to retry plugin repair.",
           "Run `openclaw plugins inspect brave --runtime --json` for details.",
         ],
       },
     ]);
+  });
+
+  it("uses ownership guidance and a coherent update outcome for unreadable package.json", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath: "/p/brave" } },
+    });
+    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
+      checked: ["brave"],
+      failures: [
+        {
+          pluginId: "brave",
+          installPath: "/p/brave",
+          reason: "unreadable-package-json",
+          detail: "Could not read package.json at /p/brave/package.json: EACCES: permission denied",
+        },
+      ],
+    });
+
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+
+    const message =
+      'Plugin "brave" failed post-core payload smoke check (unreadable-package-json): Could not read package.json at /p/brave/package.json: EACCES: permission denied';
+    const guidance = [
+      "Fix file access for /p/brave/package.json so it is readable by the user running OpenClaw. For EACCES or EPERM, correct its ownership or permissions; otherwise resolve the reported filesystem I/O error, then retry.",
+      "Run `openclaw plugins inspect brave --runtime --json` for details.",
+    ];
+    expect(result.warnings).toStrictEqual([
+      {
+        pluginId: "brave",
+        reason:
+          "unreadable-package-json: Could not read package.json at /p/brave/package.json: EACCES: permission denied",
+        message,
+        guidance,
+      },
+    ]);
+    expect(convergenceWarningsToOutcomes(result)).toStrictEqual({
+      warnings: result.warnings,
+      outcomes: [{ pluginId: "brave", status: "error", message }],
+      errored: true,
+    });
+  });
+
+  it("does not duplicate a package-scoped repair error owned by a smoke failure", async () => {
+    const installPath = "/tmp/openclaw-state/npm/projects/brave/node_modules/brave";
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath } },
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(
+          new Error(`EACCES: permission denied, open '${installPath}/package.json'`),
+          installPath,
+        );
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+    mocks.runPluginPayloadSmokeCheck.mockResolvedValue({
+      checked: ["brave"],
+      failures: [
+        {
+          pluginId: "brave",
+          installPath,
+          reason: "unreadable-package-json",
+          detail: `Could not read package.json at ${installPath}/package.json: EACCES: permission denied`,
+        },
+      ],
+    });
+
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatchObject({
+      pluginId: "brave",
+      reason: expect.stringContaining("unreadable-package-json"),
+    });
+    expect(result.errored).toBe(true);
+  });
+
+  it("does not promote an inactive package read error into an ownerless blocker", async () => {
+    const installPath = "/tmp/openclaw-state/npm/projects/brave/node_modules/brave";
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { brave: { source: "npm", installPath } },
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(
+          new Error(`EACCES: permission denied, open '${installPath}/package.json'`),
+          installPath,
+        );
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { brave: { enabled: false } } },
+      } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.errored).toBe(false);
+  });
+
+  it("keeps an unowned package read error visible for startup to block", async () => {
+    const packageDir = "/tmp/openclaw-state/npm/node_modules/untracked";
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockImplementation(
+      async (params: { onPackageReadError?: (error: unknown, packageDir: string) => void }) => {
+        params.onPackageReadError?.(new Error("EACCES: permission denied"), packageDir);
+        return { checked: 0, attempted: 0, repaired: 0, skipped: 1 };
+      },
+    );
+
+    const result = await runPostCorePluginConvergence({
+      cfg: { plugins: { entries: {} } } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(result.warnings).toStrictEqual([
+      {
+        reason: "Failed to repair managed npm OpenClaw host peer links: EACCES: permission denied",
+        message: "Failed to repair managed npm OpenClaw host peer links: EACCES: permission denied",
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
+      },
+    ]);
+    expect(result.errored).toBe(false);
   });
 
   it("hands repair's post-mutation records straight to the smoke check (no second disk read)", async () => {
@@ -410,12 +708,12 @@ describe("convergenceWarningsToOutcomes", () => {
           pluginId: "brave",
           reason: "missing-main-entry: …",
           message: 'Plugin "brave" failed payload smoke check.',
-          guidance: ["Run `openclaw doctor --fix`."],
+          guidance: ["Run `openclaw update repair`."],
         },
         {
           reason: "Failed install",
           message: "Failed install for some plugin.",
-          guidance: ["Run `openclaw doctor --fix`."],
+          guidance: ["Run `openclaw update repair`."],
         },
       ],
       errored: true,

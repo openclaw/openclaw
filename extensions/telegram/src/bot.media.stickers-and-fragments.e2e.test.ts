@@ -1,5 +1,9 @@
+// Telegram tests cover bot.media.stickers and fragments plugin behavior.
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
+import { readRemoteMediaBufferSpy, telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   cacheStickerSpy,
@@ -83,20 +87,6 @@ function resolveActiveScheduledTimersForDelay(
 describe("telegram stickers", () => {
   // Parallel Testbox shards can make these media-path e2e tests slower than standalone local runs.
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
-
-  async function createStaticStickerHarness() {
-    const proxyFetch = vi.fn().mockResolvedValue(
-      new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
-        status: 200,
-        headers: { "content-type": "image/webp" },
-      }),
-    );
-    const handlerContext = await createBotHandlerWithOptions({
-      proxyFetch: proxyFetch as unknown as typeof fetch,
-    });
-    return { proxyFetch, ...handlerContext };
-  }
-
   beforeEach(() => {
     cacheStickerSpy.mockClear();
     getCachedStickerSpy.mockClear();
@@ -174,12 +164,9 @@ describe("telegram stickers", () => {
   );
 
   it(
-    "skips animated and video sticker formats that cannot be downloaded",
+    "rejects animated and video sticker downloads before fetching bytes",
     async () => {
       const proxyFetch = vi.fn();
-      const { handler, replySpy, runtimeError } = await createBotHandlerWithOptions({
-        proxyFetch: proxyFetch as unknown as typeof fetch,
-      });
 
       for (const scenario of [
         {
@@ -213,31 +200,81 @@ describe("telegram stickers", () => {
           },
         },
       ]) {
-        replySpy.mockClear();
-        runtimeError.mockClear();
         proxyFetch.mockClear();
+        const getFile = vi.fn(async () => ({ file_path: scenario.filePath }));
 
-        await handler({
-          message: {
-            message_id: scenario.messageId,
-            chat: { id: 1234, type: "private" },
-            from: { id: 777, is_bot: false, first_name: "Ada" },
-            sticker: scenario.sticker,
-            date: 1736380800,
-          },
-          me: { username: "openclaw_bot" },
-          getFile: async () => ({ file_path: scenario.filePath }),
+        const media = await resolveMedia({
+          maxBytes: 2 * 1024 * 1024,
+          token: "tok",
+          transport: {
+            close: async () => {},
+            fetch: proxyFetch as unknown as typeof fetch,
+            sourceFetch: proxyFetch as unknown as typeof fetch,
+          } satisfies TelegramTransport,
+          ctx: {
+            message: {
+              message_id: scenario.messageId,
+              chat: { id: 1234, type: "private" },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              sticker: scenario.sticker,
+              date: 1736380800,
+            },
+            getFile,
+          } as unknown as TelegramContext,
         });
 
+        expect(media).toBeNull();
+        expect(getFile).not.toHaveBeenCalled();
         expect(proxyFetch).not.toHaveBeenCalled();
-        expect(replySpy).not.toHaveBeenCalled();
-        expect(runtimeError).not.toHaveBeenCalled();
       }
     },
     STICKER_TEST_TIMEOUT_MS,
   );
 });
 
+describe("telegram local Bot API media", () => {
+  it("reads a container-local file from its trusted host volume mount", async () => {
+    const token = "123:test-token";
+    const tempRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-tg-local-")));
+    const relativePath = path.join(token, "documents", "file_12.zip");
+    try {
+      await mkdir(path.dirname(path.join(tempRoot, relativePath)), { recursive: true });
+      await writeFile(path.join(tempRoot, relativePath), "zip-data");
+
+      const media = await resolveMedia({
+        maxBytes: 1024,
+        token,
+        trustedLocalFileRoots: [tempRoot],
+        ctx: {
+          message: {
+            message_id: 104,
+            chat: { id: 1234, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            document: {
+              file_id: "document_file_id",
+              file_unique_id: "document_unique_id",
+              file_name: "archive.zip",
+              mime_type: "application/zip",
+            },
+            date: 1736380800,
+          },
+          getFile: async () => ({
+            file_path: `/var/lib/telegram-bot-api/${token}/documents/file_12.zip`,
+          }),
+        } as TelegramContext,
+      });
+
+      expect(readRemoteMediaBufferSpy).not.toHaveBeenCalled();
+      expect(media).toMatchObject({
+        path: "/tmp/telegram-media",
+        contentType: "application/zip",
+        kind: "document",
+      });
+    } finally {
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
 describe("telegram text fragments", () => {
   afterEach(() => {
     vi.clearAllTimers();
@@ -286,7 +323,7 @@ describe("telegram text fragments", () => {
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
         );
 
-        expect(replySpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
         const payload = replySpy.mock.calls.at(0)?.[0] as { RawBody?: string };
         expect(payload.RawBody).toContain(part1.slice(0, 32));
         expect(payload.RawBody).toContain(part2.slice(0, 32));
@@ -362,9 +399,9 @@ describe("telegram text fragments", () => {
           TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
         );
 
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
         expect(readAllowFromStore).toHaveBeenCalledWith("telegram", process.env, "default");
         expect(upsertPairingRequest).not.toHaveBeenCalled();
-        expect(replySpy).toHaveBeenCalledTimes(1);
         expect(runtimeError).not.toHaveBeenCalled();
       } finally {
         setTimeoutSpy.mockRestore();
@@ -444,7 +481,7 @@ describe("telegram text fragments", () => {
           clearTimeout(timer.handle);
           await timer.callback();
         }
-        expect(replySpy).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
         const rawBodies = replySpy.mock.calls.map(
           (call) => (call[0] as { RawBody?: string }).RawBody,
         );

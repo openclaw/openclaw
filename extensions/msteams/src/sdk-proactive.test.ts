@@ -1,3 +1,4 @@
+// Msteams tests cover sdk proactive plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";
@@ -35,6 +36,33 @@ describe("sendMSTeamsActivityWithReference", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it("sends a legacy bot-only imported reference instead of rejecting it", async () => {
+    vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
+    const app = {
+      client: { request: vi.fn() },
+      api: { serviceUrl: "https://smba.trafficmanager.net/teams" },
+    } as unknown as MSTeamsApp;
+
+    const result = await sendMSTeamsActivityWithReference(
+      app,
+      {
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        bot: { id: "28:legacy-bot", name: "OpenClaw" },
+        user: { id: "29:user" },
+        conversation: {
+          id: "19:conversation@thread.tacv2",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        channelId: "msteams",
+      },
+      { type: "message", text: "hello" },
+    );
+
+    expect(result).toMatchObject({ id: "activity-1" });
+    expect(clientState.create).toHaveBeenCalledTimes(1);
   });
 
   it("sends through a reference-scoped API client without the protected SDK activitySender", async () => {

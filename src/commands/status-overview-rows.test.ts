@@ -1,3 +1,4 @@
+// Status overview row tests cover status-all overview values, update metadata, and display rows.
 import { describe, expect, it } from "vitest";
 import { VERSION } from "../version.js";
 import {
@@ -48,6 +49,29 @@ describe("status-overview-rows", () => {
     );
 
     expect(findRowValue(rows, "Update restart")).toBe("failed · managed-service-handoff-failed");
+  });
+
+  it("lists plugins quarantined as configured-unavailable", () => {
+    const rows = buildStatusCommandOverviewRows(
+      createStatusCommandOverviewRowsParams({
+        summary: {
+          ...createStatusCommandOverviewRowsParams().summary,
+          degradedPlugins: [
+            {
+              pluginId: "discord",
+              state: "configured-unavailable",
+              diagnostic: {
+                kind: "plugin-verification",
+                reason: "unreadable-package-json",
+                detail: "permission denied",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(findRowValue(rows, "Degraded plugins")).toBe("warn(1 configured-unavailable · discord)");
   });
 
   it("builds status-all overview rows from the shared surface", () => {

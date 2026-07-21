@@ -1,3 +1,4 @@
+// Codex tests cover attempt diagnostics plugin behavior.
 import { describe, expect, it } from "vitest";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { resolveCodexPluginsPolicy } from "./config.js";
@@ -23,16 +24,20 @@ describe("Codex app-server attempt diagnostics", () => {
         },
       },
       codeModeOnly: false,
+      loopDetectionPreToolUseRelay: true,
       requestTimeoutMs: 60_000,
       turnCompletionIdleTimeoutMs: 60_000,
       approvalPolicy: "never" as const,
       approvalsReviewer: "user" as const,
       sandbox: "danger-full-access" as const,
+      connectionClass: "local-loopback" as const,
+      remoteAppsSubstrate: "preconfigured" as const,
       serviceTier: "priority" as const,
     };
     const resolvedPluginPolicy = resolveCodexPluginsPolicy({
       codexPlugins: {
         enabled: true,
+        allow_all_plugins: true,
         plugins: {
           "google-calendar": {
             marketplaceName: "openai-curated",
@@ -66,6 +71,7 @@ describe("Codex app-server attempt diagnostics", () => {
         enabled: true,
         policyConfigured: true,
         policyEnabled: true,
+        allowAllPlugins: true,
         pluginConfigKeys: ["google-calendar"],
         enabledPluginConfigKeys: ["google-calendar"],
         appCacheKeyFingerprint: expect.stringMatching(/^sha256:/),

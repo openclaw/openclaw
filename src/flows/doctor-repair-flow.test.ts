@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+// Doctor repair flow tests cover repair plan output and repair execution.
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runDoctorHealthRepairs } from "./doctor-repair-flow.js";
-import { defineSplitHealthCheck, normalizeHealthCheck } from "./health-check-adapter.js";
-import type { RunnableHealthCheck } from "./health-check-runner-types.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
+import type { RunnableHealthCheck, SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthRepairContext } from "./health-checks.js";
 
 function ctx(cfg: OpenClawConfig): HealthRepairContext {
@@ -25,13 +26,13 @@ describe("runDoctorHealthRepairs", () => {
       id: "test/run-repairable",
       kind: "core",
       description: "run repairable",
-      async run(ctx, scope) {
-        runModes.push(ctx.mode);
+      async run(ctxItem, scope) {
+        runModes.push(ctxItem.mode);
         if (scope !== undefined) {
           scopes.push(scope);
         }
         const findings =
-          ctx.cfg.gateway?.mode === "local"
+          ctxItem.cfg.gateway?.mode === "local"
             ? []
             : [
                 {
@@ -41,12 +42,12 @@ describe("runDoctorHealthRepairs", () => {
                   path: "gateway.mode",
                 },
               ];
-        if (!ctx.repair || findings.length === 0) {
+        if (!ctxItem.repair || findings.length === 0) {
           return { findings };
         }
         return {
           findings,
-          config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+          config: { ...ctxItem.cfg, gateway: { ...ctxItem.cfg.gateway, mode: "local" } },
           changes: ["Set gateway.mode to local."],
         };
       },
@@ -67,15 +68,15 @@ describe("runDoctorHealthRepairs", () => {
   it("repairs modern checks and threads updated config", async () => {
     const scopes: unknown[] = [];
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/repairable",
         kind: "core",
         description: "repairable",
-        async detect(ctx, scope) {
+        async detect(ctxCandidate, scope) {
           if (scope !== undefined) {
             scopes.push(scope);
           }
-          return ctx.cfg.gateway?.mode === "local"
+          return ctxCandidate.cfg.gateway?.mode === "local"
             ? []
             : [
                 {
@@ -86,9 +87,9 @@ describe("runDoctorHealthRepairs", () => {
                 },
               ];
         },
-        async repair(ctx) {
+        async repair(ctxEntry) {
           return {
-            config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+            config: { ...ctxEntry.cfg, gateway: { ...ctxEntry.cfg.gateway, mode: "local" } },
             changes: ["Set gateway.mode to local."],
           };
         },
@@ -106,34 +107,16 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it("keeps repairable out of split repair result types", () => {
-    const check = defineSplitHealthCheck({
-      id: "test/repair-result-status-boundary",
-      kind: "core",
-      description: "repair result status boundary",
-      async detect() {
-        return [
-          {
-            checkId: "test/repair-result-status-boundary",
-            severity: "warning",
-            message: "needs repair",
-          },
-        ];
-      },
-      // @ts-expect-error repairable is a run-result preview status, not a split repair result.
-      async repair() {
-        return {
-          status: "repairable",
-          changes: [],
-        };
-      },
-    });
-
-    expect(check.id).toBe("test/repair-result-status-boundary");
+    type SplitRepair = NonNullable<SplitHealthCheckInput["repair"]>;
+    expectTypeOf(async () => ({
+      status: "repairable" as const,
+      changes: [],
+    })).not.toMatchTypeOf<SplitRepair>();
   });
 
   it("leaves non-repairable checks for legacy doctor behavior", async () => {
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/legacy-only",
         kind: "core",
         description: "legacy only",
@@ -161,7 +144,7 @@ describe("runDoctorHealthRepairs", () => {
 
   it("keeps split check findings when repair throws", async () => {
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/repair-throws",
         kind: "core",
         description: "repair throws",
@@ -196,7 +179,7 @@ describe("runDoctorHealthRepairs", () => {
 
   it("reports repair validation findings that remain after repair", async () => {
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/not-fixed",
         kind: "core",
         description: "not fixed",
@@ -234,7 +217,7 @@ describe("runDoctorHealthRepairs", () => {
   it("validates successful repairs by default", async () => {
     let detectCalls = 0;
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/no-default-validation",
         kind: "core",
         description: "no default validation",
@@ -273,7 +256,7 @@ describe("runDoctorHealthRepairs", () => {
   it("does not validate skipped or failed repair results", async () => {
     let validationCalls = 0;
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/skipped",
         kind: "core",
         description: "skipped",
@@ -291,7 +274,7 @@ describe("runDoctorHealthRepairs", () => {
           return {
             status: "skipped",
             reason: "manual confirmation required",
-            changes: [],
+            changes: ["Review required before changing gateway.mode."],
           };
         },
       }),
@@ -303,6 +286,7 @@ describe("runDoctorHealthRepairs", () => {
     expect(result.checksRepaired).toBe(0);
     expect(result.checksValidated).toBe(0);
     expect(result.remainingFindings).toEqual([]);
+    expect(result.changes).toEqual(["Review required before changing gateway.mode."]);
     expect(result.warnings).toEqual(["test/skipped repair skipped: manual confirmation required"]);
   });
 
@@ -310,13 +294,13 @@ describe("runDoctorHealthRepairs", () => {
     const repairContexts: HealthRepairContext[] = [];
     let detectCalls = 0;
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/dry-run",
         kind: "core",
         description: "dry run",
-        async detect(ctx) {
+        async detect(ctxResult) {
           detectCalls++;
-          return ctx.cfg.gateway?.mode === "local"
+          return ctxResult.cfg.gateway?.mode === "local"
             ? []
             : [
                 {
@@ -327,10 +311,10 @@ describe("runDoctorHealthRepairs", () => {
                 },
               ];
         },
-        async repair(ctx) {
-          repairContexts.push(ctx);
+        async repair(ctxValue) {
+          repairContexts.push(ctxValue);
           return {
-            config: { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, mode: "local" } },
+            config: { ...ctxValue.cfg, gateway: { ...ctxValue.cfg.gateway, mode: "local" } },
             changes: ["Would set gateway.mode to local."],
             diffs: [
               {
@@ -372,7 +356,7 @@ describe("runDoctorHealthRepairs", () => {
   it("passes diff false and true through the repair API", async () => {
     const repairContexts: HealthRepairContext[] = [];
     const checks: HealthCheck[] = [
-      defineSplitHealthCheck({
+      normalizeHealthCheck({
         id: "test/diff-preview",
         kind: "core",
         description: "diff preview",
@@ -386,12 +370,12 @@ describe("runDoctorHealthRepairs", () => {
             },
           ];
         },
-        async repair(ctx) {
-          repairContexts.push(ctx);
+        async repair(ctxLocal) {
+          repairContexts.push(ctxLocal);
           return {
             changes: ["Would set gateway.mode to local."],
             diffs:
-              ctx.diff === true
+              ctxLocal.diff === true
                 ? [
                     {
                       kind: "config",

@@ -1,3 +1,4 @@
+// Telegram plugin module implements targets behavior.
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 
 export type TelegramTarget = {
@@ -104,7 +105,12 @@ export function parseTelegramTarget(to: string): TelegramTarget {
 
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(normalized);
   if (topicMatch) {
-    const messageThreadId = parseStrictNonNegativeInteger(topicMatch[2]);
+    const chatId = topicMatch[1];
+    const threadIdText = topicMatch[2];
+    if (chatId === undefined || threadIdText === undefined) {
+      return { chatId: normalized, chatType: resolveTelegramChatType(normalized) };
+    }
+    const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
     if (messageThreadId === undefined) {
       return {
         chatId: normalized,
@@ -112,15 +118,20 @@ export function parseTelegramTarget(to: string): TelegramTarget {
       };
     }
     return {
-      chatId: topicMatch[1],
+      chatId,
       messageThreadId,
-      chatType: resolveTelegramChatType(topicMatch[1]),
+      chatType: resolveTelegramChatType(chatId),
     };
   }
 
   const colonMatch = /^(.+):(\d+)$/.exec(normalized);
   if (colonMatch) {
-    const messageThreadId = parseStrictNonNegativeInteger(colonMatch[2]);
+    const chatId = colonMatch[1];
+    const threadIdText = colonMatch[2];
+    if (chatId === undefined || threadIdText === undefined) {
+      return { chatId: normalized, chatType: resolveTelegramChatType(normalized) };
+    }
+    const messageThreadId = parseStrictNonNegativeInteger(threadIdText);
     if (messageThreadId === undefined) {
       return {
         chatId: normalized,
@@ -128,9 +139,9 @@ export function parseTelegramTarget(to: string): TelegramTarget {
       };
     }
     return {
-      chatId: colonMatch[1],
+      chatId,
       messageThreadId,
-      chatType: resolveTelegramChatType(colonMatch[1]),
+      chatType: resolveTelegramChatType(chatId),
     };
   }
 

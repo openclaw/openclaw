@@ -1,3 +1,4 @@
+// Memory Core tests cover manager sync ops.archive delta bypass plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -82,6 +83,10 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
+  protected resolveProviderIndexIdentities() {
+    return [];
+  }
+
   protected async sync(params?: SyncParams): Promise<void> {
     this.syncCalls.push(params ?? {});
   }
@@ -101,6 +106,8 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
   protected pruneEmbeddingCacheIfNeeded(): void {}
 
   protected resetProviderInitializationForRetry(): void {}
+
+  protected assertRequiredProviderAvailable(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,

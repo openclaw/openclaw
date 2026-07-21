@@ -1,3 +1,4 @@
+// Copilot plugin module implements runtime behavior.
 import { normalize, resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { loadCopilotSdk } from "./sdk-loader.js";
@@ -13,14 +14,14 @@ const POOL_DISPOSED_MESSAGE = "[copilot-pool] pool disposed";
 export interface PoolKey {
   readonly agentId: string;
   readonly copilotHome: string;
-  readonly authMode: "useLoggedInUser" | "gitHubToken";
+  readonly authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   readonly authProfileId?: string;
   readonly authProfileVersion?: string;
 }
 
 export interface ClientCreateOptions extends Omit<
   CopilotClientOptions,
-  "copilotHome" | "useLoggedInUser" | "gitHubToken"
+  "baseDirectory" | "workingDirectory" | "useLoggedInUser" | "gitHubToken"
 > {
   readonly copilotHome: string;
   readonly useLoggedInUser?: boolean;
@@ -361,9 +362,10 @@ function normalizeClientCreateOptions(
   options: ClientCreateOptions,
   normalizedCopilotHome: string,
 ): CopilotClientOptions {
+  const { copilotHome: _copilotHome, ...clientOptions } = options;
   return {
-    ...options,
-    copilotHome: normalizedCopilotHome,
+    ...clientOptions,
+    baseDirectory: normalizedCopilotHome,
   };
 }
 

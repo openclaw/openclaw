@@ -1,3 +1,4 @@
+/** Covers plugin schema validation for manifests and exported config schemas. */
 import { Format } from "typebox/format";
 import { describe, expect, it } from "vitest";
 import { validateJsonSchemaValue } from "./schema-validator.js";
@@ -2128,3 +2129,4 @@ describe("schema validator", () => {
     expect(Format.Get("uuid")?.("not a uuid")).toBe(false);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

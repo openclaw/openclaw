@@ -1,17 +1,34 @@
+/**
+ * Channel setup group access prompts.
+ *
+ * Prompts and normalizes allowlist/open/disabled group access policy choices.
+ */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
+/**
+ * Group access policy selected during channel setup.
+ */
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
-export function parseAllowlistEntries(raw: string): string[] {
+/**
+ * Parses comma, semicolon, or newline separated allowlist entries.
+ */
+function parseAllowlistEntries(raw: string): string[] {
   return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
-export function formatAllowlistEntries(entries: string[]): string {
+/**
+ * Formats allowlist entries for setup prompt initial values.
+ */
+function formatAllowlistEntries(entries: string[]): string {
   return normalizeStringEntries(entries).join(", ");
 }
 
-export async function promptChannelAccessPolicy(params: {
+/**
+ * Prompts for the group access policy allowed by the channel setup flow.
+ */
+async function promptChannelAccessPolicy(params: {
   prompter: WizardPrompter;
   label: string;
   currentPolicy?: ChannelAccessPolicy;
@@ -35,7 +52,10 @@ export async function promptChannelAccessPolicy(params: {
   });
 }
 
-export async function promptChannelAllowlist(params: {
+/**
+ * Prompts for group allowlist entries and normalizes the response.
+ */
+async function promptChannelAllowlist(params: {
   prompter: WizardPrompter;
   label: string;
   currentEntries?: string[];
@@ -53,6 +73,9 @@ export async function promptChannelAllowlist(params: {
   return parseAllowlistEntries(raw);
 }
 
+/**
+ * Prompts for the full group access config, including allowlist entries when needed.
+ */
 export async function promptChannelAccessConfig(params: {
   prompter: WizardPrompter;
   label: string;
@@ -84,6 +107,8 @@ export async function promptChannelAccessConfig(params: {
     allowDisabled: params.allowDisabled,
   });
   if (policy !== "allowlist") {
+    // Open/disabled policies do not carry allowlist entries, so clear entries
+    // at the prompt boundary before callers write config.
     return { policy, entries: [] };
   }
   if (params.skipAllowlistEntries) {

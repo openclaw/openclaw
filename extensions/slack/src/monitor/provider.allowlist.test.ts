@@ -1,3 +1,4 @@
+// Slack tests cover provider.allowlist plugin behavior.
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -44,7 +45,7 @@ function resolveAllowlistCallAt(index: number): { entries?: unknown } {
 }
 
 describe("slack allowlist log formatting", () => {
-  it("prints channel names alongside ids", () => {
+  it("prints channel names without repeating the id input", () => {
     expect(
       formatSlackChannelResolved({
         input: "C0AQXEG6QFJ",
@@ -52,10 +53,10 @@ describe("slack allowlist log formatting", () => {
         id: "C0AQXEG6QFJ",
         name: "openclawtest",
       }),
-    ).toBe("C0AQXEG6QFJ→openclawtest (id:C0AQXEG6QFJ)");
+    ).toBe("C0AQXEG6QFJ→openclawtest");
   });
 
-  it("prints user names alongside ids", () => {
+  it("prints user names without repeating the id input", () => {
     expect(
       formatSlackUserResolved({
         input: "U090HHQ029J",
@@ -63,7 +64,39 @@ describe("slack allowlist log formatting", () => {
         id: "U090HHQ029J",
         name: "steipete",
       }),
-    ).toBe("U090HHQ029J→steipete (id:U090HHQ029J)");
+    ).toBe("U090HHQ029J→steipete");
+  });
+
+  it("includes the id when resolving from a display name", () => {
+    expect(
+      formatSlackUserResolved({
+        input: "@steipete",
+        resolved: true,
+        id: "U090HHQ029J",
+        name: "steipete",
+      }),
+    ).toBe("@steipete→steipete (id:U090HHQ029J)");
+  });
+
+  it("omits identity lookups that resolved to themselves without a name", () => {
+    expect(
+      formatSlackUserResolved({
+        input: "U090HHQ029J",
+        resolved: true,
+        id: "U090HHQ029J",
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps bare-name lookups that resolved to an id, even when the name matches the input", () => {
+    expect(
+      formatSlackChannelResolved({
+        input: "general",
+        resolved: true,
+        id: "C123",
+        name: "general",
+      }),
+    ).toBe("general→general (id:C123)");
   });
 });
 
@@ -73,6 +106,8 @@ describe("slack startup user allowlist resolution", () => {
       channels: {
         slack: {
           enabled: true,
+          botToken: "xoxb-test",
+          appToken: "xapp-test",
           allowFrom: ["U123OWNER"],
           execApprovals: {
             enabled: false,

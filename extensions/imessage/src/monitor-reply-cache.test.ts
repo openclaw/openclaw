@@ -1,49 +1,32 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import {
-  resetIMessageShortIdState,
-  findLatestIMessageEntryForChat,
-  isKnownFromMeIMessageMessageId,
-  rememberIMessageReplyCache,
-  resolveIMessageMessageId,
-} from "./monitor-reply-cache.js";
+// Imessage tests cover monitor reply cache plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadFreshIMessageReplyCacheForTest } from "./test-support/runtime.js";
 
-// Isolate from any live ~/.openclaw/imessage/reply-cache.jsonl that the
-// developer might have from a running gateway. Without this, the on-disk
-// hydrate path picks up production data and tests get cross-pollinated.
-//
-// vi.stubEnv defaults to per-test scoping in this codebase, which means a
-// beforeAll-only stub gets unstubbed between tests. Mutate process.env
-// directly so the override holds across the whole file.
-let tempStateDir: string;
-let priorStateDir: string | undefined;
-beforeAll(() => {
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-reply-cache-"));
-  priorStateDir = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
-});
-afterAll(() => {
-  if (priorStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = priorStateDir;
-  }
-  fs.rmSync(tempStateDir, { recursive: true, force: true });
+type ReplyCacheModule = typeof import("./monitor-reply-cache.js");
+let findLatestIMessageEntryForChat: ReplyCacheModule["findLatestIMessageEntryForChat"];
+let isIMessageCurrentMessageInChat: ReplyCacheModule["isIMessageCurrentMessageInChat"];
+let isKnownFromMeIMessageMessageId: ReplyCacheModule["isKnownFromMeIMessageMessageId"];
+let rememberIMessageReplyCache: ReplyCacheModule["rememberIMessageReplyCache"];
+let resolveIMessageCachedResourceBinding: ReplyCacheModule["resolveIMessageCachedResourceBinding"];
+let resolveIMessageMessageId: ReplyCacheModule["resolveIMessageMessageId"];
+
+async function loadReplyCache(options?: { preservePersistentState?: boolean }): Promise<void> {
+  ({
+    findLatestIMessageEntryForChat,
+    isIMessageCurrentMessageInChat,
+    isKnownFromMeIMessageMessageId,
+    rememberIMessageReplyCache,
+    resolveIMessageCachedResourceBinding,
+    resolveIMessageMessageId,
+  } = await loadFreshIMessageReplyCacheForTest(options));
+}
+
+beforeEach(async () => {
+  await loadReplyCache();
 });
 
-beforeEach(() => {
-  resetIMessageShortIdState();
-  // Belt-and-suspenders: also nuke the persisted file directly. The
-  // _reset helper does this when OPENCLAW_STATE_DIR is set, but explicitly
-  // clearing here protects the test from any future refactor of _reset's
-  // gating logic.
-  try {
-    fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
-  } catch {
-    // best-effort
-  }
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("imessage short message id resolution", () => {
@@ -97,7 +80,16 @@ describe("imessage short message id resolution", () => {
         requireKnownShortId: true,
         chatContext: { chatGuid: "iMessage;+;other" },
       }),
-    ).toThrow("belongs to a different chat");
+    ).toThrow("MessageSidFull from another chat is rejected");
+  });
+
+  it("recommends the full id when a short id has expired in the current chat", () => {
+    expect(() =>
+      resolveIMessageMessageId("9999", {
+        requireKnownShortId: true,
+        chatContext: { chatGuid: "iMessage;+;chat0000" },
+      }),
+    ).toThrow("is no longer available. Use MessageSidFull");
   });
 
   it("guards full guid reuse across chats when cached", () => {
@@ -271,11 +263,6 @@ describe("findLatestIMessageEntryForChat", () => {
   });
 
   it("never crosses account boundaries", () => {
-    // Diagnostic: verify the temp-dir env stub is actually visible.
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(tempStateDir);
-    const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    expect(fs.existsSync(cachePath)).toBe(false);
-
     rememberIMessageReplyCache({
       accountId: "other-account",
       messageId: "foreign-account",
@@ -342,57 +329,8 @@ describe("findLatestIMessageEntryForChat", () => {
   });
 });
 
-describe("reply cache disk permissions", () => {
-  it("clamps pre-existing reply-cache.jsonl from older 0644/0755 to 0600/0700", () => {
-    // Older gateway versions wrote with default modes. Every append must
-    // clamp existing files back to owner-only — appendFileSync's `mode`
-    // only applies on creation, so a chmod-on-create-only path would leave
-    // the upgrade case world-readable forever.
-    const imsgDir = path.join(tempStateDir, "imessage");
-    fs.mkdirSync(imsgDir, { recursive: true, mode: 0o755 });
-    const cacheFile = path.join(imsgDir, "reply-cache.jsonl");
-    fs.writeFileSync(cacheFile, "", { mode: 0o644 });
-    fs.chmodSync(imsgDir, 0o755);
-    fs.chmodSync(cacheFile, 0o644);
-
-    rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "clamp-test-guid",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-
-    const fileMode = fs.statSync(cacheFile).mode & 0o777;
-    const dirMode = fs.statSync(imsgDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
-  });
-
-  it("writes the cache file 0600 and parent dir 0700", () => {
-    // Map gateway-allocated short-ids to message guids; a hostile same-UID
-    // process reading or writing this file could (a) enumerate active
-    // conversation guids or (b) inject lines so a future shortId resolves
-    // to an attacker-chosen guid. Owner-only mode is the mitigation.
-    rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "perm-test-guid",
-      chatIdentifier: "+12069106512",
-      timestamp: Date.now(),
-    });
-
-    const cacheFile = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    const cacheDir = path.dirname(cacheFile);
-    expect(fs.existsSync(cacheFile)).toBe(true);
-
-    const fileMode = fs.statSync(cacheFile).mode & 0o777;
-    const dirMode = fs.statSync(cacheDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
-  });
-});
-
 describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
-  it("hydrates the on-disk JSONL before resolving a short id whose mapping predates this run", () => {
+  it("hydrates SQLite state before resolving a short id whose mapping predates this run", async () => {
     // Issue-then-restart contract: a shortId we issued before a gateway
     // restart must still resolve afterwards. The first resolve call after
     // process boot would otherwise miss the persisted mapping because the
@@ -407,15 +345,9 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     });
     expect(issued.shortId).not.toBe("");
 
-    // Simulate a restart: clear the in-memory state but leave the JSONL on
-    // disk. resetIMessageShortIdState only deletes the persisted file when
-    // OPENCLAW_STATE_DIR is set, so we have to keep the file ourselves
-    // since this test runs under the suite's temp state dir.
-    const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    const persisted = fs.readFileSync(cachePath, "utf8");
-    resetIMessageShortIdState();
-    fs.mkdirSync(path.dirname(cachePath), { recursive: true });
-    fs.writeFileSync(cachePath, persisted, "utf8");
+    // Simulate a restart: clear only the process-local maps and leave the
+    // SQLite plugin-state rows intact.
+    await loadReplyCache({ preservePersistentState: true });
 
     // Now resolve the short id we issued before the "restart". Without the
     // hydrate-on-resolve fix this throws "no longer available" because the
@@ -427,6 +359,160 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
         chatContext: { chatGuid: "iMessage;+;chatA" },
       }),
     ).toBe("outbound-guid-pre-restart");
+  });
+
+  it("persists entries when optional chat fields are explicitly undefined", async () => {
+    const issued = rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "guid-with-undefined-optionals",
+      chatGuid: undefined,
+      chatIdentifier: undefined,
+      chatId: undefined,
+      timestamp: Date.now(),
+    });
+
+    await loadReplyCache({ preservePersistentState: true });
+
+    expect(
+      resolveIMessageMessageId(issued.shortId, {
+        requireKnownShortId: true,
+        chatContext: { chatIdentifier: "+15551234567" },
+      }),
+    ).toBe("guid-with-undefined-optionals");
+  });
+
+  it("does not reuse short ids after cached rows expire", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
+    const first = rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "old-guid",
+      timestamp: Date.now(),
+    });
+    expect(first.shortId).toBe("1");
+
+    vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
+    await loadReplyCache({ preservePersistentState: true });
+    const second = rememberIMessageReplyCache({
+      accountId: "default",
+      messageId: "new-guid",
+      timestamp: Date.now(),
+    });
+
+    expect(second.shortId).toBe("2");
+  });
+});
+
+describe("current-message chat binding", () => {
+  it("preserves concrete service identity while allowing trusted any aliases", () => {
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "sms-guid",
+      chatGuid: "SMS;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "any-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      timestamp: Date.now(),
+    });
+
+    expect(
+      resolveIMessageCachedResourceBinding("sms-guid", {
+        accountId: "work",
+        chatIdentifier: "iMessage;-;+12069106512",
+      }),
+    ).toBe("mismatch");
+    expect(
+      resolveIMessageCachedResourceBinding("any-guid", {
+        accountId: "work",
+        chatIdentifier: "iMessage;-;+12069106512",
+      }),
+    ).toBe("match");
+  });
+
+  it("treats expired entries as unknown before account or chat mismatches", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T00:00:00Z"));
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "expired-guid",
+      chatId: 42,
+      timestamp: Date.now(),
+    });
+    vi.setSystemTime(new Date("2026-05-08T07:00:00Z"));
+
+    expect(
+      resolveIMessageCachedResourceBinding("expired-guid", {
+        accountId: "other",
+        chatId: 99,
+      }),
+    ).toBe("unknown");
+  });
+
+  it.each([{ chatGuid: "any;-;+12069106512" }, { chatIdentifier: "+12069106512" }, { chatId: 42 }])(
+    "matches a trusted current message through $chatGuid$chatIdentifier$chatId",
+    (chatContext) => {
+      const entry = rememberIMessageReplyCache({
+        accountId: "work",
+        messageId: "current-guid",
+        chatGuid: "any;-;+12069106512",
+        chatIdentifier: "+12069106512",
+        chatId: 42,
+        timestamp: Date.now(),
+      });
+
+      expect(
+        isIMessageCurrentMessageInChat({
+          accountId: "work",
+          currentMessageId: entry.shortId,
+          chatContext,
+        }),
+      ).toBe(true);
+      expect(
+        isIMessageCurrentMessageInChat({
+          accountId: "work",
+          currentMessageId: "current-guid",
+          chatContext,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("fails closed for wrong accounts, chats, and unknown current messages", () => {
+    rememberIMessageReplyCache({
+      accountId: "work",
+      messageId: "current-guid",
+      chatGuid: "any;-;+12069106512",
+      chatIdentifier: "+12069106512",
+      chatId: 42,
+      timestamp: Date.now(),
+    });
+
+    expect(
+      isIMessageCurrentMessageInChat({
+        accountId: "other",
+        currentMessageId: "current-guid",
+        chatContext: { chatId: 42 },
+      }),
+    ).toBe(false);
+    expect(
+      isIMessageCurrentMessageInChat({
+        accountId: "work",
+        currentMessageId: "current-guid",
+        chatContext: { chatId: 99 },
+      }),
+    ).toBe(false);
+    expect(
+      isIMessageCurrentMessageInChat({
+        accountId: "work",
+        currentMessageId: "unknown-guid",
+        chatContext: { chatId: 42 },
+      }),
+    ).toBe(false);
   });
 });
 

@@ -1,9 +1,15 @@
+/**
+ * Tests mirroring refreshed OAuth credentials to the main store.
+ * Protects identity checks and persistence behavior when sub-agents refresh a
+ * shared profile.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { testing as externalAuthTesting } from "./external-auth.js";
+import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import {
@@ -11,11 +17,13 @@ import {
   createOAuthMainAgentDir,
   createOAuthTestTempRoot,
   createExpiredOauthStore,
+  readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
   resetOAuthProviderRuntimeMocks,
 } from "./oauth-test-utils.js";
-import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -129,15 +137,16 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
 
     // Main store should now carry refreshed metadata, so a peer agent
     // starting fresh can resolve the runtime credential without token races.
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
-      access: "sub-refreshed-access",
-      refresh: "sub-refreshed-refresh",
-      expires: freshExpiry,
-      accountId,
-    });
+    const mainRaw = readAuthProfileStoreForTest(mainAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(mainRaw.profiles[profileId], "mainRaw.profiles[profileId] test invariant"),
+      {
+        access: "sub-refreshed-access",
+        refresh: "sub-refreshed-refresh",
+        expires: freshExpiry,
+        accountId,
+      },
+    );
   });
 
   it("does not mirror when refresh was performed from the main agent itself", async () => {
@@ -171,14 +180,15 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     });
 
     expect(result?.apiKey).toBe("main-refreshed-access");
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
-      access: "main-refreshed-access",
-      refresh: "main-refreshed-refresh",
-      expires: freshExpiry,
-    });
+    const mainRaw = readAuthProfileStoreForTest(mainAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(mainRaw.profiles[profileId], "mainRaw.profiles[profileId] test invariant"),
+      {
+        access: "main-refreshed-access",
+        refresh: "main-refreshed-refresh",
+        expires: freshExpiry,
+      },
+    );
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
@@ -343,25 +353,27 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(result?.apiKey).toBe("main-owner-refreshed-access");
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
 
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(subRaw.profiles[profileId], {
-      access: "local-stale-access",
-      refresh: "local-stale-refresh",
-      expires: now - 120_000,
-      accountId,
-    });
+    const subRaw = readAuthProfileStoreForTest(subAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
+      {
+        access: "local-stale-access",
+        refresh: "local-stale-refresh",
+        expires: now - 120_000,
+        accountId,
+      },
+    );
 
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
-      access: "main-owner-refreshed-access",
-      refresh: "main-owner-refreshed-refresh",
-      expires: freshExpiry,
-      accountId,
-    });
+    const mainRaw = readAuthProfileStoreForTest(mainAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(mainRaw.profiles[profileId], "mainRaw.profiles[profileId] test invariant"),
+      {
+        access: "main-owner-refreshed-access",
+        refresh: "main-owner-refreshed-refresh",
+        expires: freshExpiry,
+        accountId,
+      },
+    );
   });
 
   it("inherits main-agent credentials via the catch-block fallback when refresh throws after main becomes fresh", async () => {
@@ -426,14 +438,15 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(result?.provider).toBe(provider);
 
     // Sub-agent's store keeps its local expired credential; inherited OAuth is read-through.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(subRaw.profiles[profileId], {
-      access: "cached-access-token",
-      refresh: "refresh-token",
-      accountId: "acct-shared",
-    });
+    const subRaw = readAuthProfileStoreForTest(subAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
+      {
+        access: "cached-access-token",
+        refresh: "refresh-token",
+        accountId: "acct-shared",
+      },
+    );
   });
 
   it("does not satisfy forced refresh from unchanged main-agent credentials after refresh fails", async () => {
@@ -510,9 +523,7 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(result?.apiKey).toBe("plugin-refreshed-access");
 
     // Main store must have been mirrored from the plugin-refresh branch.
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
+    const mainRaw = readAuthProfileStoreForTest(mainAgentDir);
     const mainCredential = requireOAuthCredential(mainRaw, profileId);
     expect(mainCredential.access).toBe("plugin-refreshed-access");
     expect(mainCredential.refresh).toBe("plugin-refreshed-refresh");

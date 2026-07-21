@@ -1,7 +1,8 @@
+// Defines plugin entry and install configuration types.
 export type PluginEntryConfig = {
   enabled?: boolean;
   hooks?: {
-    /** Controls prompt mutation via before_prompt_build and prompt fields from legacy before_agent_start. */
+    /** Controls prompt mutation via before_prompt_build. */
     allowPromptInjection?: boolean;
     /**
      * Controls access to raw conversation content from conversation hooks including

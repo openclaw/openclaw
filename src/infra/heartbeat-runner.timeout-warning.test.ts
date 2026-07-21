@@ -1,3 +1,4 @@
+// Covers heartbeat timeout warning emission and suppression behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -42,10 +43,7 @@ describe("startHeartbeatRunner timeout overflow warnings", () => {
       };
     });
 
-    const [{ startHeartbeatRunner }, { resetHeartbeatWakeStateForTests }] = await Promise.all([
-      import("./heartbeat-runner.js"),
-      import("./heartbeat-wake.js"),
-    ]);
+    const { startHeartbeatRunner } = await import("./heartbeat-runner.js");
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date(0));
@@ -65,6 +63,5 @@ describe("startHeartbeatRunner timeout overflow warnings", () => {
 
     runnerA.stop();
     runnerB.stop();
-    resetHeartbeatWakeStateForTests();
   });
 });

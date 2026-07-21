@@ -1,3 +1,6 @@
+/**
+ * Browser plugin service factory that lazily starts the control server.
+ */
 import {
   startLazyPluginServiceModule,
   type LazyPluginServiceHandle,
@@ -20,12 +23,17 @@ function validateBrowserControlOverrideSpecifier(specifier: string): string {
   return trimmed;
 }
 
+/** Creates the Browser plugin service registered by the plugin entrypoint. */
 export function createBrowserPluginService(): OpenClawPluginService {
   let handle: BrowserControlHandle = null;
 
   return {
     id: "browser-control",
     start: async () => {
+      const pageShare = await import("./browser/extension-relay/page-share.js");
+      // Plugin services start only in the Gateway process. The sink marks this
+      // process as able to deliver page shares to the main session.
+      pageShare.setPageShareSink(pageShare.createGatewayPageShareSink());
       if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
         return;
       }
@@ -46,14 +54,18 @@ export function createBrowserPluginService(): OpenClawPluginService {
       });
     },
     stop: async () => {
+      const { setPageShareSink } = await import("./browser/extension-relay/page-share.js");
+      setPageShareSink(null);
       const current = handle;
-      handle = null;
       if (current) {
-        await current.stop().catch(() => {});
+        await current.stop();
+        if (handle === current) {
+          handle = null;
+        }
         return;
       }
       const { stopBrowserControlService } = await import("./control-service.js");
-      await stopBrowserControlService().catch(() => {});
+      await stopBrowserControlService();
     },
   };
 }

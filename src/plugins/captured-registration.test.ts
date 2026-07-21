@@ -1,3 +1,4 @@
+// Covers captured plugin registration behavior in test registries.
 import { describe, expect, it } from "vitest";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
@@ -18,6 +19,21 @@ describe("captured plugin registration", () => {
           label: "Captured Provider",
           auth: [],
         });
+        api.registerWorkerProvider({
+          id: "captured-worker",
+          provision: async () => ({
+            leaseId: "captured-lease",
+            ssh: {
+              host: "worker.example",
+              port: 22,
+              user: "worker",
+              hostKey: ["ssh-ed25519", "AAAA"].join(" "),
+              keyRef: { source: "env", provider: "default", id: "WORKER_SSH_KEY" },
+            },
+          }),
+          inspect: async () => ({ status: "active" }),
+          destroy: async () => {},
+        });
         api.registerModelCatalogProvider({
           provider: "captured-provider",
           kinds: ["text"],
@@ -29,6 +45,12 @@ describe("captured plugin registration", () => {
               source: "static",
             },
           ],
+        });
+        api.registerSessionCatalog({
+          id: "captured-catalog",
+          label: "Captured Catalog",
+          list: async () => [],
+          read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
         });
         api.registerVideoGenerationProvider({
           id: "captured-video",
@@ -90,9 +112,11 @@ describe("captured plugin registration", () => {
 
     expect(captured.tools.map((tool) => tool.name)).toEqual(["captured-tool"]);
     expect(captured.providers.map((provider) => provider.id)).toEqual(["captured-provider"]);
+    expect(captured.workerProviders.map((provider) => provider.id)).toEqual(["captured-worker"]);
     expect(captured.modelCatalogProviders.map((provider) => provider.provider)).toEqual([
       "captured-provider",
     ]);
+    expect(captured.sessionCatalogs.map((provider) => provider.id)).toEqual(["captured-catalog"]);
     expect(captured.videoGenerationProviders.map((provider) => provider.id)).toEqual([
       "captured-video",
     ]);

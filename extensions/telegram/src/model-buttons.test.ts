@@ -1,3 +1,4 @@
+// Telegram tests cover model buttons plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildModelSelectionCallbackData,
@@ -393,6 +394,33 @@ describe("buildModelsKeyboard", () => {
         expect(text?.startsWith(testCase.startsWith), testCase.name).toBe(true);
         expect(text?.length, testCase.name).toBeLessThanOrEqual(testCase.maxLength);
       }
+    }
+  });
+
+  it("does not split surrogate pairs when truncating model labels", () => {
+    const longLabel = `a😀${"b".repeat(36)}`;
+    const cases = [
+      {
+        name: "model ID fallback",
+        model: longLabel,
+      },
+      {
+        name: "configured display name",
+        model: "short-model-id",
+        modelNames: new Map([["test/short-model-id", longLabel]]),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const result = buildModelsKeyboard({
+        provider: "test",
+        models: [testCase.model],
+        currentPage: 1,
+        totalPages: 1,
+        modelNames: "modelNames" in testCase ? testCase.modelNames : undefined,
+      });
+
+      expect(result[0]?.[0]?.text, testCase.name).toBe(`…${"b".repeat(36)}`);
     }
   });
 

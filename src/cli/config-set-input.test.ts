@@ -1,3 +1,4 @@
+// Config set input tests cover config value parsing from CLI input and files.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -95,6 +96,14 @@ describe("config set input parsing", () => {
     );
   });
 
+  it("rejects --batch-file when the file does not exist", () => {
+    expect(() =>
+      parseBatchSource({
+        batchFile: "/nonexistent/path/batch.json5",
+      }),
+    ).toThrow("--batch-file not found: /nonexistent/path/batch.json5");
+  });
+
   it("rejects malformed --batch-file payloads", () => {
     withBatchFile("openclaw-config-set-input-invalid-", "{}", (batchPath) => {
       expect(() =>
@@ -103,5 +112,17 @@ describe("config set input parsing", () => {
         }),
       ).toThrow("--batch-file must be a JSON array.");
     });
+  });
+
+  it("rejects --batch-file payloads above the config mutation limit", () => {
+    withBatchFile(
+      "openclaw-config-set-input-oversized-",
+      " ".repeat(8 * 1024 * 1024 + 1),
+      (batchPath) => {
+        expect(() => parseBatchSource({ batchFile: batchPath })).toThrow(
+          "File exceeds 8388608 bytes",
+        );
+      },
+    );
   });
 });

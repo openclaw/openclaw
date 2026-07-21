@@ -1,3 +1,7 @@
+/**
+ * Lazy ACPX runtime service registration. The plugin exposes an ACP backend
+ * immediately, then imports the heavier service only when a session needs it.
+ */
 import {
   getAcpRuntimeBackend,
   registerAcpRuntimeBackend,
@@ -5,6 +9,7 @@ import {
   type AcpRuntime,
 } from "openclaw/plugin-sdk/acp-runtime-backend";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createLazyAcpRuntimeProxy } from "./src/runtime-proxy.js";
 
 const ACPX_BACKEND_ID = "acpx";
@@ -22,12 +27,7 @@ type DeferredServiceState = {
   startPromise: Promise<AcpRuntime> | null;
 };
 
-let serviceModulePromise: Promise<RealAcpxServiceModule> | null = null;
-
-function loadServiceModule(): Promise<RealAcpxServiceModule> {
-  serviceModulePromise ??= import("./src/service.js");
-  return serviceModulePromise;
-}
+const loadServiceModule = createLazyRuntimeModule(() => import("./src/service.js"));
 
 async function startRealService(state: DeferredServiceState): Promise<AcpRuntime> {
   if (state.realRuntime) {
@@ -37,8 +37,8 @@ async function startRealService(state: DeferredServiceState): Promise<AcpRuntime
     throw new Error("ACPX runtime service is not started");
   }
   state.startPromise ??= (async () => {
-    const { createAcpxRuntimeService } = await loadServiceModule();
-    const service = createAcpxRuntimeService(state.params);
+    const { createAcpxRuntimeService: createAcpxRuntimeServiceLocal } = await loadServiceModule();
+    const service = createAcpxRuntimeServiceLocal(state.params);
     state.realService = service;
     await service.start(state.ctx as OpenClawPluginServiceContext);
     const backend = getAcpRuntimeBackend(ACPX_BACKEND_ID);
@@ -62,6 +62,7 @@ function createDeferredRuntime(state: DeferredServiceState): AcpRuntime {
   return createLazyAcpRuntimeProxy(resolveRuntime);
 }
 
+/** Creates the plugin service that registers ACPX as an ACP runtime backend. */
 export function createAcpxRuntimeService(
   params: CreateAcpxRuntimeServiceParams = {},
 ): OpenClawPluginService {

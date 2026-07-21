@@ -1,3 +1,5 @@
+// Server hooks tests cover HTTP hook auth, payload normalization, dedupe,
+// session targeting, system events, and cron-isolated hook dispatch.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -49,14 +51,14 @@ function buildHookJsonHeaders(options?: {
 
 async function postHook(
   port: number,
-  path: string,
+  pathLocal: string,
   body: Record<string, unknown> | string,
   options?: {
     token?: string | null;
     headers?: Record<string, string>;
   },
 ): Promise<Response> {
-  return fetch(`http://127.0.0.1:${port}${path}`, {
+  return fetch(`http://127.0.0.1:${port}${pathLocal}`, {
     method: "POST",
     headers: buildHookJsonHeaders(options),
     body: typeof body === "string" ? body : JSON.stringify(body),
@@ -98,6 +100,7 @@ type HookCronRunCall = {
     createdAtMs?: number;
     payload?: {
       externalContentSource?: string;
+      allowUnsafeExternalContent?: boolean;
       model?: string;
     };
     schedule?: {
@@ -319,6 +322,41 @@ describe("gateway server hooks", () => {
       const call = cronRunCall();
       expect(call?.sessionKey).toBe("main");
       expect(call?.job?.payload?.externalContentSource).toBe("gmail");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
+  test("does not let mapped hook payload source claim gmail provenance", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowedSessionKeyPrefixes: ["hook:"],
+      gmail: { allowUnsafeExternalContent: true },
+      mappings: [
+        {
+          match: { path: "github" },
+          action: "agent",
+          messageTemplate: "Issue: {{payload.title}}",
+          sessionKey: "hook:webhook:github",
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const response = await postHook(port, "/hooks/github", {
+        source: "gmail",
+        id: "issue-1",
+        title: "Bug report",
+      });
+      expect(response.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+
+      const call = cronRunCall();
+      expect(call?.sessionKey).toBe("hook:webhook:github");
+      expect(call?.job?.payload?.externalContentSource).toBe("webhook");
+      expect(call?.job?.payload?.allowUnsafeExternalContent).toBeUndefined();
       drainSystemEvents(resolveMainKey());
     });
   });

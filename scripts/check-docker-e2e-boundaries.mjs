@@ -15,14 +15,21 @@ const packageScripts = new Set(Object.keys(packageJson.scripts ?? {}));
 // These lanes prove package-installed surfaces against live auth, so they
 // intentionally need both live credentials and a package-backed image.
 const livePackageBackedLanes = new Set([
+  "install-e2e-anthropic",
+  "install-e2e-openai",
   "live-codex-npm-plugin",
+  "live-mcp-code-mode-gateway",
   "live-plugin-tool",
+  "npm-telegram-live",
   "openai-chat-tools",
   "openwebui",
 ]);
 // These lanes intentionally build a focused source-checkout image instead of
 // consuming the shared package E2E images.
-const sourceCheckoutImageLanes = new Set(["plugin-binding-command-escape"]);
+const sourceCheckoutImageLanes = new Set([
+  "docker-selected-plugins",
+  "plugin-binding-command-escape",
+]);
 
 function readText(relativePath) {
   return fs.readFileSync(path.join(ROOT_DIR, relativePath), "utf8");

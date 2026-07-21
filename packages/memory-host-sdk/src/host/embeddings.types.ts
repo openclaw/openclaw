@@ -1,3 +1,4 @@
+// Memory Host SDK type module defines shared TypeScript contracts.
 import type { OpenClawConfig, SecretInput } from "../engine-foundation.js";
 import type { EmbeddingInput } from "./embedding-inputs.js";
 
@@ -18,11 +19,11 @@ export type EmbeddingProviderCallOptions = {
   signal?: AbortSignal;
 };
 
-export type EmbeddingProviderId = string;
-export type EmbeddingProviderRequest = string;
-export type EmbeddingProviderFallback = string;
+/** @public */ export type EmbeddingProviderId = string;
+/** @public */ export type EmbeddingProviderRequest = string;
+/** @public */ export type EmbeddingProviderFallback = string;
 
-export type GeminiTaskType =
+/** @public */ export type GeminiTaskType =
   | "RETRIEVAL_QUERY"
   | "RETRIEVAL_DOCUMENT"
   | "SEMANTIC_SIMILARITY"

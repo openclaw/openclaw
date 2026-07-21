@@ -1,3 +1,4 @@
+// Status JSON payload tests cover update metadata, overview rows, and structured status output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VERSION } from "../version.js";
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
@@ -85,7 +86,7 @@ describe("status-json-payload", () => {
         pluginCompatibility: [
           {
             pluginId: "legacy",
-            code: "legacy-before-agent-start",
+            code: "deprecated-memory-embedding-provider-api",
             severity: "warn",
             message: "warn",
           },
@@ -128,7 +129,7 @@ describe("status-json-payload", () => {
         warnings: [
           {
             pluginId: "legacy",
-            code: "legacy-before-agent-start",
+            code: "deprecated-memory-embedding-provider-api",
             severity: "warn",
             message: "warn",
           },

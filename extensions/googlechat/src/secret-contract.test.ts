@@ -1,3 +1,4 @@
+// Googlechat tests cover secret contract plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyResolvedAssignments,
@@ -39,6 +40,15 @@ describe("googlechat secret contract", () => {
       defaults: undefined,
       context,
     });
+
+    expect(context.assignments).toMatchObject([
+      {
+        ownerKind: "account",
+        ownerId: "googlechat:work",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
 
     const resolved = await resolveSecretRefValues(
       context.assignments.map((assignment) => assignment.ref),

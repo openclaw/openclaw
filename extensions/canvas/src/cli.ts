@@ -1,3 +1,6 @@
+/**
+ * Canvas node CLI command registration and runtime dependency wiring.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { Command } from "commander";
@@ -18,16 +21,18 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildA2UITextJsonl, validateA2UIJsonl } from "./a2ui-jsonl.js";
+import { buildA2UITextJsonl, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
-export type CanvasCliRuntime = {
+/** Runtime output surface used by Canvas CLI commands. */
+type CanvasCliRuntime = {
   log: (message: string) => void;
   error: (message: string) => void;
   exit: (code: number) => void;
   writeJson: (value: unknown) => void;
 };
 
+/** Parent node/gateway options consumed by Canvas CLI commands. */
 export type CanvasNodesRpcOpts = {
   url?: string;
   token?: string;
@@ -48,6 +53,7 @@ export type CanvasNodesRpcOpts = {
   quality?: string;
 };
 
+/** Dependency bundle used to keep Canvas CLI commands testable. */
 export type CanvasCliDependencies = {
   defaultRuntime: CanvasCliRuntime;
   nodesCallOpts: (cmd: Command, defaults?: { timeoutMs?: number }) => Command;
@@ -91,7 +97,11 @@ function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
-  return parseStrictPositiveInteger(raw);
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error("--invoke-timeout must be a positive integer.");
+  }
+  return parsed;
 }
 
 function parseCanvasPositiveIntOption(raw: string | undefined, flag: string): number | undefined {
@@ -112,6 +122,14 @@ function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): n
   const parsed = parseStrictFiniteNumber(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a number.`);
+  }
+  return parsed;
+}
+
+function parseCanvasSnapshotQualityOption(raw: string | undefined): number | undefined {
+  const parsed = parseCanvasFiniteNumberOption(raw, "--quality");
+  if (parsed !== undefined && (parsed < 0 || parsed > 1)) {
+    throw new Error("--quality must be between 0 and 1.");
   }
   return parsed;
 }
@@ -173,6 +191,7 @@ function unauthorizedHintForMessage(message: string): string | null {
   return null;
 }
 
+/** Creates the default Canvas CLI dependency bundle backed by the OpenClaw gateway CLI. */
 export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
   const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
     cmd
@@ -238,8 +257,8 @@ async function invokeCanvas(
   command: string,
   params?: Record<string, unknown>,
 ) {
-  const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   const timeoutMs = deps.parseTimeoutMs(opts.invokeTimeout);
+  const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
   return await deps.callGatewayCli(
     "node.invoke",
     opts,
@@ -252,6 +271,7 @@ async function invokeCanvas(
   );
 }
 
+/** Registers Canvas subcommands under the nodes CLI command group. */
 export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDependencies) {
   const canvas = nodes
     .command("canvas")
@@ -270,7 +290,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
         await deps.runNodesCommand("canvas snapshot", async () => {
           const format = parseCanvasSnapshotRequestFormat(opts.format);
           const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
-          const quality = parseCanvasFiniteNumberOption(opts.quality, "--quality");
+          const quality = parseCanvasSnapshotQualityOption(opts.quality);
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
             format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
@@ -393,7 +413,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
             typeof raw === "object" && raw !== null
               ? (raw as { payload?: { result?: string } }).payload
               : undefined;
-          if (payload?.result) {
+          if (typeof payload?.result === "string") {
             deps.defaultRuntime.log(payload.result);
           } else {
             const { ok } = deps.getNodesTheme();
@@ -424,12 +444,7 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
           const jsonl = hasText
             ? buildA2UITextJsonl(opts.text ?? "")
             : await fs.readFile(String(opts.jsonl), "utf8");
-          const { version, messageCount } = validateA2UIJsonl(jsonl);
-          if (version === "v0.9") {
-            throw new Error(
-              "Detected A2UI v0.9 JSONL (createSurface). OpenClaw currently supports v0.8 only.",
-            );
-          }
+          const { messageCount } = validateSupportedA2UIJsonl(jsonl);
           await invokeCanvas(deps, opts, "canvas.a2ui.pushJSONL", { jsonl });
           if (!opts.json) {
             const { ok } = deps.getNodesTheme();

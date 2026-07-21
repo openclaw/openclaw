@@ -1,3 +1,4 @@
+// Verifies transport-aware model stream aliases and fail-closed boundaries.
 import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { attachModelProviderLocalService } from "./provider-local-service.js";
@@ -7,7 +8,6 @@ import {
   createBoundaryAwareStreamFnForModel,
   createOpenClawTransportStreamFnForModel,
   createTransportAwareStreamFnForModel,
-  isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
@@ -20,6 +20,7 @@ function buildModel<TApi extends Api>(
     baseUrl: string;
   },
 ): Model<TApi> {
+  // Minimal model rows keep the transport matrix focused on api/provider/baseUrl.
   return {
     id: params.id,
     name: params.id,
@@ -36,6 +37,7 @@ function buildModel<TApi extends Api>(
 
 describe("provider transport stream contracts", () => {
   it("covers the supported transport api alias matrix", () => {
+    // Supported APIs can be projected to OpenClaw transport aliases when needed.
     const cases = [
       {
         api: "openai-responses" as const,
@@ -97,7 +99,6 @@ describe("provider transport stream contracts", () => {
         },
       );
 
-      expect(isTransportAwareApiSupported(testCase.api)).toBe(true);
       expect(resolveTransportAwareSimpleApi(testCase.api)).toBe(testCase.alias);
       if (testCase.providerOwnedRuntime) {
         continue;
@@ -127,7 +128,6 @@ describe("provider transport stream contracts", () => {
       },
     );
 
-    expect(isTransportAwareApiSupported(model.api)).toBe(false);
     expect(resolveTransportAwareSimpleApi(model.api)).toBeUndefined();
     expect(createBoundaryAwareStreamFnForModel(model)).toBeUndefined();
     expect(() => createTransportAwareStreamFnForModel(model)).toThrow(

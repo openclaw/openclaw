@@ -1,3 +1,4 @@
+/** Loads channel secret contract APIs from bundled and external plugin artifacts. */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,11 +18,6 @@ import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-sur
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
-type UnsupportedSecretRefConfigCandidate = {
-  path: string;
-  value: unknown;
-};
-
 type BundledChannelContractApi = {
   collectRuntimeConfigAssignments?: (params: {
     config: OpenClawConfig;
@@ -29,10 +25,6 @@ type BundledChannelContractApi = {
     context: ResolverContext;
   }) => void;
   secretTargetRegistryEntries?: readonly SecretTargetRegistryEntry[];
-  unsupportedSecretRefSurfacePatterns?: readonly string[];
-  collectUnsupportedSecretRefConfigCandidates?: (
-    raw: Record<string, unknown>,
-  ) => UnsupportedSecretRefConfigCandidate[];
 };
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -44,41 +36,34 @@ const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function loadBundledChannelPublicArtifact(
   channelId: string,
-  artifactBasenames: readonly string[],
+  artifactBasename: string,
 ): BundledChannelContractApi | undefined {
-  for (const artifactBasename of artifactBasenames) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
-        dirName: channelId,
-        artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      if (process.env.OPENCLAW_DEBUG_CHANNEL_CONTRACT_API === "1") {
-        const detail = error instanceof Error ? error.message : String(error);
-        process.stderr.write(
-          `[channel-contract-api] failed to load ${channelId}/${artifactBasename}: ${detail}\n`,
-        );
-      }
+  try {
+    return loadBundledPluginPublicArtifactModuleSync<BundledChannelContractApi>({
+      dirName: channelId,
+      artifactBasename,
+    });
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Unable to resolve bundled plugin public surface ")
+    ) {
+      return undefined;
     }
+    throw error;
   }
-  return undefined;
 }
 
-export type BundledChannelSecretContractApi = Pick<
+type BundledChannelSecretContractApi = Pick<
   BundledChannelContractApi,
   "collectRuntimeConfigAssignments" | "secretTargetRegistryEntries"
 >;
 
-export function loadBundledChannelSecretContractApi(
+/** Loads a bundled channel secret contract from its public artifact bundle. */
+function loadBundledChannelSecretContractApi(
   channelId: string,
 ): BundledChannelSecretContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, ["secret-contract-api.js", "contract-api.js"]);
+  return loadBundledChannelPublicArtifact(channelId, "secret-contract-api.js");
 }
 
 function orderedContractApiExtensions(): readonly string[] {
@@ -159,7 +144,7 @@ function loadExternalChannelSecretContractFromRecord(
 function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boolean {
   return (
     record.channels.includes(channelId) ||
-    Object.prototype.hasOwnProperty.call(record.channelConfigs ?? {}, channelId) ||
+    Object.hasOwn(record.channelConfigs ?? {}, channelId) ||
     record.channelCatalogMeta?.id === channelId ||
     record.packageChannel?.id === channelId
   );
@@ -198,6 +183,8 @@ function listChannelSecretContractRecords(params: {
     });
 }
 
+/** Loads the first channel secret contract for a channel, preferring bundled metadata. */
+/** Loads a channel secret contract API for a channel id and current plugin origin policy. */
 export function loadChannelSecretContractApi(params: {
   channelId: string;
   config: OpenClawConfig;
@@ -208,6 +195,8 @@ export function loadChannelSecretContractApi(params: {
   if (bundled) {
     return bundled;
   }
+  // External contracts are considered only after bundled artifacts so core channels keep their
+  // shipped metadata stable even when similarly named plugins are installed.
   const env = params.env ?? process.env;
   for (const record of listChannelSecretContractRecords({
     channelId: params.channelId,
@@ -223,6 +212,7 @@ export function loadChannelSecretContractApi(params: {
   return undefined;
 }
 
+/** Loads a channel secret contract directly from a manifest record. */
 export function loadChannelSecretContractApiForRecord(
   record: PluginManifestRecord,
 ): BundledChannelSecretContractApi | undefined {
@@ -230,15 +220,4 @@ export function loadChannelSecretContractApiForRecord(
     return loadBundledChannelSecretContractApi(record.id);
   }
   return loadExternalChannelSecretContractFromRecord(record);
-}
-
-export type BundledChannelSecurityContractApi = Pick<
-  BundledChannelContractApi,
-  "unsupportedSecretRefSurfacePatterns" | "collectUnsupportedSecretRefConfigCandidates"
->;
-
-export function loadBundledChannelSecurityContractApi(
-  channelId: string,
-): BundledChannelSecurityContractApi | undefined {
-  return loadBundledChannelPublicArtifact(channelId, ["security-contract-api.js"]);
 }

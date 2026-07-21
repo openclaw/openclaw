@@ -1,6 +1,14 @@
+// Resolves transcript source configuration from OpenClaw config.
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 
-export type TranscriptsAutoStartConfig = {
+/**
+ * Configuration normalization for transcript capture/import.
+ *
+ * Raw config can contain optional auto-start provider locators; resolution
+ * returns bounded defaults and drops malformed entries before runtime startup.
+ */
+/** Raw auto-start transcript source entry from config. */
+type TranscriptsAutoStartConfig = {
   providerId: string;
   sessionId?: string;
   title?: string;
@@ -10,6 +18,7 @@ export type TranscriptsAutoStartConfig = {
   meetingUrl?: string;
 };
 
+/** Normalized auto-start source entry consumed by transcript runtime code. */
 export type ResolvedTranscriptsAutoStartConfig = {
   providerId: string;
   sessionId?: string;
@@ -20,17 +29,20 @@ export type ResolvedTranscriptsAutoStartConfig = {
   meetingUrl?: string;
 };
 
+/** Raw transcripts config block. */
 export type TranscriptsConfig = {
   enabled?: boolean;
-  maxUtterances?: number;
   autoStart?: TranscriptsAutoStartConfig[];
 };
 
-export type ResolvedTranscriptsConfig = {
+/** Resolved transcripts config with defaults applied. */
+type ResolvedTranscriptsConfig = {
   enabled: boolean;
   maxUtterances: number;
   autoStart: ResolvedTranscriptsAutoStartConfig[];
 };
+
+const DEFAULT_TRANSCRIPTS_MAX_UTTERANCES = 2_000;
 
 function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
   if (!Array.isArray(raw)) {
@@ -56,15 +68,12 @@ function resolveAutoStart(raw: unknown): ResolvedTranscriptsAutoStartConfig[] {
     .filter((entry): entry is ResolvedTranscriptsAutoStartConfig => entry !== undefined);
 }
 
+/** Normalize raw transcripts config into runtime settings. */
 export function resolveTranscriptsConfig(raw: unknown): ResolvedTranscriptsConfig {
   const config = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-  const maxUtterances =
-    typeof config.maxUtterances === "number" && Number.isFinite(config.maxUtterances)
-      ? Math.max(1, Math.min(10_000, Math.floor(config.maxUtterances)))
-      : 2_000;
   return {
     enabled: config.enabled === true,
-    maxUtterances,
+    maxUtterances: DEFAULT_TRANSCRIPTS_MAX_UTTERANCES,
     autoStart: resolveAutoStart(config.autoStart),
   };
 }

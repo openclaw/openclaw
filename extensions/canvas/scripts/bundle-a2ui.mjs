@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+/**
+ * Bundles the Canvas A2UI web app and writes a hash for tracked inputs.
+ */
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -12,12 +15,15 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 const pluginDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const rootDir = path.resolve(pluginDir, "../..");
 const require = createRequire(import.meta.url);
-const hashFile = path.join(pluginDir, "src", "host", "a2ui", ".bundle.hash");
-const outputFile = path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
+const hashFile =
+  process.env.OPENCLAW_A2UI_BUNDLE_HASH_FILE ??
+  path.join(pluginDir, "src", "host", "a2ui", ".bundle.hash");
+const outputFile =
+  process.env.OPENCLAW_A2UI_BUNDLE_OUT ??
+  path.join(pluginDir, "src", "host", "a2ui", "a2ui.bundle.js");
 const a2uiAppDir = path.join(pluginDir, "src", "host", "a2ui-app");
-const rootPackageFile = path.join(rootDir, "package.json");
-const lockFile = path.join(rootDir, "pnpm-lock.yaml");
-const repoInputPaths = [rootPackageFile, lockFile, a2uiAppDir];
+const GIT_INPUT_DISCOVERY_TIMEOUT_MS = 5_000;
+const repoInputPaths = getBundleHashRepoInputPaths(rootDir);
 const relativeRepoInputPaths = repoInputPaths.map((inputPath) =>
   normalizePath(path.relative(rootDir, inputPath)),
 );
@@ -42,10 +48,12 @@ function normalizePath(filePath) {
   return filePath.split(path.sep).join("/");
 }
 
+/** Returns whether a path should participate in the A2UI bundle input hash. */
 export function isBundleHashInputPath(filePath, repoRoot = rootDir) {
   return Boolean(filePath && repoRoot);
 }
 
+/** Returns local Rolldown CLI candidates for the current install layout. */
 export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "node_modules", "rolldown", "bin", "cli.mjs"),
@@ -63,6 +71,7 @@ export function getLocalRolldownCliCandidates(repoRoot = rootDir) {
   ];
 }
 
+/** Returns repository paths that define the A2UI bundle hash inputs. */
 export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   return [
     path.join(repoRoot, "package.json"),
@@ -71,10 +80,7 @@ export function getBundleHashRepoInputPaths(repoRoot = rootDir) {
   ];
 }
 
-export function getBundleHashInputPaths(repoRoot = rootDir) {
-  return getBundleHashRepoInputPaths(repoRoot);
-}
-
+/** Compares paths after normalizing separators to POSIX slashes. */
 export function compareNormalizedPaths(left, right) {
   const normalizedLeft = normalizePath(left);
   const normalizedRight = normalizePath(right);
@@ -106,7 +112,9 @@ function listTrackedInputFiles() {
   const result = spawnSync("git", ["ls-files", "--", ...relativeRepoInputPaths], {
     cwd: rootDir,
     encoding: "utf8",
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: GIT_INPUT_DISCOVERY_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     return null;
@@ -222,7 +230,9 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  await main().catch((error) => {
-    fail(error instanceof Error ? error.message : String(error));
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      fail(error instanceof Error ? error.message : String(error));
+    },
+  );
 }

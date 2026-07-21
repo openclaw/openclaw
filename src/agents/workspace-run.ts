@@ -1,3 +1,8 @@
+/**
+ * Agent run workspace resolver.
+ *
+ * Selects per-run workspace directories and redacts run identifiers for logs/prompts.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
@@ -14,8 +19,9 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 type WorkspaceFallbackReason = "missing" | "blank" | "invalid_type";
 type AgentIdSource = "explicit" | "session_key" | "default";
 
-type ResolveRunWorkspaceResult = {
+export type ResolveRunWorkspaceResult = {
   workspaceDir: string;
+  isCanonicalWorkspace: boolean;
   usedFallback: boolean;
   fallbackReason?: WorkspaceFallbackReason;
   agentId: string;
@@ -67,10 +73,12 @@ function resolveRunAgentId(params: {
   };
 }
 
+/** Redacts a run/session identifier for logs and prompts. */
 export function redactRunIdentifier(value: string | undefined): string {
   return redactIdentifier(value, { len: 12 });
 }
 
+/** Resolves the workspace directory used for an agent run. */
 export function resolveRunWorkspaceDir(params: {
   workspaceDir: unknown;
   sessionKey?: string;
@@ -92,8 +100,14 @@ export function resolveRunWorkspaceDir(params: {
       if (sanitized !== trimmed) {
         logWarn("Control/format characters stripped from workspaceDir (OC-19 hardening).");
       }
+      const workspaceDir = resolveUserPath(sanitized, env);
+      const canonicalWorkspaceDir = resolveUserPath(
+        resolveAgentWorkspaceDir(params.config ?? {}, agentId, env),
+        env,
+      );
       return {
-        workspaceDir: resolveUserPath(sanitized, env),
+        workspaceDir,
+        isCanonicalWorkspace: workspaceDir === canonicalWorkspaceDir,
         usedFallback: false,
         agentId,
         agentIdSource,
@@ -110,6 +124,7 @@ export function resolveRunWorkspaceDir(params: {
   }
   return {
     workspaceDir: resolveUserPath(sanitizedFallback, env),
+    isCanonicalWorkspace: true,
     usedFallback: true,
     fallbackReason,
     agentId,

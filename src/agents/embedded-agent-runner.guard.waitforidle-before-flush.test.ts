@@ -1,6 +1,10 @@
+// Covers delayed flushing of pending tool results after agent idle.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { flushPendingToolResultsAfterIdle } from "./embedded-agent-runner/wait-for-idle-before-flush.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
@@ -22,6 +26,8 @@ function toolResult(id: string, text: string): AgentMessage {
 }
 
 function deferred<T>() {
+  // Tests control when waitForIdle resolves so real tool results can race the
+  // synthetic flush path deterministically.
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((r) => {
     resolve = r;
@@ -45,6 +51,8 @@ describe("flushPendingToolResultsAfterIdle", () => {
   });
 
   it("waits for idle so real tool results can land before flush", async () => {
+    // Waiting gives the tool runner a chance to persist its real output before
+    // the guard synthesizes a missing result.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
     const idle = deferred<void>();
@@ -93,7 +101,7 @@ describe("flushPendingToolResultsAfterIdle", () => {
     const entries = getMessages(sm);
 
     expect(entries.length).toBe(2);
-    expect(entries[1].role).toBe("toolResult");
+    expect(expectDefined(entries[1], "entries[1] test invariant").role).toBe("toolResult");
     expect((entries[1] as { isError?: boolean }).isError).toBe(true);
     expect((entries[1] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toContain(
       "missing tool result",
@@ -144,7 +152,30 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("clamps oversized idle wait timeouts before scheduling", async () => {
+    // JavaScript timers overflow above the platform max; clamp to keep huge
+    // configs from firing immediately.
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const idle = deferred<void>();
+    const agent = { waitForIdle: () => idle.promise };
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const flushPromise = flushPendingToolResultsAfterIdle({
+        agent,
+        sessionManager: sm,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      idle.resolve();
+      await flushPromise;
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
   it("immediately flushes pending tool results without waiting when timeoutMs is 0 or less", async () => {
+    // Non-positive timeouts are an explicit "do not wait" policy.
     const sm = guardSessionManager(SessionManager.inMemory());
     const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
 

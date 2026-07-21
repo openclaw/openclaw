@@ -1,8 +1,10 @@
+// Defines source/config paths that pnpm dev watches for rebuilds and restarts.
 import path from "node:path";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
+import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mjs";
 
 const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   // Root runtime code imports these package sources through tsconfig aliases,
@@ -11,21 +13,28 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/gateway-client/src",
   "packages/gateway-protocol/src",
   "packages/markdown-core/src",
+  "packages/media-core/src",
   "packages/media-generation-core/src",
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
+  "packages/retry/src",
+  "packages/acp-core/src",
   "packages/terminal-core/src",
   "packages/web-content-core/src",
   "packages/net-policy/src",
 ];
 
+/** Source roots whose changes require the root dev build pipeline. */
 export const runNodeSourceRoots = [
   "src",
   ...RUN_NODE_PACKAGE_SOURCE_ROOTS,
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
+/** Root config files whose changes invalidate the dev build. */
 export const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
+/** Combined watch list used by the run-node wrapper. */
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
+/** Plugin metadata files that require a runtime restart even without source edits. */
 export const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
 
 const ignoredRunNodeRepoPathPatterns = [
@@ -34,6 +43,7 @@ const ignoredRunNodeRepoPathPatterns = [
 ];
 const extensionSourceFilePattern = /\.(?:[cm]?[jt]sx?)$/;
 
+/** Normalizes watch paths to repository-style POSIX separators. */
 export const normalizeRunNodePath = (filePath) => String(filePath ?? "").replaceAll("\\", "/");
 
 const isIgnoredSourcePath = (relativePath) => {
@@ -58,9 +68,16 @@ const isRestartRelevantExtensionPath = (relativePath) => {
   return isBuildRelevantSourcePath(normalizedPath);
 };
 
-const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
+const isRelevantRunNodePath = (
+  repoPath,
+  isRelevantBundledPluginPath,
+  generatedPluginAssetPaths,
+) => {
   const normalizedPath = normalizeRunNodePath(repoPath).replace(/^\.\/+/, "");
-  if (ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))) {
+  if (
+    generatedPluginAssetPaths.has(normalizedPath) ||
+    ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
+  ) {
     return false;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {
@@ -80,8 +97,41 @@ const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   return false;
 };
 
-export const isBuildRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath);
+/** Creates a path classifier whose generated-output metadata can be refreshed. */
+export function createRunNodePathClassifier(params = {}) {
+  const rootDir = params.rootDir ?? process.cwd();
+  let generatedPluginAssetPaths = new Set();
 
+  return {
+    refreshGeneratedPluginAssetPaths() {
+      generatedPluginAssetPaths = new Set(listGeneratedExtensionAssetSources({ rootDir }));
+    },
+    isBuildRelevantRunNodePath(repoPath) {
+      return isRelevantRunNodePath(repoPath, isBuildRelevantSourcePath, generatedPluginAssetPaths);
+    },
+    isRestartRelevantRunNodePath(repoPath) {
+      return isRelevantRunNodePath(
+        repoPath,
+        isRestartRelevantExtensionPath,
+        generatedPluginAssetPaths,
+      );
+    },
+  };
+}
+
+let defaultRunNodePathClassifier;
+const getDefaultRunNodePathClassifier = () => {
+  if (!defaultRunNodePathClassifier) {
+    defaultRunNodePathClassifier = createRunNodePathClassifier();
+    defaultRunNodePathClassifier.refreshGeneratedPluginAssetPaths();
+  }
+  return defaultRunNodePathClassifier;
+};
+
+/** Returns true when a repo path should trigger a dev rebuild. */
+export const isBuildRelevantRunNodePath = (repoPath) =>
+  getDefaultRunNodePathClassifier().isBuildRelevantRunNodePath(repoPath);
+
+/** Returns true when a repo path should restart the running dev process. */
 export const isRestartRelevantRunNodePath = (repoPath) =>
-  isRelevantRunNodePath(repoPath, isRestartRelevantExtensionPath);
+  getDefaultRunNodePathClassifier().isRestartRelevantRunNodePath(repoPath);

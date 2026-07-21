@@ -1,6 +1,13 @@
+// Slack tests cover monitor.thread resolution plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
+
+type SlackThreadClient = Parameters<typeof createSlackThreadTsResolver>[0]["client"];
+
+function createThreadClient(history: ReturnType<typeof vi.fn>): SlackThreadClient {
+  return { conversations: { history } } as unknown as SlackThreadClient;
+}
 
 describe("createSlackThreadTsResolver", () => {
   afterEach(() => {
@@ -21,7 +28,7 @@ describe("createSlackThreadTsResolver", () => {
       messages: [{ ts: "1", thread_ts: "9" }],
     });
     const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as any,
+      client: createThreadClient(historyMock),
       cacheTtlMs: 60_000,
       maxSize: 5,
     });
@@ -41,7 +48,7 @@ describe("createSlackThreadTsResolver", () => {
       messages: [{ ts: "1" }],
     });
     const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as any,
+      client: createThreadClient(historyMock),
       cacheTtlMs: 60_000,
       maxSize: 5,
     });

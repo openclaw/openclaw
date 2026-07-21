@@ -1,3 +1,7 @@
+/**
+ * Canvas A2UI browser bootstrap that installs theme overrides and native bridge
+ * helpers.
+ */
 import { v0_8 } from "@a2ui/lit";
 import { ContextProvider } from "@lit/context";
 import { themeContext } from "@openclaw/a2ui-theme-context";
@@ -106,6 +110,18 @@ const statusBlur = isAndroid ? "10px" : "14px";
 
 const postNativeMessage = (handler, payload) => {
   Reflect.apply(handler.postMessage, handler, [payload]);
+};
+
+const createSecureActionId = () => {
+  const crypto = globalThis.crypto;
+  if (typeof crypto?.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto?.getRandomValues === "function") {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return `a2ui_${Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+  }
+  return null;
 };
 
 const openclawTheme = {
@@ -378,10 +394,7 @@ class OpenClawA2UIHost extends LitElement {
   }
 
   #makeActionId() {
-    return (
-      globalThis.crypto?.randomUUID?.() ??
-      `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`
-    );
+    return createSecureActionId();
   }
 
   #setToast(text, kind = "ok", timeoutMs = 1400) {
@@ -457,21 +470,25 @@ class OpenClawA2UIHost extends LitElement {
         context[key] = resolved;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalString")) {
+      if (Object.hasOwn(value, "literalString")) {
         context[key] = value.literalString ?? "";
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalNumber")) {
+      if (Object.hasOwn(value, "literalNumber")) {
         context[key] = value.literalNumber ?? 0;
         continue;
       }
-      if (Object.prototype.hasOwnProperty.call(value, "literalBoolean")) {
+      if (Object.hasOwn(value, "literalBoolean")) {
         context[key] = value.literalBoolean ?? false;
         continue;
       }
     }
 
     const actionId = this.#makeActionId();
+    if (!actionId) {
+      this.#setToast("Secure action identifiers unavailable", "error", 4500);
+      return;
+    }
     this.pendingAction = { id: actionId, name, phase: "sending", startedAt: Date.now() };
     this.requestUpdate();
 

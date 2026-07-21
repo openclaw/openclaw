@@ -1,25 +1,45 @@
+// Memory Core plugin module implements short term promotion behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
+  isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import pLimit from "p-limit";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
   summarizeConceptTagScriptCoverage,
   type ConceptTagScriptCoverage,
 } from "./concept-vocabulary.js";
-import { asRecord } from "./dreaming-shared.js";
+import { asRecord, formatErrorMessage } from "./dreaming-shared.js";
+import {
+  SHORT_TERM_LOCK_MAX_ENTRIES,
+  SHORT_TERM_LOCK_NAMESPACE,
+  SHORT_TERM_META_NAMESPACE,
+  SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+  SHORT_TERM_RECALL_NAMESPACE,
+  memoryCoreStateReference,
+  memoryCoreWorkspaceStateKey,
+  openMemoryCoreStateStore,
+  readMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntries,
+  writeMemoryCoreWorkspaceEntry,
+} from "./dreaming-state.js";
 import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-budget.js";
 import { resolveMemoryCoreNowMs, resolveMemoryCoreTimestamp } from "./time.js";
 
@@ -38,13 +58,23 @@ const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
 const SHORT_TERM_RECALL_MAX_ENTRIES = 512;
+// One recall batch can inspect every retained entry; cap filesystem pressure.
+const SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY = 32;
 const SHORT_TERM_RECALL_MAX_SNIPPET_CHARS = 800;
-const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
-const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
-const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
+export const SHORT_TERM_STORE_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "short-term-recall.json",
+);
+export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
+  "memory",
+  ".dreams",
+  "phase-signals.json",
+);
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
+const DREAMING_ENTRY_LIST_LIMIT = 8;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
@@ -52,9 +82,21 @@ const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const RAW_SESSION_METADATA_RE =
+  /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
+const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
+const MEMORY_FLUSH_PROMPT_RE =
+  /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+// Optional signals=N accepts both legacy annotations and the current format.
+const PROMOTION_SCORE_METADATA_RE =
+  /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
-const inProcessShortTermLocks = new Map<string, Promise<void>>();
-const ensuredShortTermDirs = new Map<string, Promise<void>>();
+const GENERIC_DAY_HEADING_RE =
+  /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
+const PROMOTION_LIST_MARKER_RE = /^(?:\d+\.\s+|[-*+]\s+)/;
+const MANAGED_DREAMING_HEADINGS = new Set(["light sleep", "rem sleep"]);
+const inProcessShortTermLocks = new KeyedAsyncQueue();
 
 type PromotionWeights = {
   frequency: number;
@@ -116,6 +158,15 @@ type ShortTermPhaseSignalStore = {
   entries: Record<string, ShortTermPhaseSignalEntry>;
 };
 
+type ShortTermStoreMeta = {
+  updatedAt: string;
+};
+
+type ShortTermLockEntry = {
+  owner: string;
+  acquiredAt: number;
+};
+
 type PromotionComponents = {
   frequency: number;
   relevance: number;
@@ -135,7 +186,7 @@ export type PromotionCandidate = {
   recallCount: number;
   dailyCount?: number;
   groundedCount?: number;
-  signalCount?: number;
+  signalCount: number;
   avgScore: number;
   maxScore: number;
   uniqueQueries: number;
@@ -248,6 +299,43 @@ type ApplyShortTermPromotionsResult = {
   compactedDates: string[];
 };
 
+export type ShortTermDreamingStatsEntry = {
+  key: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  recallCount: number;
+  dailyCount: number;
+  groundedCount: number;
+  totalSignalCount: number;
+  lightHits: number;
+  remHits: number;
+  phaseHitCount: number;
+  promotedAt?: string;
+  lastRecalledAt?: string;
+};
+
+export type ShortTermDreamingStats = {
+  shortTermCount: number;
+  recallSignalCount: number;
+  dailySignalCount: number;
+  groundedSignalCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
+  lightPhaseHitCount: number;
+  remPhaseHitCount: number;
+  promotedTotal: number;
+  promotedToday: number;
+  storePath: string;
+  phaseSignalPath: string;
+  phaseSignalError?: string;
+  lastPromotedAt?: string;
+  shortTermEntries: ShortTermDreamingStatsEntry[];
+  signalEntries: ShortTermDreamingStatsEntry[];
+  promotedEntries: ShortTermDreamingStatsEntry[];
+};
+
 function clampScore(value: number): number {
   if (!Number.isFinite(value)) {
     return 0;
@@ -278,7 +366,7 @@ function truncateShortTermSnippet(snippet: string): string {
   if (snippet.length <= SHORT_TERM_RECALL_MAX_SNIPPET_CHARS) {
     return snippet;
   }
-  return snippet.slice(0, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
+  return truncateUtf16Safe(snippet, SHORT_TERM_RECALL_MAX_SNIPPET_CHARS).trimEnd();
 }
 
 function enforceShortTermRecallSnippetCap(store: ShortTermRecallStore): void {
@@ -331,14 +419,22 @@ function hasDreamingNarrativeLead(snippet: string): boolean {
   return /\b(?:Candidate|Reflections?):/i.test(head);
 }
 
-function isContaminatedDreamingSnippet(raw: string): boolean {
+function isContaminatedDreamingSnippet(
+  raw: string,
+  opts: { allowTranscriptTurnSnippet?: boolean } = {},
+): boolean {
   const snippet = normalizeSnippet(raw);
   if (!snippet) {
     return false;
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
-    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
+    RAW_SESSION_METADATA_RE.test(snippet) ||
+    RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
+    (!opts.allowTranscriptTurnSnippet && RAW_TRANSCRIPT_TURN_RE.test(snippet)) ||
+    MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
+    PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
     return true;
   }
@@ -466,13 +562,15 @@ function calculateConsolidationComponent(recallDays: string[]): number {
     return 0.2;
   }
   const parsed = recallDays
-    .map((value) => Date.parse(`${value}T00:00:00.000Z`))
+    .map((recallDay) => Date.parse(recallDay + "T00:00:00.000Z"))
     .filter((value) => Number.isFinite(value))
     .toSorted((left, right) => left - right);
   if (parsed.length <= 1) {
     return 0.2;
   }
-  const spanDays = Math.max(0, (parsed.at(-1)! - parsed[0]) / DAY_MS);
+  const first = expectDefined(parsed.at(0), "multiple parsed recall days");
+  const last = expectDefined(parsed.at(-1), "multiple parsed recall days");
+  const spanDays = Math.max(0, (last - first) / DAY_MS);
   const spacing = clampScore(Math.log1p(parsed.length - 1) / Math.log1p(4));
   const span = clampScore(spanDays / 7);
   return clampScore(0.55 * spacing + 0.45 * span);
@@ -490,7 +588,7 @@ function emptyStore(nowIso: string): ShortTermRecallStore {
   };
 }
 
-function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
+export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
     return emptyStore(nowIso);
   }
@@ -527,7 +625,12 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
           ? entry.claimHash.trim()
           : undefined;
       const fullSnippet = typeof entry.snippet === "string" ? normalizeSnippet(entry.snippet) : "";
-      if (fullSnippet && isContaminatedDreamingSnippet(fullSnippet)) {
+      if (
+        fullSnippet &&
+        isContaminatedDreamingSnippet(fullSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entryPath),
+        })
+      ) {
         continue;
       }
       const snippet = truncateShortTermSnippet(fullSnippet);
@@ -536,8 +639,8 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         : [];
       const recallDays = Array.isArray(entry.recallDays)
         ? entry.recallDays
-            .map((value) => normalizeIsoDay(String(value)))
-            .filter((value): value is string => value !== null)
+            .map((recallDay) => (typeof recallDay === "string" ? normalizeIsoDay(recallDay) : null))
+            .filter((valueLocal): valueLocal is string => valueLocal !== null)
         : [];
       const conceptTags = Array.isArray(entry.conceptTags)
         ? normalizeDistinctStrings(
@@ -726,37 +829,15 @@ function calculatePhaseSignalBoost(
 }
 
 function resolveStorePath(workspaceDir: string): string {
-  return path.join(workspaceDir, SHORT_TERM_STORE_RELATIVE_PATH);
+  return memoryCoreStateReference(SHORT_TERM_RECALL_NAMESPACE, workspaceDir);
 }
 
 function resolvePhaseSignalPath(workspaceDir: string): string {
-  return path.join(workspaceDir, SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH);
+  return memoryCoreStateReference(SHORT_TERM_PHASE_SIGNAL_NAMESPACE, workspaceDir);
 }
 
 function resolveLockPath(workspaceDir: string): string {
-  return path.join(workspaceDir, SHORT_TERM_LOCK_RELATIVE_PATH);
-}
-
-function resolveShortTermArtifactsDir(workspaceDir: string): string {
-  return path.dirname(resolveLockPath(workspaceDir));
-}
-
-async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> {
-  const artifactsDir = resolveShortTermArtifactsDir(workspaceDir);
-  const existing = ensuredShortTermDirs.get(artifactsDir);
-  if (existing) {
-    await existing;
-    return;
-  }
-  const ensuring = fs
-    .mkdir(artifactsDir, { recursive: true })
-    .then(() => undefined)
-    .catch((err) => {
-      ensuredShortTermDirs.delete(artifactsDir);
-      throw err;
-    });
-  ensuredShortTermDirs.set(artifactsDir, ensuring);
-  await ensuring;
+  return memoryCoreStateReference(SHORT_TERM_LOCK_NAMESPACE, workspaceDir);
 }
 
 function parseLockOwnerPid(raw: string): number | null {
@@ -785,103 +866,77 @@ function isProcessLikelyAlive(pid: number): boolean {
   }
 }
 
-async function canStealStaleLock(lockPath: string): Promise<boolean> {
-  const ownerPid = await fs
-    .readFile(lockPath, "utf-8")
-    .then((raw) => parseLockOwnerPid(raw))
-    .catch(() => null);
-  if (ownerPid === null) {
-    return true;
-  }
-  return !isProcessLikelyAlive(ownerPid);
-}
-
-async function sleep(ms: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 async function withInProcessShortTermLock<T>(lockPath: string, task: () => Promise<T>): Promise<T> {
-  const previous = inProcessShortTermLocks.get(lockPath) ?? Promise.resolve();
-  let releaseCurrent!: () => void;
-  const current = new Promise<void>((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const queued = previous.catch(() => undefined).then(() => current);
-  inProcessShortTermLocks.set(lockPath, queued);
-
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    releaseCurrent();
-    if (inProcessShortTermLocks.get(lockPath) === queued) {
-      inProcessShortTermLocks.delete(lockPath);
-    }
-  }
+  return await inProcessShortTermLocks.enqueue(lockPath, task);
 }
 
 async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>): Promise<T> {
-  const lockPath = resolveLockPath(workspaceDir);
-  return withInProcessShortTermLock(lockPath, async () => {
-    await ensureShortTermArtifactsDir(workspaceDir);
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockRef = resolveLockPath(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  return withInProcessShortTermLock(lockKey, async () => {
     const startedAt = Date.now();
 
     while (true) {
-      try {
-        const lockHandle = await fs.open(lockPath, "wx");
-        await lockHandle
-          .writeFile(`${process.pid}:${Date.now()}\n`, "utf-8")
-          .catch(() => undefined);
+      const owner = `${process.pid}:${Date.now()}`;
+      const acquired = await lockStore.registerIfAbsent(lockKey, {
+        owner,
+        acquiredAt: Date.now(),
+      });
+      if (acquired) {
         try {
           return await task();
         } finally {
-          await lockHandle.close().catch(() => undefined);
-          await fs.unlink(lockPath).catch(() => undefined);
-        }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
-          throw err;
-        }
-
-        const ageMs = await fs
-          .stat(lockPath)
-          .then((stats) => Date.now() - stats.mtimeMs)
-          .catch(() => 0);
-        if (ageMs > SHORT_TERM_LOCK_STALE_MS) {
-          if (await canStealStaleLock(lockPath)) {
-            await fs.unlink(lockPath).catch(() => undefined);
-            continue;
+          const current = await lockStore.lookup(lockKey).catch(() => undefined);
+          if (current?.owner === owner) {
+            await lockStore.delete(lockKey).catch(() => false);
           }
         }
-
-        if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
-          throw new Error(`Timed out waiting for short-term promotion lock at ${lockPath}`, {
-            cause: err,
-          });
-        }
-
-        await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
       }
+
+      const existing = await lockStore.lookup(lockKey);
+      if (existing && Date.now() - existing.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
+        const ownerPid = parseLockOwnerPid(existing.owner);
+        if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
+          await lockStore.delete(lockKey);
+          continue;
+        }
+      }
+
+      if (Date.now() - startedAt >= SHORT_TERM_LOCK_WAIT_TIMEOUT_MS) {
+        throw new Error(`Timed out waiting for short-term promotion lock at ${lockRef}`);
+      }
+
+      await sleep(SHORT_TERM_LOCK_RETRY_DELAY_MS);
     }
   });
 }
 
 async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
-  try {
-    const store = normalizeStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_STORE_RELATIVE_PATH),
-      nowIso,
-    );
-    enforceShortTermRecallStoreRetention(store);
-    return store;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-      return emptyStore(nowIso);
-    }
-    throw err;
-  }
+  const [entryRows, metaRows] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<ShortTermRecallEntry>({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  const meta = metaRows.find((entry) => entry.key === "recall")?.value;
+  const store = normalizeShortTermRecallStore(
+    {
+      version: 1,
+      updatedAt: meta?.updatedAt ?? nowIso,
+      entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
+    },
+    nowIso,
+  );
+  enforceShortTermRecallStoreRetention(store);
+  return store;
 }
 
 function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
@@ -892,7 +947,10 @@ function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore {
   };
 }
 
-function normalizePhaseSignalStore(raw: unknown, nowIso: string): ShortTermPhaseSignalStore {
+export function normalizeShortTermPhaseSignalStore(
+  raw: unknown,
+  nowIso: string,
+): ShortTermPhaseSignalStore {
   const record = asRecord(raw);
   if (!record) {
     return emptyPhaseSignalStore(nowIso);
@@ -948,36 +1006,65 @@ async function readPhaseSignalStore(
   workspaceDir: string,
   nowIso: string,
 ): Promise<ShortTermPhaseSignalStore> {
-  try {
-    return normalizePhaseSignalStore(
-      await privateFileStore(workspaceDir).readJsonIfExists(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
-      nowIso,
-    );
-  } catch {
-    return emptyPhaseSignalStore(nowIso);
-  }
+  const [entryRows, metaRows] = await Promise.all([
+    readMemoryCoreWorkspaceEntries<ShortTermPhaseSignalEntry>({
+      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+      workspaceDir,
+    }),
+    readMemoryCoreWorkspaceEntries<ShortTermStoreMeta>({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+    }),
+  ]);
+  const meta = metaRows.find((entry) => entry.key === "phase")?.value;
+  return normalizeShortTermPhaseSignalStore(
+    {
+      version: 1,
+      updatedAt: meta?.updatedAt ?? nowIso,
+      entries: Object.fromEntries(entryRows.map((entry) => [entry.key, entry.value])),
+    },
+    nowIso,
+  );
 }
 
 async function writePhaseSignalStore(
   workspaceDir: string,
   store: ShortTermPhaseSignalStore,
 ): Promise<void> {
-  await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH, store, {
-    trailingNewline: true,
-  });
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
+      workspaceDir,
+      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: "phase",
+      value: { updatedAt: store.updatedAt },
+    }),
+  ]);
 }
 
 async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
   enforceShortTermRecallSnippetCap(store);
   enforceShortTermRecallStoreRetention(store);
-  await ensureShortTermArtifactsDir(workspaceDir);
-  await privateFileStore(workspaceDir).writeJson(SHORT_TERM_STORE_RELATIVE_PATH, store, {
-    trailingNewline: true,
-  });
+  await Promise.all([
+    writeMemoryCoreWorkspaceEntries({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+      entries: Object.entries(store.entries).map(([key, value]) => ({ key, value })),
+    }),
+    writeMemoryCoreWorkspaceEntry({
+      namespace: SHORT_TERM_META_NAMESPACE,
+      workspaceDir,
+      key: "recall",
+      value: { updatedAt: store.updatedAt },
+    }),
+  ]);
 }
 
-export function isShortTermMemoryPath(filePath: string): boolean {
+function isShortTermMemoryPath(filePath: string): boolean {
   const normalized = normalizeMemoryPath(filePath);
   if (DREAMING_MEMORY_PATH_RE.test(normalized)) {
     return false;
@@ -991,41 +1078,311 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
-async function shortTermRecallSourceExists(params: {
-  workspaceDir: string;
-  entry: Pick<ShortTermRecallEntry, "path">;
-}): Promise<boolean> {
-  const workspaceDir = params.workspaceDir.trim();
-  if (!workspaceDir) {
-    return false;
+function isShortTermSessionCorpusPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
+}
+
+function normalizeMemoryPathForWorkspace(workspaceDir: string, rawPath: string): string {
+  const normalized = normalizeMemoryPath(rawPath);
+  const workspaceNormalized = normalizeMemoryPath(workspaceDir);
+  if (path.isAbsolute(rawPath) && normalized.startsWith(`${workspaceNormalized}/`)) {
+    return normalized.slice(workspaceNormalized.length + 1);
   }
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
-    try {
-      const stat = await fs.stat(sourcePath);
-      if (stat.isFile()) {
-        return true;
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw err;
+  return normalized;
+}
+
+function toNonNegativeInt(value: unknown): number {
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(num));
+}
+
+function parseEntryRangeFromKey(
+  key: string,
+  fallbackStartLine: unknown,
+  fallbackEndLine: unknown,
+): { startLine: number; endLine: number } {
+  const startLine = toNonNegativeInt(fallbackStartLine);
+  const endLine = toNonNegativeInt(fallbackEndLine);
+  if (startLine > 0 && endLine > 0) {
+    return { startLine, endLine };
+  }
+  const match = key.match(/:(\d+):(\d+)$/);
+  if (match) {
+    return {
+      startLine: Math.max(1, toNonNegativeInt(match[1])),
+      endLine: Math.max(1, toNonNegativeInt(match[2])),
+    };
+  }
+  return { startLine: 1, endLine: 1 };
+}
+
+function compareDreamingStatsEntryByRecency(
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
+): number {
+  const aMs = a.lastRecalledAt ? Date.parse(a.lastRecalledAt) : Number.NEGATIVE_INFINITY;
+  const bMs = b.lastRecalledAt ? Date.parse(b.lastRecalledAt) : Number.NEGATIVE_INFINITY;
+  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
+    if (bMs !== aMs) {
+      return bMs - aMs;
     }
   }
-  return false;
+  if (b.totalSignalCount !== a.totalSignalCount) {
+    return b.totalSignalCount - a.totalSignalCount;
+  }
+  return a.path.localeCompare(b.path);
+}
+
+function compareDreamingStatsEntryBySignals(
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
+): number {
+  if (b.totalSignalCount !== a.totalSignalCount) {
+    return b.totalSignalCount - a.totalSignalCount;
+  }
+  if (b.phaseHitCount !== a.phaseHitCount) {
+    return b.phaseHitCount - a.phaseHitCount;
+  }
+  return compareDreamingStatsEntryByRecency(a, b);
+}
+
+function compareDreamingStatsEntryByPromotion(
+  a: ShortTermDreamingStatsEntry,
+  b: ShortTermDreamingStatsEntry,
+): number {
+  const aMs = a.promotedAt ? Date.parse(a.promotedAt) : Number.NEGATIVE_INFINITY;
+  const bMs = b.promotedAt ? Date.parse(b.promotedAt) : Number.NEGATIVE_INFINITY;
+  if (Number.isFinite(aMs) || Number.isFinite(bMs)) {
+    if (bMs !== aMs) {
+      return bMs - aMs;
+    }
+  }
+  return compareDreamingStatsEntryBySignals(a, b);
+}
+
+function trimDreamingStatsEntries(
+  entries: ShortTermDreamingStatsEntry[],
+  compare: (a: ShortTermDreamingStatsEntry, b: ShortTermDreamingStatsEntry) => number,
+): ShortTermDreamingStatsEntry[] {
+  const selected: ShortTermDreamingStatsEntry[] = [];
+  for (const entry of entries) {
+    let insertAt = selected.length;
+    for (let index = 0; index < selected.length; index += 1) {
+      if (compare(entry, expectDefined(selected[index], "selected dreaming stats index")) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+    if (insertAt < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.splice(insertAt, 0, entry);
+      if (selected.length > DREAMING_ENTRY_LIST_LIMIT) {
+        selected.pop();
+      }
+    } else if (selected.length < DREAMING_ENTRY_LIST_LIMIT) {
+      selected.push(entry);
+    }
+  }
+  return selected;
+}
+
+export async function loadShortTermPromotionDreamingStats(params: {
+  workspaceDir: string;
+  nowMs: number;
+  timezone?: string;
+}): Promise<ShortTermDreamingStats> {
+  const workspaceDir = params.workspaceDir.trim();
+  const nowIso = new Date(params.nowMs).toISOString();
+  const store = await readStore(workspaceDir, nowIso);
+  let phaseSignalError: string | undefined;
+  let phaseStore: ShortTermPhaseSignalStore;
+  try {
+    phaseStore = await readPhaseSignalStore(workspaceDir, nowIso);
+  } catch (err) {
+    phaseSignalError = formatErrorMessage(err);
+    phaseStore = emptyPhaseSignalStore(nowIso);
+  }
+  let shortTermCount = 0;
+  let recallSignalCount = 0;
+  let dailySignalCount = 0;
+  let groundedSignalCount = 0;
+  let totalSignalCount = 0;
+  let phaseSignalCount = 0;
+  let lightPhaseHitCount = 0;
+  let remPhaseHitCount = 0;
+  let promotedTotal = 0;
+  let promotedToday = 0;
+  let latestPromotedAtMs = Number.NEGATIVE_INFINITY;
+  let latestPromotedAt: string | undefined;
+  const activeKeys = new Set<string>();
+  const activeEntries = new Map<string, ShortTermDreamingStatsEntry>();
+  const shortTermEntries: ShortTermDreamingStatsEntry[] = [];
+  const promotedEntries: ShortTermDreamingStatsEntry[] = [];
+
+  for (const [entryKey, entry] of Object.entries(store.entries)) {
+    if (entry.source !== "memory" || !entry.path || !isShortTermMemoryPath(entry.path)) {
+      continue;
+    }
+    const range = parseEntryRangeFromKey(entryKey, entry.startLine, entry.endLine);
+    const recallCount = toNonNegativeInt(entry.recallCount);
+    const dailyCount = toNonNegativeInt(entry.dailyCount);
+    const groundedCount = toNonNegativeInt(entry.groundedCount);
+    const totalEntrySignalCount = recallCount + dailyCount + groundedCount;
+    const normalizedEntryPath = normalizeMemoryPathForWorkspace(workspaceDir, entry.path);
+    const detail: ShortTermDreamingStatsEntry = {
+      key: entryKey,
+      path: normalizedEntryPath,
+      startLine: range.startLine,
+      endLine: Math.max(range.startLine, range.endLine),
+      snippet: normalizeSnippet(entry.snippet) || normalizedEntryPath,
+      recallCount,
+      dailyCount,
+      groundedCount,
+      totalSignalCount: totalEntrySignalCount,
+      lightHits: 0,
+      remHits: 0,
+      phaseHitCount: 0,
+      ...(entry.lastRecalledAt ? { lastRecalledAt: entry.lastRecalledAt } : {}),
+    };
+    if (!entry.promotedAt) {
+      shortTermCount += 1;
+      activeKeys.add(entryKey);
+      recallSignalCount += recallCount;
+      dailySignalCount += dailyCount;
+      groundedSignalCount += groundedCount;
+      totalSignalCount += totalEntrySignalCount;
+      shortTermEntries.push(detail);
+      activeEntries.set(entryKey, detail);
+      continue;
+    }
+    promotedTotal += 1;
+    promotedEntries.push({ ...detail, promotedAt: entry.promotedAt });
+    const promotedAtMs = Date.parse(entry.promotedAt);
+    if (
+      Number.isFinite(promotedAtMs) &&
+      isSameMemoryDreamingDay(promotedAtMs, params.nowMs, params.timezone)
+    ) {
+      promotedToday += 1;
+    }
+    if (Number.isFinite(promotedAtMs) && promotedAtMs > latestPromotedAtMs) {
+      latestPromotedAtMs = promotedAtMs;
+      latestPromotedAt = entry.promotedAt;
+    }
+  }
+
+  for (const [key, phaseEntry] of Object.entries(phaseStore.entries)) {
+    if (!activeKeys.has(key)) {
+      continue;
+    }
+    const lightHits = toNonNegativeInt(phaseEntry.lightHits);
+    const remHits = toNonNegativeInt(phaseEntry.remHits);
+    lightPhaseHitCount += lightHits;
+    remPhaseHitCount += remHits;
+    phaseSignalCount += lightHits + remHits;
+    const detail = activeEntries.get(key);
+    if (detail) {
+      detail.lightHits = lightHits;
+      detail.remHits = remHits;
+      detail.phaseHitCount = lightHits + remHits;
+    }
+  }
+
+  return {
+    shortTermCount,
+    recallSignalCount,
+    dailySignalCount,
+    groundedSignalCount,
+    totalSignalCount,
+    phaseSignalCount,
+    lightPhaseHitCount,
+    remPhaseHitCount,
+    promotedTotal,
+    promotedToday,
+    storePath: resolveStorePath(workspaceDir),
+    phaseSignalPath: resolvePhaseSignalPath(workspaceDir),
+    shortTermEntries: trimDreamingStatsEntries(
+      shortTermEntries,
+      compareDreamingStatsEntryByRecency,
+    ),
+    signalEntries: trimDreamingStatsEntries(shortTermEntries, compareDreamingStatsEntryBySignals),
+    promotedEntries: trimDreamingStatsEntries(
+      promotedEntries,
+      compareDreamingStatsEntryByPromotion,
+    ),
+    ...(phaseSignalError ? { phaseSignalError } : {}),
+    ...(latestPromotedAt ? { lastPromotedAt: latestPromotedAt } : {}),
+  };
+}
+
+async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(sourcePath);
+    return stat.isFile();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
 }
 
 export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
 }): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return [];
+  }
+  const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const sourceFileLimit = pLimit(SHORT_TERM_SOURCE_FILE_CHECK_CONCURRENCY);
+  const checkSourceFile = (sourcePath: string): Promise<boolean> => {
+    const existing = sourceFileChecks.get(sourcePath);
+    if (existing) {
+      return existing;
+    }
+    const check = sourceFileLimit(() => shortTermRecallSourceIsFile(sourcePath));
+    sourceFileChecks.set(sourcePath, check);
+    return check;
+  };
   const results = await Promise.all(
-    params.entries.map(async (entry) => ({
-      entry,
-      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
-    })),
+    params.entries.map(async (entry) => {
+      let exists = false;
+      for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
+        if (await checkSourceFile(sourcePath)) {
+          exists = true;
+          break;
+        }
+      }
+      return { entry, exists };
+    }),
   );
   return results.filter((result) => result.exists).map((result) => result.entry);
+}
+
+function buildMemoryRecallSkippedEvent(params: {
+  timestamp: string;
+  query: string;
+  eligibleResultCount: number;
+  skipped: MemorySearchResult[];
+}) {
+  return {
+    type: "memory.recall.skipped" as const,
+    timestamp: params.timestamp,
+    query: params.query,
+    reason: "non-short-term-memory-path" as const,
+    eligibleResultCount: params.eligibleResultCount,
+    skippedResultCount: params.skipped.length,
+    results: params.skipped.map((result) => ({
+      path: normalizeMemoryPath(result.path),
+      startLine: Math.max(1, Math.floor(result.startLine)),
+      endLine: Math.max(1, Math.floor(result.endLine)),
+      score: clampScore(result.score),
+      reason: "non-short-term-memory-path" as const,
+    })),
+  };
 }
 
 export async function recordShortTermRecalls(params: {
@@ -1046,15 +1403,27 @@ export async function recordShortTermRecalls(params: {
   if (!query) {
     return;
   }
-  const relevant = params.results.filter(
-    (result) => result.source === "memory" && isShortTermMemoryPath(result.path),
-  );
-  if (relevant.length === 0) {
+  const memoryResults = params.results.filter((result) => result.source === "memory");
+  const relevant = memoryResults.filter((result) => isShortTermMemoryPath(result.path));
+  const skipped = memoryResults.filter((result) => !isShortTermMemoryPath(result.path));
+  if (relevant.length === 0 && skipped.length === 0) {
     return;
   }
 
   const nowMs = resolveMemoryCoreNowMs(params.nowMs);
   const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  if (relevant.length === 0) {
+    await appendMemoryHostEvent(
+      workspaceDir,
+      buildMemoryRecallSkippedEvent({
+        timestamp: nowIso,
+        query,
+        eligibleResultCount: relevant.length,
+        skipped,
+      }),
+    );
+    return;
+  }
   const signalType = params.signalType ?? "recall";
   const queryHash = hashQuery(query);
   const todayBucket =
@@ -1066,7 +1435,12 @@ export async function recordShortTermRecalls(params: {
       const normalizedPath = normalizeMemoryPath(result.path);
       const rawSnippet = normalizeSnippet(result.snippet);
       const snippet = truncateShortTermSnippet(rawSnippet);
-      if (!rawSnippet || isContaminatedDreamingSnippet(rawSnippet)) {
+      if (
+        !rawSnippet ||
+        isContaminatedDreamingSnippet(rawSnippet, {
+          allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(normalizedPath),
+        })
+      ) {
         continue;
       }
       const claimHash = buildClaimHash(rawSnippet);
@@ -1103,6 +1477,14 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: normalizedPath,
@@ -1116,7 +1498,7 @@ export async function recordShortTermRecalls(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1139,6 +1521,17 @@ export async function recordShortTermRecalls(params: {
         score: clampScore(result.score),
       })),
     });
+    if (skipped.length > 0) {
+      await appendMemoryHostEvent(
+        workspaceDir,
+        buildMemoryRecallSkippedEvent({
+          timestamp: nowIso,
+          query,
+          eligibleResultCount: relevant.length,
+          skipped,
+        }),
+      );
+    }
   });
 }
 
@@ -1241,6 +1634,14 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === item.snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: item.path,
@@ -1254,7 +1655,7 @@ export async function recordGroundedShortTermCandidates(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1402,6 +1803,32 @@ export async function readLightStagedKeys(params: {
   return keys;
 }
 
+export async function filterFreshLightDreamingEntries(params: {
+  workspaceDir: string;
+  entries: readonly ShortTermRecallEntry[];
+  nowMs?: number;
+}): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir || params.entries.length === 0) {
+    return [];
+  }
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+  return params.entries.filter((entry) => {
+    const phaseSignal = phaseSignals.entries[entry.key];
+    if (!phaseSignal || phaseSignal.lightHits <= 0) {
+      return true;
+    }
+    const lastLightMs = parseStoreTimestampMs(phaseSignal.lastLightAt);
+    if (!Number.isFinite(lastLightMs)) {
+      return true;
+    }
+    const lastRecalledAtMs = parseStoreTimestampMs(entry.lastRecalledAt);
+    return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs > lastLightMs;
+  });
+}
+
 export async function rankShortTermPromotionCandidates(
   options: RankShortTermPromotionOptions,
 ): Promise<PromotionCandidate[]> {
@@ -1439,7 +1866,11 @@ export async function rankShortTermPromotionCandidates(
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
-    if (isContaminatedDreamingSnippet(entry.snippet)) {
+    if (
+      isContaminatedDreamingSnippet(entry.snippet, {
+        allowTranscriptTurnSnippet: isShortTermSessionCorpusPath(entry.path),
+      })
+    ) {
       continue;
     }
     if (!includePromoted && entry.promotedAt) {
@@ -1591,6 +2022,114 @@ function normalizeRangeSnippet(lines: string[], startLine: number, endLine: numb
   return normalizeSnippet(lines.slice(startIndex, endIndex).join(" "));
 }
 
+function normalizeListMarkerFreeRangeSnippet(
+  lines: string[],
+  startLine: number,
+  endLine: number,
+): string {
+  const startIndex = Math.max(0, startLine - 1);
+  const endIndex = Math.min(lines.length, endLine);
+  if (startIndex >= endIndex) {
+    return "";
+  }
+  const strippedLines = lines.slice(startIndex, endIndex).map((line) => {
+    const trimmed = line.trim();
+    const withoutMarker = trimmed.replace(PROMOTION_LIST_MARKER_RE, "");
+    return { text: withoutMarker, hadListMarker: withoutMarker !== trimmed };
+  });
+  const joiner =
+    strippedLines.length > 1 && strippedLines.every((line) => line.hadListMarker) ? "; " : " ";
+  return normalizeSnippet(strippedLines.map((line) => line.text).join(joiner));
+}
+
+function normalizeDailyHeadingForPromotion(line: string): string | null {
+  const match = line.trim().match(/^#{1,6}\s+(.+)$/);
+  const heading = match?.[1]?.replace(PROMOTION_LIST_MARKER_RE, "").trim() ?? "";
+  const normalized = normalizeSnippet(heading);
+  if (
+    !normalized ||
+    SHORT_TERM_BASENAME_RE.test(normalized) ||
+    isGenericDailyHeadingForPromotion(normalized)
+  ) {
+    return null;
+  }
+  return normalized;
+}
+
+function isGenericDailyHeadingForPromotion(heading: string): boolean {
+  const normalized = heading.trim().replace(/\s+/g, " ");
+  const lower = normalized.toLowerCase();
+  if (MANAGED_DREAMING_HEADINGS.has(lower)) {
+    return true;
+  }
+  if (lower === "today" || lower === "yesterday" || lower === "tomorrow") {
+    return true;
+  }
+  if (lower === "morning" || lower === "afternoon" || lower === "evening" || lower === "night") {
+    return true;
+  }
+  return GENERIC_DAY_HEADING_RE.test(normalized);
+}
+
+function buildRelocatedDailyHeadingLookup(lines: string[]): (string | null)[] {
+  const headings: (string | null)[] = Array.from({ length: lines.length + 1 }, () => null);
+  let currentHeading: string | null = null;
+  for (let index = 0; index < lines.length; index += 1) {
+    headings[index + 1] = currentHeading;
+    const line = lines[index] ?? "";
+    if (DREAMING_FENCE_START_RE.test(line) || DREAMING_FENCE_END_RE.test(line)) {
+      currentHeading = null;
+      continue;
+    }
+    if (/^#{1,6}\s+.+$/.test(line.trim())) {
+      currentHeading = normalizeDailyHeadingForPromotion(line);
+    }
+  }
+  return headings;
+}
+
+function buildListMarkerFreeMatchSnippet(
+  heading: string | null,
+  listMarkerFreeSnippet: string,
+): string {
+  if (!listMarkerFreeSnippet) {
+    return listMarkerFreeSnippet;
+  }
+  return heading ? normalizeSnippet(`${heading}: ${listMarkerFreeSnippet}`) : listMarkerFreeSnippet;
+}
+
+function targetSnippetHasHeadingContext(targetSnippet: string, bodySnippet: string): boolean {
+  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
+    return false;
+  }
+  const bodyIndex = targetSnippet.indexOf(bodySnippet);
+  if (bodyIndex <= 0) {
+    return false;
+  }
+  return targetSnippet.slice(0, bodyIndex).trimEnd().endsWith(":");
+}
+
+function extractTargetHeadingBodySnippet(
+  targetSnippet: string,
+  bodySnippet: string,
+): string | null {
+  if (!targetSnippet || !bodySnippet || targetSnippet === bodySnippet) {
+    return null;
+  }
+  if (bodySnippet.startsWith(targetSnippet)) {
+    return null;
+  }
+  const normalizedBody = normalizeSnippet(bodySnippet);
+  for (let separatorIndex = targetSnippet.indexOf(": "); separatorIndex > 0;) {
+    const targetBody = normalizeSnippet(targetSnippet.slice(separatorIndex + 2));
+    if (targetBody && normalizedBody.startsWith(targetBody)) {
+      return targetBody;
+    }
+    separatorIndex = targetSnippet.indexOf(": ", separatorIndex + 2);
+  }
+  return null;
+}
+
 function compareCandidateWindow(
   targetSnippet: string,
   windowSnippet: string,
@@ -1638,6 +2177,7 @@ function relocateCandidateRange(
   }
 
   const maxSpan = Math.min(lines.length, Math.max(preferredSpan + 3, 8));
+  const headingLookup = buildRelocatedDailyHeadingLookup(lines);
   let bestMatch:
     | { startLine: number; endLine: number; snippet: string; quality: number; distance: number }
     | undefined;
@@ -1647,15 +2187,61 @@ function relocateCandidateRange(
       const endLine = startIndex + span;
       const snippet = normalizeRangeSnippet(lines, startLine, endLine);
       const comparison = compareCandidateWindow(targetSnippet, snippet);
-      if (!comparison.matched) {
+      const listMarkerFreeSnippet = normalizeListMarkerFreeRangeSnippet(lines, startLine, endLine);
+      const listMarkerFreeMatchSnippet = buildListMarkerFreeMatchSnippet(
+        headingLookup[startLine] ?? null,
+        listMarkerFreeSnippet,
+      );
+      const listMarkerFreeComparison =
+        listMarkerFreeSnippet === snippet
+          ? { matched: false, quality: 0 }
+          : compareCandidateWindow(targetSnippet, listMarkerFreeSnippet);
+      const listMarkerFreeContextComparison =
+        listMarkerFreeMatchSnippet === listMarkerFreeSnippet
+          ? { matched: false, quality: 0 }
+          : compareCandidateWindow(targetSnippet, listMarkerFreeMatchSnippet);
+      const targetHeadingBodySnippet = extractTargetHeadingBodySnippet(
+        targetSnippet,
+        listMarkerFreeSnippet,
+      );
+      const targetHeadingBodyComparison =
+        targetHeadingBodySnippet && listMarkerFreeMatchSnippet !== listMarkerFreeSnippet
+          ? compareCandidateWindow(targetHeadingBodySnippet, listMarkerFreeSnippet)
+          : { matched: false, quality: 0 };
+      const useTargetHeadingBodyContext =
+        targetHeadingBodyComparison.matched &&
+        targetHeadingBodyComparison.quality >= comparison.quality &&
+        targetHeadingBodyComparison.quality >= listMarkerFreeComparison.quality;
+      const useListMarkerFreeContext =
+        !useTargetHeadingBodyContext &&
+        listMarkerFreeContextComparison.quality > comparison.quality &&
+        listMarkerFreeContextComparison.quality >= listMarkerFreeComparison.quality;
+      const useListMarkerFree =
+        !useListMarkerFreeContext && listMarkerFreeComparison.quality > comparison.quality;
+      const bestComparison = useTargetHeadingBodyContext
+        ? targetHeadingBodyComparison
+        : useListMarkerFreeContext
+          ? listMarkerFreeContextComparison
+          : useListMarkerFree
+            ? listMarkerFreeComparison
+            : comparison;
+      if (!bestComparison.matched) {
         continue;
       }
+      const matchedSnippet =
+        useTargetHeadingBodyContext || useListMarkerFreeContext
+          ? listMarkerFreeMatchSnippet
+          : useListMarkerFree
+            ? targetSnippetHasHeadingContext(targetSnippet, listMarkerFreeSnippet)
+              ? listMarkerFreeMatchSnippet
+              : listMarkerFreeSnippet
+            : snippet;
       const distance = Math.abs(startLine - candidate.startLine);
       if (
         !bestMatch ||
-        comparison.quality > bestMatch.quality ||
-        (comparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
-        (comparison.quality === bestMatch.quality &&
+        bestComparison.quality > bestMatch.quality ||
+        (bestComparison.quality === bestMatch.quality && distance < bestMatch.distance) ||
+        (bestComparison.quality === bestMatch.quality &&
           distance === bestMatch.distance &&
           Math.abs(span - preferredSpan) <
             Math.abs(bestMatch.endLine - bestMatch.startLine + 1 - preferredSpan))
@@ -1663,8 +2249,8 @@ function relocateCandidateRange(
         bestMatch = {
           startLine,
           endLine,
-          snippet,
-          quality: comparison.quality,
+          snippet: matchedSnippet,
+          quality: bestComparison.quality,
           distance,
         };
       }
@@ -1697,15 +2283,21 @@ function lineRangeOverlapsDreamingFence(
   let insideFence = false;
   for (let i = 0; i < safeEnd; i += 1) {
     const line = lines[i] ?? "";
-    if (DREAMING_FENCE_START_RE.test(line)) {
-      insideFence = true;
-      continue;
-    }
-    if (DREAMING_FENCE_END_RE.test(line)) {
-      insideFence = false;
-      continue;
-    }
     const oneIndexed = i + 1;
+    const isStart = DREAMING_FENCE_START_RE.test(line);
+    const isEnd = DREAMING_FENCE_END_RE.test(line);
+    if (isStart || isEnd) {
+      // The marker line itself is managed-block content. A relocated range
+      // that includes a `<!-- openclaw:dreaming:*:start/end -->` marker would
+      // build its snippet from raw lines that contain that marker text and
+      // leak it into MEMORY.md alongside any adjacent fenced content captured
+      // by the same window. (#80613)
+      if (oneIndexed >= safeStart && oneIndexed <= safeEnd) {
+        return true;
+      }
+      insideFence = isStart;
+      continue;
+    }
     if (insideFence && oneIndexed >= safeStart && oneIndexed <= safeEnd) {
       return true;
     }
@@ -1762,7 +2354,7 @@ function buildPromotionSection(
 
   for (const candidate of candidates) {
     const source = `${candidate.path}:${candidate.startLine}-${candidate.endLine}`;
-    const metadata = `[score=${candidate.score.toFixed(3)} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
+    const metadata = `[score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} avg=${candidate.avgScore.toFixed(3)} source=${source}]`;
     lines.push(`<!-- ${PROMOTION_MARKER_PREFIX}${candidate.key} -->`);
     // Cap only the visible MEMORY.md text. The recall store keeps the full
     // rehydrated snippet so ranking, provenance, and dream narratives remain
@@ -1790,7 +2382,7 @@ function truncatePromotedSnippet(snippet: string, maxTokens: number): string {
   if (limit === 0 || snippet.length <= limit) {
     return snippet;
   }
-  const hardLimit = snippet.slice(0, limit);
+  const hardLimit = truncateUtf16Safe(snippet, limit);
   const sentenceBoundary = Math.max(
     hardLimit.lastIndexOf(". "),
     hardLimit.lastIndexOf("! "),
@@ -1818,6 +2410,63 @@ function withTrailingNewline(content: string): string {
     return "";
   }
   return content.endsWith("\n") ? content : `${content}\n`;
+}
+
+async function resolveMemoryWritePath(filePath: string): Promise<string> {
+  try {
+    return await fs.realpath(filePath);
+  } catch (err) {
+    const hasTrailingSeparator =
+      filePath.endsWith(path.sep) ||
+      (process.platform === "win32" && filePath.endsWith(path.posix.sep));
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT" || hasTrailingSeparator) {
+      throw err;
+    }
+  }
+
+  // Canonicalize each parent before applying a relative link target. Lexical
+  // normalization would change `..` semantics when an earlier component is a symlink.
+  const parentPath = await fs.realpath(path.dirname(filePath));
+  const canonicalPath = path.join(parentPath, path.basename(filePath));
+  let linkTarget: string;
+  try {
+    linkTarget = await fs.readlink(canonicalPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT" || code === "EINVAL") {
+      return canonicalPath;
+    }
+    throw err;
+  }
+  const isWindowsRootRelative = process.platform === "win32" && /^[\\/](?![\\/])/.test(linkTarget);
+  const targetPath = isWindowsRootRelative
+    ? `${path.parse(parentPath).root.replace(/[\\/]$/, "")}${linkTarget}`
+    : path.isAbsolute(linkTarget)
+      ? linkTarget
+      : `${parentPath}${parentPath.endsWith(path.sep) ? "" : path.sep}${linkTarget}`;
+  return await resolveMemoryWritePath(targetPath);
+}
+
+function isAtomicReplacePermissionError(error: unknown): boolean {
+  const code = (error as NodeJS.ErrnoException)?.code;
+  return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
+}
+
+async function writeExistingMemoryInPlace(filePath: string, content: string): Promise<boolean> {
+  let handle: Awaited<ReturnType<typeof fs.open>>;
+  try {
+    handle = await fs.open(filePath, "r+");
+  } catch {
+    return false;
+  }
+  try {
+    await handle.writeFile(content, { encoding: "utf-8" });
+    await handle.truncate(Buffer.byteLength(content));
+    await handle.sync();
+    return true;
+  } finally {
+    await handle.close();
+  }
 }
 
 function extractPromotionMarkers(memoryText: string): Set<string> {
@@ -1869,16 +2518,7 @@ export async function applyShortTermPromotions(
         if (candidate.score < minScore) {
           return false;
         }
-        const candidateSignalCount = Math.max(
-          0,
-          candidate.signalCount ??
-            totalSignalCountForEntry({
-              recallCount: candidate.recallCount,
-              dailyCount: candidate.dailyCount,
-              groundedCount: candidate.groundedCount,
-            }),
-        );
-        if (candidateSignalCount < minRecallCount) {
+        if (candidate.signalCount < minRecallCount) {
           return false;
         }
         if (Math.max(candidate.uniqueQueries, candidate.recallDays.length) < minUniqueQueries) {
@@ -1915,7 +2555,10 @@ export async function applyShortTermPromotions(
       };
     }
 
-    const existingMemory = await fs.readFile(memoryPath, "utf-8").catch((err: unknown) => {
+    // Promotions historically follow user-managed MEMORY.md symlinks. Replace the
+    // final target atomically without severing the chain, matching the prior writeFile path.
+    const memoryWritePath = await resolveMemoryWritePath(memoryPath);
+    const existingMemory = await fs.readFile(memoryWritePath, "utf-8").catch((err: unknown) => {
       if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
         return "";
       }
@@ -1948,11 +2591,52 @@ export async function applyShortTermPromotions(
       compactedDates = compaction.droppedDates;
       const baseMemory = compaction.compacted;
       const header = baseMemory.trim().length > 0 ? "" : "# Long-Term Memory\n\n";
-      await fs.writeFile(
-        memoryPath,
-        `${header}${withTrailingNewline(baseMemory)}${section}`,
-        "utf-8",
-      );
+      const content = `${header}${withTrailingNewline(baseMemory)}${section}`;
+      const memoryDirMode = (await fs.stat(path.dirname(memoryWritePath))).mode & 0o7777;
+      let atomicRenameCommitted = false;
+      const trackedRename: typeof fs.rename = async (source, destination) => {
+        await fs.rename(source, destination);
+        atomicRenameCommitted = true;
+      };
+      try {
+        await replaceFileAtomic({
+          filePath: memoryWritePath,
+          content,
+          dirMode: memoryDirMode,
+          mode: 0o600,
+          preserveExistingMode: true,
+          tempPrefix: `${path.basename(memoryPath)}.promotion`,
+          syncTempFile: true,
+          syncParentDir: true,
+          throwOnCleanupError: true,
+          // Stage proof prevents a future post-rename permission error from entering fallback.
+          fileSystem: {
+            promises: {
+              mkdir: fs.mkdir,
+              chmod: fs.chmod,
+              writeFile: fs.writeFile,
+              rename: trackedRename,
+              copyFile: fs.copyFile,
+              unlink: fs.unlink,
+              rm: fs.rm,
+              open: fs.open,
+              stat: fs.stat,
+              lstat: fs.lstat,
+            },
+          },
+        });
+      } catch (error) {
+        // Released promotion writes could update an existing writable MEMORY.md even when
+        // directory ACLs blocked rename. Retain that in-place contract only after a real
+        // atomic permission failure and a successful writable-file open.
+        if (
+          atomicRenameCommitted ||
+          !isAtomicReplacePermissionError(error) ||
+          !(await writeExistingMemoryInPlace(memoryWritePath, content))
+        ) {
+          throw error;
+        }
+      }
     }
 
     for (const candidate of rehydratedSelected) {
@@ -1998,10 +2682,6 @@ export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
 
-export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
-  return resolvePhaseSignalPath(workspaceDir);
-}
-
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
   return resolveLockPath(workspaceDir);
 }
@@ -2017,7 +2697,6 @@ export async function auditShortTermPromotionArtifacts(params: {
   const storePath = resolveStorePath(workspaceDir);
   const lockPath = resolveLockPath(workspaceDir);
   const issues: ShortTermAuditIssue[] = [];
-  let exists = false;
   let entryCount = 0;
   let promotedCount = 0;
   let spacedEntryCount = 0;
@@ -2026,86 +2705,73 @@ export async function auditShortTermPromotionArtifacts(params: {
   let invalidEntryCount = 0;
   let updatedAt: string | undefined;
 
-  try {
-    const raw = await fs.readFile(storePath, "utf-8");
-    exists = true;
-    if (raw.trim().length === 0) {
+  const nowIso = new Date().toISOString();
+  const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
+    namespace: SHORT_TERM_RECALL_NAMESPACE,
+    workspaceDir,
+  });
+  const exists = rawEntries.length > 0;
+  if (exists) {
+    const parsed = {
+      version: 1,
+      updatedAt: nowIso,
+      entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
+    };
+    const store = normalizeShortTermRecallStore(parsed, nowIso);
+    const normalizedEntryCount = Object.keys(store.entries).length;
+    updatedAt = store.updatedAt;
+    entryCount = normalizedEntryCount;
+    promotedCount = Object.values(store.entries).filter((entry) =>
+      Boolean(entry.promotedAt),
+    ).length;
+    spacedEntryCount = Object.values(store.entries).filter(
+      (entry) => (entry.recallDays?.length ?? 0) > 1,
+    ).length;
+    conceptTaggedEntryCount = Object.values(store.entries).filter(
+      (entry) => (entry.conceptTags?.length ?? 0) > 0,
+    ).length;
+    conceptTagScripts = summarizeConceptTagScriptCoverage(
+      Object.values(store.entries)
+        .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
+        .map((entry) => entry.conceptTags ?? []),
+    );
+    invalidEntryCount = rawEntries.length - entryCount;
+    if (invalidEntryCount > 0) {
       issues.push({
         severity: "warn",
-        code: "recall-store-empty",
-        message: "Short-term recall store is empty.",
+        code: "recall-store-invalid",
+        message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
         fixable: true,
       });
-    } else {
-      const nowIso = new Date().toISOString();
-      const parsed = JSON.parse(raw) as unknown;
-      const store = normalizeStore(parsed, nowIso);
-      const normalizedEntryCount = Object.keys(store.entries).length;
-      updatedAt = store.updatedAt;
-      entryCount = normalizedEntryCount;
-      promotedCount = Object.values(store.entries).filter((entry) =>
-        Boolean(entry.promotedAt),
-      ).length;
-      spacedEntryCount = Object.values(store.entries).filter(
-        (entry) => (entry.recallDays?.length ?? 0) > 1,
-      ).length;
-      conceptTaggedEntryCount = Object.values(store.entries).filter(
-        (entry) => (entry.conceptTags?.length ?? 0) > 0,
-      ).length;
-      conceptTagScripts = summarizeConceptTagScriptCoverage(
-        Object.values(store.entries)
-          .filter((entry) => (entry.conceptTags?.length ?? 0) > 0)
-          .map((entry) => entry.conceptTags ?? []),
-      );
-      invalidEntryCount = Object.keys(asRecord(parsed)?.entries ?? {}).length - entryCount;
-      if (invalidEntryCount > 0) {
-        issues.push({
-          severity: "warn",
-          code: "recall-store-invalid",
-          message: `Short-term recall store contains ${invalidEntryCount} invalid entr${invalidEntryCount === 1 ? "y" : "ies"}.`,
-          fixable: true,
-        });
-      }
-      if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
-        issues.push({
-          severity: "warn",
-          code: "recall-store-over-limit",
-          message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
-          fixable: true,
-        });
-      }
     }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
+    if (normalizedEntryCount > SHORT_TERM_RECALL_MAX_ENTRIES) {
       issues.push({
-        severity: "error",
-        code: "recall-store-unreadable",
-        message: `Short-term recall store is unreadable: ${code ?? "error"}.`,
-        fixable: false,
+        severity: "warn",
+        code: "recall-store-over-limit",
+        message: `Short-term recall store contains ${normalizedEntryCount} entries; only the newest ${SHORT_TERM_RECALL_MAX_ENTRIES} are kept at runtime.`,
+        fixable: true,
       });
     }
   }
 
-  try {
-    const stat = await fs.stat(lockPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  const lockEntry = await lockStore.lookup(lockKey);
+  if (lockEntry) {
+    const ageMs = Date.now() - lockEntry.acquiredAt;
+    const ownerPid = parseLockOwnerPid(lockEntry.owner);
+    if (
+      ageMs > SHORT_TERM_LOCK_STALE_MS &&
+      (ownerPid === null || !isProcessLikelyAlive(ownerPid))
+    ) {
       issues.push({
         severity: "warn",
         code: "recall-lock-stale",
         message: "Short-term promotion lock appears stale.",
         fixable: true,
-      });
-    }
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT") {
-      issues.push({
-        severity: "warn",
-        code: "recall-lock-unreadable",
-        message: `Short-term promotion lock could not be inspected: ${code ?? "error"}.`,
-        fixable: false,
       });
     }
   }
@@ -2179,28 +2845,37 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedOverflowEntries = 0;
   let removedStaleLock = false;
 
-  try {
-    const lockPath = resolveLockPath(workspaceDir);
-    const stat = await fs.stat(lockPath);
-    const ageMs = Date.now() - stat.mtimeMs;
-    if (ageMs > SHORT_TERM_LOCK_STALE_MS && (await canStealStaleLock(lockPath))) {
-      await fs.unlink(lockPath).catch(() => undefined);
-      removedStaleLock = true;
-    }
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw err;
+  const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+  const lockStore = openMemoryCoreStateStore<ShortTermLockEntry>({
+    namespace: SHORT_TERM_LOCK_NAMESPACE,
+    maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+  });
+  const lockEntry = await lockStore.lookup(lockKey);
+  if (lockEntry && Date.now() - lockEntry.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
+    const ownerPid = parseLockOwnerPid(lockEntry.owner);
+    if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
+      removedStaleLock = await lockStore.delete(lockKey);
     }
   }
 
   await withShortTermLock(workspaceDir, async () => {
-    const storePath = resolveStorePath(workspaceDir);
-    try {
-      const raw = await fs.readFile(storePath, "utf-8");
-      const parsed = raw.trim().length > 0 ? (JSON.parse(raw) as unknown) : emptyStore(nowIso);
-      const rawEntries = Object.keys(asRecord(parsed)?.entries ?? {}).length;
-      const normalized = normalizeStore(parsed, nowIso);
-      removedInvalidEntries = Math.max(0, rawEntries - Object.keys(normalized.entries).length);
+    const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
+      namespace: SHORT_TERM_RECALL_NAMESPACE,
+      workspaceDir,
+    });
+    if (rawEntries.length > 0) {
+      const normalized = normalizeShortTermRecallStore(
+        {
+          version: 1,
+          updatedAt: nowIso,
+          entries: Object.fromEntries(rawEntries.map((entry) => [entry.key, entry.value])),
+        },
+        nowIso,
+      );
+      removedInvalidEntries = Math.max(
+        0,
+        rawEntries.length - Object.keys(normalized.entries).length,
+      );
       const nextEntries = Object.fromEntries(
         Object.entries(normalized.entries).map(([key, entry]) => {
           const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
@@ -2230,17 +2905,16 @@ export async function repairShortTermPromotionArtifacts(params: {
         entries: nextEntries,
       };
       removedOverflowEntries = enforceShortTermRecallStoreRetention(comparableStore);
-      const comparableRaw = `${JSON.stringify(comparableStore, null, 2)}\n`;
-      if (comparableRaw !== `${raw.trimEnd()}\n`) {
+      const needsRewrite =
+        removedInvalidEntries > 0 ||
+        removedOverflowEntries > 0 ||
+        JSON.stringify(normalized.entries) !== JSON.stringify(comparableStore.entries);
+      if (needsRewrite) {
         await writeStore(workspaceDir, {
           ...comparableStore,
           updatedAt: nowIso,
         });
         rewroteStore = true;
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        throw err;
       }
     }
   });
@@ -2297,19 +2971,4 @@ export async function removeGroundedShortTermCandidates(params: {
 
   return { removed, storePath };
 }
-
-export const testing = {
-  parseLockOwnerPid,
-  canStealStaleLock,
-  isProcessLikelyAlive,
-  deriveConceptTags,
-  calculateConsolidationComponent,
-  calculatePhaseSignalBoost,
-  buildClaimHash,
-  totalSignalCountForEntry,
-  isContaminatedDreamingSnippet,
-  lineRangeOverlapsDreamingFence,
-  SHORT_TERM_RECALL_MAX_ENTRIES,
-  SHORT_TERM_RECALL_MAX_SNIPPET_CHARS,
-};
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

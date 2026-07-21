@@ -1,5 +1,8 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
+/**
+ * Channel setup promotion helpers.
+ *
+ * Moves legacy single-account channel config into account-scoped config records.
+ */
 import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
 import { getLoadedChannelPlugin } from "./registry.js";
 import {
@@ -39,28 +42,9 @@ function getBundledChannelSetupPromotionSurface(
   return asPromotionSurface(getBundledChannelPlugin(channelKey)?.setup);
 }
 
-export function shouldMoveSingleAccountChannelKey(params: {
-  channelKey: string;
-  key: string;
-}): boolean {
-  if (isCommonSingleAccountPromotionKey(params.key)) {
-    return true;
-  }
-  const loadedContractKeys = getLoadedChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.singleAccountKeysToMove;
-  if (loadedContractKeys?.includes(params.key)) {
-    return true;
-  }
-  const bundledContractKeys = getBundledChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.singleAccountKeysToMove;
-  if (bundledContractKeys?.includes(params.key)) {
-    return true;
-  }
-  return false;
-}
-
+/**
+ * Resolves all root-level keys eligible for single-account promotion.
+ */
 export function resolveSingleAccountKeysToMove(params: {
   channelKey: string;
   channel: Record<string, unknown>;
@@ -94,6 +78,8 @@ export function resolveSingleAccountKeysToMove(params: {
     return keysToMove;
   }
 
+  // Once named accounts exist, only keys explicitly allowed for named-account
+  // promotion should move. This avoids flattening root-only channel settings.
   const namedAccountPromotionKeys =
     resolveLoadedSetupSurface()?.namedAccountPromotionKeys ??
     resolveBundledSetupSurface()?.namedAccountPromotionKeys;
@@ -101,33 +87,4 @@ export function resolveSingleAccountKeysToMove(params: {
     return keysToMove;
   }
   return keysToMove.filter((key) => namedAccountPromotionKeys.includes(key));
-}
-
-export function resolveSingleAccountPromotionTarget(params: {
-  channelKey: string;
-  channel: ChannelSectionBase;
-}): string {
-  const accounts = params.channel.accounts ?? {};
-  const resolveExistingAccountId = (targetAccountId: string): string => {
-    const normalizedTargetAccountId = normalizeAccountId(targetAccountId);
-    const matchedAccountId = Object.keys(accounts).find(
-      (accountId) => normalizeAccountId(accountId) === normalizedTargetAccountId,
-    );
-    return matchedAccountId ?? normalizedTargetAccountId;
-  };
-  const loadedSurface = getLoadedChannelSetupPromotionSurface(params.channelKey);
-  const bundledSurface = loadedSurface?.resolveSingleAccountPromotionTarget
-    ? undefined
-    : getBundledChannelSetupPromotionSurface(params.channelKey);
-  const resolvePromotionTarget =
-    loadedSurface?.resolveSingleAccountPromotionTarget ??
-    bundledSurface?.resolveSingleAccountPromotionTarget;
-  const resolved = resolvePromotionTarget?.({
-    channel: params.channel,
-  });
-  const normalizedResolved = normalizeOptionalString(resolved);
-  if (normalizedResolved) {
-    return resolveExistingAccountId(normalizedResolved);
-  }
-  return resolveExistingAccountId(DEFAULT_ACCOUNT_ID);
 }

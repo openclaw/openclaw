@@ -1,8 +1,15 @@
+// Validates normalized OpenClaw config and reports user-facing errors.
 import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  type ChannelDmAllowFromMode,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+} from "../channels/plugins/dm-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import {
@@ -25,7 +32,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
-import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
+import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -41,19 +48,39 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
+import {
+  collectChannelDmPolicyMetadata,
+  collectChannelSchemaMetadataWithOwnership,
+} from "./channel-config-metadata.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  isModelPolicyCompatSelector,
+  isValidExactModelPolicyRef,
+  parseModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import {
+  type DmPolicyAllowFromViolation,
+  evaluateDmPolicyAllowFromDependency,
+  isBuiltInModelProviderOverlayId,
+} from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
-const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const LEGACY_REMOVED_PLUGIN_IDS = new Set([
+  "google-antigravity-auth",
+  "google-gemini-cli-auth",
+  "skill-workshop",
+]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
-const LEGACY_CHATGPT_PROVIDER_ID = ["openai", "codex"].join("-");
-const LEGACY_CHATGPT_RESPONSES_API = `${LEGACY_CHATGPT_PROVIDER_ID}-responses`;
-const OPENAI_PROVIDER_ID = "openai";
-const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
+
+function formatRemovedPluginConfigWarning(pluginId: string): string {
+  if (pluginId === "skill-workshop") {
+    return "plugin removed: skill-workshop (stale plugin config ignored; Skill Workshop is built into OpenClaw skills now. Use skills.workshop settings and openclaw skills workshop commands, then remove this plugins config entry)";
+  }
+  return `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`;
+}
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -69,83 +96,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-
-function normalizeLegacyOpenAIProviderForValidation(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.models) || !isRecord(raw.models.providers)) {
-    return raw;
-  }
-  let providersChanged = false;
-  const providers = { ...raw.models.providers };
-  const normalizeProviderConfig = (providerConfig: unknown): unknown => {
-    if (!isRecord(providerConfig)) {
-      return providerConfig;
-    }
-    let providerChanged = false;
-    const nextProvider = { ...providerConfig };
-    if (nextProvider.api === LEGACY_CHATGPT_RESPONSES_API) {
-      nextProvider.api = OPENAI_CHATGPT_RESPONSES_API;
-      providerChanged = true;
-    }
-    if (Array.isArray(nextProvider.models)) {
-      const nextModels = nextProvider.models.map((model) => {
-        if (!isRecord(model) || model.api !== LEGACY_CHATGPT_RESPONSES_API) {
-          return model;
-        }
-        providerChanged = true;
-        return { ...model, api: OPENAI_CHATGPT_RESPONSES_API };
-      });
-      if (providerChanged) {
-        nextProvider.models = nextModels;
-      }
-    }
-    return providerChanged ? nextProvider : providerConfig;
-  };
-
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    const normalizedProvider = normalizeLowercaseStringOrEmpty(providerId);
-    const normalizedConfig = normalizeProviderConfig(providerConfig);
-    if (normalizedProvider !== LEGACY_CHATGPT_PROVIDER_ID) {
-      if (normalizedConfig !== providerConfig) {
-        providers[providerId] = normalizedConfig;
-        providersChanged = true;
-      }
-      continue;
-    }
-    if (!Object.hasOwn(providers, OPENAI_PROVIDER_ID)) {
-      providers[OPENAI_PROVIDER_ID] = normalizedConfig;
-    }
-    delete providers[providerId];
-    providersChanged = true;
-  }
-
-  if (!providersChanged) {
-    return raw;
-  }
-  return {
-    ...raw,
-    models: {
-      ...raw.models,
-      providers,
-    },
-  };
-}
-
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  const normalizedRaw = normalizeLegacyOpenAIProviderForValidation(raw);
-  if (
-    !isRecord(normalizedRaw) ||
-    !isRecord(normalizedRaw.commands) ||
-    !Object.hasOwn(normalizedRaw.commands, "modelsWrite")
-  ) {
-    return normalizedRaw;
-  }
-  const commands = { ...normalizedRaw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...normalizedRaw,
-    commands,
-  };
-}
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
@@ -236,11 +186,11 @@ function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   return value as UnknownIssueRecord;
 }
 
-function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
-  if (!Array.isArray(path)) {
+function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
+  if (!Array.isArray(pathLocal3)) {
     return [];
   }
-  return path.filter((segment): segment is ConfigPathSegment => {
+  return pathLocal3.filter((segment): segment is ConfigPathSegment => {
     const segmentType = typeof segment;
     return segmentType === "string" || segmentType === "number";
   });
@@ -248,6 +198,17 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function withConfigIssuePath(
+  issue: ConfigValidationIssue,
+  pathSegments: readonly ConfigPathSegment[],
+): ConfigValidationIssue {
+  Object.defineProperty(issue, "pathSegments", {
+    value: [...pathSegments],
+    enumerable: false,
+  });
+  return issue;
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -309,7 +270,7 @@ function collectAllowedValuesFromJsonSchemaNode(schema: unknown): AllowedValuesC
     return { values: [], incomplete: false, hasValues: false };
   }
 
-  if (Object.prototype.hasOwnProperty.call(node, "const")) {
+  if (Object.hasOwn(node, "const")) {
     return { values: [node.const], incomplete: false, hasValues: true };
   }
 
@@ -366,13 +327,151 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
 function formatRawChannelConfigIssueMessage(message: string): string {
   return `invalid config: ${message}`;
 }
+
+function buildDmPolicyDependencyWarning(params: {
+  channelId: string;
+  accountId?: string;
+  allowFromSource?: "explicit" | "inherited";
+  violation: DmPolicyAllowFromViolation;
+}): ConfigValidationIssue {
+  const channelBase = `channels.${params.channelId}`;
+  const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
+  const allowFromPath = `${scope}.allowFrom`;
+  const inherited = params.accountId && params.allowFromSource === "inherited";
+  const allowFromSubject = inherited
+    ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
+    : allowFromPath;
+  const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
+  const accountOverrideFix =
+    params.accountId && !inherited
+      ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
+      : "";
+  const message =
+    params.violation === "open_requires_wildcard"
+      ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
+      : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
+  return { path: allowFromPath, message };
+}
+
+// Channel map keys that are not channels and must be skipped while scanning DM policy.
+const DM_POLICY_PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
+
+function hasDefinedConfigValue(record: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(record, key) && record[key] !== undefined;
+}
+
+function hasConfiguredDmAllowFrom(
+  record: Record<string, unknown>,
+  mode: ChannelDmAllowFromMode,
+): boolean {
+  const dm = isRecord(record.dm) ? record.dm : null;
+  if (mode === "nestedOnly") {
+    return (
+      (dm !== null && hasDefinedConfigValue(dm, "allowFrom")) ||
+      hasDefinedConfigValue(record, "allowFrom")
+    );
+  }
+  return (
+    hasDefinedConfigValue(record, "allowFrom") ||
+    (dm !== null && hasDefinedConfigValue(dm, "allowFrom"))
+  );
+}
+
+function isConfigRecordEnabled(record: Record<string, unknown>): boolean {
+  return record.enabled !== false;
+}
+
+type ChannelDmPolicyDependencyWarningOptions = {
+  dmAllowFromModes?: ReadonlyMap<string, ChannelDmAllowFromMode>;
+};
+
+function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawConfig): boolean {
+  if (!config.channels || !isRecord(config.channels)) {
+    return false;
+  }
+  return Object.entries(config.channels).some(
+    ([channelId, channelValue]) =>
+      !DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) &&
+      isRecord(channelValue) &&
+      isConfigRecordEnabled(channelValue),
+  );
+}
+
+/**
+ * Surface dmPolicy/allowFrom dependency problems generically for every channel that
+ * exposes DM policy via the canonical top-level `dmPolicy`/`allowFrom` fields. These
+ * configs parse fine but drop every DM at runtime, so we warn (rather than reject) to
+ * stay consistent with `security audit`/`doctor` and avoid breaking existing-but-usable
+ * configs on upgrade.
+ *
+ * Resolution goes through the shared DM-access helpers so the warning matches the
+ * effective policy/allowFrom the runtime sees, including the legacy `dm.*` aliases and
+ * account->channel inheritance. `nestedOnly` channels (canonical fields under `dm.*`)
+ * are skipped because their config shape does not match this warning's top-level paths.
+ */
+function collectChannelDmPolicyDependencyWarnings(
+  config: OpenClawConfig,
+  options: ChannelDmPolicyDependencyWarningOptions = {},
+): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  for (const [channelId, channelValue] of Object.entries(config.channels)) {
+    if (
+      DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) ||
+      !isRecord(channelValue) ||
+      !isConfigRecordEnabled(channelValue)
+    ) {
+      continue;
+    }
+    const mode = options.dmAllowFromModes?.get(channelId) ?? "topOnly";
+    if (mode === "nestedOnly") {
+      continue;
+    }
+    const channelViolation = evaluateDmPolicyAllowFromDependency({
+      policy: resolveChannelDmPolicy({ account: channelValue, mode }),
+      allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
+    });
+    if (channelViolation) {
+      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
+    }
+    if (!isRecord(channelValue.accounts)) {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(channelValue.accounts)) {
+      if (!isRecord(accountValue) || !isConfigRecordEnabled(accountValue)) {
+        continue;
+      }
+      const allowFromSource = hasConfiguredDmAllowFrom(accountValue, mode)
+        ? "explicit"
+        : "inherited";
+      const accountViolation = evaluateDmPolicyAllowFromDependency({
+        policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
+        allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
+      });
+      if (accountViolation) {
+        warnings.push(
+          buildDmPolicyDependencyWarning({
+            channelId,
+            accountId,
+            allowFromSource,
+            violation: accountViolation,
+          }),
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
   }
   const issues: ConfigValidationIssue[] = [];
   for (const [channelId, schema] of bundledChannelSchemaById) {
-    if (!Object.prototype.hasOwnProperty.call(config.channels, channelId)) {
+    if (!Object.hasOwn(config.channels, channelId)) {
       continue;
     }
     const result = validateJsonSchemaValue({
@@ -388,10 +487,10 @@ function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigVal
       const message = error.additionalProperty
         ? `${error.message}: "${error.additionalProperty}"`
         : error.message;
-      const path =
+      const pathLocal2 =
         error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`;
       issues.push({
-        path,
+        path: pathLocal2,
         message: formatRawChannelConfigIssueMessage(message),
         allowedValues: error.allowedValues,
         allowedValuesHiddenCount: error.allowedValuesHiddenCount,
@@ -536,7 +635,7 @@ function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
 
 function extractBindingsSpecificUnionIssue(
   record: UnknownIssueRecord,
-  parentPath: string,
+  parentPathSegments: readonly ConfigPathSegment[],
 ): ConfigValidationIssue | null {
   if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
     return null;
@@ -605,11 +704,16 @@ function extractBindingsSpecificUnionIssue(
     return null;
   }
 
-  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
-  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const fullPathSegments = [
+    ...parentPathSegments,
+    ...toConfigPathSegments(matchingBranchIssue.path),
+  ];
   const subMessage =
     typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
-  return { path: fullPath, message: subMessage };
+  return withConfigIssuePath(
+    { path: formatConfigPath(fullPathSegments), message: subMessage },
+    fullPathSegments,
+  );
 }
 
 function isObjectSecretRefCandidate(value: unknown): boolean {
@@ -619,9 +723,9 @@ function isObjectSecretRefCandidate(value: unknown): boolean {
   return coerceSecretRef(value) !== null;
 }
 
-function formatUnsupportedMutableSecretRefMessage(path: string): string {
+function formatUnsupportedMutableSecretRefMessage(pathInner: string): string {
   return [
-    `SecretRef objects are not supported at ${path}.`,
+    `SecretRef objects are not supported at ${pathInner}.`,
     "This credential is runtime-mutable or runtime-managed and must stay a plain string value.",
     'Use a plain string (env template strings like "${MY_VAR}" are allowed).',
     `See ${SECRETREF_POLICY_DOC_URL}.`,
@@ -630,21 +734,21 @@ function formatUnsupportedMutableSecretRefMessage(path: string): string {
 
 function pushUnsupportedMutableSecretRefIssue(
   issues: ConfigValidationIssue[],
-  path: string,
+  pathScoped: string,
   value: unknown,
 ): void {
   if (!isObjectSecretRefCandidate(value)) {
     return;
   }
   issues.push({
-    path,
-    message: formatUnsupportedMutableSecretRefMessage(path),
+    path: pathScoped,
+    message: formatUnsupportedMutableSecretRefMessage(pathScoped),
   });
 }
 
 function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
-  for (const candidate of collectUnsupportedSecretRefConfigCandidates(raw)) {
+  for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
     pushUnsupportedMutableSecretRefIssue(issues, candidate.path, candidate.value);
   }
 
@@ -688,7 +792,9 @@ function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   if (!unrecognizedKeys.includes(childKey)) {
     return issue;
   }
-  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  const remainingKeys = unrecognizedKeys.filter(
+    (key): key is string => key !== undefined && key !== childKey,
+  );
   if (remainingKeys.length === 0) {
     return null;
   }
@@ -727,7 +833,8 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const path = formatConfigPath(toConfigPathSegments(record?.path));
+  const pathSegments = toConfigPathSegments(record?.path);
+  const pathItem = formatConfigPath(pathSegments);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
@@ -746,22 +853,25 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     record.code === "invalid_union" &&
     !allowedValuesSummary
   ) {
-    const betterIssue = extractBindingsSpecificUnionIssue(record, path);
+    const betterIssue = extractBindingsSpecificUnionIssue(record, pathSegments);
     if (betterIssue) {
       return betterIssue;
     }
   }
 
   if (!allowedValuesSummary) {
-    return { path, message: enrichedMessage };
+    return withConfigIssuePath({ path: pathItem, message: enrichedMessage }, pathSegments);
   }
 
-  return {
-    path,
-    message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
-    allowedValues: allowedValuesSummary.values,
-    allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
-  };
+  return withConfigIssuePath(
+    {
+      path: pathItem,
+      message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
+      allowedValues: allowedValuesSummary.values,
+      allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
+    },
+    pathSegments,
+  );
 }
 
 function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
@@ -838,15 +948,15 @@ function resolveExplicitPluginReferencePath(
   }
   return undefined;
 }
-
-export const testing = {
-  mapZodIssueToConfigIssue,
-};
-
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
   return isPathWithinRoot(workspaceRoot, resolved);
+}
+
+function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
+  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
+  return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -871,18 +981,22 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       continue;
     }
     if (avatar.startsWith("~")) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(
@@ -890,10 +1004,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       entry.id ?? resolveDefaultAgentId(config),
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must stay within the agent workspace.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
+      );
     }
   }
   return issues;
@@ -939,6 +1052,61 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const defaultModels = config.agents?.defaults?.models;
+  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
+    const aliases = new Set<string>();
+    for (const models of modelMaps) {
+      for (const entry of Object.values(models ?? {})) {
+        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
+        if (alias) {
+          aliases.add(alias);
+        }
+      }
+    }
+    return aliases;
+  };
+  const validateRefs = (
+    refs: readonly string[] | undefined,
+    configPath: string,
+    aliases: Set<string>,
+  ) => {
+    for (const [index, raw] of (refs ?? []).entries()) {
+      const trimmed = raw.trim();
+      if (
+        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+        isModelPolicyCompatSelector(trimmed) ||
+        isValidExactModelPolicyRef(trimmed) ||
+        parseModelPolicyWildcardRef(trimmed)
+      ) {
+        continue;
+      }
+      issues.push({
+        path: `${configPath}.${index}`,
+        message:
+          `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".',
+      });
+    }
+  };
+
+  const defaultAliases = collectAliases(defaultModels);
+  validateRefs(
+    config.agents?.defaults?.modelPolicy?.allow,
+    "agents.defaults.modelPolicy.allow",
+    defaultAliases,
+  );
+  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+    validateRefs(
+      agent.modelPolicy?.allow,
+      `agents.list.${index}.modelPolicy.allow`,
+      collectAliases(defaultModels, agent.models),
+    );
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -953,7 +1121,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    stripDeprecatedValidationKeys(raw),
+    raw,
     opts?.preservedLegacyRootKeys,
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
@@ -1002,6 +1170,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
   if (gatewayTailscaleAuthIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleAuthIssues };
+  }
+  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
+  if (modelPolicyAllowIssues.length > 0) {
+    return { ok: false, issues: modelPolicyAllowIssues };
   }
   return {
     ok: true,
@@ -1117,16 +1289,23 @@ function validateConfigObjectWithPluginsBase(
 
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
-  const hasExplicitPluginsConfig =
-    isRecord(raw) && Object.prototype.hasOwnProperty.call(raw, "plugins");
+  const hasExplicitPluginsConfig = isRecord(raw) && Object.hasOwn(raw, "plugins");
   const explicitPluginReferences = collectExplicitPluginReferences(raw);
 
   const resolvePluginConfigIssuePath = (pluginId: string, errorPath: string): string => {
-    const base = `plugins.entries.${pluginId}.config`;
+    const baseLocal = `plugins.entries.${pluginId}.config`;
     if (!errorPath || errorPath === "<root>") {
-      return base;
+      return baseLocal;
     }
-    return `${base}.${errorPath}`;
+    return `${baseLocal}.${errorPath}`;
+  };
+
+  const formatChannelConfigIssueMessage = (message: string, pluginId?: string): string => {
+    const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
+    if (safePluginId) {
+      return `invalid config for plugin ${safePluginId}: ${message}`;
+    }
+    return formatRawChannelConfigIssueMessage(message);
   };
 
   type RegistryInfo = {
@@ -1134,10 +1313,12 @@ function validateConfigObjectWithPluginsBase(
     knownIds?: Set<string>;
     overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
+    channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
     channelSchemas?: Map<
       string,
       {
         schema?: Record<string, unknown>;
+        pluginId?: string;
       }
     >;
   };
@@ -1156,16 +1337,16 @@ function validateConfigObjectWithPluginsBase(
       const explicitPath = diag.pluginId
         ? resolveExplicitPluginReferencePath(explicitPluginReferences, diag.pluginId)
         : undefined;
-      let path = explicitPath ?? (diag.pluginId ? "plugins" : "plugins");
+      let pathCandidate = explicitPath ?? (diag.pluginId ? "plugins" : "plugins");
       if (!diag.pluginId && diag.message.includes("plugin path not found")) {
-        path = "plugins.load.paths";
+        pathCandidate = "plugins.load.paths";
       }
       const pluginLabel = diag.pluginId ? `plugin ${diag.pluginId}` : "plugin";
       const message = `${pluginLabel}: ${diag.message}`;
       if (diag.level === "error" && (explicitPath || !diag.pluginId)) {
-        issues.push({ path, message });
+        issues.push({ path: pathCandidate, message });
       } else {
-        warnings.push({ path, message });
+        warnings.push({ path: pathCandidate, message });
       }
     }
   };
@@ -1186,6 +1367,8 @@ function validateConfigObjectWithPluginsBase(
     registryInfo = { registry };
     return registryInfo;
   };
+
+  const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
 
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
     if (compatPluginIdsResolved) {
@@ -1227,7 +1410,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const ensureRegistry = (): RegistryInfo => {
-    const info = registryInfo ?? loadValidationRegistry();
+    const info = ensureLoadedRegistryInfo();
     ensureCompatConfig();
     pushRegistryDiagnostics(info.registry);
     return info;
@@ -1268,6 +1451,7 @@ function validateConfigObjectWithPluginsBase(
     string,
     {
       schema?: Record<string, unknown>;
+      pluginId?: string;
     }
   > => {
     const info = ensureRegistry();
@@ -1277,10 +1461,13 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadata(info.registry)) {
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
-          info.channelSchemas.set(entry.id, { schema: entry.configSchema });
+          info.channelSchemas.set(entry.id, {
+            schema: entry.configSchema,
+            pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
+          });
           continue;
         }
         if (!current) {
@@ -1290,6 +1477,28 @@ function validateConfigObjectWithPluginsBase(
     }
     return info.channelSchemas;
   };
+
+  const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
+    const info = ensureLoadedRegistryInfo();
+    if (!info.channelDmAllowFromModes) {
+      info.channelDmAllowFromModes = new Map(
+        collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
+          entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
+        ),
+      );
+    }
+    return info.channelDmAllowFromModes;
+  };
+
+  // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
+  // so account inheritance matches the per-channel Zod refinements.
+  warnings.push(
+    ...(hasChannelDmPolicyDependencyWarningCandidates(base.config)
+      ? collectChannelDmPolicyDependencyWarnings(base.config, {
+          dmAllowFromModes: ensureChannelDmAllowFromModes(),
+        })
+      : collectChannelDmPolicyDependencyWarnings(base.config)),
+  );
 
   let mutatedConfig = config;
   let channelsCloned = false;
@@ -1409,9 +1618,9 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     const trimmed = provider.trim();
-    const path = "tools.web.search.provider";
+    const pathEntry = "tools.web.search.provider";
     if (!trimmed) {
-      issues.push({ path, message: "web_search provider must not be empty" });
+      issues.push({ path: pathEntry, message: "web_search provider must not be empty" });
       return;
     }
     const activeProviderIds = collectActiveWebSearchProviderIds();
@@ -1423,7 +1632,7 @@ function validateConfigObjectWithPluginsBase(
     );
     if (installCatalogEntry) {
       const issue = {
-        path,
+        path: pathEntry,
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
       };
@@ -1442,7 +1651,7 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     const issue = {
-      path,
+      path: pathEntry,
       message: `unknown web_search provider: ${trimmed}`,
       allowedValues,
     };
@@ -1588,12 +1797,12 @@ function validateConfigObjectWithPluginsBase(
         continue;
       }
 
-      const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
-      if (!channelSchema) {
+      const channelSchema = ensureChannelSchemas().get(trimmed);
+      if (!channelSchema?.schema) {
         continue;
       }
       const result = validateJsonSchemaValue({
-        schema: channelSchema,
+        schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
         applyDefaults: true, // Always apply defaults for AJV schema validation;
@@ -1601,11 +1810,11 @@ function validateConfigObjectWithPluginsBase(
       });
       if (!result.ok) {
         for (const error of result.errors) {
-          const path =
+          const pathResult =
             error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
-            path,
-            message: formatRawChannelConfigIssueMessage(error.message),
+            path: pathResult,
+            message: formatChannelConfigIssueMessage(error.message, channelSchema.pluginId),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
@@ -1621,13 +1830,13 @@ function validateConfigObjectWithPluginsBase(
     heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(channelId));
   }
 
-  const validateHeartbeatTarget = (target: string | undefined, path: string) => {
+  const validateHeartbeatTarget = (target: string | undefined, pathValue: string) => {
     if (typeof target !== "string") {
       return;
     }
     const trimmed = target.trim();
     if (!trimmed) {
-      issues.push({ path, message: "heartbeat target must not be empty" });
+      issues.push({ path: pathValue, message: "heartbeat target must not be empty" });
       return;
     }
     const normalized = normalizeLowercaseStringOrEmpty(trimmed);
@@ -1651,7 +1860,7 @@ function validateConfigObjectWithPluginsBase(
     if (heartbeatChannelIds.has(normalized)) {
       return;
     }
-    issues.push({ path, message: `unknown heartbeat target: ${target}` });
+    issues.push({ path: pathValue, message: `unknown heartbeat target: ${target}` });
   };
 
   validateHeartbeatTarget(
@@ -1770,14 +1979,18 @@ function validateConfigObjectWithPluginsBase(
   };
   const missingOfficialPluginWarningIds = new Set<string>();
   const pushMissingPluginIssue = (
-    path: string,
+    pathLocal: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean; officialInstallHint?: boolean; missingMessage?: string | null },
+    optsLocal?: {
+      warnOnly?: boolean;
+      officialInstallHint?: boolean;
+      missingMessage?: string | null;
+    },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
-        path,
-        message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+        path: pathLocal,
+        message: formatRemovedPluginConfigWarning(pluginId),
       });
       return;
     }
@@ -1785,40 +1998,47 @@ function validateConfigObjectWithPluginsBase(
     if (blockedDiagnostic) {
       const source = blockedDiagnostic.source ? `; source: ${blockedDiagnostic.source}` : "";
       const message = `plugin present but blocked: ${pluginId} (see preceding plugin warning${source}; fix the blocked plugin path instead of removing config)`;
-      if (opts?.warnOnly) {
-        warnings.push({ path, message });
+      if (optsLocal?.warnOnly) {
+        warnings.push({ path: pathLocal, message });
       } else {
-        issues.push({ path, message });
+        issues.push({ path: pathLocal, message });
       }
       return;
     }
-    if (opts?.warnOnly && opts.officialInstallHint !== false) {
+    if (
+      normalizePluginId(pluginId) === "codex" &&
+      pathLocal === "plugins.entries.codex" &&
+      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
+    ) {
+      return;
+    }
+    if (optsLocal?.warnOnly && optsLocal.officialInstallHint !== false) {
       const externalInstallWarning =
-        opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
+        optsLocal.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
         const normalizedPluginId = normalizePluginId(pluginId);
-        if (!opts.missingMessage && normalizedPluginId) {
+        if (!optsLocal.missingMessage && normalizedPluginId) {
           if (missingOfficialPluginWarningIds.has(normalizedPluginId)) {
             return;
           }
           missingOfficialPluginWarningIds.add(normalizedPluginId);
         }
         warnings.push({
-          path,
+          path: pathLocal,
           message: externalInstallWarning,
         });
         return;
       }
     }
-    if (opts?.warnOnly) {
+    if (optsLocal?.warnOnly) {
       warnings.push({
-        path,
+        path: pathLocal,
         message: `plugin not found: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
       });
       return;
     }
     issues.push({
-      path,
+      path: pathLocal,
       message: `plugin not found: ${pluginId}`,
     });
   };
@@ -1873,8 +2093,7 @@ function validateConfigObjectWithPluginsBase(
 
   // The default memory slot is inferred; only a user-configured slot should block startup.
   const pluginSlots = pluginsConfig?.slots;
-  const hasExplicitMemorySlot =
-    pluginSlots !== undefined && Object.prototype.hasOwnProperty.call(pluginSlots, "memory");
+  const hasExplicitMemorySlot = pluginSlots !== undefined && Object.hasOwn(pluginSlots, "memory");
   const memorySlot = normalizedPlugins.slots.memory;
   if (
     hasExplicitMemorySlot &&
@@ -1983,4 +2202,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

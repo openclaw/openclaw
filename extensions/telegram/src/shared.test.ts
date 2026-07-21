@@ -1,3 +1,4 @@
+// Telegram tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import type { ResolvedTelegramAccount } from "./accounts.js";
@@ -56,8 +57,8 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     expect(channelData).toEqual({
       telegram: {
         buttons: [
-          [{ text: "ollama", callback_data: "/models add ollama" }],
-          [{ text: "lmstudio", callback_data: "/models add lmstudio" }],
+          [{ text: "ollama", callback_data: "tgcmd:/models add ollama" }],
+          [{ text: "lmstudio", callback_data: "tgcmd:/models add lmstudio" }],
         ],
       },
     });
@@ -165,6 +166,11 @@ describe("createTelegramPluginBase config duplicate token guard", () => {
     const account = resolveAccount(cfg, "default");
     expect(await telegramPluginBase.config.isConfigured!(account, cfg)).toBe(false);
     expect(telegramPluginBase.config.unconfiguredReason?.(account, cfg)).toContain("unavailable");
+    expect(telegramPluginBase.config.describeAccount?.(account, cfg)).toMatchObject({
+      configured: true,
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    });
   });
 
   it("keeps read-only accessors from resolving bot token SecretRefs", () => {

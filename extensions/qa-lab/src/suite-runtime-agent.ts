@@ -1,9 +1,11 @@
+// Qa Lab plugin module implements suite runtime agent behavior.
 export {
   createSession,
   readEffectiveTools,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionTranscript,
 } from "./suite-runtime-agent-session.js";
 export {
   forceMemoryIndex,
@@ -13,6 +15,7 @@ export {
   runAgentPrompt,
   runQaCli,
   startAgentRun,
+  waitForAgentHistoryReply,
   waitForAgentRun,
 } from "./suite-runtime-agent-process.js";
 export {

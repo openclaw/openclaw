@@ -1,3 +1,4 @@
+// Covers document extractor runtime hooks supplied by plugins.
 import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -88,5 +89,22 @@ describe("resolvePluginDocumentExtractors", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+
+  it("respects an explicit empty plugin scope with an operator plugin allowlist", () => {
+    expect(
+      resolvePluginDocumentExtractors({
+        config: {
+          plugins: {
+            allow: ["document-extract"],
+          },
+        },
+        onlyPluginIds: [],
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("respects an explicit empty plugin scope without an operator plugin allowlist", () => {
+    expect(resolvePluginDocumentExtractors({ onlyPluginIds: [] })).toStrictEqual([]);
   });
 });

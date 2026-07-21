@@ -1,7 +1,12 @@
+import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+/**
+ * OpenAI Responses payload policy.
+ * Classifies endpoint capabilities and applies store, prompt-cache,
+ * server-compaction, service-tier, and reasoning payload rules.
+ */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { asBoolean } from "../utils/boolean.js";
-import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
@@ -48,6 +53,7 @@ type OpenAIResponsesPayloadPolicy = {
   compactThreshold: number;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
+  shouldStripInputStatus: boolean;
   shouldStripPromptCache: boolean;
   shouldStripStore: boolean;
   useServerCompaction: boolean;
@@ -320,6 +326,20 @@ function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>
   }
 }
 
+/** Strip returned-item metadata rejected by strict Responses-compatible endpoints. */
+function stripInputItemStatuses(input: unknown): void {
+  if (!Array.isArray(input)) {
+    return;
+  }
+  for (const item of input) {
+    if (item && typeof item === "object" && !Array.isArray(item)) {
+      // Only item-level status is provider metadata. Nested values may be user or tool payloads.
+      delete (item as Record<string, unknown>).status;
+    }
+  }
+}
+
+/** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
   options: OpenAIResponsesPayloadPolicyOptions = {},
@@ -340,6 +360,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
     (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
+  // Strict OpenAI-compatible Responses endpoints reject output-only fields
+  // such as `status` on replayed input items. Strip them for non-native routes.
+  const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
@@ -348,6 +371,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
       resolveOpenAIResponsesCompactThreshold(model),
     explicitStore,
     shouldStripDisabledReasoningPayload,
+    shouldStripInputStatus,
     shouldStripPromptCache:
       options.enablePromptCacheStripping === true && capabilities.shouldStripResponsesPromptCache,
     shouldStripStore:
@@ -364,6 +388,7 @@ export function resolveOpenAIResponsesPayloadPolicy(
   };
 }
 
+/** Mutate a Responses request payload according to the resolved endpoint policy. */
 export function applyOpenAIResponsesPayloadPolicy(
   payloadObj: Record<string, unknown>,
   policy: OpenAIResponsesPayloadPolicy,
@@ -388,5 +413,8 @@ export function applyOpenAIResponsesPayloadPolicy(
   }
   if (policy.shouldStripDisabledReasoningPayload) {
     stripDisabledOpenAIReasoningPayload(payloadObj);
+  }
+  if (policy.shouldStripInputStatus) {
+    stripInputItemStatuses(payloadObj.input);
   }
 }

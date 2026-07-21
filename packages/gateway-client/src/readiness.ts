@@ -1,3 +1,4 @@
+// Gateway Client module implements readiness behavior.
 import type { GatewayClientOptions } from "./client.js";
 import {
   waitForEventLoopReady,
@@ -10,15 +11,17 @@ export type GatewayClientStartable = {
   start(): void;
 };
 
+/** Injectable readiness waiter used by tests and alternate event-loop probes. */
 export type EventLoopReadyWaiter = (
   options?: EventLoopReadyOptions,
 ) => Promise<EventLoopReadyResult>;
 
+/** Timeout and abort controls for delaying client start until the loop can process IO. */
 export type GatewayClientStartReadinessOptions = {
   timeoutMs?: number;
   clientOptions?: Pick<
     GatewayClientOptions,
-    "connectChallengeTimeoutMs" | "connectDelayMs" | "preauthHandshakeTimeoutMs"
+    "connectChallengeTimeoutMs" | "env" | "preauthHandshakeTimeoutMs"
   >;
   signal?: AbortSignal;
 };
@@ -30,19 +33,13 @@ function resolveGatewayClientStartReadinessTimeoutMs(
     return options.timeoutMs;
   }
   const clientOptions = options.clientOptions ?? {};
-  const timeoutOverride =
-    typeof clientOptions.connectChallengeTimeoutMs === "number" &&
-    Number.isFinite(clientOptions.connectChallengeTimeoutMs)
-      ? clientOptions.connectChallengeTimeoutMs
-      : typeof clientOptions.connectDelayMs === "number" &&
-          Number.isFinite(clientOptions.connectDelayMs)
-        ? clientOptions.connectDelayMs
-        : undefined;
-  return resolveConnectChallengeTimeoutMs(timeoutOverride, {
+  return resolveConnectChallengeTimeoutMs(clientOptions.connectChallengeTimeoutMs, {
+    env: clientOptions.env,
     configuredTimeoutMs: clientOptions.preauthHandshakeTimeoutMs,
   });
 }
 
+/** Starts a gateway client only after the supplied readiness probe succeeds. */
 export async function startGatewayClientWithReadinessWait(
   waitForReady: EventLoopReadyWaiter,
   client: GatewayClientStartable,
@@ -58,6 +55,7 @@ export async function startGatewayClientWithReadinessWait(
   return readiness;
 }
 
+/** Starts a gateway client after the default event-loop readiness probe succeeds. */
 export async function startGatewayClientWhenEventLoopReady(
   client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},

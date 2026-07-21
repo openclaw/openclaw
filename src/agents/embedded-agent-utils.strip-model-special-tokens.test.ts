@@ -1,5 +1,9 @@
+/**
+ * Regression coverage for model special-token stripping.
+ * Ensures provider wrapper tokens do not leak into visible assistant text.
+ */
 import { describe, expect, it } from "vitest";
-import { stripModelSpecialTokens } from "./embedded-agent-utils.js";
+import { stripModelSpecialTokens } from "../shared/text/model-special-tokens.js";
 
 /**
  * @see https://github.com/openclaw/openclaw/issues/40020

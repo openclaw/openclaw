@@ -1,8 +1,7 @@
+// Line plugin module implements template messages behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import { messageAction, postbackAction, uriAction, type Action } from "./actions.js";
 import type { LineTemplateMessagePayload } from "./types.js";
-
-export { messageAction };
 
 type TemplateMessage = messagingApi.TemplateMessage;
 type ConfirmTemplate = messagingApi.ConfirmTemplate;
@@ -11,6 +10,9 @@ type CarouselTemplate = messagingApi.CarouselTemplate;
 type CarouselColumn = messagingApi.CarouselColumn;
 type ImageCarouselTemplate = messagingApi.ImageCarouselTemplate;
 type ImageCarouselColumn = messagingApi.ImageCarouselColumn;
+
+const COMPACT_TEMPLATE_TEXT_LIMIT = 60;
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 type TemplatePayloadAction = {
   type?: "uri" | "postback" | "message";
@@ -29,6 +31,55 @@ function buildTemplatePayloadAction(action: TemplatePayloadAction): Action {
   return messageAction(action.label, action.data ?? action.label);
 }
 
+function resolveTemplateTextLimit(params: {
+  title?: string;
+  thumbnailImageUrl?: string;
+  textOnlyLimit: number;
+}): number {
+  return params.title !== undefined || params.thumbnailImageUrl !== undefined
+    ? COMPACT_TEMPLATE_TEXT_LIMIT
+    : params.textOnlyLimit;
+}
+
+function truncateTemplateText(text: string, limit: number): string {
+  let result = "";
+  for (const { segment } of graphemeSegmenter.segment(text)) {
+    if (result.length + segment.length > limit) {
+      // A pathological grapheme can exceed LINE's whole field limit. Preserve
+      // graphemes normally, but keep required text non-empty without splitting
+      // a surrogate pair when the first grapheme alone cannot fit.
+      if (!result) {
+        for (const codePoint of segment) {
+          if (result.length + codePoint.length > limit) {
+            break;
+          }
+          result += codePoint;
+        }
+      }
+      break;
+    }
+    result += segment;
+  }
+  return result;
+}
+
+function truncateOptionalTemplateText(
+  value: string | undefined,
+  limit: number,
+): string | undefined {
+  return value === undefined ? undefined : truncateTemplateText(value, limit);
+}
+
+function formatProductCarouselText(description: string, price?: string): string {
+  if (!price) {
+    return description;
+  }
+  const priceText = truncateTemplateText(price, COMPACT_TEMPLATE_TEXT_LIMIT);
+  const descriptionLimit = Math.max(0, COMPACT_TEMPLATE_TEXT_LIMIT - priceText.length - 1);
+  const descriptionText = truncateTemplateText(description, descriptionLimit);
+  return descriptionText ? `${descriptionText}\n${priceText}` : priceText;
+}
+
 /**
  * Create a confirm template (yes/no style dialog)
  */
@@ -40,13 +91,13 @@ export function createConfirmTemplate(
 ): TemplateMessage {
   const template: ConfirmTemplate = {
     type: "confirm",
-    text: text.slice(0, 240), // LINE limit
+    text: truncateTemplateText(text, 240), // LINE limit
     actions: [confirmAction, cancelAction],
   };
 
   return {
     type: "template",
-    altText: altText?.slice(0, 400) ?? text.slice(0, 400),
+    altText: truncateOptionalTemplateText(altText, 400) ?? truncateTemplateText(text, 400),
     template,
   };
 }
@@ -55,7 +106,7 @@ export function createConfirmTemplate(
  * Create a button template with title, text, and action buttons
  */
 export function createButtonTemplate(
-  title: string,
+  title: string | undefined,
   text: string,
   actions: Action[],
   options?: {
@@ -67,12 +118,16 @@ export function createButtonTemplate(
     altText?: string;
   },
 ): TemplateMessage {
-  const hasThumbnail = Boolean(options?.thumbnailImageUrl?.trim());
-  const textLimit = hasThumbnail ? 160 : 60;
+  const normalizedTitle = title || undefined;
+  const textLimit = resolveTemplateTextLimit({
+    title: normalizedTitle,
+    thumbnailImageUrl: options?.thumbnailImageUrl,
+    textOnlyLimit: 160,
+  });
   const template: ButtonsTemplate = {
     type: "buttons",
-    title: title.slice(0, 40), // LINE limit
-    text: text.slice(0, textLimit), // LINE limit (60 if no thumbnail, 160 with thumbnail)
+    ...(normalizedTitle ? { title: truncateTemplateText(normalizedTitle, 40) } : {}), // LINE limit
+    text: truncateTemplateText(text, textLimit),
     actions: actions.slice(0, 4), // LINE limit: max 4 actions
     thumbnailImageUrl: options?.thumbnailImageUrl,
     imageAspectRatio: options?.imageAspectRatio ?? "rectangle",
@@ -83,7 +138,9 @@ export function createButtonTemplate(
 
   return {
     type: "template",
-    altText: options?.altText?.slice(0, 400) ?? `${title}: ${text}`.slice(0, 400),
+    altText:
+      truncateOptionalTemplateText(options?.altText, 400) ??
+      truncateTemplateText(normalizedTitle ? `${normalizedTitle}: ${text}` : text, 400),
     template,
   };
 }
@@ -108,7 +165,7 @@ export function createTemplateCarousel(
 
   return {
     type: "template",
-    altText: options?.altText?.slice(0, 400) ?? "View carousel",
+    altText: truncateOptionalTemplateText(options?.altText, 400) ?? "View carousel",
     template,
   };
 }
@@ -124,9 +181,14 @@ export function createCarouselColumn(params: {
   imageBackgroundColor?: string;
   defaultAction?: Action;
 }): CarouselColumn {
+  // LINE caps a carousel column's text at 60 chars when the column carries a
+  // title or thumbnail image, and 120 chars otherwise. Sending an over-length
+  // text makes LINE reject the whole carousel, so mirror the conditional limit
+  // the buttons template already applies above.
+  const textLimit = resolveTemplateTextLimit({ ...params, textOnlyLimit: 120 });
   return {
-    title: params.title?.slice(0, 40),
-    text: params.text.slice(0, 120), // LINE limit
+    title: truncateOptionalTemplateText(params.title, 40),
+    text: truncateTemplateText(params.text, textLimit),
     actions: params.actions.slice(0, 3), // LINE limit: max 3 actions per column
     thumbnailImageUrl: params.thumbnailImageUrl,
     imageBackgroundColor: params.imageBackgroundColor,
@@ -148,7 +210,7 @@ export function createImageCarousel(
 
   return {
     type: "template",
-    altText: altText?.slice(0, 400) ?? "View images",
+    altText: truncateOptionalTemplateText(altText, 400) ?? "View images",
     template,
   };
 }
@@ -255,9 +317,7 @@ export function createProductCarousel(
 
     return createCarouselColumn({
       title: product.title,
-      text: product.price
-        ? `${product.description}\n${product.price}`.slice(0, 120)
-        : product.description,
+      text: formatProductCarouselText(product.description, product.price),
       thumbnailImageUrl: product.imageUrl,
       actions,
     });

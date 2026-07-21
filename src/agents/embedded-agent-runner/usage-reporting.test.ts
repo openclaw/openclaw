@@ -1,3 +1,5 @@
+// Usage reporting tests cover run-level metadata attribution, runtime plugin
+// bootstrap inputs, and forwarding fields into embedded attempts.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
@@ -6,6 +8,7 @@ import {
   mockedEnsureRuntimePluginsLoaded,
   mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
+  warmRunOverflowCompactionHarness,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -14,6 +17,8 @@ let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
 ): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  // Minimal assistant fixture lets tests override provider/model/usage without
+  // recreating the full attempt result shape.
   return {
     role: "assistant",
     api: "openai-responses",
@@ -28,6 +33,8 @@ function makeAssistantMessage(
 }
 
 function firstAttemptInput(): Record<string, unknown> {
+  // Harness calls are single-attempt in these tests; expose the first input so
+  // forwarding assertions stay readable.
   const call = mockedRunEmbeddedAttempt.mock.calls[0];
   if (!call) {
     throw new Error("Expected embedded attempt");
@@ -38,6 +45,7 @@ function firstAttemptInput(): Record<string, unknown> {
 describe("runEmbeddedAgent usage reporting", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
+    await warmRunOverflowCompactionHarness(runEmbeddedAgent);
   });
 
   beforeEach(() => {
@@ -63,7 +71,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     });
 
     expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
+      config: {},
       workspaceDir: "/tmp/workspace",
     });
   });
@@ -87,7 +95,7 @@ describe("runEmbeddedAgent usage reporting", () => {
     });
 
     expect(mockedEnsureRuntimePluginsLoaded).toHaveBeenCalledWith({
-      config: undefined,
+      config: {},
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
@@ -122,6 +130,27 @@ describe("runEmbeddedAgent usage reporting", () => {
     expect(attemptInput.senderE164).toBe("+15551234567");
   });
 
+  it("forwards the current-turn message action capability into embedded attempts", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1"],
+      }),
+    );
+
+    await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-message-action-capability",
+      messageActionTurnCapability: "turn-capability",
+    });
+
+    expect(firstAttemptInput().messageActionTurnCapability).toBe("turn-capability");
+  });
+
   it("forwards memory flush write paths into memory-triggered attempts", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -147,6 +176,8 @@ describe("runEmbeddedAgent usage reporting", () => {
   });
 
   it("reports total usage from the last turn instead of accumulated total", async () => {
+    // Billing metadata uses accumulated input/output but the reported total
+    // remains the final provider call total, matching last-turn usage contracts.
     // Simulate a multi-turn run result.
     // Turn 1: Input 100, Output 50. Total 150.
     // Turn 2: Input 150, Output 50. Total 200.
@@ -191,6 +222,49 @@ describe("runEmbeddedAgent usage reporting", () => {
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+  });
+
+  it("uses current-attempt usage when the persisted assistant snapshot is zeroed", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1", "Response 2"],
+        lastAssistant: makeAssistantMessage({
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+          } as unknown as AssistantMessage["usage"],
+        }),
+        currentAttemptAssistant: makeAssistantMessage({
+          usage: { input: 150, output: 50, total: 200 } as unknown as AssistantMessage["usage"],
+        }),
+        attemptUsage: { input: 250, output: 100, total: 350 },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      timeoutMs: 30000,
+      runId: "run-zeroed-persisted-usage",
+    });
+
+    expect(result.meta.agentMeta?.usage).toMatchObject({
+      input: 250,
+      output: 100,
+      total: 200,
+    });
+    expect(result.meta.agentMeta?.lastCallUsage).toMatchObject({
+      input: 150,
+      output: 50,
+      total: 200,
+    });
+    expect(result.meta.agentMeta?.promptTokens).toBe(150);
   });
 
   it("reports the resolved model provider when OpenClaw marks the assistant message as the native runtime", async () => {

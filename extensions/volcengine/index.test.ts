@@ -1,3 +1,4 @@
+// Volcengine tests cover index plugin behavior.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -34,6 +35,10 @@ describe("volcengine plugin", () => {
         input: [...entry.input],
         contextWindow: entry.contextWindow,
       })),
+    ]);
+    expect(DOUBAO_CODING_MODEL_CATALOG.map((entry) => entry.id)).toEqual([
+      "ark-code-latest",
+      "doubao-seed-code",
     ]);
   });
 
@@ -72,9 +77,9 @@ describe("volcengine plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "volcengine-plan",
-      modelId: "kimi-k2.5",
+      modelId: "doubao-seed-code",
       model: {
-        id: "kimi-k2.5",
+        id: "doubao-seed-code",
         provider: "volcengine-plan",
         api: "openai-completions",
         compat: { unsupportedToolSchemaKeywords: ["not"] },

@@ -1,23 +1,14 @@
+// Transcript repair contract tests ensure orphaned user leaves are merged into
+// the next prompt consistently across runtime fixtures and strategy adapters.
 import {
   inlineDataUriOrphanLeaf,
   QUEUED_USER_MESSAGE_MARKER,
   structuredOrphanLeaf,
   textOrphanLeaf,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
-import {
-  DEFAULT_MESSAGE_MERGE_STRATEGY_ID,
-  registerMessageMergeStrategyForTest,
-  resolveMessageMergeStrategy,
-} from "./message-merge-strategy.js";
-
-let restoreStrategy: (() => void) | undefined;
-
-afterEach(() => {
-  restoreStrategy?.();
-  restoreStrategy = undefined;
-});
+import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 
 describe("embedded agent transcript repair runtime contract", () => {
   it("merges text orphan leaves into the next prompt with the queued marker", () => {
@@ -68,6 +59,8 @@ describe("embedded agent transcript repair runtime contract", () => {
   });
 
   it("summarizes inline data URI media instead of embedding payload bytes", () => {
+    // Inline data can be huge and provider-sensitive; repair keeps provenance
+    // while avoiding byte replay in the merged prompt.
     const result = mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
       trigger: "user",
@@ -83,7 +76,7 @@ describe("embedded agent transcript repair runtime contract", () => {
     expect(result.prompt).not.toContain("aaaa");
   });
 
-  it("exposes transcript repair through the active message merge strategy", () => {
+  it("exposes transcript repair through the embedded message merge strategy", () => {
     const strategy = resolveMessageMergeStrategy();
     const result = strategy.mergeOrphanedTrailingUserPrompt({
       prompt: "newest inbound message",
@@ -96,36 +89,6 @@ describe("embedded agent transcript repair runtime contract", () => {
       merged: true,
       removeLeaf: true,
       prompt: `${QUEUED_USER_MESSAGE_MARKER}\nqueued via strategy\n\nnewest inbound message`,
-    });
-  });
-
-  it("allows the active transcript repair strategy to be replaced for adapter contracts", () => {
-    const mergeOrphanedTrailingUserPromptSpy = vi.fn((params: { prompt: string }) => ({
-      prompt: `custom strategy: ${params.prompt}`,
-      merged: false,
-      removeLeaf: false,
-    }));
-
-    restoreStrategy = registerMessageMergeStrategyForTest({
-      id: DEFAULT_MESSAGE_MERGE_STRATEGY_ID,
-      mergeOrphanedTrailingUserPrompt: mergeOrphanedTrailingUserPromptSpy,
-    });
-
-    const result = resolveMessageMergeStrategy().mergeOrphanedTrailingUserPrompt({
-      prompt: "newest inbound message",
-      trigger: "manual",
-      leafMessage: textOrphanLeaf("queued via custom strategy"),
-    });
-
-    expect(mergeOrphanedTrailingUserPromptSpy).toHaveBeenCalledWith({
-      prompt: "newest inbound message",
-      trigger: "manual",
-      leafMessage: textOrphanLeaf("queued via custom strategy"),
-    });
-    expect(result).toEqual({
-      merged: false,
-      removeLeaf: false,
-      prompt: "custom strategy: newest inbound message",
     });
   });
 });

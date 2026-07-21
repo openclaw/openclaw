@@ -1,3 +1,4 @@
+// Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -81,11 +82,8 @@ function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
-function readAgentModelDiscoveryCacheSource(): string {
-  return readFileSync(
-    new URL("../agents/embedded-agent-runner/model-discovery-cache.ts", import.meta.url),
-    "utf8",
-  );
+function readAgentAuthDiscoverySource(): string {
+  return readFileSync(new URL("../agents/agent-auth-discovery.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {
@@ -101,6 +99,8 @@ describe("tsdown config", () => {
       "cli/gateway-lifecycle.runtime",
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
+      "state/openclaw-database-verify.worker",
+      "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
@@ -115,8 +115,8 @@ describe("tsdown config", () => {
       "plugins/runtime/index",
       "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
-      "plugin-sdk/compat",
-      "plugin-sdk/index",
+      "mcp/openclaw-tools-serve",
+      "mcp/plugin-tools-serve",
       bundledEntry("active-memory"),
       "bundled/boot-md/handler",
     ]) {
@@ -158,15 +158,23 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps worker environment bootstrap behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/worker-environments/runtime"]).toBe(
+      "src/gateway/worker-environments/runtime.ts",
+    );
+  });
+
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
-      ...readAgentModelDiscoveryCacheSource().matchAll(
+      ...readAgentAuthDiscoverySource().matchAll(
         /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
       ),
     ].map((match) => match[1]);
 
-    expect(importSpecifiers).toEqual(["../../plugins/synthetic-auth.runtime.js"]);
+    expect(importSpecifiers).toEqual(["../plugins/synthetic-auth.runtime.js"]);
     expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
       "src/plugins/synthetic-auth.runtime.ts",
     );
@@ -222,8 +230,10 @@ describe("tsdown config", () => {
       expect(neverBundle("@slack/bolt")).toBe(true);
       expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
+      expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
+      expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
@@ -235,8 +245,10 @@ describe("tsdown config", () => {
         "@slack/bolt",
         "@slack/web-api",
         "@vitest/expect",
+        "jimp",
         "matrix-js-sdk",
         "qrcode-terminal",
+        "sharp",
         "vitest",
       ]) {
         expect(neverBundle).toContain(dependency);
@@ -246,7 +258,9 @@ describe("tsdown config", () => {
       throw new Error("expected unified graph external predicate");
     }
     const externalize = external;
+    expect(externalize("jimp", undefined, false)).toBe(true);
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
+    expect(externalize("sharp", undefined, false)).toBe(true);
   });
 
   it("always bundles plugin SDK package-local runtime dependencies", () => {
@@ -259,6 +273,8 @@ describe("tsdown config", () => {
 
     expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
     expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
+    expect(alwaysBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
     expect(alwaysBundle("zod")).toBe(true);
     expect(alwaysBundle("zod/v4/core")).toBe(true);
     expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);

@@ -1,3 +1,7 @@
+/**
+ * Implements filesystem JSON-RPC handlers for the Codex sandbox exec-server
+ * with OpenClaw sandbox policy checks before every bridge operation.
+ */
 import { posix as pathPosix } from "node:path";
 import type { SandboxFsStat } from "openclaw/plugin-sdk/sandbox";
 import type { JsonObject, JsonValue } from "../protocol.js";
@@ -17,17 +21,19 @@ import {
   requireObject,
   requireString,
 } from "./json-rpc.js";
+import { resolveExecServerPath } from "./path-uri.js";
 import { requireBackend, requireFsBridge } from "./runtime.js";
 import type { DirectoryEntry, OpenClawExecServer, ResolvedFsSandboxPolicy } from "./types.js";
 
 const CODEX_SANDBOX_EXEC_SERVER_MAX_READ_FILE_BYTES = 512 * 1024 * 1024;
 
+/** Reads a sandbox file as base64 after read-policy and size checks. */
 export async function readFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/readFile params");
-  const filePath = requireString(record.path, "path");
+  const filePath = resolveExecServerPath(requireString(record.path, "path"), "read path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
   const fsBridge = requireFsBridge(execServer);
   const stat = await fsBridge.stat({ filePath });
@@ -45,12 +51,13 @@ export async function readFile(
   return { dataBase64: data.toString("base64") };
 }
 
+/** Writes base64 data to an existing sandbox directory after write-policy checks. */
 export async function writeFile(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<void> {
   const record = requireObject(params, "fs/writeFile params");
-  const filePath = requireString(record.path, "path");
+  const filePath = resolveExecServerPath(requireString(record.path, "path"), "write path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "write" }]);
   const fsBridge = requireFsBridge(execServer);
   const parent = await fsBridge.stat({ filePath: pathPosix.dirname(filePath) });
@@ -64,12 +71,16 @@ export async function writeFile(
   });
 }
 
+/** Creates a sandbox directory, respecting recursive and parent-directory semantics. */
 export async function createDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<void> {
   const record = requireObject(params, "fs/createDirectory params");
-  const filePath = requireString(record.path, "path");
+  const filePath = resolveExecServerPath(
+    requireString(record.path, "path"),
+    "create-directory path",
+  );
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "write" }]);
   const fsBridge = requireFsBridge(execServer);
   if (record.recursive === false) {
@@ -84,12 +95,13 @@ export async function createDirectory(
   });
 }
 
+/** Returns normalized metadata for a sandbox path. */
 export async function getMetadata(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/getMetadata params");
-  const filePath = requireString(record.path, "path");
+  const filePath = resolveExecServerPath(requireString(record.path, "path"), "metadata path");
   assertFsSandboxAccess(execServer, record, [{ path: filePath, access: "read" }]);
   const fsBridge = requireFsBridge(execServer);
   const stat = await fsBridge.stat({
@@ -101,12 +113,13 @@ export async function getMetadata(
   return metadataResponse(stat);
 }
 
+/** Lists sandbox directory entries visible under the resolved filesystem policy. */
 export async function readDirectory(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "fs/readDirectory params");
-  const filePath = requireString(record.path, "path");
+  const filePath = resolveExecServerPath(requireString(record.path, "path"), "read-directory path");
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
   return {
     entries: await listDirectoryEntries(execServer, filePath, fsSandboxPolicy),
@@ -148,12 +161,13 @@ async function listDirectoryEntries(
   });
 }
 
+/** Removes a sandbox path after rejecting writes outside policy or under read-only descendants. */
 export async function removePath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<void> {
   const record = requireObject(params, "fs/remove params");
-  const filePath = requireString(record.path, "path");
+  const filePath = resolveExecServerPath(requireString(record.path, "path"), "remove path");
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
   assertResolvedFsSandboxAccess(fsSandboxPolicy, [{ path: filePath, access: "write" }]);
   if (record.recursive !== false) {
@@ -167,15 +181,19 @@ export async function removePath(
   });
 }
 
+/** Copies sandbox files or recursive directories while enforcing source and destination policy. */
 export async function copyPath(
   execServer: OpenClawExecServer,
   params: JsonValue | undefined,
 ): Promise<void> {
   const record = requireObject(params, "fs/copy params");
-  const sourcePath = requireString(record.sourcePath ?? record.source, "sourcePath");
-  const destinationPath = requireString(
-    record.destinationPath ?? record.destination,
-    "destinationPath",
+  const sourcePath = resolveExecServerPath(
+    requireString(record.sourcePath ?? record.source, "sourcePath"),
+    "copy source path",
+  );
+  const destinationPath = resolveExecServerPath(
+    requireString(record.destinationPath ?? record.destination, "destinationPath"),
+    "copy destination path",
   );
   const fsSandboxPolicy = resolveFsSandboxPolicy(execServer, record);
   assertResolvedFsSandboxAccess(fsSandboxPolicy, [

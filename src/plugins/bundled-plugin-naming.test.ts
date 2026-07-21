@@ -1,6 +1,8 @@
+// Verifies bundled plugin naming conventions and package metadata.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -34,7 +36,7 @@ const DIR_ID_EXCEPTIONS = new Map<string, string>([
   // Historical directory name kept until a wider repo cleanup is worth the churn.
   ["kimi-coding", "kimi"],
 ]);
-const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 const ALLOWED_PACKAGE_SUFFIXES = [
   "",
   "-provider",
@@ -44,9 +46,8 @@ const ALLOWED_PACKAGE_SUFFIXES = [
   "-media-understanding",
 ] as const;
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
-function readJsonFile<T>(filePath: string): T {
-  return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
 function normalizeText(value: unknown): string | undefined {
@@ -78,9 +79,10 @@ function listExternalBundledPluginDirs(): string[] | null {
       continue;
     }
     const [, dirName, fileName] = match;
-    const metadataFiles = metadataByDir.get(dirName) ?? new Set<string>();
-    metadataFiles.add(fileName);
-    metadataByDir.set(dirName, metadataFiles);
+    const metadataFiles =
+      metadataByDir.get(expectDefined(dirName, "dirName test invariant")) ?? new Set<string>();
+    metadataFiles.add(expectDefined(fileName, "fileName test invariant"));
+    metadataByDir.set(expectDefined(dirName, "dirName test invariant"), metadataFiles);
   }
 
   return [...metadataByDir.entries()]
@@ -142,8 +144,8 @@ function readBundledPluginRecords(): BundledPluginRecord[] {
       return [];
     }
 
-    const manifest = readJsonFile<PluginManifestShape>(manifestPath);
-    const pkg = readJsonFile<OpenClawPackageShape>(packagePath);
+    const manifest = readJsonFile(manifestPath) as PluginManifestShape;
+    const pkg = readJsonFile(packagePath) as OpenClawPackageShape;
     const manifestId = normalizeText(manifest.id);
     const packageName = normalizeText(pkg.name);
     if (!manifestId || !packageName) {

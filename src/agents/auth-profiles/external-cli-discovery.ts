@@ -1,3 +1,8 @@
+/**
+ * External CLI auth discovery mode helpers.
+ * Converts provider/config lookup contexts into scoped discovery options for
+ * auth profile store loading.
+ */
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -5,6 +10,7 @@ import {
   type ExternalCliAuthScope,
 } from "./external-cli-scope.js";
 
+/** External CLI auth discovery mode used while loading auth profile stores. */
 export type ExternalCliAuthDiscovery =
   | {
       mode: "none";
@@ -47,9 +53,8 @@ function normalizeStringList(values: Iterable<string | undefined>): string[] {
   return normalizeTrimmedStringList([...values]);
 }
 
-export function externalCliDiscoveryNone(params?: {
-  config?: OpenClawConfig;
-}): ExternalCliAuthDiscovery {
+/** Disables external CLI auth discovery. */
+function externalCliDiscoveryNone(params?: { config?: OpenClawConfig }): ExternalCliAuthDiscovery {
   return {
     mode: "none",
     allowKeychainPrompt: false,
@@ -57,19 +62,7 @@ export function externalCliDiscoveryNone(params?: {
   };
 }
 
-export function externalCliDiscoveryExisting(params?: {
-  config?: OpenClawConfig;
-  allowKeychainPrompt?: boolean;
-}): ExternalCliAuthDiscovery {
-  return {
-    mode: "existing",
-    ...(params?.allowKeychainPrompt !== undefined
-      ? { allowKeychainPrompt: params.allowKeychainPrompt }
-      : {}),
-    ...(params?.config ? { config: params.config } : {}),
-  };
-}
-
+/** Allows external CLI auth discovery for specific providers and/or profiles. */
 export function externalCliDiscoveryScoped(params: {
   config?: OpenClawConfig;
   providerIds?: Iterable<string>;
@@ -87,6 +80,7 @@ export function externalCliDiscoveryScoped(params: {
   };
 }
 
+/** Builds external CLI discovery options for a provider auth lookup. */
 export function externalCliDiscoveryForProviderAuth(
   params: ProviderAuthDiscoveryParams,
 ): ExternalCliAuthDiscovery {
@@ -99,6 +93,7 @@ export function externalCliDiscoveryForProviderAuth(
   });
 }
 
+/** Builds external CLI discovery options for config status checks. */
 export function externalCliDiscoveryForConfigStatus(
   params: ConfigStatusDiscoveryParams,
 ): ExternalCliAuthDiscovery {
@@ -110,6 +105,7 @@ export function externalCliDiscoveryForConfigStatus(
   });
 }
 
+/** Builds external CLI discovery options for a provider set. */
 export function externalCliDiscoveryForProviders(
   params: ProviderSetDiscoveryParams,
 ): ExternalCliAuthDiscovery {

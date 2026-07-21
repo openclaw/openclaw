@@ -1,3 +1,4 @@
+// Signal plugin module implements shared behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import {
   adaptScopedAccountAccessor,
@@ -14,6 +15,7 @@ import {
   resolveSignalAccount,
   type ResolvedSignalAccount,
 } from "./accounts.js";
+import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
@@ -27,7 +29,7 @@ export const signalSetupWizard = createSignalSetupWizardProxy(
   async () => (await loadSignalChannelRuntime()).signalSetupWizard,
 );
 
-export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
+const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalAccount>({
   sectionKey: SIGNAL_CHANNEL,
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
@@ -40,6 +42,27 @@ export const signalConfigAdapter = createScopedChannelConfigAdapter<ResolvedSign
       .filter(Boolean),
   resolveDefaultTo: (account: ResolvedSignalAccount) => account.config.defaultTo,
 });
+
+export const signalConfigAdapter = {
+  ...signalConfigAdapterBase,
+  resolveDefaultTo({
+    cfg,
+    accountId,
+  }: {
+    cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
+    accountId?: string | null;
+  }) {
+    const raw = resolveSignalAccount({ cfg, accountId }).config.defaultTo;
+    if (typeof raw !== "string" || !raw.trim()) {
+      return undefined;
+    }
+    try {
+      return resolveSignalTarget({ cfg, accountId, input: raw })?.to ?? raw.trim();
+    } catch {
+      return raw.trim();
+    }
+  },
+};
 
 export const signalSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedSignalAccount>({
   channelKey: SIGNAL_CHANNEL,

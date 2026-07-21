@@ -1,12 +1,21 @@
+/**
+ * SSH sandbox transport helpers.
+ *
+ * Materializes temporary SSH config, validates remote shell snippets, runs commands, and uploads workspace trees.
+ */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createAbortError } from "../../infra/abort-signal.js";
 import { resolveRootPath } from "../../infra/boundary-path.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { parseSshTarget } from "../../infra/ssh-tunnel.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { isPlainCommandExitFailure, spawnCommand } from "../../process/exec.js";
 import { resolveUserPath } from "../../utils.js";
 import type { SandboxBackendCommandResult } from "./backend-handle.types.js";
+import { SANDBOX_COMMAND_MAX_BUFFER_BYTES } from "./constants.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 
 export type SshSandboxSettings = {
@@ -22,12 +31,14 @@ export type SshSandboxSettings = {
   knownHostsData?: string;
 };
 
+/** Temporary SSH session descriptor with an isolated config file. */
 export type SshSandboxSession = {
   command: string;
   configPath: string;
   host: string;
 };
 
+/** Parameters for one SSH sandbox command execution. */
 export type RunSshSandboxCommandParams = {
   session: SshSandboxSession;
   remoteCommand: string;
@@ -66,10 +77,12 @@ function buildSshFailureMessage(stderr: string, exitCode?: number): string {
   );
 }
 
+/** Single-quote a value for POSIX shell argv construction. */
 export function shellEscape(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+/** Build a remote shell command from literal argv entries. */
 export function buildRemoteCommand(argv: string[]): string {
   return argv.map((entry) => shellEscape(entry)).join(" ");
 }
@@ -93,6 +106,8 @@ type PendingHeredoc = HeredocMarker & {
 };
 
 function assertValidExecRemoteCommand(command: string): void {
+  // The SSH backend wraps model-provided shell text in `/bin/sh -c`. This parser
+  // catches unbalanced syntax and unresolved placeholders before quoting it.
   const frames: ExecCommandFrame[] = [
     { kind: "root", quote: "plain", escaping: false, parenDepth: 0 },
   ];
@@ -103,7 +118,7 @@ function assertValidExecRemoteCommand(command: string): void {
     if (!frame) {
       throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
     }
-    const char = command[index];
+    const char = command.charAt(index);
 
     if (frame.escaping) {
       frame.escaping = false;
@@ -162,6 +177,8 @@ function assertValidExecRemoteCommand(command: string): void {
         (pending) => pending.frameDepth === frames.length,
       );
       if (frameHeredocs.length > 0) {
+        // Here-doc bodies are opaque shell payloads; skip them so placeholder
+        // and quote checks only inspect executable syntax.
         index = skipHeredocBodies(command, index + 1, frameHeredocs) - 1;
         for (const pending of frameHeredocs) {
           pendingHeredocs.splice(pendingHeredocs.indexOf(pending), 1);
@@ -236,12 +253,15 @@ function assertValidExecRemoteCommand(command: string): void {
     throw new Error("Malformed SSH/OpenShell exec command: trailing backslash escape.");
   }
   if (pendingHeredocs.length > 0) {
+    const pending = pendingHeredocs.at(0);
+    if (!pending) {
+      throw new Error("Malformed SSH/OpenShell exec command: parser state underflow.");
+    }
     throw new Error(
-      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pendingHeredocs[0].delimiter}.`,
+      `Malformed SSH/OpenShell exec command: unterminated here-doc ${pending.delimiter}.`,
     );
   }
-  for (let index = frames.length - 1; index >= 0; index -= 1) {
-    const frame = frames[index];
+  for (const frame of frames.toReversed()) {
     if (frame.quote === "single") {
       throw new Error("Malformed SSH/OpenShell exec command: unclosed single quote.");
     }
@@ -262,6 +282,7 @@ function assertValidExecRemoteCommand(command: string): void {
   }
 }
 
+/** Build the wrapped remote `/bin/sh -c` command for sandbox exec. */
 export function buildExecRemoteCommand(params: {
   command: string;
   workdir?: string;
@@ -283,6 +304,7 @@ export function buildExecRemoteCommand(params: {
   return buildRemoteCommand(argv);
 }
 
+/** Validate and build a remote exec command for untrusted model input. */
 export function buildValidatedExecRemoteCommand(params: {
   command: string;
   workdir?: string;
@@ -290,6 +312,60 @@ export function buildValidatedExecRemoteCommand(params: {
 }): string {
   assertValidExecRemoteCommand(params.command);
   return buildExecRemoteCommand(params);
+}
+
+const VALIDATE_REMOTE_WORKDIR_SCRIPT = [
+  "set -e",
+  'target="$1"',
+  'root="$2"',
+  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
+  'target="${target%/}"',
+  'root="${root%/}"',
+  '[ -n "$target" ] || target="/"',
+  '[ -n "$root" ] || root="/"',
+  'if [ "$root" != "/" ]; then',
+  '  case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+  "fi",
+  'for path_to_check in "$target" "$root"; do',
+  '  relative="${path_to_check#/}"',
+  '  while [ -n "$relative" ]; do',
+  '    part="${relative%%/*}"',
+  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '    [ -n "$part" ] || continue',
+  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  "  done",
+  "done",
+  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
+  'if [ ! -d "$root" ]; then echo "remote root not found: $root" >&2; exit 1; fi',
+  'canonical_root="$(cd "$root" && pwd -P)"',
+  'relative="${target#"$root"}"',
+  'relative="${relative#/}"',
+  'current="$canonical_root"',
+  'while [ -n "$relative" ]; do',
+  '  part="${relative%%/*}"',
+  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '  [ -n "$part" ] || continue',
+  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ ! -d "$next" ]; then echo "remote directory not found: $next" >&2; exit 1; fi',
+  '  current="$next"',
+  "done",
+  'printf "%s\\n" "$current"',
+].join("\n");
+
+export function buildRemoteWorkdirValidationCommand(params: {
+  workdir: string;
+  root: string;
+}): string {
+  return buildRemoteCommand([
+    "/bin/sh",
+    "-c",
+    VALIDATE_REMOTE_WORKDIR_SCRIPT,
+    "openclaw-validate-workdir",
+    params.workdir,
+    params.root,
+  ]);
 }
 
 function createExecCommandFrame(kind: ExecCommandFrame["kind"], parenDepth = 0): ExecCommandFrame {
@@ -319,10 +395,11 @@ function readPlaceholderToken(command: string, index: number): string | null {
 
 function hasRedirectionTargetAfter(command: string, index: number): boolean {
   let cursor = index;
-  while (command[cursor] === " " || command[cursor] === "\t") {
+  while (command.charAt(cursor) === " " || command.charAt(cursor) === "\t") {
     cursor += 1;
   }
-  return command[cursor] !== undefined && !/[;&|()<>\r\n]/.test(command[cursor]);
+  const next = command.charAt(cursor);
+  return next !== "" && !/[;&|()<>\r\n]/.test(next);
 }
 
 function isLikelyGeneratedWorkflowPlaceholder(command: string, index: number): boolean {
@@ -476,6 +553,7 @@ function skipShellComment(command: string, index: number): number {
   return newlineIndex === -1 ? command.length : newlineIndex;
 }
 
+/** Build the local ssh argv for a prepared sandbox session. */
 export function buildSshSandboxArgv(params: {
   session: SshSandboxSession;
   remoteCommand: string;
@@ -493,6 +571,7 @@ export function buildSshSandboxArgv(params: {
   ];
 }
 
+/** Create a temporary SSH session from already-rendered ssh config text. */
 export async function createSshSandboxSessionFromConfigText(params: {
   configText: string;
   host?: string;
@@ -513,6 +592,7 @@ export async function createSshSandboxSessionFromConfigText(params: {
   };
 }
 
+/** Create a temporary SSH session from structured sandbox SSH settings. */
 export async function createSshSandboxSessionFromSettings(
   settings: SshSandboxSettings,
 ): Promise<SshSandboxSession> {
@@ -523,6 +603,8 @@ export async function createSshSandboxSessionFromSettings(
 
   const configDir = await fs.mkdtemp(path.join(resolveSshTmpRoot(), "openclaw-sandbox-ssh-"));
   try {
+    // Inline secret material is written into the temp config dir with strict
+    // permissions so ssh can consume it without exposing values in argv/env.
     const materializedIdentity = settings.identityData
       ? await writeSecretMaterial(configDir, "identity", settings.identityData)
       : undefined;
@@ -583,10 +665,12 @@ export async function createSshSandboxSessionFromSettings(
   }
 }
 
+/** Remove temporary SSH config and materialized secret files. */
 export async function disposeSshSandboxSession(session: SshSandboxSession): Promise<void> {
   await fs.rm(path.dirname(session.configPath), { recursive: true, force: true });
 }
 
+/** Run a remote command through ssh and return buffered stdout/stderr. */
 export async function runSshSandboxCommand(
   params: RunSshSandboxCommandParams,
 ): Promise<SandboxBackendCommandResult> {
@@ -595,69 +679,112 @@ export async function runSshSandboxCommand(
     remoteCommand: params.remoteCommand,
     tty: params.tty,
   });
+  const [executable, ...args] = argv;
+  if (!executable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
-  return await new Promise<SandboxBackendCommandResult>((resolve, reject) => {
-    const child = spawn(argv[0], argv.slice(1), {
-      stdio: ["pipe", "pipe", "pipe"],
-      env: sshEnv,
-      signal: params.signal,
-    });
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-
-    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
-    child.on("error", reject);
-    child.on("close", (code) => {
-      const stdout = Buffer.concat(stdoutChunks);
-      const stderr = Buffer.concat(stderrChunks);
-      const exitCode = code ?? 0;
-      if (exitCode !== 0 && !params.allowFailure) {
-        reject(
-          Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
-            code: exitCode,
-            stdout,
-            stderr,
-          }),
-        );
-        return;
-      }
-      resolve({ stdout, stderr, code: exitCode });
-    });
-
-    if (params.stdin !== undefined) {
-      child.stdin.end(params.stdin);
-      return;
-    }
-    child.stdin.end();
+  const result = await spawnCommand([executable, ...args], {
+    baseEnv: sshEnv,
+    cancelSignal: params.signal,
+    encoding: "buffer",
+    input: params.stdin ?? Buffer.alloc(0),
+    maxBuffer: SANDBOX_COMMAND_MAX_BUFFER_BYTES,
+    reject: false,
+    stripFinalNewline: false,
   });
+  if (params.signal?.aborted || result.isCanceled) {
+    throw createAbortError("Aborted");
+  }
+  if (result.failed && !isPlainCommandExitFailure(result)) {
+    throw toErrorObject(result, "SSH command execution failed");
+  }
+  const stdout = Buffer.from(result.stdout);
+  const stderr = Buffer.from(result.stderr);
+  const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
+  if (exitCode !== 0 && !params.allowFailure) {
+    throw Object.assign(new Error(buildSshFailureMessage(stderr.toString("utf8"), exitCode)), {
+      code: exitCode,
+      stdout,
+      stderr,
+    });
+  }
+  return { stdout, stderr, code: exitCode };
 }
 
+export const ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT = [
+  "set -e",
+  'target="$1"',
+  'root="${2:-$1}"',
+  'case "$target" in /*) ;; *) echo "remote directory must be absolute: $target" >&2; exit 1 ;; esac',
+  'case "$root" in /*) ;; *) echo "remote root must be absolute: $root" >&2; exit 1 ;; esac',
+  'target="${target%/}"',
+  'root="${root%/}"',
+  '[ -n "$target" ] || target="/"',
+  '[ -n "$root" ] || root="/"',
+  'case "$target/" in "$root"/*|"$root/") ;; *) echo "remote directory must stay under root: $target" >&2; exit 1 ;; esac',
+  'for path_to_check in "$target" "$root"; do',
+  '  relative="${path_to_check#/}"',
+  '  while [ -n "$relative" ]; do',
+  '    part="${relative%%/*}"',
+  '    if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '    [ -n "$part" ] || continue',
+  '    case "$part" in "."|"..") echo "unsafe remote directory component: $part" >&2; exit 1 ;; esac',
+  "  done",
+  "done",
+  'if [ -L "$root" ]; then echo "unsafe remote root symlink: $root" >&2; exit 1; fi',
+  'mkdir -p -- "$root"',
+  'canonical_root="$(cd "$root" && pwd -P)"',
+  'relative="${target#"$root"}"',
+  'relative="${relative#/}"',
+  'current="$canonical_root"',
+  'while [ -n "$relative" ]; do',
+  '  part="${relative%%/*}"',
+  '  if [ "$part" = "$relative" ]; then relative=""; else relative="${relative#*/}"; fi',
+  '  [ -n "$part" ] || continue',
+  '  if [ "$current" = "/" ]; then next="/$part"; else next="$current/$part"; fi',
+  '  if [ -L "$next" ]; then echo "unsafe remote directory symlink: $next" >&2; exit 1; fi',
+  '  if [ -e "$next" ]; then',
+  '    if [ ! -d "$next" ]; then echo "unsafe remote directory component: $next" >&2; exit 1; fi',
+  "  else",
+  '    mkdir -- "$next"',
+  "  fi",
+  '  current="$next"',
+  "done",
+].join("\n");
+
+/** Stream a local directory to the remote sandbox with tar over ssh. */
 export async function uploadDirectoryToSshTarget(params: {
   session: SshSandboxSession;
   localDir: string;
   remoteDir: string;
+  remoteRootDir?: string;
   signal?: AbortSignal;
 }): Promise<void> {
   await assertSafeUploadSymlinks(params.localDir);
   const remoteCommand = buildRemoteCommand([
     "/bin/sh",
     "-c",
-    'mkdir -p -- "$1" && tar -xf - -C "$1"',
+    `${ENSURE_REMOTE_REAL_DIRECTORY_SCRIPT}\ntar -xf - -C "$1"`,
     "openclaw-sandbox-upload",
     params.remoteDir,
+    params.remoteRootDir ?? params.remoteDir,
   ]);
   const sshArgv = buildSshSandboxArgv({
     session: params.session,
     remoteCommand,
   });
+  const [sshExecutable, ...sshArgs] = sshArgv;
+  if (!sshExecutable) {
+    throw new Error("SSH command argv is empty");
+  }
   const sshEnv = sanitizeEnvVars(process.env).allowed;
   await new Promise<void>((resolve, reject) => {
     const tar = spawn("tar", ["-C", params.localDir, "-cf", "-", "."], {
       stdio: ["ignore", "pipe", "pipe"],
       signal: params.signal,
     });
-    const ssh = spawn(sshArgv[0], sshArgv.slice(1), {
+    const ssh = spawn(sshExecutable, sshArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: sshEnv,
       signal: params.signal,
@@ -669,20 +796,34 @@ export async function uploadDirectoryToSshTarget(params: {
     let sshClosed = false;
     let tarCode = 0;
     let sshCode = 0;
-
-    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
-    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
-    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    let settled = false;
 
     const fail = (error: unknown) => {
-      tar.kill("SIGKILL");
-      ssh.kill("SIGKILL");
-      reject(error);
+      if (settled) {
+        return;
+      }
+      settled = true;
+      for (const child of [tar, ssh]) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // Preserve the pipeline error while still terminating the peer.
+        }
+      }
+      reject(toErrorObject(error, "Non-Error rejection"));
     };
+
+    tar.stderr.on("data", (chunk) => tarStderr.push(Buffer.from(chunk)));
+    tar.stderr.on("error", fail);
+    tar.stdout.on("error", fail);
+    ssh.stdout.on("data", (chunk) => sshStdout.push(Buffer.from(chunk)));
+    ssh.stdout.on("error", fail);
+    ssh.stderr.on("data", (chunk) => sshStderr.push(Buffer.from(chunk)));
+    ssh.stderr.on("error", fail);
+    ssh.stdin?.on("error", fail);
 
     tar.on("error", fail);
     ssh.on("error", fail);
-    tar.stdout.pipe(ssh.stdin);
 
     tar.on("close", (code) => {
       tarClosed = true;
@@ -696,9 +837,10 @@ export async function uploadDirectoryToSshTarget(params: {
     });
 
     function maybeResolve() {
-      if (!tarClosed || !sshClosed) {
+      if (settled || !tarClosed || !sshClosed) {
         return;
       }
+      settled = true;
       if (tarCode !== 0) {
         reject(
           new Error(
@@ -717,6 +859,13 @@ export async function uploadDirectoryToSshTarget(params: {
       }
       resolve();
     }
+
+    try {
+      // Readable pipe errors do not close the writable peer automatically.
+      tar.stdout.pipe(ssh.stdin);
+    } catch (error) {
+      fail(error);
+    }
   });
 }
 
@@ -729,6 +878,8 @@ async function assertSafeUploadSymlinks(localDir: string): Promise<void> {
     for (const entry of entries) {
       const entryPath = path.join(currentDir, entry.name);
       if (entry.isSymbolicLink()) {
+        // The remote tar extract should not recreate links that escape the
+        // uploaded workspace tree.
         try {
           await resolveRootPath({
             absolutePath: entryPath,
@@ -778,3 +929,4 @@ async function writeSecretMaterial(
   await fs.chmod(pathname, 0o600);
   return pathname;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

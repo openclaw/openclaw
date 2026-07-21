@@ -1,10 +1,8 @@
+// Covers copying bundled plugin metadata for package output.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  copyBundledPluginMetadata,
-  rewritePackageExtensions,
-} from "../../scripts/copy-bundled-plugin-metadata.mjs";
+import { copyBundledPluginMetadata } from "../../scripts/copy-bundled-plugin-metadata.mjs";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -83,15 +81,6 @@ function createTlonSkillPlugin(repoRoot: string, skillPath = "node_modules/@tlon
 
 afterEach(() => {
   cleanupTempDirs(tempDirs);
-});
-
-describe("rewritePackageExtensions", () => {
-  it("rewrites TypeScript extension entries to built JS paths", () => {
-    expect(rewritePackageExtensions(["./index.ts", "./nested/entry.mts"])).toEqual([
-      "./index.js",
-      "./nested/entry.js",
-    ]);
-  });
 });
 
 describe("copyBundledPluginMetadata", () => {

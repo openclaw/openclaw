@@ -1,3 +1,4 @@
+// Nostr plugin module implements channel.setup behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -90,7 +91,11 @@ function resolveSetupNostrAccount(params: {
 }
 
 function looksLikeNostrPrivateKey(privateKey: string): boolean {
-  return privateKey.startsWith("nsec1") || /^[0-9a-fA-F]{64}$/.test(privateKey);
+  return (
+    privateKey.startsWith("nsec1") ||
+    privateKey.startsWith("NSEC1") ||
+    /^[0-9a-fA-F]{64}$/.test(privateKey)
+  );
 }
 
 const nostrSetupAdapter = createNostrSetupAdapter({

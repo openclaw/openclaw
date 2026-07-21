@@ -1,14 +1,14 @@
+// Bridges OpenClaw-managed proxy TLS trust into Undici EnvHttpProxyAgent and
+// explicit ProxyAgent options without changing unrelated operator proxies.
 import { isRecord as isProxyTlsRecord } from "@openclaw/normalization-core/record-coerce";
 import type { EnvHttpProxyAgent } from "undici";
-import { resolveEnvHttpProxyAgentOptions, resolveEnvHttpProxyUrl } from "../proxy-env.js";
-import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
-import {
-  loadManagedProxyTlsOptionsSync,
-  resolveManagedProxyCaFileForUrl,
-  type ManagedProxyTlsOptions,
-} from "./proxy-tls.js";
+import { resolveEnvHttpProxyAgentOptions } from "../proxy-env.js";
+import { resolveActiveManagedProxyTlsOptions } from "./active-managed-proxy-tls.js";
+import type { ManagedProxyTlsOptions } from "./proxy-tls.js";
 
-export type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+export { resolveActiveManagedProxyTlsOptions } from "./active-managed-proxy-tls.js";
+
+type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
 
 function readProxyTlsRecord(options: object | undefined): Record<string, unknown> | undefined {
   if (!options || !("proxyTls" in options)) {
@@ -37,69 +37,18 @@ function readProxyUrlFromOptions(options: object | undefined): string | undefine
   return undefined;
 }
 
-function normalizeProxyUrl(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    return new URL(value).href;
-  } catch {
-    return undefined;
-  }
-}
-
 type ManagedProxyTlsEnv = NodeJS.ProcessEnv;
-
-type ResolveActiveManagedProxyTlsOptionsParams = {
-  proxyUrl?: string;
-  env?: ManagedProxyTlsEnv;
-};
 
 type AddActiveManagedProxyTlsOptionsParams = {
   env?: ManagedProxyTlsEnv;
 };
 
-function resolveManagedProxyUrl(env: ManagedProxyTlsEnv = process.env): string | undefined {
-  const activeProxyUrl = getActiveManagedProxyUrl();
-  if (activeProxyUrl) {
-    return activeProxyUrl.href;
-  }
-  if (env["OPENCLAW_PROXY_ACTIVE"] !== "1") {
-    return undefined;
-  }
-  return normalizeProxyUrl(resolveEnvHttpProxyUrl("https", env));
-}
-
-export function resolveActiveManagedProxyTlsOptions(
-  params?: ResolveActiveManagedProxyTlsOptionsParams,
-): ManagedProxyTlsOptions | undefined {
-  const env = params?.env ?? process.env;
-  const managedProxyUrl = resolveManagedProxyUrl(env);
-  const targetProxyUrl = normalizeProxyUrl(
-    params?.proxyUrl ?? resolveEnvHttpProxyUrl("https", env),
-  );
-  if (!managedProxyUrl || targetProxyUrl !== managedProxyUrl) {
-    return undefined;
-  }
-  const activeProxyTls = getActiveManagedProxyTlsOptions();
-  if (activeProxyTls) {
-    return activeProxyTls;
-  }
-  const proxyCaFile = resolveManagedProxyCaFileForUrl({
-    proxyUrl: managedProxyUrl,
-    caFileOverride: env["OPENCLAW_PROXY_CA_FILE"],
-  });
-  try {
-    return loadManagedProxyTlsOptionsSync(proxyCaFile);
-  } catch {
-    return undefined;
-  }
-}
-
+/** Adds active managed proxy TLS options to env proxy agent options. */
 export function addActiveManagedProxyTlsOptions(
   options: undefined,
   params?: AddActiveManagedProxyTlsOptionsParams,
 ): { proxyTls: ManagedProxyTlsOptions } | undefined;
+/** Adds active managed proxy TLS options to explicit proxy agent options. */
 export function addActiveManagedProxyTlsOptions<TOptions extends object>(
   options: TOptions,
   params?: AddActiveManagedProxyTlsOptionsParams,
@@ -130,6 +79,8 @@ export function addActiveManagedProxyTlsOptions<TOptions extends object>(
     return options;
   }
   const existingProxyTls = readProxyTlsRecord(options);
+  // Caller-supplied proxyTls wins over managed defaults so explicit TLS policy
+  // is not overwritten while still inheriting missing managed CA fields.
   return {
     ...options,
     proxyTls: {
@@ -139,6 +90,7 @@ export function addActiveManagedProxyTlsOptions<TOptions extends object>(
   };
 }
 
+/** Resolves env proxy options with managed proxy TLS attached when applicable. */
 export function resolveManagedEnvHttpProxyAgentOptions(
   env: NodeJS.ProcessEnv = process.env,
 ): ManagedEnvHttpProxyAgentOptions | undefined {

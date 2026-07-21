@@ -1,9 +1,10 @@
+// Workboard plugin module implements persistence types behavior.
 import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
   WorkboardNotificationSubscription,
-} from "./types.js";
+} from "@openclaw/workboard-contract";
 
 export type PersistedWorkboardCard = {
   version: 1;

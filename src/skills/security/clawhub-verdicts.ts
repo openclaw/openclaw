@@ -1,3 +1,4 @@
+// ClawHub verdict helpers normalize skill security verdicts from registry metadata.
 import {
   fetchClawHubSkillSecurityVerdicts,
   resolveClawHubBaseUrl,
@@ -5,7 +6,8 @@ import {
 } from "../../infra/clawhub.js";
 import type { buildWorkspaceSkillStatus } from "../discovery/status.js";
 
-export type OpenClawSkillSecurityVerdictItem = Omit<
+/** ClawHub verdict item shape projected into local security scan verdicts. */
+type OpenClawSkillSecurityVerdictItem = Omit<
   ClawHubSkillSecurityVerdictItem,
   "decision" | "error" | "security"
 > & {
@@ -35,7 +37,7 @@ function readSecurityPassed(security: unknown): boolean | null | undefined {
   return typeof passed === "boolean" ? passed : undefined;
 }
 
-export function projectClawHubVerdictItem(
+function projectClawHubVerdictItem(
   item: ClawHubSkillSecurityVerdictItem,
   registry: string,
 ): OpenClawSkillSecurityVerdictItem {

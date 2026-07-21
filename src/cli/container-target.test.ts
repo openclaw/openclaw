@@ -1,3 +1,4 @@
+// Container target tests cover CLI container target parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
   maybeRunCliInContainer,
@@ -405,7 +406,7 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       3,
@@ -458,7 +459,7 @@ describe("maybeRunCliInContainer", () => {
       2,
       "docker",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       3,
@@ -515,13 +516,13 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
       "docker",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       3,
@@ -569,13 +570,13 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
     expect(spawnSync).toHaveBeenNthCalledWith(
       2,
       "docker",
       ["inspect", "--format", "{{.State.Running}}", "demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
   });
 
@@ -680,7 +681,7 @@ describe("maybeRunCliInContainer", () => {
       1,
       "podman",
       ["inspect", "--format", "{{.State.Running}}", "flag-demo"],
-      { encoding: "utf8" },
+      { encoding: "utf8", killSignal: "SIGKILL", timeout: 10_000 },
     );
   });
 

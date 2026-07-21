@@ -1,8 +1,10 @@
+/**
+ * Auth profile ordering regression tests.
+ * Ensures last-good hints do not override explicit config, aws-sdk, or
+ * round-robin ordering semantics.
+ */
 import { describe, expect, it, vi } from "vitest";
-import {
-  ANTHROPIC_CFG,
-  ANTHROPIC_STORE,
-} from "./auth-profiles.resolve-auth-profile-order.fixtures.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
@@ -36,6 +38,31 @@ function makeApiKeyProfilesByProviderProvider(
     ]),
   );
 }
+
+const ANTHROPIC_STORE = {
+  version: 1,
+  profiles: {
+    "anthropic:default": {
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-default",
+    },
+    "anthropic:work": {
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-work",
+    },
+  },
+} satisfies AuthProfileStore;
+
+const ANTHROPIC_CFG = {
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "api_key" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" },
+    },
+  },
+} satisfies OpenClawConfig;
 
 describe("resolveAuthProfileOrder", () => {
   const store = ANTHROPIC_STORE;
@@ -477,6 +504,43 @@ describe("resolveAuthProfileOrder", () => {
       provider: "anthropic",
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+  it("prefers store order over stale configured profiles", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          profiles: {
+            "openai:old-login": {
+              provider: "openai",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      store: {
+        version: 1,
+        order: { openai: ["openai:new-login", "openai:old-login"] },
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: Date.now() + 60_000,
+          },
+          "openai:old-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      },
+      provider: "openai",
+    });
+
+    expect(order).toEqual(["openai:new-login", "openai:old-login"]);
   });
   it.each(["store", "config"] as const)(
     "pushes cooldown profiles to the end even with %s order",

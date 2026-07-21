@@ -1,24 +1,24 @@
+// Covers provider error classifiers and failover reason mapping.
 import { describe, expect, it } from "vitest";
+import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
 import {
+  classifyAssistantFailoverReason,
   classifyProviderRuntimeFailureKind,
   classifyFailoverReason,
-  classifyFailoverReasonFromHttpStatus,
   extractObservedOverflowTokenCount,
   isAuthErrorMessage,
-  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
-  isCloudflareOrHtmlErrorPage,
   isCompactionFailureError,
   isContextOverflowError,
   isFailoverErrorMessage,
-  isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
   isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
 } from "./embedded-agent-helpers.js";
+import { isAuthPermanentErrorMessage } from "./embedded-agent-helpers/failover-matches.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -56,12 +56,15 @@ function expectMessageMatches(
   samples: readonly string[],
   expected: boolean,
 ) {
+  // Keep table cases terse while still showing the sample that failed.
   for (const sample of samples) {
     expect(matcher(sample), sample).toBe(expected);
   }
 }
 
 function expectTimeoutFailoverSamples(samples: readonly string[]) {
+  // Timeout samples must agree across the raw matcher, failover classifier, and
+  // broader failover predicate.
   for (const sample of samples) {
     expect(isTimeoutErrorMessage(sample)).toBe(true);
     expect(classifyFailoverReason(sample)).toBe("timeout");
@@ -73,6 +76,18 @@ function expectNotFailoverSample(sample: string) {
   expect(isTimeoutErrorMessage(sample)).toBe(false);
   expect(classifyFailoverReason(sample)).toBeNull();
   expect(isFailoverErrorMessage(sample)).toBe(false);
+}
+
+function classifyFailoverReasonFromHttpStatus(
+  status: number | undefined,
+  message?: string,
+  opts?: { provider?: string },
+) {
+  if (status === undefined) {
+    return null;
+  }
+  const statusText = `HTTP ${status}`;
+  return classifyFailoverReason(message ? `${statusText}: ${message}` : statusText, opts);
 }
 
 describe("isAuthPermanentErrorMessage", () => {
@@ -186,7 +201,7 @@ describe("isBillingErrorMessage", () => {
   });
 
   it("does not false-positive on long assistant responses mentioning billing keywords", () => {
-    // Simulate a multi-paragraph assistant response that mentions billing terms
+    // Simulate a multi-paragraph assistant response that mentions billing terms.
     const longResponse =
       "Sure! Here's how to set up billing for your SaaS application.\n\n" +
       "## Payment Integration\n\n" +
@@ -219,6 +234,8 @@ describe("isBillingErrorMessage", () => {
     expect(classifyFailoverReason(msg)).toBe("billing");
   });
   it("matches provider spending-limit exhaustion messages", () => {
+    // Provider wording often omits HTTP 402 while still describing a billing
+    // exhaustion state that should route to billing copy/failover.
     const msg =
       "Your team has either used all available credits or reached its monthly spending limit.";
     expect(isBillingErrorMessage(msg)).toBe(true);
@@ -301,6 +318,7 @@ describe("isCloudflareOrHtmlErrorPage", () => {
   });
 
   it("detects standalone Cloudflare challenge HTML pages", () => {
+    // HTML challenge pages are provider transport failures, not model text.
     const htmlError = `<!DOCTYPE html>
 <html lang="en-US">
   <head><title>Just a moment...</title></head>
@@ -428,7 +446,7 @@ describe("isContextOverflowError", () => {
   });
 
   it("ignores normal conversation text mentioning context overflow", () => {
-    // These are legitimate conversation snippets, not error messages
+    // These are legitimate conversation snippets, not error messages.
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
     expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
@@ -603,6 +621,12 @@ describe("extractObservedOverflowTokenCount", () => {
   });
 });
 
+describe("classifyFailoverReason context overflow", () => {
+  it("maps prompt overflow to the closed failover reason", () => {
+    expect(classifyFailoverReason("Prompt is too long")).toBe("context_overflow");
+  });
+});
+
 describe("isTransientHttpError", () => {
   it("returns true for retryable 5xx status codes", () => {
     expect(isTransientHttpError("499 Client Closed Request")).toBe(true);
@@ -623,20 +647,6 @@ describe("isTransientHttpError", () => {
 describe("classifyFailoverReasonFromHttpStatus", () => {
   it("treats HTTP 401 invalid_api_key as ambiguous auth", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
-  });
-
-  it("treats body-less HTTP 422 as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
-  });
-
-  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
-    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
-    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
-    expect(
-      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
-    ).toBeNull();
   });
 
   it("treats HTTP 422 with an unclassifiable body as format error", () => {
@@ -663,13 +673,13 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("rate_limit");
   });
 
-  it("does not force HTTP 400 context-overflow payloads into format", () => {
+  it("classifies HTTP 400 context-overflow payloads without using format", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(
         400,
         "INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("lets OpenRouter billing-classified HTTP 401 responses bypass generic auth", () => {
@@ -795,12 +805,12 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
     expect(classifyFailoverReason("HTTP 404: insufficient credits")).toBe("billing");
   });
 
-  it("does not map HTTP 404 plus context-overflow text to model_not_found", () => {
+  it("maps HTTP 404 plus context-overflow text to context_overflow", () => {
     expect(
       classifyFailoverReason(
         "HTTP 404: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("keeps raw HTTP 400 wrappers aligned with structured provider classification", () => {
@@ -811,7 +821,7 @@ describe("classifyFailoverReason HTTP 410 handling", () => {
       classifyFailoverReason(
         "HTTP 400: INVALID_ARGUMENT: input exceeds the maximum number of tokens",
       ),
-    ).toBeNull();
+    ).toBe("context_overflow");
   });
 
   it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
@@ -1026,7 +1036,66 @@ describe("image dimension errors", () => {
       contentIndex: 1,
       raw,
     });
-    expect(isImageDimensionErrorMessage(raw)).toBe(true);
+  });
+});
+
+describe("classifyAssistantFailoverReason", () => {
+  const opencodeGoStalledStreamError = {
+    role: "assistant" as const,
+    api: "openai-completions" as const,
+    provider: "opencode-go",
+    model: "deepseek-v4-flash",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+    content: [],
+    timestamp: 0,
+  };
+
+  it("classifies opencode-go provider-owned stalled streams as timeout", () => {
+    expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
+  });
+
+  it("does not classify caller-aborted assistant messages as provider failover", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        ...opencodeGoStalledStreamError,
+        stopReason: "aborted",
+      }),
+    ).toBeNull();
+  });
+
+  it("uses structured assistant error bodies for model-not-found 400s", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openai",
+        model: "some-model-id",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "error",
+        errorMessage: "400 Param Incorrect",
+        errorCode: "400",
+        errorBody:
+          '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
+        content: [],
+        timestamp: 0,
+      }),
+    ).toBe("model_not_found");
   });
 });
 
@@ -1425,6 +1494,28 @@ describe("classifyFailoverReason provider messages", () => {
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
+  it("classifies generic resource-exhausted codes as rate_limit", () => {
+    expect(
+      classifyProviderRuntimeFailureKind({
+        provider: "openai",
+        code: "RESOURCE_EXHAUSTED",
+        message: "",
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it.each([
+    { provider: "openai", code: "SERVER_ERROR" },
+    { provider: "google", code: "UNAVAILABLE" },
+    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not report code-only $provider $code failures as empty responses",
+    ({ provider, code }) => {
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
+        "empty_response",
+      );
+    },
+  );
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
@@ -1563,6 +1654,25 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("replay_invalid");
   });
 
+  it("classifies expired Anthropic thinking signatures as replay invalid", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.440: Invalid `signature` in `thinking` block"}}',
+      ),
+    ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: invalid signature on thinking block",
+      ),
+    ).toBe("replay_invalid");
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "ValidationException: signature present in thinking block",
+      ),
+    ).not.toBe("replay_invalid");
+    expect(classifyProviderRuntimeFailureKind("Invalid signature")).not.toBe("replay_invalid");
+  });
+
   it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
     expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
     expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(
@@ -1610,3 +1720,4 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

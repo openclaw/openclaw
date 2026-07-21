@@ -1,3 +1,4 @@
+// Status JSON runtime tests cover runtime status payload construction and command dependencies.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 
@@ -40,7 +41,7 @@ function createScan() {
     pluginCompatibility: [
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start",
+        code: "deprecated-memory-embedding-provider-api",
         severity: "warn",
         message: "warn",
       },
@@ -104,7 +105,7 @@ describe("status-json-runtime", () => {
     expect(payloadInput.pluginCompatibility).toStrictEqual([
       {
         pluginId: "legacy",
-        code: "legacy-before-agent-start",
+        code: "deprecated-memory-embedding-provider-api",
         severity: "warn",
         message: "warn",
       },

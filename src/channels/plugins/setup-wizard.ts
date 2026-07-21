@@ -1,7 +1,13 @@
+/**
+ * Channel setup wizard adapter.
+ *
+ * Adapts declarative wizard definitions into imperative setup adapters used by onboarding.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { configureChannelAccessWithAllowlist } from "./setup-group-access-configure.js";
+import { moveSingleAccountChannelSectionToDefaultAccount } from "./setup-helpers.js";
 import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
@@ -21,20 +27,74 @@ import type { ChannelSetupInput } from "./types.core.js";
 
 export type {
   ChannelSetupWizard,
-  ChannelSetupWizardAllowFrom,
-  ChannelSetupWizardAllowFromEntry,
-  ChannelSetupWizardCredential,
-  ChannelSetupWizardCredentialState,
-  ChannelSetupWizardEnvShortcut,
-  ChannelSetupWizardFinalize,
-  ChannelSetupWizardGroupAccess,
-  ChannelSetupWizardNote,
-  ChannelSetupWizardPrepare,
   ChannelSetupWizardStatus,
   ChannelSetupWizardTextInput,
 } from "./setup-wizard-types.js";
 
 type ChannelSetupWizardPlugin = ChannelSetupPlugin;
+
+type ChannelSectionWithAccounts = Record<string, unknown> & {
+  accounts?: Record<string, unknown>;
+  defaultAccount?: string;
+};
+
+function getChannelSection(cfg: OpenClawConfig, channelKey: string): ChannelSectionWithAccounts {
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  const channel = channels?.[channelKey];
+  return channel && typeof channel === "object" ? (channel as ChannelSectionWithAccounts) : {};
+}
+
+function createWizardAccountScope(params: {
+  cfg: OpenClawConfig;
+  channelKey: string;
+  accountId: string;
+}): { cfg: OpenClawConfig; restore: (cfg: OpenClawConfig) => OpenClawConfig } {
+  const accountId = normalizeAccountId(params.accountId);
+  const initialChannel = getChannelSection(params.cfg, params.channelKey);
+  // An existing accounts map — even empty — makes legacy plugins write account-scoped
+  // while root credentials linger; only a truly absent map may skip promotion.
+  if (accountId === DEFAULT_ACCOUNT_ID && initialChannel.accounts === undefined) {
+    return { cfg: params.cfg, restore: (cfg) => cfg };
+  }
+
+  const cfg = moveSingleAccountChannelSectionToDefaultAccount({
+    cfg: params.cfg,
+    channelKey: params.channelKey,
+  });
+  const channel = getChannelSection(cfg, params.channelKey);
+  const previousDefaultAccount = channel.defaultAccount;
+
+  // Some shipped plugins ignore accountId and resolve through defaultAccount.
+  // Scope their callbacks to this wizard run, then restore the operator's default.
+  const scopedCfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      [params.channelKey]: {
+        ...channel,
+        defaultAccount: accountId,
+      },
+    },
+  } as OpenClawConfig;
+
+  return {
+    cfg: scopedCfg,
+    restore: (currentCfg) => {
+      const currentChannel = getChannelSection(currentCfg, params.channelKey);
+      const restoredChannel =
+        previousDefaultAccount !== undefined
+          ? { ...currentChannel, defaultAccount: previousDefaultAccount }
+          : (({ defaultAccount: _ignored, ...rest }) => rest)(currentChannel);
+      return {
+        ...currentCfg,
+        channels: {
+          ...currentCfg.channels,
+          [params.channelKey]: restoredChannel,
+        },
+      } as OpenClawConfig;
+    },
+  };
+}
 
 async function buildStatus(
   plugin: ChannelSetupWizardPlugin,
@@ -71,6 +131,8 @@ async function buildStatus(
   };
 }
 
+// Legacy setup adapters still own the canonical config write path. Wizard
+// inputs funnel through them unless a field supplies a narrower writer.
 function applySetupInput(params: {
   plugin: ChannelSetupWizardPlugin;
   cfg: OpenClawConfig;
@@ -133,6 +195,8 @@ function collectCredentialValues(params: {
   return values;
 }
 
+// Text inputs can either update custom config state or reuse the same generic
+// setup input contract as credential steps.
 async function applyWizardTextInputValue(params: {
   plugin: ChannelSetupWizardPlugin;
   input: ChannelSetupWizardTextInput;
@@ -203,7 +267,22 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             defaultAccountId,
           }));
 
-      let next = cfg;
+      const channel = getChannelSection(cfg, plugin.id);
+      // Wizards that explicitly own account selection may use defaultAccount as a
+      // top-level routing label. Only inject temporary scope when generic selection
+      // owns the account or an accounts map proves that scoped storage is in use.
+      const shouldScopeAccount =
+        wizard.resolveShouldPromptAccountIds === undefined ||
+        resolvedShouldPromptAccountIds ||
+        channel.accounts !== undefined;
+      const accountScope = shouldScopeAccount
+        ? createWizardAccountScope({
+            cfg,
+            channelKey: plugin.id,
+            accountId,
+          })
+        : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
+      let next = accountScope.cfg;
       let credentialValues = collectCredentialValues({
         wizard,
         cfg: next,
@@ -211,6 +290,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
       });
       let usedEnvShortcut = false;
 
+      // The env shortcut is all-or-nothing. Once accepted, skip credential
+      // prompts so the user does not overwrite env-backed setup accidentally.
       if (wizard.envShortcut?.isAvailable({ cfg: next, accountId })) {
         const useEnvShortcut = await prompter.confirm({
           message: wizard.envShortcut.prompt,
@@ -240,6 +321,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         await prompter.note(wizard.introNote.lines.join("\n"), wizard.introNote.title);
       }
 
+      // Prepare/finalize hooks may derive helper values from credentials.
+      // Keep credentialValues current so later optional steps can reuse them.
       if (wizard.prepare) {
         const prepared = await wizard.prepare({
           cfg: next,
@@ -277,6 +360,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
               })
             : true;
           if (!shouldPrompt) {
+            // A skipped credential can still expose a resolved value for later
+            // text inputs, allowlist resolution, or finalize hooks.
             if (resolvedCredentialValue) {
               credentialValues[credential.inputKey] = resolvedCredentialValue;
             } else {
@@ -388,6 +473,8 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             if (currentValue) {
               credentialValues[textInput.inputKey] = currentValue;
               if (textInput.applyCurrentValue) {
+                // Some inputs are derived from existing config but still need
+                // normalization written back before dependent steps run.
                 next = await applyWizardTextInputValue({
                   plugin,
                   input: textInput,
@@ -543,8 +630,16 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
 
       if (forceAllowFrom && wizard.allowFrom) {
         const allowFrom = wizard.allowFrom;
+        // Allowlist resolution often needs the freshly entered credential, not
+        // only the persisted config, because setup may not have been written yet.
+        const credentialInputKey =
+          allowFrom.credentialInputKey ??
+          wizard.credentials.find((credential) =>
+            normalizeOptionalString(credentialValues[credential.inputKey]),
+          )?.inputKey ??
+          wizard.credentials[0]?.inputKey;
         const allowFromCredentialValue = normalizeOptionalString(
-          credentialValues[allowFrom.credentialInputKey ?? wizard.credentials[0]?.inputKey],
+          credentialInputKey === undefined ? undefined : credentialValues[credentialInputKey],
         );
         if (allowFrom.helpLines && allowFrom.helpLines.length > 0) {
           await prompter.note(
@@ -616,7 +711,7 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
         await prompter.note(wizard.completionNote.lines.join("\n"), wizard.completionNote.title);
       }
 
-      return { cfg: next, accountId };
+      return { cfg: accountScope.restore(next), accountId };
     },
     dmPolicy: wizard.dmPolicy,
     disable: wizard.disable,

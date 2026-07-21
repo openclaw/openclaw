@@ -1,5 +1,11 @@
+/**
+ * Tests OAuth adoption identity safety.
+ * Ensures sub-agent/main-agent credential adoption only happens when identity
+ * evidence allows the copy.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import { captureEnv } from "../../test-utils/env.js";
@@ -11,12 +17,14 @@ import {
   createOAuthMainAgentDir,
   createOAuthTestTempRoot,
   oauthCred,
+  readAuthProfileStoreForTest,
   removeOAuthTestTempRoot,
   resolveApiKeyForProfileInTest,
   resetOAuthProviderRuntimeMocks,
   storeWith,
 } from "./oauth-test-utils.js";
-import { resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } from "./oauth.js";
+import { resolveApiKeyForProfile } from "./oauth.js";
+import { resetOAuthRefreshQueuesForTest } from "./oauth.test-support.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -132,15 +140,16 @@ describe("OAuth credential adoption is identity-gated", () => {
     expect(result?.apiKey).toBe("sub-own-access");
 
     // Sub-agent store must NOT have been overwritten with main's foreign cred.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(subRaw.profiles[profileId], {
-      access: "sub-own-access",
-      refresh: "sub-own-refresh",
-      accountId: "acct-sub",
-      expires: subExpiry,
-    });
+    const subRaw = readAuthProfileStoreForTest(subAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
+      {
+        access: "sub-own-access",
+        refresh: "sub-own-refresh",
+        accountId: "acct-sub",
+        expires: subExpiry,
+      },
+    );
     expect(JSON.stringify(subRaw)).not.toContain("main-foreign-access");
   });
 
@@ -207,15 +216,16 @@ describe("OAuth credential adoption is identity-gated", () => {
 
     // Main must still hold its foreign cred, untouched (mirror would also
     // refuse because of identity mismatch).
-    const mainRaw = JSON.parse(
-      await fs.readFile(path.join(mainAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(mainRaw.profiles[profileId], {
-      access: "main-foreign-access",
-      refresh: "main-foreign-refresh",
-      accountId: "acct-other",
-      expires: freshExpiry,
-    });
+    const mainRaw = readAuthProfileStoreForTest(mainAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(mainRaw.profiles[profileId], "mainRaw.profiles[profileId] test invariant"),
+      {
+        access: "main-foreign-access",
+        refresh: "main-foreign-refresh",
+        accountId: "acct-other",
+        expires: freshExpiry,
+      },
+    );
   });
 
   it("catch-block main-inherit refuses across accountId mismatch and surfaces the original error", async () => {
@@ -285,14 +295,15 @@ describe("OAuth credential adoption is identity-gated", () => {
     ).rejects.toThrow(/OAuth token refresh failed for openai/);
 
     // Sub-agent store must still have its own stale cred \u2014 no leak.
-    const subRaw = JSON.parse(
-      await fs.readFile(path.join(subAgentDir, "auth-profiles.json"), "utf8"),
-    ) as AuthProfileStore;
-    expectPersistedOpenAICodexProfile(subRaw.profiles[profileId], {
-      access: "sub-stale",
-      refresh: "sub-refresh-token",
-      accountId: "acct-sub",
-    });
+    const subRaw = readAuthProfileStoreForTest(subAgentDir);
+    expectPersistedOpenAICodexProfile(
+      expectDefined(subRaw.profiles[profileId], "subRaw.profiles[profileId] test invariant"),
+      {
+        access: "sub-stale",
+        refresh: "sub-refresh-token",
+        accountId: "acct-sub",
+      },
+    );
     expect(JSON.stringify(subRaw)).not.toContain("main-foreign-refreshed");
   });
 });

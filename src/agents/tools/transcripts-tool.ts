@@ -1,4 +1,8 @@
-import { randomUUID } from "node:crypto";
+/**
+ * transcripts built-in tool.
+ *
+ * Manages live capture, manual import, summarization, and process-local transcript sessions.
+ */
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
@@ -9,34 +13,23 @@ import {
   resolveTranscriptsConfig,
 } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
-import {
-  getTranscriptSourceProvider,
-  listTranscriptSourceProviders,
-} from "../../transcripts/provider-registry.js";
-import type {
-  TranscriptSessionDescriptor,
-  TranscriptSourceLocator,
-} from "../../transcripts/provider-types.js";
+import { listTranscriptSourceProviders } from "../../transcripts/provider-registry.js";
+import type { TranscriptSessionDescriptor } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
-import { type AnyAgentTool } from "./common.js";
-
-type TranscriptsLogger = {
-  warn: (message: string) => void;
-};
-
-type TranscriptsRuntimeContext = {
-  config?: OpenClawConfig;
-  stateDir: string;
-  logger: TranscriptsLogger;
-};
-
-type ActiveTranscriptsSession = {
-  session: TranscriptSessionDescriptor;
-  providerId: string;
-};
-
-const activeSessions = new Map<string, ActiveTranscriptsSession>();
+import type { AnyAgentTool } from "./common.js";
+import {
+  activeSessions,
+  createSessionId,
+  readStringParam,
+  resolveSourceProvider,
+  sourceFromParams,
+  startTranscripts,
+  stopPendingTranscriptCapture,
+  toolText,
+  type TranscriptsLogger,
+  type TranscriptsRuntimeContext,
+} from "./transcripts-tool-runtime.js";
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
 const AUTO_START_STOP_TIMEOUT_MS = 5_000;
@@ -53,35 +46,6 @@ function asParamsRecord(params: unknown): Record<string, unknown> {
   return params && typeof params === "object" && !Array.isArray(params)
     ? (params as Record<string, unknown>)
     : {};
-}
-
-function readStringParam(
-  params: Record<string, unknown>,
-  key: string,
-  options: { required: true; trim?: boolean },
-): string;
-function readStringParam(
-  params: Record<string, unknown>,
-  key: string,
-  options?: { required?: false; trim?: boolean },
-): string | undefined;
-function readStringParam(
-  params: Record<string, unknown>,
-  key: string,
-  options: { required?: boolean; trim?: boolean } = {},
-): string | undefined {
-  const value = params[key];
-  if (typeof value !== "string") {
-    if (options.required) {
-      throw new Error(`${key} required`);
-    }
-    return undefined;
-  }
-  const normalized = options.trim === false ? value : value.trim();
-  if (!normalized && options.required) {
-    throw new Error(`${key} required`);
-  }
-  return normalized || undefined;
 }
 
 const TranscriptsSchema = Type.Object(
@@ -101,10 +65,6 @@ const TranscriptsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-
-function createSessionId(): string {
-  return `transcript-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}`;
-}
 
 function createStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"));
@@ -132,30 +92,8 @@ async function waitForPendingAutoStartsToSettle(
   }
 }
 
-function sourceFromParams(params: Record<string, unknown>): TranscriptSourceLocator {
-  const providerId = readStringParam(params, "providerId", { trim: true }) ?? "manual-transcript";
-  return {
-    providerId,
-    accountId: readStringParam(params, "accountId", { trim: true }),
-    guildId: readStringParam(params, "guildId", { trim: true }),
-    channelId: readStringParam(params, "channelId", { trim: true }),
-    meetingUrl: readStringParam(params, "meetingUrl", { trim: true }),
-  };
-}
-
-function resolveSourceProvider(providerId: string, ctx: TranscriptsRuntimeContext) {
-  return providerId === manualTranscriptSourceProvider.id
-    ? manualTranscriptSourceProvider
-    : getTranscriptSourceProvider(providerId, ctx.config);
-}
-
-function toolText(text: string, details?: Record<string, unknown>) {
-  return {
-    content: [{ type: "text" as const, text }],
-    details: details ?? {},
-  };
-}
-
+// Summaries are persisted beside the session so stop/import/summarize actions
+// return both model-readable details and a durable artifact path.
 async function summarizeAndPersist(params: {
   config: ReturnType<typeof resolveTranscriptsConfig>;
   store: TranscriptsStore;
@@ -176,54 +114,6 @@ async function summarizeAndPersist(params: {
       ? await params.store.writeSummaryToDir(summary, params.sessionDir)
       : await params.store.writeSummary(summary, params.session);
   return { summary, summaryPath };
-}
-
-async function startTranscripts(params: {
-  ctx: TranscriptsRuntimeContext;
-  store: TranscriptsStore;
-  rawParams: Record<string, unknown>;
-  abortSignal?: AbortSignal;
-  startupWaitMs?: number;
-}) {
-  if (params.abortSignal?.aborted) {
-    throw new Error("transcripts start aborted");
-  }
-  const source = sourceFromParams(params.rawParams);
-  const provider = resolveSourceProvider(source.providerId, params.ctx);
-  if (!provider?.start) {
-    throw new Error(`transcripts provider ${source.providerId} cannot start live capture`);
-  }
-  const session: TranscriptSessionDescriptor = {
-    sessionId: readStringParam(params.rawParams, "sessionId", { trim: true }) ?? createSessionId(),
-    title: readStringParam(params.rawParams, "title", { trim: true }),
-    source,
-    startedAt: new Date().toISOString(),
-  };
-  await params.store.writeSession(session);
-  const result = await provider.start({
-    cfg: params.ctx.config,
-    session,
-    abortSignal: params.abortSignal,
-    startupWaitMs: params.startupWaitMs,
-    onUtterance: (utterance) => params.store.appendUtteranceForSession(session, utterance),
-  });
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  if (params.abortSignal?.aborted) {
-    await provider.stop?.({
-      cfg: params.ctx.config,
-      sessionId: session.sessionId,
-      source: session.source,
-      reason: "service-stop",
-    });
-    throw new Error("transcripts start aborted");
-  }
-  activeSessions.set(session.sessionId, { session, providerId: provider.id });
-  return toolText(`Transcripts started: ${session.sessionId}`, {
-    sessionId: session.sessionId,
-    providerId: provider.id,
-  });
 }
 
 async function stopTranscripts(params: {
@@ -255,7 +145,17 @@ async function stopTranscripts(params: {
   const providerId = selectedActive?.providerId ?? session.source.providerId;
   const provider = resolveSourceProvider(providerId, params.ctx);
   let providerStopError: string | undefined;
-  if (selectedActive && provider?.stop) {
+  if (selectedActive?.cleanupPending) {
+    providerStopError = await stopPendingTranscriptCapture({
+      ctx: params.ctx,
+      provider,
+      session,
+      reason: "tool-stop",
+    });
+    if (providerStopError) {
+      throw new Error(`transcripts provider cleanup failed: ${providerStopError}`);
+    }
+  } else if (selectedActive && provider?.stop) {
     const result = await provider.stop({
       cfg: params.ctx.config,
       sessionId,
@@ -383,6 +283,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
     providerId: entry.providerId,
     title: entry.session.title,
     source: entry.session.source,
+    cleanupPending: entry.cleanupPending === true,
   }));
   return toolText(
     [
@@ -393,6 +294,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   );
 }
 
+/** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
   config?: OpenClawConfig;
   stateDir?: string;
@@ -407,9 +309,9 @@ export function createTranscriptsTool(options?: {
     name: "transcripts",
     label: "Transcripts",
     description:
-      "Start, stop, import, summarize, or inspect transcripts from Discord, Google Meet, Slack huddles, and other meeting sources.",
+      "Start/stop/import/summarize/status meeting transcripts: Discord, Google Meet, Slack huddles, others.",
     parameters: TranscriptsSchema,
-    async execute(_toolCallId, rawParams) {
+    async execute(_toolCallId, rawParams, signal) {
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);
       if (!config.enabled) {
         throw new Error("transcripts are disabled");
@@ -419,7 +321,7 @@ export function createTranscriptsTool(options?: {
       const store = createStore(ctx);
       switch (action) {
         case "start":
-          return await startTranscripts({ ctx, store, rawParams: params });
+          return await startTranscripts({ ctx, store, rawParams: params, abortSignal: signal });
         case "stop":
           return await stopTranscripts({ ctx, store, rawParams: params });
         case "import":
@@ -435,6 +337,7 @@ export function createTranscriptsTool(options?: {
   };
 }
 
+/** Create the process lifecycle service that starts configured transcript captures. */
 export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext): {
   start: () => void;
   stop: () => Promise<void>;
@@ -445,6 +348,8 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
   const pendingStartControllers = new Set<AbortController>();
   const pendingStarts = new Set<Promise<void>>();
 
+  // Auto-start is retrying and stoppable; each scheduled timer is tracked so a
+  // gateway shutdown can cancel retries before stopping any started sessions.
   const schedule = (run: () => void, delayMs: number) => {
     const timer = setTimeout(() => {
       timers.delete(timer);
@@ -480,7 +385,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           startedSessionIds.add(sessionId);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (stopped) {
           return;
         }
@@ -488,7 +393,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           ctx.logger.warn(
             `transcripts autoStart failed provider=${entry.providerId}: ${
               err instanceof Error ? err.message : String(err)
-            }`,
+            } (check the transcripts.autoStart entry in your config)`,
           );
           return;
         }
@@ -542,7 +447,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           ctx,
           store,
           rawParams: { action: "stop", sessionId },
-        }).catch((err) =>
+        }).catch((err: unknown) =>
           ctx.logger.warn(
             `transcripts autoStart stop failed session=${sessionId}: ${
               err instanceof Error ? err.message : String(err)

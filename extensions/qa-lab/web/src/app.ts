@@ -1,8 +1,12 @@
+// Qa Lab plugin module implements app behavior.
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
 import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
+import { getJson, getJsonNoStore, postJson } from "./http.js";
+import { conversationSelectionKey, findConversationBySelectionKey } from "./ui-conversation-key.js";
 import {
   type Bootstrap,
+  type EvidenceEnvelope,
   type OutcomesEnvelope,
   type ReportEnvelope,
   type RunnerSelection,
@@ -17,34 +21,6 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
-async function getJsonNoStore<T>(path: string): Promise<T> {
-  const response = await fetch(path, { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({}))) as { error?: string };
-    throw new Error(payload.error || `${response.status} ${response.statusText}`);
-  }
-  return (await response.json()) as T;
-}
 
 function countCaptureDimension(
   events: UiState["captureEvents"],
@@ -159,6 +135,11 @@ function isEditableElement(target: EventTarget | null): boolean {
 }
 
 export async function createQaLabApp(root: HTMLDivElement) {
+  const initialUrl = new URL(window.location.href);
+  const initialEvidencePath =
+    initialUrl.searchParams.get("evidencePath")?.trim() ||
+    initialUrl.searchParams.get("path")?.trim() ||
+    "";
   const state: UiState = {
     theme: detectTheme(),
     bootstrap: null,
@@ -202,6 +183,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     captureErrorsOnly: false,
     captureCoverage: null,
     captureStartupStatus: null,
+    evidence: null,
+    evidenceArtifactFilter: "all",
+    evidenceError: null,
+    evidenceLoading: false,
+    evidencePathDraft: initialEvidencePath,
+    evidenceSearchText: "",
+    evidenceStatusFilter: "all",
     captureControlsExpanded: false,
     captureSummaryExpanded: false,
     captureSavedViews: loadCaptureSavedViews(),
@@ -212,10 +200,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
     capturePinnedLaneIds: [],
     selectedCaptureSessionIds: [],
     selectedCaptureEventKey: null,
-    selectedConversationId: null,
+    selectedEvidenceEntryId: null,
+    selectedConversationKey: null,
     selectedThreadId: null,
     selectedScenarioId: null,
-    activeTab: "chat",
+    activeTab: initialUrl.pathname === "/evidence" || initialEvidencePath ? "evidence" : "chat",
     runnerDraft: null,
     runnerDraftDirty: false,
     composer: {
@@ -252,11 +241,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
     const ev = state.snapshot?.events;
     return JSON.stringify({
       mc: msgs?.length ?? 0,
-      lm: msgs && msgs.length > 0 ? msgs[msgs.length - 1].id : null,
+      lm: msgs?.at(-1)?.id ?? null,
       cc: state.snapshot?.conversations.length ?? 0,
       tc: state.snapshot?.threads.length ?? 0,
       ec: ev?.length ?? 0,
-      lc: ev && ev.length > 0 ? ev[ev.length - 1].cursor : -1,
+      lc: ev?.at(-1)?.cursor ?? -1,
       rs: state.bootstrap?.runner.status,
       ra: state.bootstrap?.runner.startedAt,
       rf: state.bootstrap?.runner.finishedAt,
@@ -315,12 +304,23 @@ export async function createQaLabApp(root: HTMLDivElement) {
       ccli: state.captureCollapsedLaneIds.join(","),
       ccpi: state.capturePinnedLaneIds.join(","),
       er: state.error,
+      el: state.evidenceLoading,
+      ee: state.evidenceError,
+      ep: state.evidence?.evidencePath ?? null,
+      eg: state.evidence?.generatedAt ?? null,
+      ecnt: state.evidence?.entries.length ?? 0,
+      eac: state.evidence?.entries.reduce((sum, entry) => sum + entry.artifacts.length, 0) ?? 0,
+      epr: state.evidence?.producerContext?.rootPath ?? null,
+      esf: state.evidenceStatusFilter,
+      eaf: state.evidenceArtifactFilter,
+      esq: state.evidenceSearchText,
+      ese: state.selectedEvidenceEntryId,
     });
   }
 
   function isSelectOpen(): boolean {
     const active = document.activeElement;
-    return !!active && root.contains(active) && active.tagName === "SELECT";
+    return active !== null && root.contains(active) && active.tagName === "SELECT";
   }
 
   /* ---------- Data fetching ---------- */
@@ -337,6 +337,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
       state.snapshot = snapshot;
       state.latestReport = report.report ?? bootstrap.latestReport;
       state.scenarioRun = outcomes.run;
+      if (!state.evidencePathDraft.trim() && bootstrap.runner.artifacts?.evidencePath) {
+        state.evidencePathDraft = bootstrap.runner.artifacts.evidencePath;
+      }
       if (!state.runnerDraft || !state.runnerDraftDirty) {
         state.runnerDraft = {
           ...bootstrap.runner.selection,
@@ -344,8 +347,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         };
         state.runnerDraftDirty = false;
       }
-      if (!state.selectedConversationId) {
-        state.selectedConversationId = snapshot.conversations[0]?.id ?? null;
+      if (!state.selectedConversationKey) {
+        const firstConversation = snapshot.conversations[0];
+        state.selectedConversationKey = firstConversation
+          ? conversationSelectionKey(firstConversation)
+          : null;
       }
       if (!state.selectedScenarioId) {
         state.selectedScenarioId = bootstrap.scenarios[0]?.id ?? null;
@@ -557,7 +563,13 @@ export async function createQaLabApp(root: HTMLDivElement) {
     state.error = null;
     render();
     try {
+      const selectedConversation = findConversationBySelectionKey(
+        state.snapshot?.conversations ?? [],
+        state.selectedConversationKey,
+      );
+      const accountId = selectedConversation?.accountId ?? "default";
       await postJson("/api/inbound/message", {
+        accountId,
         conversation: {
           id: conversationId,
           kind: state.composer.conversationKind,
@@ -568,7 +580,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
         text,
         ...(state.selectedThreadId ? { threadId: state.selectedThreadId } : {}),
       });
-      state.selectedConversationId = conversationId;
+      state.selectedConversationKey = conversationSelectionKey({
+        accountId,
+        id: conversationId,
+        kind: state.composer.conversationKind,
+      });
       state.composer.text = "";
       chatScrollLocked = true;
       await refresh();
@@ -612,6 +628,37 @@ export async function createQaLabApp(root: HTMLDivElement) {
       render();
     } finally {
       state.busy = false;
+      render();
+    }
+  }
+
+  async function loadEvidence(pathOverride?: string) {
+    const evidencePath = (pathOverride ?? state.evidencePathDraft).trim();
+    if (!evidencePath) {
+      state.evidenceError = "Evidence path is required.";
+      render();
+      return;
+    }
+    state.evidenceLoading = true;
+    state.evidenceError = null;
+    render();
+    try {
+      const payload = await getJson<EvidenceEnvelope>(
+        `/api/evidence?path=${encodeURIComponent(evidencePath)}`,
+      );
+      state.evidence = payload.evidence;
+      state.evidencePathDraft = payload.evidence?.evidencePath ?? evidencePath;
+      state.selectedEvidenceEntryId = payload.evidence?.entries[0]?.id ?? null;
+      const url = new URL(window.location.href);
+      url.pathname = "/evidence";
+      url.searchParams.set("path", state.evidencePathDraft);
+      window.history.replaceState(null, "", `${url.pathname}${url.search}`);
+    } catch (error) {
+      state.evidence = null;
+      state.selectedEvidenceEntryId = null;
+      state.evidenceError = formatErrorMessage(error);
+    } finally {
+      state.evidenceLoading = false;
       render();
     }
   }
@@ -756,9 +803,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
     });
 
     /* Conversation chips */
-    root.querySelectorAll<HTMLElement>("[data-conversation-id]").forEach((node) => {
+    root.querySelectorAll<HTMLElement>("[data-conversation-key]").forEach((node) => {
       node.addEventListener("click", () => {
-        state.selectedConversationId = node.dataset.conversationId ?? null;
+        state.selectedConversationKey = node.dataset.conversationKey ?? null;
         state.selectedThreadId = null;
         if (state.activeTab !== "chat") {
           state.activeTab = "chat";
@@ -775,9 +822,9 @@ export async function createQaLabApp(root: HTMLDivElement) {
           state.selectedThreadId = null;
         } else {
           state.selectedThreadId = val ?? null;
-          const conv = node.dataset.threadConv;
-          if (conv) {
-            state.selectedConversationId = conv;
+          const conversationKey = node.dataset.threadConversationKey;
+          if (conversationKey) {
+            state.selectedConversationKey = conversationKey;
           }
         }
         render();
@@ -831,6 +878,19 @@ export async function createQaLabApp(root: HTMLDivElement) {
     root
       .querySelector<HTMLElement>("[data-action='download-report']")
       ?.addEventListener("click", downloadReport);
+    root
+      .querySelector<HTMLElement>("[data-action='load-evidence']")
+      ?.addEventListener("click", () => void loadEvidence());
+    root
+      .querySelector<HTMLElement>("[data-action='open-run-evidence']")
+      ?.addEventListener("click", () => {
+        const evidencePath = state.bootstrap?.runner.artifacts?.evidencePath;
+        if (!evidencePath) {
+          return;
+        }
+        state.activeTab = "evidence";
+        void loadEvidence(evidencePath);
+      });
 
     /* Scenario All/None */
     root
@@ -898,6 +958,53 @@ export async function createQaLabApp(root: HTMLDivElement) {
       }));
     });
 
+    root.querySelector<HTMLInputElement>("#evidence-path")?.addEventListener("input", (e) => {
+      state.evidencePathDraft = (e.currentTarget as HTMLInputElement).value;
+    });
+    root.querySelector<HTMLInputElement>("#evidence-path")?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void loadEvidence();
+      }
+    });
+    root
+      .querySelector<HTMLSelectElement>("#evidence-status-filter")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.evidenceStatusFilter =
+          value === "pass" || value === "fail" || value === "blocked" || value === "skipped"
+            ? value
+            : "all";
+        state.selectedEvidenceEntryId = null;
+        render();
+      });
+    root
+      .querySelector<HTMLSelectElement>("#evidence-artifact-filter")
+      ?.addEventListener("change", (e) => {
+        const value = (e.currentTarget as HTMLSelectElement).value;
+        state.evidenceArtifactFilter =
+          value === "image" ||
+          value === "video" ||
+          value === "json" ||
+          value === "text" ||
+          value === "file"
+            ? value
+            : "all";
+        state.selectedEvidenceEntryId = null;
+        render();
+      });
+    root.querySelector<HTMLInputElement>("#evidence-search")?.addEventListener("input", (e) => {
+      state.evidenceSearchText = (e.currentTarget as HTMLInputElement).value;
+      state.selectedEvidenceEntryId = null;
+      render();
+    });
+    root.querySelectorAll<HTMLElement>("[data-evidence-entry-id]").forEach((node) => {
+      node.addEventListener("click", () => {
+        state.selectedEvidenceEntryId = node.dataset.evidenceEntryId ?? null;
+        render();
+      });
+    });
+
     root.querySelector<HTMLSelectElement>("#capture-session")?.addEventListener("change", (e) => {
       state.selectedCaptureSessionIds = readMultiSelect(e.currentTarget as HTMLSelectElement);
       state.selectedCaptureEventKey = null;
@@ -958,28 +1065,29 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     root
       .querySelector<HTMLButtonElement>("#capture-delete-selected-sessions")
-      ?.addEventListener("click", async () => {
-        if (state.selectedCaptureSessionIds.length === 0) {
-          return;
-        }
-        const confirmed = window.confirm(
-          `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
-            state.selectedCaptureSessionIds.length === 1 ? "" : "s"
-          }?`,
-        );
-        if (!confirmed) {
-          return;
-        }
-        await postJson("/api/capture/delete-sessions", {
-          sessionIds: state.selectedCaptureSessionIds,
-        });
-        state.selectedCaptureSessionIds = [];
-        state.selectedCaptureEventKey = null;
-        await refresh();
+      ?.addEventListener("click", () => {
+        void (async () => {
+          if (state.selectedCaptureSessionIds.length === 0) {
+            return;
+          }
+          const confirmed = window.confirm(
+            `Delete ${state.selectedCaptureSessionIds.length} selected capture session${
+              state.selectedCaptureSessionIds.length === 1 ? "" : "s"
+            }?`,
+          );
+          if (!confirmed) {
+            return;
+          }
+          await postJson("/api/capture/delete-sessions", {
+            sessionIds: state.selectedCaptureSessionIds,
+          });
+          state.selectedCaptureSessionIds = [];
+          state.selectedCaptureEventKey = null;
+          await refresh();
+        })();
       });
-    root
-      .querySelector<HTMLButtonElement>("#capture-purge-all")
-      ?.addEventListener("click", async () => {
+    root.querySelector<HTMLButtonElement>("#capture-purge-all")?.addEventListener("click", () => {
+      void (async () => {
         const confirmed = window.confirm("Purge all captured sessions, events, and blobs?");
         if (!confirmed) {
           return;
@@ -988,7 +1096,8 @@ export async function createQaLabApp(root: HTMLDivElement) {
         state.selectedCaptureSessionIds = [];
         state.selectedCaptureEventKey = null;
         await refresh();
-      });
+      })();
+    });
     root.querySelector<HTMLSelectElement>("#capture-preset")?.addEventListener("change", (e) => {
       state.captureQueryPreset = (e.currentTarget as HTMLSelectElement)
         .value as UiState["captureQueryPreset"];
@@ -1327,12 +1436,12 @@ export async function createQaLabApp(root: HTMLDivElement) {
       });
     });
     root.querySelectorAll<HTMLButtonElement>("[data-copy-text]").forEach((node) => {
-      node.addEventListener("click", async () => {
+      node.addEventListener("click", () => {
         const text = node.dataset.copyText ?? "";
         if (!text) {
           return;
         }
-        await navigator.clipboard.writeText(text).catch(() => undefined);
+        void navigator.clipboard.writeText(text).catch(() => undefined);
       });
     });
     root.querySelectorAll<HTMLElement>("[data-capture-sparkline-window]").forEach((node) => {
@@ -1640,7 +1749,11 @@ export async function createQaLabApp(root: HTMLDivElement) {
 
   render();
   await refresh();
+  if (initialEvidencePath) {
+    await loadEvidence(initialEvidencePath);
+  }
   void pollUiVersion();
   setInterval(() => void refresh(), 1_000);
   setInterval(() => void pollUiVersion(), 1_000);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

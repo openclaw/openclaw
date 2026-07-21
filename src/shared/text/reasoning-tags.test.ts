@@ -1,3 +1,4 @@
+// Reasoning tag tests cover parsing and stripping reasoning tag blocks.
 import { describe, expect, it } from "vitest";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
@@ -54,6 +55,21 @@ describe("stripReasoningTagsFromText", () => {
         name: "strips antml namespaced thinking tags",
         input: "Before <antml:thinking>secret</antml:thinking> after",
         expected: "Before  after",
+      },
+      {
+        name: "strips mm namespaced think tags (MiniMax)",
+        input: "<mm:think>internal reasoning</mm:think>Visible answer.",
+        expected: "Visible answer.",
+      },
+      {
+        name: "strips mm namespaced thinking/thought variants",
+        input: "<mm:thinking>x</mm:thinking>A<mm:thought>y</mm:thought>B",
+        expected: "AB",
+      },
+      {
+        name: "recovers visible text after truncated mm:think opening tag",
+        input: "leaked preamble</mm:think>Real answer.",
+        expected: "Real answer.",
       },
       {
         name: "strips multiple reasoning blocks",

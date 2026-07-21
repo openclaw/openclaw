@@ -1,6 +1,9 @@
+// Live image provider tests verify real provider calls downscale large local
+// images before sending them to OpenAI or Anthropic.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -15,9 +18,11 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
-} from "../../plugin-sdk/test-env.js";
+} from "../embedded-agent-helpers/failover-matches.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
-import { createImageTool, testing } from "./image-tool.js";
+import { isLiveAuthDrift } from "../live-test-provider-drift.test-support.js";
+import { createImageTool } from "./image-tool.js";
+import { testing } from "./image-tool.test-support.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
@@ -80,13 +85,15 @@ function createLargeCenterRedPng(size: number): Buffer {
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  // The provider hook receives JPEG bytes after optimization; parsing SOF
+  // markers keeps the downscale proof independent from image libraries.
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) {
       offset += 1;
       continue;
     }
-    const marker = buffer[offset + 1];
+    const marker = expectDefined(buffer[offset + 1], "buffer[offset + 1] test invariant");
     offset += 2;
     if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
       continue;
@@ -111,6 +118,7 @@ function isSkippableLiveError(error: unknown): boolean {
   const message = formatLiveError(error);
   return (
     isBillingErrorMessage(message) ||
+    isLiveAuthDrift(message) ||
     isOverloadedErrorMessage(message) ||
     isServerErrorMessage(message) ||
     /timed out|operation was aborted/i.test(message)

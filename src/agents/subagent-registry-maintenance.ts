@@ -1,3 +1,8 @@
+/**
+ * Session-store maintenance protection for subagent runs.
+ * Preserves child session keys while runs are active, pending delivery, or
+ * awaiting completion announces so pruning cannot delete needed transcripts.
+ */
 import { registerSessionMaintenancePreserveKeysProvider } from "../config/sessions/store-maintenance-preserve.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -21,6 +26,11 @@ function isAwaitingCompletionAnnounceForMaintenance(entry: SubagentRunRecord): b
 }
 
 function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
+  if (entry.killReconciliation) {
+    // The killed row is a reconciliation tombstone. Its session owns the
+    // provider result until the sweeper accepts completion or finalizes cancellation.
+    return true;
+  }
   if (isCleanupCompleteForMaintenance(entry)) {
     return false;
   }
@@ -32,7 +42,8 @@ function shouldPreserveForMaintenance(entry: SubagentRunRecord): boolean {
   );
 }
 
-export function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
+/** Lists child session keys protected from session-store maintenance pruning. */
+function listSessionMaintenanceProtectedSubagentSessionKeys(): string[] {
   const keys = new Set<string>();
   for (const entry of getSubagentRunsSnapshotForRead(subagentRuns).values()) {
     if (!shouldPreserveForMaintenance(entry)) {

@@ -1,3 +1,4 @@
+// Covers task-flow registry store persistence, events, and state queries.
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,14 +8,11 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createTaskFlowForTask,
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import {
   loadTaskFlowRegistryStateFromSqlite,
   saveTaskFlowRegistryStateToSqlite,
@@ -25,6 +23,20 @@ import {
   type TaskFlowRecord,
 } from "./task-flow-registry.types.js";
 import { parseTaskNotifyPolicy } from "./task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 type TaskFlowRegistryTestDatabase = Pick<OpenClawStateKyselyDatabase, "flow_runs">;
 
@@ -151,8 +163,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("rejects corrupt persisted flow rows during sqlite restore", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -176,8 +187,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("drops invalid requester origins during sqlite restore", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -206,8 +216,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -252,8 +261,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("round-trips explicit json null through sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -274,8 +282,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("prunes large sqlite snapshots without binding every flow id at once", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const flows = new Map<string, TaskFlowRecord>();
@@ -305,8 +312,7 @@ describe("task-flow-registry store runtime", () => {
     if (process.platform === "win32") {
       return;
     }
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       createManagedTaskFlow({

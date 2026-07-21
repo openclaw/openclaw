@@ -1,3 +1,4 @@
+// Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { mapCaptureEventForQa, probeTcpReachability } from "./lab-server-capture.js";
@@ -18,7 +19,7 @@ describe("qa-lab server capture helpers", () => {
       metaJson: JSON.stringify({
         provider: "openai",
         api: "responses",
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         captureOrigin: "shared-fetch",
       }),
     }) as ReturnType<typeof mapCaptureEventForQa> & { flowId?: string };
@@ -26,7 +27,7 @@ describe("qa-lab server capture helpers", () => {
     expect(record.payloadPreview).toBe('{"hello":"world"}');
     expect(record.provider).toBe("openai");
     expect(record.api).toBe("responses");
-    expect(record.model).toBe("gpt-5.5");
+    expect(record.model).toBe("gpt-5.6-luna");
     expect(record.captureOrigin).toBe("shared-fetch");
   });
 
@@ -41,9 +42,9 @@ describe("qa-lab server capture helpers", () => {
     });
     cleanups.push(
       async () =>
-        await new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        ),
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        }),
     );
 
     const address = server.address();

@@ -1,3 +1,4 @@
+// Coverage for Kilocode proxy wrapper headers and reasoning payloads.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -17,6 +18,8 @@ function applyAndCapture(params: {
   modelId: string;
   callerHeaders?: Record<string, string>;
 }) {
+  // Capture headers after wrapper composition so caller-provided headers and
+  // environment defaults can be compared against the final transport options.
   const captured: ExtraParamsCapture<Record<string, unknown>> = { payload: {} };
   const baseStreamFn: StreamFn = (model, _context, options) => {
     captured.headers = options?.headers;
@@ -25,7 +28,10 @@ function applyAndCapture(params: {
   };
   const streamFn =
     params.provider === "kilocode"
-      ? createKilocodeWrapper(baseStreamFn, params.modelId === "kilo/auto" ? undefined : "high")
+      ? createKilocodeWrapper(
+          baseStreamFn,
+          params.modelId === "kilo-auto/balanced" ? undefined : "high",
+        )
       : baseStreamFn;
 
   const context: Context = { messages: [] };
@@ -49,6 +55,8 @@ function applyAndCaptureReasoning(params: {
   initialPayload?: Record<string, unknown>;
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
 }) {
+  // Reasoning is injected by the proxy wrapper before payload dispatch, so tests
+  // inspect the captured request body rather than mock provider responses.
   const captured: ExtraParamsCapture<Record<string, unknown>> = {
     payload: { ...params.initialPayload },
   };
@@ -57,7 +65,7 @@ function applyAndCaptureReasoning(params: {
     return {} as ReturnType<StreamFn>;
   };
   const thinkingLevel =
-    params.modelId === "kilo/auto" || isProxyReasoningUnsupported(params.modelId)
+    params.modelId === "kilo-auto/balanced" || isProxyReasoningUnsupported(params.modelId)
       ? undefined
       : (params.thinkingLevel ?? "high");
   const streamFn = createKilocodeWrapper(baseStreamFn, thinkingLevel);
@@ -137,14 +145,15 @@ describe("extra-params: Kilocode wrapper", () => {
   });
 });
 
-describe("extra-params: Kilocode kilo/auto reasoning", () => {
-  it("does not inject reasoning.effort for kilo/auto", () => {
+describe("extra-params: Kilocode kilo-auto/balanced reasoning", () => {
+  it("does not inject reasoning.effort for kilo-auto/balanced", () => {
     const capturedPayload = applyAndCaptureReasoning({
-      modelId: "kilo/auto",
+      modelId: "kilo-auto/balanced",
       initialPayload: { reasoning_effort: "high" },
     });
 
-    // kilo/auto should not have reasoning injected
+    // kilo-auto/balanced chooses its own downstream model, so reasoning effort would be
+    // unsafe to inject.
     expect(capturedPayload?.reasoning).toBeUndefined();
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });
@@ -173,7 +182,8 @@ describe("extra-params: Kilocode kilo/auto reasoning", () => {
       thinkingLevel: "high",
     });
 
-    // x-ai models reject reasoning.effort — should be skipped
+    // x-ai models reject reasoning.effort, so strip both normalized and legacy
+    // aliases before the request leaves the wrapper.
     expect(capturedPayload?.reasoning).toBeUndefined();
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
   });

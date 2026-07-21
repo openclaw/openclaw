@@ -1,6 +1,12 @@
+// Covers provider hook structured failover signals.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFailoverReasonFromError } from "../failover-error.js";
-import { classifyFailoverSignal } from "./errors.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
+import {
+  classifyAssistantFailoverReason,
+  classifyProviderRuntimeFailureKind,
+  classifyFailoverSignal,
+} from "./errors.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   classifyProviderPluginError: vi.fn(),
@@ -20,6 +26,8 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("lets provider hooks refine ambiguous auth statuses from stable codes", () => {
+    // HTTP 403 is ambiguous; provider-owned stable codes can refine it to
+    // billing or rate-limit without weakening default auth handling.
     providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
       if (
         context.provider === "demo-provider" &&
@@ -62,6 +70,8 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("does not call the direct provider hook for unstructured classified messages", () => {
+    // Plain message classifiers run first; provider hooks only see structured
+    // descriptors where a plugin can make a reliable decision.
     expect(
       classifyFailoverSignal({
         provider: "demo-provider",
@@ -84,6 +94,8 @@ describe("provider failover hook structured signals", () => {
   });
 
   it("passes nested provider error types through failover error normalization", () => {
+    // SDK wrappers often put the provider code under error.type; normalization
+    // should preserve that code for provider hooks.
     providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
       return context.provider === "demo-provider" &&
         context.errorType === "PROVIDER_QUOTA_EXHAUSTED"
@@ -103,6 +115,60 @@ describe("provider failover hook structured signals", () => {
       }),
     ).toBe("billing");
   });
+
+  it.each([
+    { errorType: "rate_limit_error", reason: "rate_limit", runtimeKind: "rate_limit" },
+    { errorType: "api_error", reason: "server_error", runtimeKind: "unclassified" },
+  ] as const)(
+    "classifies message-less Anthropic $errorType assistant failures",
+    ({ errorType, reason, runtimeKind }) => {
+      providerRuntimeMocks.classifyProviderPluginError.mockImplementation((context) => {
+        if (context.provider !== "anthropic") {
+          return undefined;
+        }
+        if (context.errorType === "rate_limit_error") {
+          return "rate_limit";
+        }
+        return context.errorType === "api_error" ? "server_error" : undefined;
+      });
+
+      const message = makeAssistantMessageFixture({
+        provider: "anthropic",
+        errorMessage: undefined,
+        errorType,
+        content: [],
+      });
+
+      expect(classifyAssistantFailoverReason(message)).toBe(reason);
+      expect(
+        classifyProviderRuntimeFailureKind({
+          provider: "anthropic",
+          message: "",
+          errorType,
+        }),
+      ).toBe(runtimeKind);
+    },
+  );
+
+  it.each([
+    { provider: "google", code: "SERVER_ERROR" },
+    { provider: "anthropic", code: "INSUFFICIENT_QUOTA" },
+    { provider: "openai", code: "INTERNAL" },
+    { provider: "openai", code: "DEADLINE_EXCEEDED" },
+    { provider: "anthropic", code: "UNAVAILABLE" },
+    { provider: "google", code: "API_ERROR" },
+    { provider: "google", code: "RATE_LIMIT_ERROR" },
+  ] as const)(
+    "does not apply provider-native $code semantics to non-owner $provider",
+    ({ provider, code }) => {
+      providerRuntimeMocks.classifyProviderPluginError.mockReturnValue(undefined);
+
+      expect(classifyFailoverSignal({ provider, code, message: "" })).toBeNull();
+      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).toBe(
+        "unclassified",
+      );
+    },
+  );
 
   it("does not promote generic SDK type strings as structured provider descriptors", () => {
     providerRuntimeMocks.classifyProviderPluginError.mockReturnValue("billing");

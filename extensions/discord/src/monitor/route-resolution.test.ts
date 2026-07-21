@@ -1,3 +1,4 @@
+// Discord tests cover route resolution plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
@@ -114,6 +115,7 @@ describe("discord route resolution helpers", () => {
       agentId: "worker",
       channel: "discord",
       accountId: "default",
+      dmScope: "main",
       sessionKey: "agent:worker:discord:channel:c1",
       mainSessionKey: "agent:worker:main",
       lastRoutePolicy: "session",
@@ -139,6 +141,7 @@ describe("discord route resolution helpers", () => {
       agentId: "worker",
       channel: "discord",
       accountId: "default",
+      dmScope: "main",
       sessionKey: "agent:worker:discord:direct:user-1",
       mainSessionKey: "agent:worker:main",
       lastRoutePolicy: "session",

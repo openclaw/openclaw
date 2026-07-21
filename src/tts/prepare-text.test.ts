@@ -1,3 +1,4 @@
+// TTS prepare text tests cover text cleanup before speech synthesis.
 import { describe, expect, it } from "vitest";
 import { stripMarkdown } from "../shared/text/strip-markdown.js";
 
@@ -34,6 +35,15 @@ describe("TTS text preparation – stripMarkdown", () => {
     expect(stripMarkdown("Use `consistent hashing` for distribution")).toBe(
       "Use consistent hashing for distribution",
     );
+  });
+
+  it("keeps explicit link destinations readable by default", () => {
+    expect(stripMarkdown("Read the [download](https://example.com/file)")).toBe(
+      "Read the download (https://example.com/file)",
+    );
+    expect(
+      stripMarkdown("Read the [download](https://example.com/file)", { linkStyle: "label" }),
+    ).toBe("Read the download");
   });
 
   it("handles a typical LLM reply with mixed markdown", () => {

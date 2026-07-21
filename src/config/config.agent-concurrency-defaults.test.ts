@@ -1,3 +1,4 @@
+// Verifies agent concurrency config defaults and limits.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
@@ -28,7 +29,6 @@ describe("agent concurrency defaults", () => {
     };
     expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
     expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
-    expect(resolveCronMaxConcurrentRuns({ maxConcurrentRuns: 0 })).toBe(1);
   });
 
   it("accepts subagent spawn depth and per-agent child limits", () => {

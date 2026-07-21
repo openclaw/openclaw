@@ -1,15 +1,19 @@
+// Verifies session write locks handle reentrancy, stale locks, and symlinked paths.
+import { spawn } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { SessionWriteLockStaleError } from "./session-write-lock-error.js";
 
 const FAKE_STARTTIME = 12345;
-let testing: typeof import("./session-write-lock.js").testing;
+let testing: typeof import("./session-write-lock.test-support.js").testing;
 let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSessionWriteLock;
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
-let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
+let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.test-support.js").resetSessionWriteLockStateForTest;
 let resolveSessionLockMaxHoldFromTimeout: typeof import("./session-write-lock.js").resolveSessionLockMaxHoldFromTimeout;
 let resolveSessionWriteLockAcquireTimeoutMs: typeof import("./session-write-lock.js").resolveSessionWriteLockAcquireTimeoutMs;
 let resolveSessionWriteLockOptions: typeof import("./session-write-lock.js").resolveSessionWriteLockOptions;
@@ -19,6 +23,7 @@ async function expectLockRemovedOnlyAfterFinalRelease(params: {
   firstLock: { release: () => Promise<void> };
   secondLock: { release: () => Promise<void> };
 }) {
+  // Reentrant locks share one file; only the final release removes it.
   await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
   await params.firstLock.release();
   await expect(fs.access(params.lockPath)).resolves.toBeUndefined();
@@ -85,6 +90,19 @@ async function writeCurrentProcessLock(lockPath: string, extra?: Record<string, 
   );
 }
 
+function readFilePathToString(filePath: Parameters<typeof fs.readFile>[0]): string | undefined {
+  if (typeof filePath === "string") {
+    return filePath;
+  }
+  if (Buffer.isBuffer(filePath)) {
+    return filePath.toString("utf8");
+  }
+  if (filePath instanceof URL) {
+    return fileURLToPath(filePath);
+  }
+  return undefined;
+}
+
 async function withSymlinkedSessionPaths(
   run: (params: {
     sessionReal: string;
@@ -93,6 +111,7 @@ async function withSymlinkedSessionPaths(
     linkLockPath: string;
   }) => Promise<void>,
 ) {
+  // Symlinked session paths must resolve to the same lock ownership boundary.
   if (process.platform === "win32") {
     return;
   }
@@ -119,12 +138,13 @@ async function withSymlinkedSessionPaths(
 
 async function expectActiveInProcessLockIsNotReclaimed(params?: {
   legacyStarttime?: unknown;
+  createdAt?: string;
 }): Promise<void> {
   await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
     const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
     const lockPayload = {
       pid: process.pid,
-      createdAt: new Date().toISOString(),
+      createdAt: params?.createdAt ?? new Date().toISOString(),
       ...(params && "legacyStarttime" in params ? { starttime: params.legacyStarttime } : {}),
     };
     await fs.writeFile(lockPath, JSON.stringify(lockPayload), "utf8");
@@ -143,14 +163,14 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 describe("acquireSessionWriteLock", () => {
   beforeAll(async () => {
     ({
-      testing,
       acquireSessionWriteLock,
       cleanStaleLockFiles,
-      resetSessionWriteLockStateForTest,
       resolveSessionLockMaxHoldFromTimeout,
       resolveSessionWriteLockAcquireTimeoutMs,
       resolveSessionWriteLockOptions,
     } = await import("./session-write-lock.js"));
+    ({ testing, resetSessionWriteLockStateForTest } =
+      await import("./session-write-lock.test-support.js"));
   });
 
   afterEach(() => {
@@ -221,6 +241,29 @@ describe("acquireSessionWriteLock", () => {
         acquireSessionWriteLock({ sessionFile, timeoutMs: 5, staleMs: 60_000 }),
       ).rejects.toThrow(/session file locked/);
       await lock.release();
+    });
+  });
+
+  it("cancels a contended infinite acquisition without leaving a lock waiter", async () => {
+    await withTempSessionLockFile(async ({ sessionFile }) => {
+      const heldLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      const abortController = new AbortController();
+      const abortError = new Error("stop requested");
+      abortError.name = "AbortError";
+      const pendingLock = acquireSessionWriteLock({
+        sessionFile,
+        timeoutMs: Number.POSITIVE_INFINITY,
+        signal: abortController.signal,
+      });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 20);
+      });
+      abortController.abort(abortError);
+
+      await expect(pendingLock).rejects.toBe(abortError);
+      await heldLock.release();
+      const nextLock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await nextLock.release();
     });
   });
 
@@ -410,6 +453,203 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("does not report or remove active in-process locks that pass staleMs", async () => {
+    await expectActiveInProcessLockIsNotReclaimed({
+      createdAt: new Date(Date.now() - 120_000).toISOString(),
+    });
+  });
+
+  it("reports live OpenClaw-owned stale locks without removing them", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      try {
+        await expect(
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 }),
+        ).rejects.toMatchObject({
+          name: "SessionWriteLockStaleError",
+          staleReasons: ["too-old"],
+        });
+        await expect(
+          acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 }),
+        ).rejects.toBeInstanceOf(SessionWriteLockStaleError);
+        await expect(fs.access(lockPath)).resolves.toBeUndefined();
+      } finally {
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
+  it("retries when a stale lock report disappears before diagnostics", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath,
+        options,
+      ) => {
+        const lockFilePath = readFilePathToString(filePath);
+        if (lockFilePath && path.basename(lockFilePath) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(lockFilePath, { force: true });
+            await fs.rm(lockPath, { force: true });
+            throw Object.assign(new Error("lock disappeared"), { code: "ENOENT" });
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        readFileSpy.mockRestore();
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
+  it("retries when a stale lock report is replaced before diagnostics", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath,
+        options,
+      ) => {
+        const lockFilePath = readFilePathToString(filePath);
+        if (lockFilePath && path.basename(lockFilePath) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(lockFilePath, { force: true });
+            await fs.rm(lockPath, { force: true });
+            await fs.writeFile(
+              lockFilePath,
+              JSON.stringify({ pid: owner.pid, createdAt: new Date().toISOString() }),
+              "utf8",
+            );
+            setTimeout(() => {
+              void fs.rm(lockFilePath, { force: true });
+            }, 10);
+            throw Object.assign(new Error("lock disappeared"), { code: "ENOENT" });
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10 });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        readFileSpy.mockRestore();
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
+  it("retries when a stale lock report is replaced by a fresh payload-less lock", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 120_000).toISOString(),
+        }),
+        "utf8",
+      );
+
+      const originalReadFile = fs.readFile.bind(fs);
+      let lockReads = 0;
+      const readFileSpy = vi.spyOn(fs, "readFile").mockImplementation((async (
+        filePath,
+        options,
+      ) => {
+        const lockFilePath = readFilePathToString(filePath);
+        if (lockFilePath && path.basename(lockFilePath) === path.basename(lockPath)) {
+          lockReads += 1;
+          if (lockReads === 3) {
+            await fs.rm(lockFilePath, { force: true });
+            await fs.writeFile(lockFilePath, "", "utf8");
+            setTimeout(() => {
+              void fs.rm(lockFilePath, { force: true });
+            }, 10);
+          }
+        }
+        return await originalReadFile(filePath, options as never);
+      }) as typeof fs.readFile);
+
+      try {
+        // Keep the original lock stale while the replacement stays fresh for the full acquire
+        // budget. Worker scheduling must not turn the replacement into another stale report.
+        const lock = await acquireSessionWriteLock({
+          sessionFile,
+          timeoutMs: 800,
+          staleMs: 60_000,
+        });
+        await lock.release();
+        expect(lockReads).toBeGreaterThanOrEqual(3);
+        await expectPathMissing(lockPath);
+      } finally {
+        readFileSpy.mockRestore();
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
@@ -459,56 +699,17 @@ describe("acquireSessionWriteLock", () => {
 
   it("resolves the session write-lock acquire timeout", () => {
     expect(resolveSessionWriteLockAcquireTimeoutMs()).toBe(60_000);
-    expect(
-      resolveSessionWriteLockAcquireTimeoutMs({
-        session: { writeLock: { acquireTimeoutMs: 90_000 } },
-      }),
-    ).toBe(90_000);
-    expect(
-      resolveSessionWriteLockAcquireTimeoutMs({
-        session: { writeLock: { acquireTimeoutMs: 0 } },
-      }),
-    ).toBe(60_000);
   });
 
-  it("resolves session write-lock stale and max-hold policy", () => {
+  it("lets session write-lock env override built-in defaults for emergency tuning", () => {
     expect(
-      resolveSessionWriteLockOptions({
-        session: {
-          writeLock: {
-            acquireTimeoutMs: 90_000,
-            staleMs: 45_000,
-            maxHoldMs: 30_000,
-          },
+      resolveSessionWriteLockOptions(undefined, {
+        env: {
+          OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "120000",
+          OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000",
+          OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "50000",
         },
       }),
-    ).toEqual({
-      timeoutMs: 90_000,
-      staleMs: 45_000,
-      maxHoldMs: 30_000,
-    });
-  });
-
-  it("lets session write-lock env override config for emergency tuning", () => {
-    expect(
-      resolveSessionWriteLockOptions(
-        {
-          session: {
-            writeLock: {
-              acquireTimeoutMs: 90_000,
-              staleMs: 45_000,
-              maxHoldMs: 30_000,
-            },
-          },
-        },
-        {
-          env: {
-            OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "120000",
-            OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000",
-            OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "50000",
-          },
-        },
-      ),
     ).toEqual({
       timeoutMs: 120_000,
       staleMs: 60_000,
@@ -518,28 +719,17 @@ describe("acquireSessionWriteLock", () => {
 
   it("ignores non-decimal and unsafe session write-lock env values", () => {
     expect(
-      resolveSessionWriteLockOptions(
-        {
-          session: {
-            writeLock: {
-              acquireTimeoutMs: 90_000,
-              staleMs: 45_000,
-              maxHoldMs: 30_000,
-            },
-          },
+      resolveSessionWriteLockOptions(undefined, {
+        env: {
+          OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "1e3",
+          OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "0x1000",
+          OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "9007199254740993",
         },
-        {
-          env: {
-            OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS: "1e3",
-            OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "0x1000",
-            OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS: "9007199254740993",
-          },
-        },
-      ),
+      }),
     ).toEqual({
-      timeoutMs: 90_000,
-      staleMs: 45_000,
-      maxHoldMs: 30_000,
+      timeoutMs: 60_000,
+      staleMs: 30 * 60_000,
+      maxHoldMs: 5 * 60_000,
     });
   });
 
@@ -555,6 +745,14 @@ describe("acquireSessionWriteLock", () => {
       timeoutMs: Number.POSITIVE_INFINITY,
       staleMs: 30 * 60 * 1000,
     });
+  });
+
+  it("preserves one acquire timeout budget across retries", () => {
+    expect(testing.resolveRemainingAcquireTimeoutMs(500, 1_000, 1_125)).toBe(375);
+    expect(testing.resolveRemainingAcquireTimeoutMs(500, 1_000, 1_500)).toBe(0);
+    expect(testing.resolveRemainingAcquireTimeoutMs(Number.POSITIVE_INFINITY, 1_000, 9_000)).toBe(
+      Number.POSITIVE_INFINITY,
+    );
   });
 
   it("uses resolved stale policy when cleaning stale lock files", async () => {
@@ -574,18 +772,8 @@ describe("acquireSessionWriteLock", () => {
         "utf8",
       );
 
-      const configOnly = await cleanStaleLockFiles({
-        sessionsDir,
-        config: { session: { writeLock: { staleMs: 30_000 } } },
-        nowMs,
-        removeStale: false,
-        readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
-      });
-      expect(configOnly.locks[0]?.stale).toBe(true);
-
       const envOverride = await cleanStaleLockFiles({
         sessionsDir,
-        config: { session: { writeLock: { staleMs: 30_000 } } },
         env: { OPENCLAW_SESSION_WRITE_LOCK_STALE_MS: "60000" },
         nowMs,
         removeStale: false,
@@ -1265,3 +1453,4 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

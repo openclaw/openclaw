@@ -1,3 +1,4 @@
+// Tests private-route command persistence and timestamp bounds.
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -64,6 +65,7 @@ function createOwnerDerivedApprovalChannelPlugin(params: {
       id: params.id,
       label: params.id,
     }),
+    messaging: { targetPrefixes: params.ownerPrefixes },
     approvalCapability: {
       native: {
         describeDeliveryCapabilities: vi.fn(({ cfg }) => {
@@ -266,7 +268,7 @@ describe("resolvePrivateCommandRouteTargets", () => {
     ]);
   });
 
-  it("routes a Discord group command to the Telegram owner without Telegram exec approvers", async () => {
+  it("routes a Discord group command through Telegram's declared tg owner prefix", async () => {
     registerApprovalChannelPlugins([
       createApprovalChannelPlugin({
         id: "discord",
@@ -281,7 +283,7 @@ describe("resolvePrivateCommandRouteTargets", () => {
     const targets = await resolvePrivateCommandRouteTargets({
       commandParams: buildCommandParams({
         commands: {
-          ownerAllowFrom: ["telegram:849985193"],
+          ownerAllowFrom: ["tg:849985193"],
         },
         channels: {
           telegram: {

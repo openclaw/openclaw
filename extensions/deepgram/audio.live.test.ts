@@ -1,8 +1,9 @@
+// Deepgram tests cover audio plugin behavior.
 import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { transcribeDeepgramAudio } from "./audio.js";
 import { buildDeepgramRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";

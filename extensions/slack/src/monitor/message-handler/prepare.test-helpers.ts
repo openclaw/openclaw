@@ -1,7 +1,10 @@
+// Slack helper module supports prepare helpers behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type { App } from "@slack/bolt";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -9,20 +12,23 @@ import type { SlackChannelConfigEntries } from "../channel-config.js";
 import { createSlackMonitorContext } from "../context.js";
 
 export function createInboundSlackTestContext(params: {
+  app?: App;
   cfg: OpenClawConfig;
   appClient?: App["client"];
   defaultRequireMention?: boolean;
   replyToMode?: "off" | "all" | "first" | "batched";
   channelsConfig?: SlackChannelConfigEntries;
-  threadRequireExplicitMention?: boolean;
   dmHistoryLimit?: number;
+  groupDmEnabled?: boolean;
+  channelRuntime?: ChannelRuntimeSurface;
 }) {
   return createSlackMonitorContext({
     cfg: params.cfg,
     accountId: "default",
     botToken: "token",
-    app: { client: params.appClient ?? {} } as App,
+    app: params.app ?? ({ client: params.appClient ?? {} } as App),
     runtime: {} as RuntimeEnv,
+    channelRuntime: params.channelRuntime ?? createPluginRuntimeMock().channel,
     botUserId: "B1",
     botId: "B1",
     teamId: "T1",
@@ -35,7 +41,7 @@ export function createInboundSlackTestContext(params: {
     dmPolicy: "open",
     allowFrom: ["*"],
     allowNameMatching: false,
-    groupDmEnabled: true,
+    groupDmEnabled: params.groupDmEnabled ?? true,
     groupDmChannels: [],
     defaultRequireMention: params.defaultRequireMention ?? true,
     channelsConfig: params.channelsConfig,
@@ -46,7 +52,6 @@ export function createInboundSlackTestContext(params: {
     replyToMode: params.replyToMode ?? "off",
     threadHistoryScope: "thread",
     threadInheritParent: false,
-    threadRequireExplicitMention: params.threadRequireExplicitMention ?? false,
     slashCommand: {
       enabled: false,
       name: "openclaw",
@@ -67,6 +72,7 @@ export function createSlackTestAccount(
   return {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",

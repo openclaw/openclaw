@@ -16,6 +16,18 @@ if [[ ! -f "$FILTER_FILES" ]]; then
   exit 1
 fi
 
+GIT_DIR="$(git rev-parse --git-dir 2>/dev/null || true)"
+if [[ -n "$GIT_DIR" ]] && \
+  { [[ -f "$GIT_DIR/MERGE_HEAD" ]] || \
+    [[ -f "$GIT_DIR/CHERRY_PICK_HEAD" ]] || \
+    [[ -f "$GIT_DIR/REVERT_HEAD" ]] || \
+    [[ -f "$GIT_DIR/REBASE_HEAD" ]] || \
+    [[ -d "$GIT_DIR/rebase-merge" ]] || \
+    [[ -d "$GIT_DIR/rebase-apply" ]]; }; then
+  # Sequencer commits stage the operation result, not just the user's local edits.
+  exit 0
+fi
+
 # Security: avoid option-injection from malicious file names (e.g. "--all", "--force").
 # Robustness: NUL-delimited file list handles spaces/newlines safely.
 # Compatibility: use read loops instead of `mapfile` so this runs on macOS Bash 3.x.
@@ -26,6 +38,17 @@ done < <(git diff --cached --name-only --diff-filter=ACMR -z)
 
 if [ "${#files[@]}" -eq 0 ]; then
   exit 0
+fi
+
+if ! command -v trufflehog >/dev/null 2>&1; then
+  cat >&2 <<'EOF'
+OpenClaw requires TruffleHog for pre-commit secret scanning.
+
+Install it, then retry the commit:
+  macOS: brew install trufflehog
+  Other platforms: https://github.com/trufflesecurity/trufflehog#installation
+EOF
+  exit 1
 fi
 
 restage_files=()
@@ -47,3 +70,22 @@ fi
 if [ "${#restage_files[@]}" -gt 0 ]; then
   git add -- "${restage_files[@]}"
 fi
+
+staged_snapshot="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-trufflehog.XXXXXX")"
+trap 'rm -rf "$staged_snapshot"' EXIT
+for file in "${files[@]}"; do
+  if [[ "$(git cat-file -t ":0:$file")" != "blob" ]]; then
+    continue
+  fi
+  snapshot_path="$staged_snapshot/$file"
+  mkdir -p "${snapshot_path%/*}"
+  git cat-file blob ":0:$file" > "$snapshot_path"
+done
+
+trufflehog \
+  --no-update \
+  --no-color \
+  --results=verified,unknown \
+  --fail \
+  --fail-on-scan-errors \
+  filesystem "$staged_snapshot"

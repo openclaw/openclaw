@@ -1,3 +1,4 @@
+/** Resolves /model directive selections and auth profile overrides. */
 import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
 import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import {
@@ -44,6 +45,7 @@ function resolveStoredNumericProfileModelDirective(params: { raw: string; agentD
   return { modelRaw, profileId, profileProvider: profile.provider };
 }
 
+/** Resolves the requested model/profile override from parsed inline directives. */
 export function resolveModelSelectionFromDirective(params: {
   directives: InlineDirectives;
   cfg: OpenClawConfig;
@@ -54,6 +56,7 @@ export function resolveModelSelectionFromDirective(params: {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: Array<{ provider: string; id?: string; name?: string }>;
   provider: string;
+  agentId?: string;
 }): {
   modelSelection?: ModelDirectiveSelection;
   profileOverride?: string;
@@ -90,6 +93,8 @@ export function resolveModelSelectionFromDirective(params: {
         defaultModel: params.defaultModel,
         aliasIndex: params.aliasIndex,
         allowedModelKeys: params.allowedModelKeys,
+        cfg: params.cfg,
+        agentId: params.agentId,
         rawRuntime: params.directives.rawModelRuntime,
       })
     : null;
@@ -145,6 +150,8 @@ export function resolveModelSelectionFromDirective(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys: params.allowedModelKeys,
+      cfg: params.cfg,
+      agentId: params.agentId,
       rawRuntime: params.directives.rawModelRuntime,
     });
 

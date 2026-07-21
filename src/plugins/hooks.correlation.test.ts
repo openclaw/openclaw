@@ -1,33 +1,22 @@
+// Verifies correlation metadata for plugin hook execution.
 import { spawnSync } from "node:child_process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
-import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
+import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-fixtures.js";
 import { createEmptyPluginRegistry, type PluginRegistry } from "./registry.js";
 import type { PluginHookRegistration } from "./types.js";
 
 describe("hook correlation fields", () => {
   let registry: PluginRegistry;
+  let oneShotAgentEndProbe: {
+    status: number | null;
+    stderr: string;
+    stdout: string;
+  };
 
   beforeEach(() => {
     registry = createEmptyPluginRegistry();
-  });
-
-  it("adds runId to legacy before_agent_start events from hook context", async () => {
-    const handler = vi.fn(() => undefined);
-    addTestHook({
-      registry,
-      pluginId: "plugin-a",
-      hookName: "before_agent_start",
-      handler: handler as PluginHookRegistration["handler"],
-    });
-
-    const runner = createHookRunner(registry);
-    await runner.runBeforeAgentStart({ prompt: "hello" }, TEST_PLUGIN_AGENT_CTX);
-
-    expect(handler).toHaveBeenCalledWith(
-      { prompt: "hello", runId: "test-run-id" },
-      TEST_PLUGIN_AGENT_CTX,
-    );
   });
 
   it("adds runId to agent_end events from hook context", async () => {
@@ -86,7 +75,7 @@ describe("hook correlation fields", () => {
     }
   });
 
-  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
+  beforeAll(() => {
     const script = `
       import { createHookRunner } from "./src/plugins/hooks.ts";
       const registry = {
@@ -130,12 +119,19 @@ describe("hook correlation fields", () => {
         timeout: 3_000,
       },
     );
+    oneShotAgentEndProbe = {
+      status: child.status,
+      stderr: child.stderr,
+      stdout: child.stdout,
+    };
+  });
 
-    expect(child.status).toBe(0);
-    expect(child.stderr).toContain(
+  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
+    expect(oneShotAgentEndProbe.status).toBe(0);
+    expect(oneShotAgentEndProbe.stderr).toContain(
       "[hooks] agent_end handler from plugin-a failed: timed out after 20ms",
     );
-    expect(child.stdout).toContain("settled-after-timeout");
+    expect(oneShotAgentEndProbe.stdout).toContain("settled-after-timeout");
   });
 
   it("honors per-hook registration timeouts over the default void hook timeout", async () => {
@@ -171,6 +167,27 @@ describe("hook correlation fields", () => {
       expect(logger.error).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized hook timeouts before scheduling", async () => {
+    const handler = vi.fn(async () => {});
+    addTestHook({
+      registry,
+      pluginId: "plugin-a",
+      hookName: "agent_end",
+      handler: handler as PluginHookRegistration["handler"],
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const runner = createHookRunner(registry);
+
+      await runner.runAgentEnd({ messages: [], success: true }, TEST_PLUGIN_AGENT_CTX);
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
     }
   });
 });

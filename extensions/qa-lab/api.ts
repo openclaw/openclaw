@@ -1,3 +1,4 @@
+// Qa Lab API module exposes the plugin public contract.
 export {
   buildQaBusSnapshot,
   cloneEvent,
@@ -26,6 +27,15 @@ export {
 export { isQaLabCliAvailable, registerQaLabCli } from "./src/cli.js";
 export { createQaRunnerRuntime } from "./src/harness-runtime.js";
 export {
+  buildScriptEvidenceSummary,
+  QA_EVIDENCE_FILENAME,
+  type QaEvidencePackageSource,
+  type QaEvidenceStatus,
+  type QaEvidenceSummaryJson,
+  validateQaEvidenceSummaryJson,
+} from "./src/evidence-summary.js";
+export type { QaProviderMode } from "./src/providers/index.js";
+export {
   type QaLabLatestReport,
   type QaLabScenarioOutcome,
   type QaLabScenarioRun,
@@ -47,11 +57,7 @@ export {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   type QaThinkingLevel,
 } from "./src/qa-gateway-config.js";
-export {
-  renderQaMarkdownReport,
-  type QaReportCheck,
-  type QaReportScenario,
-} from "openclaw/plugin-sdk/qa-runtime";
+export { renderQaMarkdownReport, type QaReportCheck, type QaReportScenario } from "./src/report.js";
 export {
   type QaScenarioDefinition,
   type QaScenarioResult,
@@ -63,7 +69,7 @@ export {
 export {
   DEFAULT_QA_AGENT_IDENTITY_MARKDOWN,
   hasQaScenarioPack,
-  listQaScenarioMarkdownPaths,
+  listQaScenarioYamlPaths,
   type QaBootstrapScenarioCatalog,
   type QaScenarioExecution,
   type QaScenarioFlow,
@@ -75,11 +81,12 @@ export {
   readQaScenarioExecutionConfig,
   readQaScenarioOverviewMarkdown,
   readQaScenarioPack,
-  readQaScenarioPackMarkdown,
+  readQaScenarioPackYamlSource,
   validateQaScenarioExecutionConfig,
 } from "./src/scenario-catalog.js";
 export { createQaSelfCheckScenario } from "./src/self-check-scenario.js";
 export {
+  isQaSelfCheckSuccessful,
   type QaSelfCheckResult,
   resolveQaSelfCheckOutputPath,
   runQaSelfCheckAgainstState,
@@ -90,6 +97,7 @@ export {
   testing as __testing,
   buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
+  type QaGatewayChildListeningContext,
   type QaGatewayChildCommand,
   type QaGatewayChildStateMutationContext,
   resolveQaControlUiRoot,
@@ -105,5 +113,6 @@ export {
   type QaSuiteStartLabFn,
   type QaSuiteSummaryJson,
   type QaSuiteSummaryJsonParams,
-  runQaSuite,
+  runQaFlowSuite,
 } from "./src/suite.js";
+export { runQaSuite, type QaSuiteRuntimeResult } from "./src/suite-launch.runtime.js";

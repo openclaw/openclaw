@@ -1,9 +1,9 @@
+// Music generation status tests cover duplicate guards and explicit status
+// actions for background music tasks.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
-import {
-  recordRecentMediaGenerationTaskStartForSession,
-  resetRecentMediaGenerationDuplicateGuardsForTests,
-} from "../media-generation-task-status-shared.js";
+import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import { MUSIC_GENERATION_TASK_KIND } from "../music-generation-task-status.js";
 import {
   createMusicGenerateDuplicateGuardResult,
@@ -45,6 +45,8 @@ describe("createMusicGenerateTool status actions", () => {
   });
 
   it("returns active task status instead of starting a duplicate generation", () => {
+    // Duplicate guard responses prevent agents from launching parallel provider
+    // jobs while a matching request is still running.
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
         taskId: "task-active",

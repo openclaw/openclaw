@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements status reaction behavior.
 import {
   createStatusReactionController,
   shouldAckReactionForWhatsApp,
@@ -5,29 +6,28 @@ import {
 } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { getSenderIdentity } from "../../identity.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import { sendReactionWhatsApp } from "../../send.js";
-import type { WebInboundMsg } from "../types.js";
 import { resolveWhatsAppAckEmoji } from "./ack-emoji.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
+import { resolveReactionParticipant } from "./reaction-participant.js";
 
 export type { StatusReactionController };
 
-export type WhatsAppStatusReactionParams = {
+type WhatsAppStatusReactionParams = {
   cfg: OpenClawConfig;
-  msg: WebInboundMsg;
+  msg: AdmittedWebInboundMessage;
   agentId: string;
   sessionKey: string;
-  conversationId: string;
   verbose: boolean;
-  accountId?: string;
 };
 
 export async function createWhatsAppStatusReactionController(
   params: WhatsAppStatusReactionParams,
 ): Promise<StatusReactionController | null> {
-  if (!params.msg.id) {
+  if (!params.msg.event.id) {
     return null;
   }
 
@@ -36,9 +36,11 @@ export async function createWhatsAppStatusReactionController(
     return null;
   }
 
+  const admission = requireWhatsAppInboundAdmission(params.msg);
+  const accountId = admission.accountId;
   const reactionLevel = resolveWhatsAppReactionLevel({
     cfg: params.cfg,
-    accountId: params.accountId,
+    accountId,
   });
   if (reactionLevel.level === "off") {
     return null;
@@ -55,26 +57,26 @@ export async function createWhatsAppStatusReactionController(
   }
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
-  const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;
+  const isGroup = admission.conversation.kind === "group";
+  const conversationIdForCheck = admission.conversation.id;
 
-  const activation =
-    params.msg.chatType === "group"
-      ? await resolveGroupActivationFor({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          conversationId: conversationIdForCheck,
-        })
-      : null;
+  const activation = isGroup
+    ? await resolveGroupActivationFor({
+        cfg: params.cfg,
+        accountId,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        conversationId: conversationIdForCheck,
+      })
+    : null;
 
   const shouldUseStatusReaction = shouldAckReactionForWhatsApp({
     emoji: ackEmoji,
-    isDirect: params.msg.chatType === "direct",
-    isGroup: params.msg.chatType === "group",
+    isDirect: admission.conversation.kind === "direct",
+    isGroup,
     directEnabled,
     groupMode,
-    wasMentioned: params.msg.wasMentioned === true,
+    wasMentioned: (params.msg.groupMention?.wasMentioned ?? params.msg.wasMentioned) === true,
     groupActivated: activation === "always",
   });
 
@@ -82,16 +84,16 @@ export async function createWhatsAppStatusReactionController(
     return null;
   }
 
-  const sender = getSenderIdentity(params.msg);
+  const participant = resolveReactionParticipant(params.msg);
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
-    ...(sender.jid ? { participant: sender.jid } : {}),
-    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(participant ? { participant } : {}),
+    accountId,
     cfg: params.cfg,
   };
-  const chatId = params.msg.chatId;
-  const msgId = params.msg.id;
+  const chatId = params.msg.platform.chatJid;
+  const msgId = params.msg.event.id;
 
   return createStatusReactionController({
     enabled: true,
@@ -105,7 +107,6 @@ export async function createWhatsAppStatusReactionController(
     },
     initialEmoji: ackEmoji,
     emojis: statusReactionsConfig.emojis,
-    timing: statusReactionsConfig.timing,
     onError: (err) => {
       logVerbose(`WhatsApp status-reaction error for chat ${chatId}/${msgId}: ${String(err)}`);
     },

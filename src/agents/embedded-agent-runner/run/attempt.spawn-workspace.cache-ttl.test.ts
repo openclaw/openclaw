@@ -1,11 +1,13 @@
+// Coverage for cache-TTL session entries after embedded attempts.
 import { describe, expect, it, vi } from "vitest";
-import {
-  appendAttemptCacheTtlIfNeeded,
-  ATTEMPT_CACHE_TTL_CUSTOM_TYPE,
-} from "./attempt.thread-helpers.js";
+import { appendAttemptCacheTtlIfNeeded } from "./attempt.thread-helpers.js";
+
+const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
 describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
   it("skips cache-ttl append when compaction completed during the attempt", () => {
+    // Compaction already changes the prompt cache boundary, so appending a fresh
+    // cache touch for the same attempt would overstate cache continuity.
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };

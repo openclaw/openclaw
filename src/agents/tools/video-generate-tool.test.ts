@@ -1,6 +1,8 @@
+// video_generate tool tests cover provider/model selection, plugin metadata,
+// background task handling, input media, and saved video output.
+import { MAX_VIDEO_BYTES } from "@openclaw/media-core/constants";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import {
@@ -13,12 +15,10 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.test-support.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
-import {
-  createVideoGenerateTool,
-  resolveVideoGenerationModelConfigForTool,
-} from "./video-generate-tool.js";
+import { createVideoGenerateTool } from "./video-generate-tool.js";
+import { resolveVideoGenerationModelConfigForTool } from "./video-generate-tool.test-support.js";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
   const mocks = {
@@ -141,6 +141,8 @@ function createVideoProviderSnapshot(params: {
   referenceAudioInputs?: boolean;
   workspaceDir?: string;
 }): PluginMetadataSnapshot {
+  // Plugin-backed provider snapshots are synthesized here so tool behavior can
+  // be tested without loading plugin manifests from disk.
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
   const plugin: PluginManifestRecord = {
     id: params.id,
@@ -716,7 +718,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     expect((firstMockCallArg(generateSpy) as { timeoutMs?: number }).timeoutMs).toBe(180_000);
-    expect((generateSpy.mock.calls.at(1)?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
+    expect((generateSpy.mock.calls.at(1)![0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
     expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
     expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
   });
@@ -879,7 +881,7 @@ describe("createVideoGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(true);
+      .mockResolvedValue({ status: "delivered" });
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "vydra",
@@ -933,7 +935,7 @@ describe("createVideoGenerateTool", () => {
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect((details.task as { taskId?: string }).taskId).toBe("task-123");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     if (!scheduledWork) {
       throw new Error("expected scheduled video generation work");
     }
@@ -1291,6 +1293,73 @@ describe("createVideoGenerateTool", () => {
     expect(providers[0]?.modes).toEqual(["generate", "imageToVideo"]);
   });
 
+  it("lists model-specific catalog capabilities and modes", async () => {
+    const imageToVideoCapabilities = {
+      imageToVideo: {
+        enabled: true,
+        maxInputImages: 1,
+        maxDurationSeconds: 15,
+        resolutions: ["480P", "720P", "1080P"] as const,
+        aspectRatios: ["16:9", "9:16"] as const,
+        supportsResolution: true,
+        supportsAspectRatio: true,
+      },
+    };
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "video-plugin",
+        defaultModel: "text-video",
+        models: ["text-video", "image-video"],
+        capabilities: {
+          generate: {
+            maxDurationSeconds: 10,
+          },
+        },
+        catalogByModel: {
+          "image-video": {
+            capabilities: imageToVideoCapabilities,
+            modes: ["imageToVideo"],
+          },
+        },
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/text-video" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const result = await tool.execute("call-1", { action: "list" });
+    const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
+    expect(text).toContain(
+      "model image-video: modes=imageToVideo, maxInputImages=1, maxDurationSeconds=15, resolution, aspectRatio",
+    );
+    const providers = resultDetails(result).providers as Array<{
+      catalog?: Array<{
+        model?: string;
+        capabilities?: unknown;
+        modes?: string[];
+      }>;
+    }>;
+    const catalogEntry = providers[0]?.catalog?.find((entry) => entry.model === "image-video");
+    expect(catalogEntry).toMatchObject({
+      model: "image-video",
+      capabilities: imageToVideoCapabilities,
+      modes: ["imageToVideo"],
+    });
+  });
+
   it("rejects image-to-video when the provider disables that mode", async () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
       {
@@ -1515,6 +1584,30 @@ describe("createVideoGenerateTool", () => {
     expect(call.inputImages?.[1]?.role).toBe("last_frame");
   });
 
+  it("passes direct remote reference URLs to the provider without local media loading", async () => {
+    mockVideoPluginProvider({
+      imageToVideo: { enabled: true, maxInputImages: 1 },
+    });
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoPluginTool();
+
+    await tool.execute("call-1", {
+      prompt: "lobster",
+      image: "https://example.test/reference.png",
+    });
+
+    expect(loadWebMedia).not.toHaveBeenCalled();
+    const call = firstMockCallArg(generateSpy) as {
+      inputImages?: Array<{ url?: string }>;
+    };
+    expect(call.inputImages).toEqual([{ url: "https://example.test/reference.png" }]);
+  });
+
   it("passes web_fetch SSRF policy when loading reference assets", async () => {
     mockVideoPluginProvider({
       imageToVideo: { enabled: true, maxInputImages: 1 },
@@ -1597,3 +1690,4 @@ describe("createVideoGenerateTool", () => {
     expect(input.resolution).toBe("draft-large");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

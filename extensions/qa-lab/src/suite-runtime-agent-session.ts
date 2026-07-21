@@ -1,12 +1,23 @@
-import fs from "node:fs/promises";
+// Qa Lab plugin module implements suite runtime agent session behavior.
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  formatSqliteSessionFileMarker,
+  listSessionEntries,
+  loadTranscriptEventsSync,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { scanDirectReplyTranscriptSentinels } from "./gateway-log-sentinel.js";
+import {
+  createDirectReplyTranscriptSentinelScanner,
+  extractGatewayMessageText,
+} from "./gateway-log-sentinel.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -19,79 +30,182 @@ type QaGatewayCallEnv = Pick<
   "gateway" | "primaryModel" | "alternateModel" | "providerMode"
 >;
 
+type QaSessionTranscriptSeedParams = {
+  label?: string;
+  messages: readonly {
+    role: "assistant" | "user";
+    text: string;
+    timestamp: number;
+  }[];
+  sessionId: string;
+  sessionKey: string;
+  updatedAt: number;
+};
+
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
 
 type QaSessionTranscriptSummary = {
+  assistantMirrors?: Array<{ identity: string; text: string }>;
+  assistantToolCallCounts: Record<string, number>;
+  eventCursor: number;
+  successfulToolCallCounts: Record<string, number>;
   finalText: string;
   hasDirectReplySelfMessage: boolean;
+  lastAssistantContentTypes?: string[];
+  lastAssistantErrorMessage?: string;
+  lastAssistantStopReason?: string;
+  lastAssistantToolNames?: string[];
+  lastMessageRole?: string;
+};
+
+type QaSessionTranscriptSummaryOptions = {
+  afterEventCursor?: number;
+  allowEmpty?: boolean;
 };
 
 function isSessionStoreLockTimeout(error: unknown) {
   const text = formatErrorMessage(error);
   return (
     text.includes("OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT") ||
+    text.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE") ||
     text.includes("SessionWriteLockTimeoutError") ||
-    text.includes("session file locked")
+    text.includes("SessionWriteLockStaleError") ||
+    text.includes("session file locked") ||
+    text.includes("session file lock stale")
   );
 }
 
-function extractSessionTranscriptText(message: Record<string, unknown>) {
-  const rawContent = message.content;
-  if (typeof rawContent === "string") {
-    return rawContent.trim();
-  }
-  if (!Array.isArray(rawContent)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of rawContent) {
-    if (typeof block === "string") {
-      if (block.trim()) {
-        parts.push(block.trim());
-      }
-      continue;
-    }
-    if (!isRecord(block)) {
-      continue;
-    }
-    const text = readNonEmptyString(block.text);
-    if (text) {
-      parts.push(text);
-      continue;
-    }
-    const content = readNonEmptyString(block.content);
-    if (
-      content &&
-      (block.type === "output_text" || block.type === "text" || block.type === "message")
-    ) {
-      parts.push(content);
-    }
-  }
-  return parts.join("\n").trim();
+function isSessionStoreFtsSettleRace(error: unknown) {
+  const text = formatErrorMessage(error);
+  return (
+    text.includes("SQLite integrity_check failed") &&
+    text.includes("fts5: checksum mismatch") &&
+    text.includes("session_transcript_fts")
+  );
 }
 
-function extractFinalAssistantTextFromTranscript(transcriptBytes: string) {
+function readSessionTranscriptEventMessage(event: unknown) {
+  return isRecord(event) && isRecord(event.message) ? event.message : undefined;
+}
+
+function readAssistantToolCalls(message: Record<string, unknown>): Array<{
+  id?: string;
+  name: string;
+}> {
+  if (!Array.isArray(message.content)) {
+    return [];
+  }
+  return message.content.flatMap((block) => {
+    if (!isRecord(block)) {
+      return [];
+    }
+    const type = readNonEmptyString(block.type);
+    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
+      return [];
+    }
+    const name = readNonEmptyString(block.name);
+    return name ? [{ id: readNonEmptyString(block.id), name }] : [];
+  });
+}
+
+function summarizeSessionTranscriptEvents(
+  events: unknown[],
+  sessionKey: string,
+  eventCursor = events.length,
+): QaSessionTranscriptSummary {
+  const scanner = createDirectReplyTranscriptSentinelScanner();
+  const assistantMirrors: Array<{ identity: string; text: string }> = [];
+  const assistantToolCallCounts: Record<string, number> = {};
+  const successfulToolCallCounts: Record<string, number> = {};
+  const assistantToolNamesByCallId = new Map<string, string>();
+  const successfulToolCallIds = new Set<string>();
   let finalText = "";
-  for (const line of transcriptBytes.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
+  let lastAssistantContentTypes: string[] = [];
+  let lastAssistantErrorMessage: string | undefined;
+  let lastAssistantStopReason: string | undefined;
+  let lastAssistantToolNames: string[] = [];
+  let lastMessageRole: string | undefined;
+
+  for (const event of events) {
+    const message = readSessionTranscriptEventMessage(event);
+    if (!message) {
       continue;
     }
-    try {
-      const parsed = JSON.parse(trimmed) as unknown;
-      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
-      if (!message || message.role !== "assistant") {
-        continue;
+    lastMessageRole = readNonEmptyString(message.role);
+    if (message.role === "toolResult") {
+      const toolCallId = readNonEmptyString(message.toolCallId);
+      const toolName = readNonEmptyString(message.toolName);
+      if (
+        toolCallId &&
+        toolName &&
+        message.isError === false &&
+        assistantToolNamesByCallId.get(toolCallId) === toolName &&
+        !successfulToolCallIds.has(toolCallId)
+      ) {
+        successfulToolCallIds.add(toolCallId);
+        successfulToolCallCounts[toolName] = (successfulToolCallCounts[toolName] ?? 0) + 1;
       }
-      const text = extractSessionTranscriptText(message);
-      if (text) {
-        finalText = text;
-      }
-    } catch {
-      // Ignore malformed transcript rows and keep QA summary checks deterministic.
+      continue;
     }
+    if (message.role !== "assistant") {
+      continue;
+    }
+    const text = extractGatewayMessageText(message);
+    if (text) {
+      finalText = text;
+    }
+    const openClawMeta = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
+    const mirrorIdentity = readNonEmptyString(openClawMeta?.mirrorIdentity);
+    if (mirrorIdentity && text) {
+      assistantMirrors.push({ identity: mirrorIdentity, text });
+    }
+    lastAssistantContentTypes = Array.isArray(message.content)
+      ? message.content.flatMap((block) => {
+          const type = isRecord(block) ? readNonEmptyString(block.type) : undefined;
+          return type ? [type] : [];
+        })
+      : [];
+    lastAssistantErrorMessage = readNonEmptyString(message.errorMessage);
+    lastAssistantStopReason = readNonEmptyString(message.stopReason);
+    const assistantToolCalls = readAssistantToolCalls(message);
+    lastAssistantToolNames = assistantToolCalls.map((toolCall) => toolCall.name);
+    for (const toolCall of assistantToolCalls) {
+      assistantToolCallCounts[toolCall.name] = (assistantToolCallCounts[toolCall.name] ?? 0) + 1;
+      if (toolCall.id) {
+        assistantToolNamesByCallId.set(toolCall.id, toolCall.name);
+      }
+    }
+    scanner.recordMessage(message);
   }
-  return finalText;
+
+  if (events.length === 0) {
+    throw new Error(`session transcript is empty for ${sessionKey}`);
+  }
+
+  return {
+    ...(assistantMirrors.length > 0 ? { assistantMirrors } : {}),
+    assistantToolCallCounts,
+    eventCursor,
+    successfulToolCallCounts,
+    finalText,
+    hasDirectReplySelfMessage: scanner.findings().length > 0,
+    ...(lastAssistantContentTypes.length > 0 ? { lastAssistantContentTypes } : {}),
+    ...(lastAssistantErrorMessage ? { lastAssistantErrorMessage } : {}),
+    ...(lastAssistantStopReason ? { lastAssistantStopReason } : {}),
+    ...(lastAssistantToolNames.length > 0 ? { lastAssistantToolNames } : {}),
+    ...(lastMessageRole ? { lastMessageRole } : {}),
+  };
+}
+
+function emptySessionTranscriptSummary(eventCursor: number): QaSessionTranscriptSummary {
+  return {
+    assistantToolCallCounts: {},
+    eventCursor,
+    successfulToolCallCounts: {},
+    finalText: "",
+    hasDirectReplySelfMessage: false,
+  };
 }
 
 async function callGatewayWithSessionStoreLockRetry<T>(
@@ -100,17 +214,15 @@ async function callGatewayWithSessionStoreLockRetry<T>(
   params: Record<string, unknown>,
   options: { timeoutMs: number },
 ) {
-  for (let attempt = 0; attempt <= SESSION_STORE_LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+  const retryDelaysMs = SESSION_STORE_LOCK_RETRY_DELAYS_MS;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
     try {
       return (await env.gateway.call(method, params, options)) as T;
     } catch (error) {
-      if (
-        !isSessionStoreLockTimeout(error) ||
-        attempt === SESSION_STORE_LOCK_RETRY_DELAYS_MS.length
-      ) {
+      if (!isSessionStoreLockTimeout(error) || attempt === retryDelaysMs.length) {
         throw error;
       }
-      await sleep(SESSION_STORE_LOCK_RETRY_DELAYS_MS[attempt]);
+      await sleep(retryDelaysMs[attempt]);
     }
   }
   throw new Error(`${method} failed after session store lock retries`);
@@ -175,41 +287,102 @@ async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
   return payload.skills ?? [];
 }
 
-function resolveQaSessionTranscriptFile(params: {
-  sessionsDir: string;
-  sessionId: string;
-  sessionFile?: string;
-}) {
-  const explicit = readNonEmptyString(params.sessionFile);
-  if (explicit) {
-    return path.isAbsolute(explicit) ? explicit : path.join(params.sessionsDir, explicit);
-  }
-  return path.join(params.sessionsDir, `${params.sessionId}.jsonl`);
+function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+  };
 }
 
-async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
-  const storePath = path.join(
-    env.gateway.tempRoot,
-    "state",
-    "agents",
-    "qa",
-    "sessions",
-    "sessions.json",
-  );
-  try {
-    const raw = await fs.readFile(storePath, "utf8");
-    return JSON.parse(raw) as Record<string, QaRawSessionStoreEntry>;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-    throw error;
+async function seedQaSessionTranscript(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  params: QaSessionTranscriptSeedParams,
+): Promise<void> {
+  const sessionId = params.sessionId.trim();
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionId || !sessionKey) {
+    throw new Error("seedQaSessionTranscript requires sessionId and sessionKey");
   }
+  if (params.messages.length === 0) {
+    throw new Error("seedQaSessionTranscript requires at least one message");
+  }
+
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const storePath = resolveStorePath(undefined, {
+    agentId: "qa",
+    env: runtimeEnv,
+  });
+  const label = params.label?.trim();
+  await upsertSessionEntry({
+    agentId: "qa",
+    env: runtimeEnv,
+    sessionKey,
+    storePath,
+    entry: {
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "qa",
+        sessionId,
+        storePath,
+      }),
+      sessionId,
+      updatedAt: params.updatedAt,
+      ...(label ? { origin: { label } } : {}),
+    },
+  });
+
+  for (const seed of params.messages) {
+    const appended = await appendSessionTranscriptMessageByIdentity({
+      agentId: "qa",
+      env: runtimeEnv,
+      sessionId,
+      sessionKey,
+      storePath,
+      now: seed.timestamp,
+      message: {
+        role: seed.role,
+        timestamp: seed.timestamp,
+        content: [{ type: "text", text: seed.text }],
+      },
+    });
+    if (!appended?.appended) {
+      throw new Error(`failed to seed QA session transcript for ${sessionKey}`);
+    }
+  }
+}
+
+async function readRawQaSessionStore(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  options: {
+    readEntries?: typeof listSessionEntries;
+    retryDelaysMs?: readonly number[];
+  } = {},
+) {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  const readEntries = options.readEntries ?? listSessionEntries;
+  const retryDelaysMs = options.retryDelaysMs ?? SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS;
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt += 1) {
+    try {
+      return Object.fromEntries(
+        readEntries({ agentId: "qa", env: runtimeEnv }).map(({ sessionKey, entry }) => [
+          sessionKey,
+          entry as QaRawSessionStoreEntry,
+        ]),
+      );
+    } catch (error) {
+      if (!isSessionStoreFtsSettleRace(error) || attempt === retryDelaysMs.length) {
+        throw error;
+      }
+      // Child completion can publish before its transcript writer has settled the FTS state.
+      await sleep(retryDelaysMs[attempt]);
+    }
+  }
+  throw new Error("QA session store read failed after FTS settle retries");
 }
 
 async function readSessionTranscriptSummary(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
+  options: QaSessionTranscriptSummaryOptions = {},
 ): Promise<QaSessionTranscriptSummary> {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
@@ -219,22 +392,32 @@ async function readSessionTranscriptSummary(
   const entry = store[normalizedSessionKey];
   const sessionId = readNonEmptyString(entry?.sessionId);
   if (!sessionId) {
+    if (options.allowEmpty === true) {
+      return emptySessionTranscriptSummary(0);
+    }
     throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
   }
-  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
-  const transcriptPath = resolveQaSessionTranscriptFile({
-    sessionsDir,
+  const events = loadTranscriptEventsSync({
+    agentId: "qa",
+    env: qaSessionRuntimeEnv(env.gateway.tempRoot),
     sessionId,
-    sessionFile: entry?.sessionFile,
+    sessionKey: normalizedSessionKey,
   });
-  const transcriptBytes = await fs.readFile(transcriptPath, "utf8");
-  if (!transcriptBytes.trim()) {
-    throw new Error(`session transcript is empty for ${normalizedSessionKey}`);
+  const afterEventCursor = options.afterEventCursor ?? 0;
+  if (
+    !Number.isSafeInteger(afterEventCursor) ||
+    afterEventCursor < 0 ||
+    afterEventCursor > events.length
+  ) {
+    throw new Error(
+      `invalid session transcript event cursor ${afterEventCursor} for ${normalizedSessionKey} with ${events.length} event(s)`,
+    );
   }
-  return {
-    finalText: extractFinalAssistantTextFromTranscript(transcriptBytes),
-    hasDirectReplySelfMessage: scanDirectReplyTranscriptSentinels(transcriptBytes).length > 0,
-  };
+  const selectedEvents = events.slice(afterEventCursor);
+  if (selectedEvents.length === 0 && options.allowEmpty === true) {
+    return emptySessionTranscriptSummary(events.length);
+  }
+  return summarizeSessionTranscriptEvents(selectedEvents, normalizedSessionKey, events.length);
 }
 
 export {
@@ -243,4 +426,5 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionTranscript,
 };

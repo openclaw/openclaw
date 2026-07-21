@@ -1,10 +1,11 @@
+// Runtime boundary for provider discovery through plugin entrypoints.
 import path from "node:path";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
-import { sortUniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { clearNativeRequireJavaScriptModuleCache } from "./native-module-require.js";
@@ -51,7 +52,7 @@ function resolveProviderDiscoveryDependencyRoot(rootDir: string): string {
   return rootDir;
 }
 
-export function clearProviderDiscoveryModuleLoaders(): void {
+function clearProviderDiscoveryModuleLoaders(): void {
   providerDiscoveryModuleLoaders.clear();
   for (const [modulePath, rootDir] of providerDiscoveryModuleRoots) {
     clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot: rootDir });
@@ -108,9 +109,7 @@ function loadProviderDiscoveryModule(params: {
 }
 
 function hasLiveProviderDiscoveryHook(provider: ProviderPlugin): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
+  return typeof provider.catalog?.run === "function";
 }
 
 function hasProviderCatalogHook(provider: ProviderPlugin): boolean {
@@ -123,10 +122,7 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const envVars = [
-    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
-  ];
+  const envVars = (plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []);
   return envVars.some((name) => {
     const value = env[name]?.trim();
     return value !== undefined && value !== "";
@@ -180,6 +176,7 @@ function modelDefinitionFromManifestRow(
     contextWindow: row.contextWindow,
     ...(row.contextTokens ? { contextTokens: row.contextTokens } : {}),
     maxTokens: row.maxTokens,
+    ...(row.thinkingLevelMap ? { thinkingLevelMap: { ...row.thinkingLevelMap } } : {}),
     ...(row.headers ? { headers: row.headers } : {}),
     ...(row.compat ? { compat: row.compat } : {}),
     ...(row.mediaInput ? { mediaInput: row.mediaInput } : {}),
@@ -216,7 +213,11 @@ function resolveManifestModelCatalogProviders(
     }
     const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
     for (const entry of plan.entries) {
-      if (entry.rows.length === 0 || entry.discovery === "runtime") {
+      if (
+        entry.rows.length === 0 ||
+        entry.discovery === "runtime" ||
+        entry.discovery === "refreshable"
+      ) {
         continue;
       }
       const providerConfig = providerConfigFromManifestRows(entry.rows);
@@ -248,7 +249,8 @@ function resolveRuntimeManifestCatalogPluginIds(
     );
     const ownsRuntimeDiscovery = Object.entries(plugin.modelCatalog?.discovery ?? {}).some(
       ([provider, discovery]) =>
-        discovery === "runtime" && ownedProviders.has(normalizeProviderId(provider)),
+        (discovery === "runtime" || discovery === "refreshable") &&
+        ownedProviders.has(normalizeProviderId(provider)),
     );
     if (ownsRuntimeDiscovery) {
       pluginIds.add(plugin.id);
@@ -258,7 +260,11 @@ function resolveRuntimeManifestCatalogPluginIds(
       continue;
     }
     const plan = planManifestModelCatalogRows({ registry: { plugins: [plugin] } });
-    if (plan.entries.some((entry) => entry.discovery === "runtime")) {
+    if (
+      plan.entries.some(
+        (entry) => entry.discovery === "runtime" || entry.discovery === "refreshable",
+      )
+    ) {
       pluginIds.add(plugin.id);
     }
   }
@@ -273,6 +279,7 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderDiscoveryEntryResult {
   const metadataSnapshot =
@@ -294,7 +301,10 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   const runtimeManifestCatalogPluginIds = resolveRuntimeManifestCatalogPluginIds(pluginRecords);
   const entryRecords = pluginRecords.filter((plugin) => plugin.providerDiscoverySource);
   const entryPluginIds = new Set(entryRecords.map((plugin) => plugin.id));
-  const manifestProviders = resolveManifestModelCatalogProviders(pluginRecords);
+  const manifestProviders =
+    params.includeManifestModelCatalogProviders === false
+      ? []
+      : resolveManifestModelCatalogProviders(pluginRecords);
   const manifestEntryPluginIds = new Set<string>();
   for (const pluginId of manifestProviders.map((provider) => provider.pluginId)) {
     if (pluginId) {
@@ -426,6 +436,7 @@ export function resolvePluginDiscoveryProvidersRuntime(params: {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;

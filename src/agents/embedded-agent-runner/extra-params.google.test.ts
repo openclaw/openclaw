@@ -1,13 +1,15 @@
+// Coverage for Google-specific extra parameter normalization.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import type { Model } from "../../llm/types.js";
-import { testing as extraParamsTesting } from "./extra-params.js";
-import { runExtraParamsCase } from "./extra-params.test-support.js";
+import { runExtraParamsCase, testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
+    // Exercise prepared extra params as production provider runtimes see them,
+    // while keeping transport-specific hooks out of these focused assertions.
     prepareProviderExtraParams: (params) => params.context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: () => undefined,
@@ -19,6 +21,8 @@ afterEach(() => {
 });
 
 function runGoogleExtraParamsCase(params?: { cfg?: unknown }) {
+  // Common Gemini payload fixture: tests vary only config precedence and final
+  // option shape.
   return runExtraParamsCase({
     ...(params?.cfg ? { cfg: params.cfg as never } : {}),
     applyProvider: "google",
@@ -36,6 +40,8 @@ function runGoogleExtraParamsCase(params?: { cfg?: unknown }) {
 
 describe("extra-params: Google thinking payload compatibility", () => {
   it("strips negative thinking budgets and fills Gemini 3.1 thinkingLevel", () => {
+    // Gemini 3.1 accepts thinkingLevel, while negative thinkingBudget belongs
+    // to older request shapes and must not survive normalization.
     const payload = runExtraParamsCase({
       applyProvider: "google",
       applyModelId: "gemini-3.1-pro-preview",

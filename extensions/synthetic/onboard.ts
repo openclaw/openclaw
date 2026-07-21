@@ -1,3 +1,4 @@
+// Synthetic setup module handles plugin onboarding behavior.
 import {
   createModelCatalogPresetAppliers,
   type OpenClawConfig,
@@ -18,7 +19,7 @@ const syntheticPresetAppliers = createModelCatalogPresetAppliers({
     api: "anthropic-messages",
     baseUrl: SYNTHETIC_BASE_URL,
     catalogModels: SYNTHETIC_MODEL_CATALOG.map(buildSyntheticModelDefinition),
-    aliases: [{ modelRef: SYNTHETIC_DEFAULT_MODEL_REF, alias: "MiniMax M2.5" }],
+    aliases: [{ modelRef: SYNTHETIC_DEFAULT_MODEL_REF, alias: "MiniMax M3" }],
   }),
 });
 

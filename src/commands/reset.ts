@@ -1,3 +1,9 @@
+/**
+ * Reset command implementation.
+ *
+ * It removes selected config/state/workspace surfaces after confirmation and
+ * stops managed gateway services before deleting broader state.
+ */
 import { cancel, confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import {
@@ -16,9 +22,10 @@ import {
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
-export type ResetScope = "config" | "config+creds+sessions" | "full";
+type ResetScope = "config" | "config+creds+sessions" | "full";
 
-export type ResetOptions = {
+/** CLI options accepted by `openclaw reset`. */
+type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
   nonInteractive?: boolean;
@@ -27,10 +34,12 @@ export type ResetOptions = {
 
 async function stopGatewayIfRunning(runtime: RuntimeEnv) {
   if (isNixMode) {
+    // Nix mode owns service lifecycle outside OpenClaw-managed launchd/systemd
+    // installs, so reset should not try to stop a service it did not create.
     return;
   }
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -51,6 +60,7 @@ function logBackupRecommendation(runtime: RuntimeEnv) {
   runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
 }
 
+/** Runs the reset command for config, credential/session, or full state scopes. */
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
@@ -134,6 +144,8 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     await removePath(configPath, runtime, { dryRun, label: configPath });
     await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
     const sessionDirs = await listAgentSessionDirs(stateDir);
+    // Session stores are per-agent directories under state; enumerate them from
+    // disk so reset handles agents that are no longer present in config.
     for (const dir of sessionDirs) {
       await removePath(dir, runtime, { dryRun, label: dir });
     }
@@ -142,13 +154,15 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   }
 
   if (scope === "full") {
-    await removeStateAndLinkedPaths(
+    const stateRemoved = await removeStateAndLinkedPaths(
       { stateDir, configPath, oauthDir, configInsideState, oauthInsideState },
       runtime,
       { dryRun },
     );
-    await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceDirs(workspaceDirs, runtime, {
+      dryRun,
+      removeStateRows: !stateRemoved,
+    });
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
-    return;
   }
 }

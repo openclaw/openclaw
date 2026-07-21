@@ -1,3 +1,4 @@
+// Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
@@ -113,6 +114,36 @@ describe("resolveAgentRoute", () => {
       lastRoutePolicy: "main",
       matchedBy: "default",
     });
+  });
+
+  test("uses the configured main session key for shared direct routes", () => {
+    const route = resolveRoute({
+      cfg: { session: { dmScope: "main", mainKey: "work" } },
+      channel: "whatsapp",
+      accountId: null,
+      peer: { kind: "direct", id: "+15551234567" },
+    });
+
+    expectResolvedRoute(route, {
+      agentId: "main",
+      accountId: "default",
+      sessionKey: "agent:main:work",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+    expect(route.mainSessionKey).toBe("agent:main:work");
+  });
+
+  test("allows a channel route to require a stronger direct-message scope", () => {
+    const route = resolveRoute({
+      cfg: { session: { dmScope: "main" } },
+      channel: "zalouser",
+      peer: { kind: "direct", id: "321" },
+      dmScope: "per-channel-peer",
+    });
+
+    expect(route.sessionKey).toBe("agent:main:zalouser:direct:321");
+    expect(route.dmScope).toBe("per-channel-peer");
   });
 
   test.each([
@@ -1258,3 +1289,4 @@ describe("binding evaluation cache scalability", () => {
     expect(defaultRoute.matchedBy).toBe("default");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

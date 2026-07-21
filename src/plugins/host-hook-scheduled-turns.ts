@@ -1,3 +1,4 @@
+// Schedules host hook turns requested by plugin hook contracts.
 import { randomUUID } from "node:crypto";
 import {
   resolveExpiresAtMsFromDurationMs,
@@ -138,7 +139,7 @@ function resolvePluginSessionTurnTag(value: unknown): {
   return { tag, invalid: false };
 }
 
-export function buildPluginSchedulerCronName(params: {
+function buildPluginSchedulerCronName(params: {
   pluginId: string;
   sessionKey: string;
   tag?: string;

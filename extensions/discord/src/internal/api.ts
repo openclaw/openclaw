@@ -1,3 +1,4 @@
+// Discord API module exposes the plugin public contract.
 export {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -31,7 +32,6 @@ export {
 export {
   createInteractionCallback,
   createWebhookMessage,
-  deleteWebhookMessage,
   editWebhookMessage,
   getWebhookMessage,
 } from "./api.interactions.js";
@@ -44,6 +44,7 @@ export {
   editChannelMessage,
   getChannel,
   getChannelMessage,
+  getThreadMember,
   listChannelArchivedThreads,
   listChannelMessages,
   listChannelPins,

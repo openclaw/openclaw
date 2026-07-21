@@ -4,6 +4,7 @@
 
 import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
+import { buildPromisedWorkPromptSection } from "../promised-work-prompt.js";
 
 export interface BuildSystemPromptOptions {
   /** Custom system prompt (replaces default). */
@@ -88,7 +89,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
   // Build tools list based on selected tools.
   // A tool appears in Available tools only when the caller provides a one-line snippet.
   const tools = selectedTools || ["read", "bash", "edit", "write"];
-  const visibleTools = tools.filter((name) => !!toolSnippets?.[name]);
+  const visibleTools = tools.filter((name) => Boolean(toolSnippets?.[name]));
   const toolsList =
     visibleTools.length > 0
       ? visibleTools.map((name) => `- ${name}: ${toolSnippets![name]}`).join("\n")
@@ -142,6 +143,8 @@ In addition to the tools above, you may have access to other custom tools depend
 
 Guidelines:
 ${guidelines}
+
+${buildPromisedWorkPromptSection().join("\n")}
 
 Embedded agent documentation (read only when the user asks about the embedded agent SDK, extensions, themes, skills, or TUI):
 - Main documentation: ${readmePath}

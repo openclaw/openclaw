@@ -1,3 +1,5 @@
+// Guarded web fetch tests pin the SSRF policies used by trusted, self-hosted,
+// and strict web tool endpoint wrappers.
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../../infra/net/fetch-guard.js";
@@ -8,20 +10,20 @@ import {
 } from "./web-guarded-fetch.js";
 
 vi.mock("../../infra/net/fetch-guard.js", () => {
-  const GUARDED_FETCH_MODE = {
+  const GUARDED_FETCH_MODELocal = {
     STRICT: "strict",
     TRUSTED_ENV_PROXY: "trusted_env_proxy",
   } as const;
   return {
-    GUARDED_FETCH_MODE,
+    GUARDED_FETCH_MODE: GUARDED_FETCH_MODELocal,
     fetchWithSsrFGuard: vi.fn(),
     withStrictGuardedFetchMode: (params: Record<string, unknown>) => ({
       ...params,
-      mode: GUARDED_FETCH_MODE.STRICT,
+      mode: GUARDED_FETCH_MODELocal.STRICT,
     }),
     withTrustedEnvProxyGuardedFetchMode: (params: Record<string, unknown>) => ({
       ...params,
-      mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
+      mode: GUARDED_FETCH_MODELocal.TRUSTED_ENV_PROXY,
     }),
   };
 });
@@ -40,6 +42,8 @@ describe("web-guarded-fetch", () => {
   });
 
   it("uses a host-scoped fake-IP SSRF policy for trusted web tools endpoints", async () => {
+    // Trusted hosted providers can resolve through fake-IP proxy ranges, but
+    // only for the exact hostname selected by the wrapper.
     vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "https://example.com",
@@ -59,6 +63,8 @@ describe("web-guarded-fetch", () => {
   });
 
   it("uses private-network policy only for self-hosted web tools endpoints", async () => {
+    // Self-hosted provider endpoints are the explicit exception that may target
+    // private network addresses.
     vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
       response: new Response("ok", { status: 200 }),
       finalUrl: "http://127.0.0.1:8080",

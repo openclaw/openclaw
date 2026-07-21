@@ -1,11 +1,12 @@
 // Lightweight ACP runtime backend helpers for startup-loaded plugins.
 
-import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { hasExplicitCommandContextText } from "../auto-reply/reply/context-text.js";
 import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
@@ -29,31 +30,18 @@ export type {
   AcpRuntimeTurnResult,
   AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
-} from "../acp/runtime/types.js";
+} from "@openclaw/acp-core/runtime/types";
 
-let dispatchAcpRuntimePromise: Promise<
-  typeof import("../auto-reply/reply/dispatch-acp.runtime.js")
-> | null = null;
+// ACP dispatch pulls in session/media/manager code; keep it lazy so
+// startup-loaded plugin surfaces stay light and concurrent hooks share one load.
+const loadDispatchAcpRuntime = createLazyRuntimeModule(
+  () => import("../auto-reply/reply/dispatch-acp.runtime.js"),
+);
 
-function loadDispatchAcpRuntime() {
-  dispatchAcpRuntimePromise ??= import("../auto-reply/reply/dispatch-acp.runtime.js");
-  return dispatchAcpRuntimePromise;
-}
-
-function hasExplicitCommandCandidate(ctx: PluginHookReplyDispatchEvent["ctx"]): boolean {
-  const commandBody = normalizeOptionalString(ctx.CommandBody);
-  if (commandBody) {
-    return true;
-  }
-
-  const normalized = normalizeOptionalString(ctx.BodyForCommands);
-  if (!normalized) {
-    return false;
-  }
-
-  return normalized.startsWith("!") || normalized.startsWith("/");
-}
-
+/**
+ * Dispatch a plugin reply hook through ACP when the event targets an ACP-bound session.
+ * Returns a handled result only when ACP consumes the reply; otherwise callers continue normal delivery.
+ */
 export async function tryDispatchAcpReplyHook(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
@@ -64,7 +52,7 @@ export async function tryDispatchAcpReplyHook(
   if (
     event.sendPolicy === "deny" &&
     !event.suppressUserDelivery &&
-    !hasExplicitCommandCandidate(event.ctx) &&
+    !hasExplicitCommandContextText(event.ctx) &&
     !event.isTailDispatch
   ) {
     return;
@@ -87,6 +75,7 @@ export async function tryDispatchAcpReplyHook(
     dispatcher: ctx.dispatcher,
     runId: event.runId,
     sessionKey: event.sessionKey,
+    toolsAllow: event.toolsAllow,
     images: event.images,
     abortSignal: ctx.abortSignal,
     inboundAudio: event.inboundAudio,
@@ -98,6 +87,9 @@ export async function tryDispatchAcpReplyHook(
     shouldRouteToOriginating: event.shouldRouteToOriginating,
     originatingChannel: event.originatingChannel,
     originatingTo: event.originatingTo,
+    originatingAccountId: event.originatingAccountId,
+    originatingThreadId: event.originatingThreadId,
+    originatingChatType: event.originatingChatType,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
     shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
     bypassForCommand,

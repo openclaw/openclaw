@@ -1,5 +1,7 @@
+// Links plugin peer packages for local development installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode } from "../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 
 type PluginPeerLinkLogger = {
@@ -73,12 +75,14 @@ async function listManagedNpmRootPackageDirs(npmRoot: string): Promise<string[]>
     }
     const entryPath = path.join(nodeModulesDir, entry.name);
     if (entry.name.startsWith("@")) {
-      const scopedEntries = await fs.readdir(entryPath, { withFileTypes: true }).catch((error) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-          return [];
-        }
-        throw error;
-      });
+      const scopedEntries = await fs
+        .readdir(entryPath, { withFileTypes: true })
+        .catch((error: unknown) => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return [];
+          }
+          throw error;
+        });
       for (const scopedEntry of scopedEntries) {
         if (scopedEntry.isDirectory()) {
           packageDirs.push(path.join(entryPath, scopedEntry.name));
@@ -240,14 +244,25 @@ async function linkOpenClawPeerDependency(params: {
   }
 
   try {
-    const existing = await fs.lstat(linkPath).catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") {
+    const existing = await fs.lstat(linkPath).catch((err: unknown) => {
+      if (hasErrnoCode(err, "ENOENT")) {
         return null;
       }
       throw err;
     });
     if (existing) {
       if (!existing.isSymbolicLink()) {
+        if (params.peerName === "openclaw" && existing.isDirectory()) {
+          const existingPackageName = await readPackageName(linkPath);
+          if (existingPackageName === "openclaw") {
+            await fs.rm(linkPath, { recursive: true, force: true });
+            await fs.symlink(params.hostRoot, linkPath, "junction");
+            params.logger.info?.(
+              `Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`,
+            );
+            return "linked";
+          }
+        }
         params.logger.warn?.(
           `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
         );
@@ -261,6 +276,19 @@ async function linkOpenClawPeerDependency(params: {
   } catch (err) {
     params.logger.warn?.(`Failed to symlink peerDependency "${params.peerName}": ${String(err)}`);
     return "skipped";
+  }
+}
+
+async function readPackageName(packageDir: string): Promise<string | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(packageDir, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { name?: unknown };
+    return typeof parsed.name === "string" ? parsed.name : undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
   }
 }
 
@@ -312,13 +340,24 @@ export async function linkOpenClawPeerDependencies(params: {
 export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
   logger: PluginPeerLinkLogger;
+  onPackageReadError?: (error: unknown, packageDir: string) => void;
 }): Promise<RelinkManagedNpmRootResult> {
   let checked = 0;
   let attempted = 0;
   let repaired = 0;
   let skipped = 0;
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    const peerDependencies = await readPackagePeerDependencies(packageDir);
+    let peerDependencies: Record<string, string>;
+    try {
+      peerDependencies = await readPackagePeerDependencies(packageDir);
+    } catch (error) {
+      if (!params.onPackageReadError) {
+        throw error;
+      }
+      params.onPackageReadError(error, packageDir);
+      skipped += 1;
+      continue;
+    }
     if (!Object.hasOwn(peerDependencies, "openclaw")) {
       continue;
     }
@@ -337,6 +376,7 @@ export async function relinkOpenClawPeerDependenciesInManagedNpmRoot(params: {
 
 export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   npmRoot: string;
+  onPackageReadError?: (error: unknown, packageDir: string) => void;
 }): Promise<AuditManagedNpmRootResult> {
   const hostRoot = resolveOpenClawPackageRootSync({
     argv1: process.argv[1],
@@ -350,7 +390,16 @@ export async function auditOpenClawPeerDependenciesInManagedNpmRoot(params: {
   let checked = 0;
   const issues: OpenClawPeerLinkAuditIssue[] = [];
   for (const packageDir of await listManagedNpmRootPackageDirs(params.npmRoot)) {
-    const peerDependencies = await readPackagePeerDependencies(packageDir);
+    let peerDependencies: Record<string, string>;
+    try {
+      peerDependencies = await readPackagePeerDependencies(packageDir);
+    } catch (error) {
+      if (!params.onPackageReadError) {
+        throw error;
+      }
+      params.onPackageReadError(error, packageDir);
+      continue;
+    }
     if (!Object.hasOwn(peerDependencies, "openclaw")) {
       continue;
     }

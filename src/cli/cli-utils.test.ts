@@ -1,5 +1,7 @@
+// CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
@@ -29,6 +31,33 @@ describe("waitForever", () => {
     } finally {
       setIntervalSpy.mockRestore();
     }
+  });
+});
+
+describe("runCommandWithRuntime", () => {
+  it("surfaces cause chains and error codes through the default runtime", async () => {
+    const messages: string[] = [];
+    const exits: number[] = [];
+    const cause = Object.assign(new Error("invalid onRequestStart method"), {
+      code: "UND_ERR_INVALID_ARG",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
+
+    await runCommandWithRuntime(
+      {
+        error: (message) => messages.push(message),
+        exit: (code) => exits.push(code),
+      },
+      async () => {
+        throw fetchError;
+      },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("TypeError: fetch failed");
+    expect(messages[0]).toContain("invalid onRequestStart method");
+    expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
+    expect(exits).toEqual([1]);
   });
 });
 
@@ -130,6 +159,17 @@ describe("parseByteSize", () => {
   it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
     expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
+  it("keeps the largest safe integer exact", () => {
+    expect(parseByteSize(String(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
+    expect(parseByteSize(`${Number.MAX_SAFE_INTEGER}.1`)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it.each([String(Number.MAX_SAFE_INTEGER + 1), "9007199254740993", "9000000tb"] as const)(
+    "rejects finite-but-unsafe values that would round to a different number: %j",
+    (input) => {
+      expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
+    },
+  );
 });
 
 describe("parseDurationMs", () => {

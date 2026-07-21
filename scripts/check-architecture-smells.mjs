@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 
+// Finds core/plugin architecture boundary smells in TypeScript sources.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import pMap from "p-map";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
 import {
   collectModuleReferencesFromSource,
@@ -15,7 +17,6 @@ import {
   resolveSourceRoots,
   runAsScript,
 } from "./lib/ts-guard-utils.mjs";
-import { mapWithConcurrency } from "./lib/source-file-scan-cache.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const scanRoots = resolveSourceRoots(repoRoot, ["src/plugin-sdk", "src/plugins/runtime"]);
@@ -165,15 +166,17 @@ function scanRuntimeServiceLocatorSmells(source, filePath) {
   return entries;
 }
 
+/**
+ * Collects architecture smell findings from the configured source roots.
+ */
 export async function collectArchitectureSmells() {
   if (!architectureSmellsPromise) {
     architectureSmellsPromise = (async () => {
       const files = (await collectTypeScriptFilesFromRoots(scanRoots)).toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-      const entriesByFile = await mapWithConcurrency(
+      const entriesByFile = await pMap(
         files,
-        undefined,
         async (filePath) => {
           const source = await fs.readFile(filePath, "utf8");
           const entries = scanPluginSdkExtensionFacadeSmells(source, filePath);
@@ -181,6 +184,7 @@ export async function collectArchitectureSmells() {
           entries.push(...scanRuntimeServiceLocatorSmells(source, filePath));
           return entries;
         },
+        { concurrency: 32, stopOnError: true },
       );
       return entriesByFile.flat().toSorted(compareEntries);
     })();
@@ -235,6 +239,9 @@ async function runArchitectureSmellsCheck(argv, io) {
   return 0;
 }
 
+/**
+ * Runs the architecture smell check and writes human/JSON output.
+ */
 export async function main(argv, io) {
   return await runArchitectureSmellsCheck(argv, io);
 }

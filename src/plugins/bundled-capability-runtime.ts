@@ -1,3 +1,4 @@
+/** Loads capability providers from bundled plugin public runtime artifacts. */
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
@@ -52,7 +53,7 @@ const CAPABILITY_VITEST_SHIM_ALIASES = [
   },
 ] as const;
 
-export function buildVitestCapabilityShimAliasMap(): Record<string, string> {
+function buildVitestCapabilityShimAliasMap(): Record<string, string> {
   return Object.fromEntries(
     CAPABILITY_VITEST_SHIM_ALIASES.flatMap(({ subpath, target }) => {
       const targetPath = fileURLToPath(target);
@@ -73,13 +74,8 @@ function applyVitestCapabilityAliasOverrides(params: {
     return params.aliasMap;
   }
 
-  const {
-    "openclaw/plugin-sdk": _ignoredLegacyRootAlias,
-    "@openclaw/plugin-sdk": _ignoredScopedRootAlias,
-    ...scopedAliasMap
-  } = params.aliasMap;
   return {
-    ...scopedAliasMap,
+    ...params.aliasMap,
     // Capability contract loads only need a narrow SDK slice. Keep those
     // helpers on a tiny source graph so Vitest does not pull the dist chunk
     // bundle that also drags Matrix/WhatsApp code into these tests.
@@ -94,7 +90,7 @@ function shouldApplyVitestCapabilityAliasOverrides(params: {
   return Boolean(params.env?.VITEST && params.pluginSdkResolution === "dist");
 }
 
-export function buildBundledCapabilityRuntimeConfig(
+function buildBundledCapabilityRuntimeConfig(
   pluginIds: readonly string[],
   env?: PluginLoadOptions["env"],
 ): PluginLoadOptions["config"] {
@@ -123,7 +119,7 @@ function resolvePluginModuleExport(moduleExport: unknown): {
     const definition = resolved as OpenClawPluginDefinition;
     return {
       definition,
-      register: definition.register ?? definition.activate,
+      register: definition.register,
     };
   }
   return {};
@@ -300,7 +296,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
 
-    let mod: OpenClawPluginModule | null = null;
+    let mod: OpenClawPluginModule | null;
     try {
       mod = getModuleLoader(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (error) {
@@ -354,7 +350,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.agentHarnessIds.push(...captured.agentHarnesses.map((entry) => entry.id));
       record.toolNames.push(...captured.tools.map((entry) => entry.name));
 
-      registry.cliBackends?.push(
+      registry.cliBackends.push(
         ...captured.cliBackends.map((backend) => ({
           pluginId: record.id,
           pluginName: record.name,

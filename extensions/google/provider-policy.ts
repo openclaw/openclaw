@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -5,89 +6,48 @@ import type {
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import {
+  isGoogleGenerativeAiApi,
+  isGoogleVertexBaseUrl,
+  normalizeGoogleApiBaseUrl,
+  normalizeGoogleGenerativeAiBaseUrl,
+} from "./src/google-api-base-url.js";
 import { isGoogleGemini3ProModel, isGoogleGemini3ThinkingLevelModel } from "./thinking-api.js";
+
+export {
+  DEFAULT_GOOGLE_API_BASE_URL,
+  isGoogleGenerativeAiApi,
+  isGoogleVertexBaseUrl,
+  isGoogleVertexHostname,
+  normalizeGoogleApiBaseUrl,
+  normalizeGoogleGenerativeAiBaseUrl,
+} from "./src/google-api-base-url.js";
 
 type GoogleApiCarrier = {
   api?: string | null;
 };
 
 type GoogleProviderConfigLike = GoogleApiCarrier & {
+  baseUrl?: string | null;
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
-export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 const GOOGLE_MODEL_ID_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
-function trimTrailingSlashes(value: string): string {
-  return value.replace(/\/+$/, "");
-}
-
-function isCanonicalGoogleApiOriginShorthand(value: string): boolean {
-  return /^https:\/\/generativelanguage\.googleapis\.com\/?$/i.test(value);
-}
-
-function isGoogleGenerativeAiUrl(url: URL): boolean {
-  return (
-    url.protocol === "https:" && url.hostname.toLowerCase() === "generativelanguage.googleapis.com"
-  );
-}
-
-function stripUrlUserInfo(url: URL): void {
-  url.username = "";
-  url.password = "";
-}
-
-export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
-  const raw = trimTrailingSlashes(normalizeOptionalString(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL);
-  try {
-    const url = new URL(raw);
-    url.hash = "";
-    url.search = "";
-    stripUrlUserInfo(url);
-    if (isGoogleGenerativeAiUrl(url)) {
-      const normalizedPath = trimTrailingSlashes(url.pathname || "");
-      url.pathname = normalizedPath || "/v1beta";
-    }
-    return trimTrailingSlashes(url.toString());
-  } catch {
-    if (isCanonicalGoogleApiOriginShorthand(raw)) {
-      return DEFAULT_GOOGLE_API_BASE_URL;
-    }
-    return raw;
-  }
-}
-
-export function isGoogleGenerativeAiApi(api?: string | null): boolean {
-  return api === "google-generative-ai";
-}
-
-export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | undefined {
-  if (!baseUrl) {
-    return baseUrl;
-  }
-
-  const normalized = normalizeGoogleApiBaseUrl(baseUrl);
-  try {
-    const url = new URL(normalized);
-    stripUrlUserInfo(url);
-    if (isGoogleGenerativeAiUrl(url)) {
-      url.pathname = trimTrailingSlashes(url.pathname || "").replace(/\/openai$/i, "") || "/v1beta";
-      return trimTrailingSlashes(url.toString());
-    }
-  } catch {
-    // `normalizeGoogleApiBaseUrl` already returned the best-effort input form.
-  }
-
-  return normalized;
-}
-
 export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
+  provider?: string;
   api: TApi;
   baseUrl?: string;
-}): { api: TApi; baseUrl?: string } {
+}): { api: TApi | "google-generative-ai" | "google-vertex"; baseUrl?: string } {
+  const api =
+    params.api ??
+    (params.provider === "google-vertex" && isGoogleVertexBaseUrl(params.baseUrl)
+      ? "google-vertex"
+      : undefined) ??
+    (params.provider === "google" && params.baseUrl ? "google-generative-ai" : params.api);
   return {
-    api: params.api,
-    baseUrl: isGoogleGenerativeAiApi(params.api)
+    api,
+    baseUrl: isGoogleGenerativeAiApi(api)
       ? normalizeGoogleGenerativeAiBaseUrl(params.baseUrl)
       : params.baseUrl,
   };
@@ -103,6 +63,9 @@ export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
+  if (providerKey === "google-vertex" && isGoogleVertexBaseUrl(provider.baseUrl)) {
+    return false;
+  }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
   }

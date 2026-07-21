@@ -1,6 +1,3 @@
-export function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  return value.trim().toLowerCase();
-}
+// Shared terminal string normalization helpers.
+
+export { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

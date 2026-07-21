@@ -1,5 +1,7 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.CHAT_IMAGE_MAX_BASE64_CHARS
+import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileCallout
 import ai.openclaw.app.ui.mobileCaption1
@@ -74,6 +76,7 @@ import org.commonmark.node.Paragraph
 import org.commonmark.node.SoftLineBreak
 import org.commonmark.node.StrongEmphasis
 import org.commonmark.node.ThematicBreak
+import org.commonmark.parser.IncludeSourceSpans
 import org.commonmark.parser.Parser
 import java.net.URI
 import java.util.Locale
@@ -95,25 +98,38 @@ private val markdownParser: Parser by lazy {
   Parser
     .builder()
     .extensions(extensions)
+    .includeSourceSpans(IncludeSourceSpans.BLOCKS_AND_INLINES)
     .build()
 }
 
+/** Renders gateway/chat Markdown using the restricted mobile-safe feature set. */
 @Composable
 fun ChatMarkdown(
   text: String,
   textColor: Color,
+  isStreaming: Boolean = false,
 ) {
-  val document = remember(text) { markdownParser.parse(text) as Document }
+  val blocks = remember(text, isStreaming) { segmentChatMarkdown(text, isStreaming) }
   val inlineStyles =
     InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText, linkColor = mobileAccent, baseCallout = mobileCallout)
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    RenderMarkdownBlocks(
-      start = document.firstChild,
-      textColor = textColor,
-      inlineStyles = inlineStyles,
-      listDepth = 0,
-    )
+    for (block in blocks) {
+      when (block) {
+        is ChatMarkdownSourceBlock.Markdown -> {
+          val document = remember(block.source) { parseChatMarkdown(block.source) }
+          RenderMarkdownBlocks(
+            start = document.firstChild,
+            textColor = textColor,
+            inlineStyles = inlineStyles,
+            listDepth = 0,
+            isStreaming = isStreaming,
+          )
+        }
+        is ChatMarkdownSourceBlock.Math -> ChatMathBlock(latex = block.latex, textColor = textColor)
+        is ChatMarkdownSourceBlock.MathFallback -> ChatMathFallback(latex = block.latex)
+      }
+    }
   }
 }
 
@@ -123,6 +139,7 @@ private fun RenderMarkdownBlocks(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   var node = start
   while (node != null) {
@@ -141,7 +158,14 @@ private fun RenderMarkdownBlocks(
       }
       is FencedCodeBlock -> {
         SelectionContainer(modifier = Modifier.fillMaxWidth()) {
-          ChatCodeBlock(code = current.literal.orEmpty(), language = current.info?.trim()?.ifEmpty { null })
+          ChatCodeBlock(
+            code = current.literal.orEmpty(),
+            language = current.info?.trim()?.ifEmpty { null },
+            // Streaming: an unclosed fence grows on every delta, so keep it plain until the
+            // closing marker arrives. Finalized messages may validly end at EOF without a
+            // closing fence (CommonMark), so completeness comes from stream state, not syntax.
+            isComplete = !isStreaming || current.closingFenceLength != null,
+          )
         }
       }
       is IndentedCodeBlock -> {
@@ -175,6 +199,7 @@ private fun RenderMarkdownBlocks(
               textColor = textColor,
               inlineStyles = inlineStyles,
               listDepth = listDepth,
+              isStreaming = isStreaming,
             )
           }
         }
@@ -185,6 +210,7 @@ private fun RenderMarkdownBlocks(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
       }
       is OrderedList -> {
@@ -193,6 +219,7 @@ private fun RenderMarkdownBlocks(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
       }
       is TableBlock -> {
@@ -234,6 +261,7 @@ private fun RenderParagraph(
 ) {
   val standaloneImage = remember(paragraph) { standaloneDataImage(paragraph) }
   if (standaloneImage != null) {
+    // Render a paragraph that is only a data image as media, not as an inline alt label.
     InlineBase64Image(base64 = standaloneImage.base64, mimeType = standaloneImage.mimeType)
     return
   }
@@ -256,6 +284,7 @@ private fun RenderBulletList(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -270,6 +299,7 @@ private fun RenderBulletList(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
       }
       item = item.next
@@ -283,6 +313,7 @@ private fun RenderOrderedList(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   Column(
     modifier = Modifier.padding(start = (LIST_INDENT_DP * listDepth).dp),
@@ -298,6 +329,7 @@ private fun RenderOrderedList(
           textColor = textColor,
           inlineStyles = inlineStyles,
           listDepth = listDepth,
+          isStreaming = isStreaming,
         )
         index += 1
       }
@@ -313,6 +345,7 @@ private fun RenderListItem(
   textColor: Color,
   inlineStyles: InlineStyles,
   listDepth: Int,
+  isStreaming: Boolean,
 ) {
   var contentStart = item.firstChild
   var marker = markerText
@@ -343,6 +376,7 @@ private fun RenderListItem(
         textColor = textColor,
         inlineStyles = inlineStyles,
         listDepth = listDepth + 1,
+        isStreaming = isStreaming,
       )
     }
   }
@@ -551,6 +585,7 @@ private fun AnnotatedString.Builder.appendLinkNode(
       textDecoration = TextDecoration.Underline,
     )
   if (destination.isEmpty() || !isSafeMarkdownLinkDestination(destination)) {
+    // Drop unsafe schemes while preserving visible link text.
     appendInlineNode(
       link.firstChild,
       inlineCodeBg = inlineCodeBg,
@@ -570,19 +605,22 @@ private fun AnnotatedString.Builder.appendLinkNode(
   }
 }
 
-private fun isSafeMarkdownLinkDestination(destination: String): Boolean {
+internal fun isSafeMarkdownLinkDestination(destination: String): Boolean {
   val scheme =
     runCatching { URI(destination).scheme?.lowercase(Locale.US) }
       .getOrNull()
       ?: return false
+  // Chat markdown links are user/model supplied; keep navigation limited to
+  // browser-safe web URLs instead of custom Android intents or file URLs.
   return scheme == "http" || scheme == "https"
 }
 
+/** Builds styled inline markdown for compact chat labels and preview text. */
 internal fun buildChatInlineMarkdown(
   text: String,
   linkColor: Color = Color.Blue,
 ): AnnotatedString {
-  val document = markdownParser.parse(text) as Document
+  val document = parseChatMarkdown(text)
   val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
   return buildInlineMarkdown(
     paragraph.firstChild,
@@ -594,6 +632,8 @@ internal fun buildChatInlineMarkdown(
     ),
   )
 }
+
+internal fun parseChatMarkdown(text: String): Document = markdownParser.parse(text) as Document
 
 private fun buildPlainText(start: Node?): String {
   val sb = StringBuilder()
@@ -615,9 +655,11 @@ private fun standaloneDataImage(paragraph: Paragraph): ParsedDataImage? {
   return parseDataImageDestination(only.destination)
 }
 
+/** Parses a data:image Markdown destination when it is safe to render inline. */
 internal fun parseDataImageDestination(destination: String?): ParsedDataImage? {
   val raw = destination?.trim().orEmpty()
   if (raw.isEmpty()) return null
+  // Bound the full URI before regex parsing so pasted data images cannot allocate huge match buffers.
   if (raw.length > CHAT_IMAGE_MAX_BASE64_CHARS + DATA_IMAGE_HEADER_MAX_CHARS) return null
   val match = dataImageRegex.matchEntire(raw) ?: return null
   val subtype =
@@ -661,6 +703,9 @@ private data class TableRenderRow(
   val cells: List<AnnotatedString>,
 )
 
+/**
+ * Parsed bounded data-image payload for chat markdown rendering.
+ */
 internal data class ParsedDataImage(
   val mimeType: String,
   val base64: String,
@@ -677,13 +722,13 @@ private fun InlineBase64Image(
   if (image != null) {
     Image(
       bitmap = image,
-      contentDescription = mimeType ?: "image",
+      contentDescription = mimeType ?: nativeString("Image"),
       contentScale = ContentScale.Fit,
       modifier = Modifier.fillMaxWidth(),
     )
   } else if (imageState.failed) {
     Text(
-      text = "Image unavailable",
+      text = nativeString("Image unavailable"),
       modifier = Modifier.padding(vertical = 2.dp),
       style = mobileCaption1,
       color = mobileTextSecondary,

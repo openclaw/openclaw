@@ -1,5 +1,6 @@
+// File Transfer plugin module implements file fetch tool behavior.
 import crypto from "node:crypto";
-import { type AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
@@ -72,7 +73,9 @@ export function createFileFetchTool(): AnyAgentTool {
       const localPath = saved.path;
       const shortHash = sha256.slice(0, 12);
 
-      const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType);
+      // Extension-derived image MIME can accompany an empty payload when there
+      // are no bytes to sniff. Keep those fetches on the saved-path text fallback.
+      const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType) && base64.length > 0;
       const isInlineText = TEXT_INLINE_MIME_SET.has(mimeType) && size <= TEXT_INLINE_MAX_BYTES;
 
       const content: Array<

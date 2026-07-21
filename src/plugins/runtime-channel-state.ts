@@ -1,6 +1,6 @@
+// Stores active plugin channel registry state for the current runtime.
 import type { ActivePluginChannelRegistry } from "./channel-registry-state.types.js";
-
-export const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+import { PLUGIN_REGISTRY_STATE } from "./runtime-state-key.js";
 
 type GlobalChannelRegistryState = typeof globalThis & {
   [PLUGIN_REGISTRY_STATE]?: {
@@ -35,6 +35,7 @@ function countChannels(registry: ActivePluginChannelRegistry | null | undefined)
   return registry?.channels?.length ?? 0;
 }
 
+/** Returns a cached channel registry snapshot, preferring pinned channel state when populated. */
 export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginChannelRegistrySnapshot {
   const state = (globalThis as GlobalChannelRegistryState)[PLUGIN_REGISTRY_STATE];
   const pinnedRegistry = state?.channel?.registry ?? null;
@@ -71,10 +72,12 @@ export function getActivePluginChannelRegistrySnapshotFromState(): ActivePluginC
   return snapshot;
 }
 
+/** Returns the active plugin channel registry from global runtime state. */
 export function getActivePluginChannelRegistryFromState(): ActivePluginChannelRegistry | null {
   return getActivePluginChannelRegistrySnapshotFromState().registry;
 }
 
+/** Returns the active plugin channel registry version from global runtime state. */
 export function getActivePluginChannelRegistryVersionFromState(): number {
   return getActivePluginChannelRegistrySnapshotFromState().version;
 }

@@ -1,21 +1,35 @@
-import { AcpRuntimeError } from "../runtime/errors.js";
+/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
   AcpRuntimeTurnInput,
   AcpRuntimeTurnResult,
-} from "../runtime/types.js";
+} from "@openclaw/acp-core/runtime/types";
+import { AcpRuntimeError } from "../runtime/errors.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
-export type AcpTurnEventGate = {
+/** Mutable gate used to suppress late events after timeout/cancel races. */
+type AcpTurnEventGate = {
   open: boolean;
 };
 
-export type AcpTurnStreamOutcome = {
+/** Summary of whether a turn stream emitted user-visible output or terminal events. */
+type AcpTurnStreamOutcome = {
   sawOutput: boolean;
-  sawTerminalEvent: boolean;
+  terminalStatus?: "completed" | "cancelled";
 };
+
+function isCancellationStopReason(stopReason: string | undefined): boolean {
+  return stopReason === "cancel" || stopReason === "cancelled" || stopReason === "manual-cancel";
+}
+
+/** Resolves legacy and current done events to the manager's canonical terminal status. */
+function resolveAcpTurnTerminalStatus(
+  event: Extract<AcpRuntimeEvent, { type: "done" }>,
+): "completed" | "cancelled" {
+  return event.status ?? (isCancellationStopReason(event.stopReason) ? "cancelled" : "completed");
+}
 
 async function consumeAcpTurnEvents(params: {
   events: AsyncIterable<AcpRuntimeEvent>;
@@ -27,24 +41,28 @@ async function consumeAcpTurnEvents(params: {
 }): Promise<AcpTurnStreamOutcome> {
   let streamError: AcpRuntimeError | null = null;
   let sawOutput = false;
-  let sawTerminalEvent = false;
+  let terminalStatus: AcpTurnStreamOutcome["terminalStatus"];
 
   for await (const event of params.events) {
     if (!params.eventGate.open) {
       continue;
     }
+    let forwardedEvent = event;
     if (event.type === "done") {
-      sawTerminalEvent = true;
+      // Legacy runTurn adapters may omit status but retain the cancellation reason.
+      terminalStatus = resolveAcpTurnTerminalStatus(event);
+      forwardedEvent = { ...event, status: terminalStatus };
     } else if (event.type === "error") {
       streamError = new AcpRuntimeError(
         normalizeAcpErrorCode(event.code),
         normalizeText(event.message) || "ACP turn failed before completion.",
+        event.detailCode ? { detailCode: event.detailCode } : undefined,
       );
     } else if (event.type === "text_delta" || event.type === "tool_call") {
       sawOutput = true;
       await params.onOutputEvent?.(event);
     }
-    await params.onEvent?.(event);
+    await params.onEvent?.(forwardedEvent);
   }
 
   if (params.eventGate.open && streamError) {
@@ -53,7 +71,7 @@ async function consumeAcpTurnEvents(params: {
 
   return {
     sawOutput,
-    sawTerminalEvent,
+    terminalStatus,
   };
 }
 
@@ -61,6 +79,7 @@ function errorFromTurnResult(result: Extract<AcpRuntimeTurnResult, { status: "fa
   return new AcpRuntimeError(
     normalizeAcpErrorCode(result.error.code),
     normalizeText(result.error.message) || "ACP turn failed before completion.",
+    result.error.detailCode ? { detailCode: result.error.detailCode } : undefined,
   );
 }
 
@@ -78,16 +97,10 @@ async function notifyTerminalResult(params: {
   if (!params.eventGate.open) {
     return;
   }
-  if (params.result.status === "completed") {
+  if (params.result.status === "completed" || params.result.status === "cancelled") {
     await params.onEvent?.({
       type: "done",
-      ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
-    });
-    return;
-  }
-  if (params.result.status === "cancelled") {
-    await params.onEvent?.({
-      type: "done",
+      status: params.result.status,
       ...(params.result.stopReason ? { stopReason: params.result.stopReason } : {}),
     });
     return;
@@ -103,6 +116,7 @@ async function notifyTerminalResult(params: {
   });
 }
 
+/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;
@@ -113,6 +127,7 @@ export async function consumeAcpTurnStream(params: {
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
   if (params.runtime.startTurn) {
+    // startTurn exposes result and event streams separately; coordinate both before reporting done.
     const turn = params.runtime.startTurn(params.turn);
     const eventsPromise = consumeAcpTurnEvents({
       events: turn.events,
@@ -179,7 +194,7 @@ export async function consumeAcpTurnStream(params: {
     }
     return {
       sawOutput: eventOutcome.sawOutput,
-      sawTerminalEvent: true,
+      terminalStatus: result.status,
     };
   }
 

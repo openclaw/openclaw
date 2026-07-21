@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
@@ -117,7 +118,7 @@ export function describeOpenAIProviderCatalogContract() {
         const { openaiProvider } = await contractDepsPromise;
         expectCodexMissingAuthHint(
           (params) => openaiProvider.buildMissingAuthMessage?.(params.context) ?? undefined,
-          "openai/gpt-5.5",
+          "openai/gpt-5.6-sol",
         );
       });
 

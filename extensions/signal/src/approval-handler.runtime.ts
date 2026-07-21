@@ -1,3 +1,4 @@
+// Signal plugin module implements approval handler behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   buildChannelApprovalExpiredText,
@@ -11,12 +12,14 @@ import {
   buildApprovalReactionPendingContent,
   type ApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
-import {
-  type ExecApprovalRequest,
-  type PluginApprovalRequest,
+import type {
+  ExecApprovalRequest,
+  PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultSignalAccountId } from "./accounts.js";
+import { resolveSignalTarget } from "./aliases.js";
 import {
   hasSignalApprovalReactionApprovers,
   registerSignalApprovalReactionTarget,
@@ -109,8 +112,31 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     }),
   },
   transport: {
-    prepareTarget: ({ plannedTarget, accountId, context }) => {
-      const to = normalizeSignalMessagingTarget(plannedTarget.target.to);
+    prepareTarget: ({ cfg, plannedTarget, accountId, context }) => {
+      const plannedAccountId = (plannedTarget.target as { accountId?: string | null }).accountId;
+      const explicitAccountId = resolvePreparedApprovalAccountId({
+        plannedAccountId,
+        contextAccountId: accountId,
+      });
+      const preparedAccountId = resolvePreparedApprovalAccountId({
+        plannedAccountId,
+        contextAccountId: accountId,
+        fallbackAccountId: cfg ? resolveDefaultSignalAccountId(cfg) : DEFAULT_ACCOUNT_ID,
+      });
+      const rawTo = plannedTarget.target.to;
+      let to = normalizeSignalMessagingTarget(rawTo);
+      if (cfg) {
+        try {
+          to =
+            resolveSignalTarget({
+              cfg,
+              accountId: explicitAccountId,
+              input: rawTo,
+            })?.to ?? to;
+        } catch {
+          return null;
+        }
+      }
       if (!to) {
         return null;
       }
@@ -121,11 +147,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       });
       const prepared: PreparedSignalApprovalTarget = {
         to,
-        accountId: resolvePreparedApprovalAccountId({
-          plannedAccountId: (plannedTarget.target as { accountId?: string | null }).accountId,
-          contextAccountId: accountId,
-          fallbackAccountId: DEFAULT_ACCOUNT_ID,
-        }),
+        accountId: preparedAccountId,
         ...(runtimeContext.baseUrl ? { baseUrl: runtimeContext.baseUrl } : {}),
         ...(runtimeContext.account ? { account: runtimeContext.account } : {}),
         ...(runtimeContext.accountUuid ? { accountUuid: runtimeContext.accountUuid } : {}),
@@ -196,6 +218,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
         approvalId: request.id,
+        approvalKind: view.approvalKind,
         allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         targetAuthorKeys: entry.targetAuthorKeys,
         route: {

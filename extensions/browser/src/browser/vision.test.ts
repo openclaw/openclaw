@@ -1,24 +1,25 @@
+// Browser tests cover vision plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
-  describeBrowserScreenshot,
-  neutralizeMediaDirectives,
-} from "./vision.js";
+import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
+
+const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
+  "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
 
 type DescribeFn = ReturnType<typeof vi.fn>;
 
 function makeDeps(
-  describe: DescribeFn,
+  describeCandidate: DescribeFn,
   overrides?: {
     normalizeBrowserScreenshot?: ReturnType<typeof vi.fn>;
     saveMediaBuffer?: ReturnType<typeof vi.fn>;
   },
 ) {
   return {
-    describeImageFile: describe as never,
+    describeImageFile: describeCandidate as never,
     normalizeBrowserScreenshot:
       (overrides?.normalizeBrowserScreenshot as never) ??
       (vi.fn(async (buffer: Buffer) => ({ buffer })) as never),
@@ -41,7 +42,7 @@ async function withTempImage<T>(fn: (filePath: string) => Promise<T>): Promise<T
 
 describe("describeBrowserScreenshot", () => {
   it("uses existing image understanding config with a browser screenshot prompt", async () => {
-    const describe = vi.fn().mockResolvedValue({
+    const describeEntry = vi.fn().mockResolvedValue({
       text: "A login screen.",
       provider: "openai",
       model: "gpt-vision",
@@ -62,7 +63,7 @@ describe("describeBrowserScreenshot", () => {
           activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
           mediaScope: { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" },
         },
-        makeDeps(describe),
+        makeDeps(describeEntry),
       );
 
       expect(result).toEqual({
@@ -71,7 +72,7 @@ describe("describeBrowserScreenshot", () => {
         model: "gpt-vision",
         decision: { outcome: "success" },
       });
-      expect(describe).toHaveBeenCalledWith({
+      expect(describeEntry).toHaveBeenCalledWith({
         filePath,
         cfg: {
           tools: {
@@ -92,7 +93,7 @@ describe("describeBrowserScreenshot", () => {
   });
 
   it("resizes screenshots before image understanding when image sanitization is configured", async () => {
-    const describe = vi.fn().mockResolvedValue({ text: "Small screenshot." });
+    const describeResult = vi.fn().mockResolvedValue({ text: "Small screenshot." });
     const normalizeBrowserScreenshot = vi.fn(async () => ({
       buffer: Buffer.from("small"),
       contentType: "image/jpeg" as const,
@@ -106,7 +107,7 @@ describe("describeBrowserScreenshot", () => {
           filePath,
           imageSanitization: { maxDimensionPx: 800 },
         },
-        makeDeps(describe, { normalizeBrowserScreenshot, saveMediaBuffer }),
+        makeDeps(describeResult, { normalizeBrowserScreenshot, saveMediaBuffer }),
       );
     });
 
@@ -114,11 +115,13 @@ describe("describeBrowserScreenshot", () => {
       maxSide: 800,
     });
     expect(saveMediaBuffer).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
-    expect(describe.mock.calls[0][0].filePath).toBe("/tmp/resized.jpg");
+    expect(
+      expectDefined(describeResult.mock.calls[0]?.[0], "browser vision request").filePath,
+    ).toBe("/tmp/resized.jpg");
   });
 
   it("returns null when image understanding is skipped or not configured", async () => {
-    const describe = vi.fn().mockResolvedValue({
+    const describeValue = vi.fn().mockResolvedValue({
       text: undefined,
       decision: { outcome: "skipped" },
     });
@@ -126,13 +129,13 @@ describe("describeBrowserScreenshot", () => {
     await expect(
       describeBrowserScreenshot(
         { cfg: { browser: {} }, filePath: "/tmp/screenshot.png" },
-        makeDeps(describe),
+        makeDeps(describeValue),
       ),
     ).resolves.toBeNull();
   });
 
   it("does not pass an incomplete active model to media understanding", async () => {
-    const describe = vi.fn().mockResolvedValue({ text: "ok" });
+    const describeLocal = vi.fn().mockResolvedValue({ text: "ok" });
 
     await describeBrowserScreenshot(
       {
@@ -144,10 +147,12 @@ describe("describeBrowserScreenshot", () => {
         filePath: "/tmp/screenshot.png",
         activeModel: { model: "missing-provider" },
       },
-      makeDeps(describe),
+      makeDeps(describeLocal),
     );
 
-    expect(describe.mock.calls[0][0].activeModel).toBeUndefined();
+    expect(
+      expectDefined(describeLocal.mock.calls[0]?.[0], "local browser vision request").activeModel,
+    ).toBeUndefined();
   });
 });
 

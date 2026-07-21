@@ -1,6 +1,8 @@
+// Tests reply delivery routing, payload persistence, and send suppression.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import type { ReplyPayload } from "../types.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import {
   createBlockReplyDeliveryHandler,
@@ -13,6 +15,36 @@ type BlockReplyPipelineLike = NonNullable<
 >;
 
 describe("createBlockReplyDeliveryHandler", () => {
+  it.each([
+    ["reasoning", { text: "internal reasoning", isReasoning: true }, "reasoningPayloadsEnabled"],
+    [
+      "commentary",
+      { text: "internal commentary", isCommentary: true },
+      "commentaryPayloadsEnabled",
+    ],
+  ] as const)("gates %s before delivery bookkeeping", async (_label, payload, enabledFlag) => {
+    const onBlockReply = vi.fn(async () => {});
+    const enqueue = vi.fn();
+    const baseParams = {
+      onBlockReply,
+      normalizeStreamingText: (reply: ReplyPayload) => ({ text: reply.text, skip: false }),
+      applyReplyToMode: (reply: ReplyPayload) => reply,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: { enqueue } as unknown as BlockReplyPipelineLike,
+      directlySentBlockKeys: new Set<string>(),
+      directlySentBlockPayloads: [],
+    };
+
+    await createBlockReplyDeliveryHandler(baseParams)(payload);
+    expect(enqueue).not.toHaveBeenCalled();
+
+    await createBlockReplyDeliveryHandler({ ...baseParams, [enabledFlag]: true })(payload);
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
   it("sends captioned media-bearing block replies when block streaming is disabled", async () => {
     const onBlockReply = vi.fn(async () => {});
     const normalizeStreamingText = vi.fn((payload: { text?: string }) => ({
@@ -32,6 +64,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({
@@ -69,6 +102,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({
@@ -105,6 +139,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({
@@ -148,6 +183,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys,
+      directlySentBlockPayloads: [],
     });
 
     await handler({ presentation });
@@ -179,6 +215,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: false,
       blockReplyPipeline: null,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "text only" });
@@ -201,6 +238,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "\n\n  Hello from stream" });
@@ -233,6 +271,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "reset intro" });
@@ -272,6 +311,18 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.mediaUrls).toEqual(["./report.pdf"]);
   });
 
+  it("keeps parsed media when an explicit media list is empty", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "MEDIA: ./report.pdf", mediaUrls: [] },
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload.text).toBeUndefined();
+    expect(normalized.payload.mediaUrl).toBe("./report.pdf");
+    expect(normalized.payload.mediaUrls).toEqual([]);
+  });
+
   it("leaves media-looking text alone when media directive parsing is disabled", () => {
     const normalized = normalizeReplyPayloadDirectives({
       payload: { text: "Result\nMEDIA: ./image.png" },
@@ -295,6 +346,30 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(normalized.payload.replyToCurrent).toBeUndefined();
   });
 
+  it("normalizes reaction directives into Telegram channel data", () => {
+    const normalized = normalizeReplyPayloadDirectives({
+      payload: { text: "[[react_to_current:✅]]" },
+      currentMessageId: "msg-123",
+      trimLeadingWhitespace: true,
+      parseMode: "auto",
+    });
+
+    expect(normalized.payload).toMatchObject({
+      text: undefined,
+      replyToId: "msg-123",
+      replyToCurrent: true,
+      channelData: {
+        telegram: {
+          reaction: {
+            emoji: "✅",
+            replyToCurrent: true,
+            replyToId: "msg-123",
+          },
+        },
+      },
+    });
+  });
+
   it("passes structured media block replies through media path normalization", async () => {
     const blockReplyPipeline = {
       enqueue: vi.fn(),
@@ -316,6 +391,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "Result", mediaUrl: "./image.png" });
@@ -353,6 +429,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     await handler({ text: "NO_REPLY", mediaUrls: ["./missing.png", "./survived.png"] });
@@ -384,6 +461,7 @@ describe("createBlockReplyDeliveryHandler", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline,
       directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads: [],
     });
 
     const payload = setReplyPayloadMetadata({ text: "Alpha" }, { assistantMessageIndex: 7 });
@@ -411,5 +489,34 @@ describe("createBlockReplyDeliveryHandler", () => {
     expect(getReplyPayloadMetadata(enqueuedPayload)).toEqual({
       assistantMessageIndex: 7,
     });
+  });
+
+  it("records concurrent direct block deliveries in emission order", async () => {
+    const resolvers: Array<() => void> = [];
+    const directlySentBlockPayloads: Array<ReplyPayload | undefined> = [];
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: () =>
+        new Promise<void>((resolve) => {
+          resolvers.push(resolve);
+        }),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: null,
+      directlySentBlockKeys: new Set(),
+      directlySentBlockPayloads,
+    });
+
+    const first = handler({ text: "first" });
+    const second = handler({ text: "second" });
+    resolvers[1]?.();
+    await second;
+    resolvers[0]?.();
+    await first;
+
+    expect(directlySentBlockPayloads.map((payload) => payload?.text)).toEqual(["first", "second"]);
   });
 });

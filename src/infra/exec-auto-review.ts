@@ -1,10 +1,12 @@
-export type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
+/** Risk level returned by exec auto-reviewers for approval routing decisions. */
+type ExecAutoReviewRisk = "unknown" | "low" | "medium" | "high";
 
+/** Auto-review outcome: either approve once or send the command to normal approval. */
 export type ExecAutoReviewDecision =
   | {
       decision: "allow-once";
       rationale: string;
-      risk: "low" | "medium" | "high";
+      risk: "low";
     }
   | {
       decision: "ask";
@@ -12,11 +14,14 @@ export type ExecAutoReviewDecision =
       risk: ExecAutoReviewRisk;
     };
 
-export type ExecAutoReviewHost = "gateway" | "node";
+/** Execution host whose command policy context is being reviewed. */
+export type ExecAutoReviewHost = "gateway" | "node" | "codex-app-server";
 
+/** Command and policy facts supplied to an exec auto-reviewer. */
 export type ExecAutoReviewInput = {
   command: string;
   argv?: readonly string[];
+  resolvedPath?: string | null;
   cwd?: string | null;
   envKeys?: readonly string[];
   host: ExecAutoReviewHost;
@@ -41,6 +46,7 @@ export type ExecAutoReviewInput = {
   };
 };
 
+/** Reviewer function used by gateway/node exec paths before human approval fallback. */
 export type ExecAutoReviewer = (
   input: ExecAutoReviewInput,
 ) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision;

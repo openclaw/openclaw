@@ -1,4 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Tests reset hook fallback behavior inside the get-reply directive pipeline.
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildNativeResetContext,
   createGetReplyContinueDirectivesResult,
@@ -42,8 +44,11 @@ function createContinueDirectivesResult(resetHookTriggered: boolean) {
 }
 
 describe("getReplyFromConfig reset-hook fallback", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
+  });
+
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();
@@ -75,9 +80,14 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     await getReplyFromConfig(buildNativeResetContext(), undefined, {});
 
     expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
-    const [[hookParams]] = mocks.emitResetCommandHooks.mock.calls as unknown as Array<
-      [{ action?: string; sessionKey?: string }]
-    >;
+    const [hookParams] = expectDefined(
+      (
+        mocks.emitResetCommandHooks.mock.calls as unknown as Array<
+          [{ action?: string; sessionKey?: string }]
+        >
+      )[0],
+      "(mocks.emitResetCommandHooks.mock.calls as unknown as Array<\n        [{ action?: string; sessionKey?: string }]\n      >)[0] test invariant",
+    );
     expect(hookParams.action).toBe("new");
     expect(hookParams.sessionKey).toBe("agent:main:telegram:direct:123");
   });

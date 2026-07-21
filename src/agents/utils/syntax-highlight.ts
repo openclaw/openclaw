@@ -1,10 +1,50 @@
-import hljs from "highlight.js";
-import { decodeHtmlEntityAt } from "./html.js";
+/**
+ * Syntax highlighting renderer for terminal-friendly formatted output.
+ *
+ * Highlight.js emits HTML spans; this module walks that small HTML subset and
+ * maps active scopes to caller-provided text formatters.
+ */
+import { createRequire } from "node:module";
+import { decodeHtmlEntities } from "../../shared/html-entities.js";
 
-export type HighlightFormatter = (text: string) => string;
-export type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
+type HighlightJs = {
+  getLanguage(name: string): unknown;
+  highlight(
+    code: string,
+    options: { language: string; ignoreIllegals?: boolean },
+  ): { value: string };
+  highlightAuto(code: string, languageSubset?: string[]): { value: string };
+};
 
-export interface HighlightOptions {
+function isHighlightJs(value: unknown): value is HighlightJs {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "getLanguage" in value &&
+    typeof value.getLanguage === "function" &&
+    "highlight" in value &&
+    typeof value.highlight === "function" &&
+    "highlightAuto" in value &&
+    typeof value.highlightAuto === "function"
+  );
+}
+
+// highlight.js ships `/// <reference lib="dom" />` in its d.ts, which would
+// silently re-inject DOM globals into the DOM-free core program. Load it
+// untyped and validate the narrow API we use instead of importing its types.
+const highlightJsModule: unknown = createRequire(import.meta.url)("highlight.js");
+if (!isHighlightJs(highlightJsModule)) {
+  throw new TypeError("highlight.js did not expose the expected Node API");
+}
+const hljs = highlightJsModule;
+
+/** Formatter applied to highlighted text segments. */
+type HighlightFormatter = (text: string) => string;
+/** Mapping from highlight.js scope names to text formatters. */
+type HighlightTheme = Partial<Record<string, HighlightFormatter>>;
+
+/** Options used when highlighting code and rendering themed text. */
+interface HighlightOptions {
   language?: string;
   ignoreIllegals?: boolean;
   languageSubset?: string[];
@@ -86,7 +126,8 @@ function isSpanOpenTagStart(html: string, index: number): boolean {
   );
 }
 
-export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
+/** Renders highlight.js span HTML into themed plain text. */
+function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
   let output = "";
   let textBuffer = "";
   const scopes: Array<string | undefined> = [];
@@ -95,8 +136,9 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
     if (!textBuffer) {
       return;
     }
+    const decodedText = decodeHtmlEntities(textBuffer);
     const formatter = getActiveFormatter(scopes, theme);
-    output += formatter ? formatter(textBuffer) : textBuffer;
+    output += formatter ? formatter(decodedText) : decodedText;
     textBuffer = "";
   };
 
@@ -105,6 +147,7 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
     if (isSpanOpenTagStart(html, index)) {
       const tagEndIndex = html.indexOf(">", index + 5);
       if (tagEndIndex !== -1) {
+        // Scope stack mirrors nested highlight.js spans so inner scopes override outer ones.
         flushText();
         const tag = html.slice(index, tagEndIndex + 1);
         const scope = getScopeFromSpanTag(tag);
@@ -123,15 +166,6 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
       continue;
     }
 
-    if (html[index] === "&") {
-      const decoded = decodeHtmlEntityAt(html, index);
-      if (decoded) {
-        textBuffer += decoded.text;
-        index += decoded.length;
-        continue;
-      }
-    }
-
     textBuffer += html[index];
     index++;
   }
@@ -140,6 +174,7 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
   return output;
 }
 
+/** Highlights code using an explicit language or highlight.js auto-detection. */
 export function highlight(code: string, options: HighlightOptions = {}): string {
   const html = options.language
     ? hljs.highlight(code, {
@@ -150,6 +185,7 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
   return renderHighlightedHtml(html, options.theme);
 }
 
+/** Returns whether highlight.js has a registered language by this name. */
 export function supportsLanguage(name: string): boolean {
   return hljs.getLanguage(name) !== undefined;
 }

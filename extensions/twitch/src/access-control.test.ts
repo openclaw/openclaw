@@ -1,3 +1,4 @@
+// Twitch tests cover access control plugin behavior.
 import { describe, expect, it } from "vitest";
 import { checkTwitchAccessControl } from "./access-control.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
@@ -11,6 +12,7 @@ describe("checkTwitchAccessControl", () => {
   };
 
   const mockMessage: TwitchChatMessage = {
+    id: "message-1",
     username: "testuser",
     userId: "123456",
     message: "hello bot",

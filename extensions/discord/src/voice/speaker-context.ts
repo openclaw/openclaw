@@ -1,3 +1,4 @@
+// Discord plugin module implements speaker context behavior.
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -32,6 +33,7 @@ export class DiscordVoiceSpeakerContextResolver {
     private readonly params: {
       client: Client;
       ownerAllowFrom?: string[];
+      ownerAllowAll?: boolean;
     },
   ) {}
 
@@ -87,6 +89,9 @@ export class DiscordVoiceSpeakerContextResolver {
   }
 
   private resolveIsOwner(identity: Pick<VoiceSpeakerIdentity, "id" | "name" | "tag">): boolean {
+    if (this.params.ownerAllowAll === true) {
+      return true;
+    }
     return resolveDiscordOwnerAccess({
       allowFrom: this.params.ownerAllowFrom,
       sender: {

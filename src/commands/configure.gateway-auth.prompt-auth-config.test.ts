@@ -1,3 +1,4 @@
+// Configure gateway auth prompt tests cover interactive auth selection and model-aware auth config.
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -26,7 +27,7 @@ const mocks = vi.hoisted(() => ({
       const scopeKeys = opts.scopeKeys ? normalizeTestModelKeys(opts.scopeKeys) : [];
       const scopeKeySet = scopeKeys.length > 0 ? new Set(scopeKeys) : null;
       if (normalized.length === 0) {
-        if (!defaults?.models) {
+        if (!defaults?.models && !defaults?.modelPolicy?.allow) {
           return cfg;
         }
         if (scopeKeySet) {
@@ -35,18 +36,23 @@ const mocks = vi.hoisted(() => ({
             delete nextModels[key];
           }
           const { models: _ignored, ...restDefaults } = defaults;
+          const allow = Object.keys(nextModels);
           return {
             ...cfg,
             agents: {
               ...cfg.agents,
               defaults:
-                Object.keys(nextModels).length > 0
-                  ? { ...defaults, models: nextModels }
-                  : restDefaults,
+                allow.length > 0
+                  ? {
+                      ...defaults,
+                      models: nextModels,
+                      modelPolicy: { ...defaults.modelPolicy, allow },
+                    }
+                  : (({ modelPolicy: _modelPolicy, ...rest }) => rest)(restDefaults),
             },
           };
         }
-        const { models: _ignored, ...restDefaults } = defaults;
+        const { models: _ignored, modelPolicy: _modelPolicy, ...restDefaults } = defaults;
         return { ...cfg, agents: { ...cfg.agents, defaults: restDefaults } };
       }
       const existingModels = defaults?.models ?? {};
@@ -63,7 +69,11 @@ const mocks = vi.hoisted(() => ({
         ...cfg,
         agents: {
           ...cfg.agents,
-          defaults: { ...defaults, models: nextModels },
+          defaults: {
+            ...defaults,
+            models: nextModels,
+            modelPolicy: { ...defaults?.modelPolicy, allow: Object.keys(nextModels) },
+          },
         },
       };
     },
@@ -240,7 +250,7 @@ function createKilocodeProvider() {
     baseUrl: "https://api.kilo.ai/api/gateway/",
     api: "openai-completions",
     models: [
-      { id: "kilo/auto", name: "Kilo Auto" },
+      { id: "kilo-auto/balanced", name: "Auto Balanced" },
       { id: "anthropic/claude-sonnet-4", name: "Claude Sonnet 4" },
     ],
   };
@@ -263,7 +273,7 @@ function createApplyAuthChoiceConfig(includeMinimaxProvider = false) {
     config: {
       agents: {
         defaults: {
-          model: { primary: "kilocode/kilo/auto" },
+          model: { primary: "kilocode/kilo-auto/balanced" },
         },
       },
       models: {
@@ -288,7 +298,7 @@ async function runPromptAuthConfigWithAllowlist(includeMinimaxProvider = false) 
   mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
   mocks.applyAuthChoice.mockResolvedValue(createApplyAuthChoiceConfig(includeMinimaxProvider));
   mocks.promptModelAllowlist.mockResolvedValue({
-    models: ["kilocode/kilo/auto"],
+    models: ["kilocode/kilo-auto/balanced"],
   });
   mocks.resolvePluginProviders.mockReturnValue([]);
   mocks.resolveProviderPluginChoice.mockReturnValue(null);
@@ -300,16 +310,19 @@ describe("promptAuthConfig", () => {
   it("keeps Kilo provider models while applying allowlist defaults", async () => {
     const result = await runPromptAuthConfigWithAllowlist();
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "kilo/auto",
+      "kilo-auto/balanced",
       "anthropic/claude-sonnet-4",
     ]);
-    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["kilocode/kilo/auto"]);
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
+      "kilocode/kilo-auto/balanced",
+    ]);
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["kilocode/kilo-auto/balanced"]);
   });
 
   it("does not mutate provider model catalogs when allowlist is set", async () => {
     const result = await runPromptAuthConfigWithAllowlist(true);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
-      "kilo/auto",
+      "kilo-auto/balanced",
       "anthropic/claude-sonnet-4",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
@@ -390,6 +403,10 @@ describe("promptAuthConfig", () => {
       "openai/gpt-5.5": { alias: "GPT" },
       "anthropic/claude-sonnet-4-6": {},
     });
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.5",
+      "anthropic/claude-sonnet-4-6",
+    ]);
   });
 
   it("resolves fallback aliases before scoped allowlist pruning", async () => {
@@ -455,6 +472,44 @@ describe("promptAuthConfig", () => {
 
     expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
     expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
+  });
+
+  it("canonicalizes a legacy Codex primary when OpenAI OAuth selects the matching model", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("openai-device-code");
+    mocks.resolvePreferredProviderForAuthChoice.mockResolvedValue("openai");
+    mocks.applyAuthChoice.mockResolvedValue({
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "codex/gpt-5.5" },
+            models: {
+              "openai/gpt-5.5": {},
+              "openai/gpt-5.3-codex": {},
+            },
+          },
+        },
+      },
+    });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai/gpt-5.5", "openai/gpt-5.3-codex"],
+      scopeKeys: ["openai/gpt-5.5", "openai/gpt-5.3-codex"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
+
+    expect(mocks.promptModelAllowlist).toHaveBeenCalledOnce();
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
+    expect(mocks.applyPrimaryModel).toHaveBeenCalledWith(expect.any(Object), "openai/gpt-5.5");
+    expect(result.agents?.defaults?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.3-codex"],
+    });
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
+      "openai/gpt-5.5",
+      "openai/gpt-5.3-codex",
+    ]);
   });
 
   it("keeps the selected provider scope when existing config has another provider", async () => {
@@ -673,6 +728,7 @@ describe("promptAuthConfig", () => {
     expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai");
     expect(result.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
     expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["openai/gpt-5.5"]);
+    expect(result.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.5"]);
   });
 
   it("returns to auth selection when plugin install onboarding asks for a retry", async () => {

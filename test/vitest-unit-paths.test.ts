@@ -1,3 +1,4 @@
+// Vitest unit path tests validate unit test include and exclude paths.
 import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { isUnitConfigTestFile } from "./vitest/vitest.unit-paths.mjs";
@@ -8,6 +9,8 @@ describe("isUnitConfigTestFile", () => {
   });
 
   it("rejects files excluded from the unit config", () => {
+    expect(isUnitConfigTestFile("packages/gateway-client/src/index.test.ts")).toBe(false);
+    expect(isUnitConfigTestFile("packages/gateway-protocol/src/index.test.ts")).toBe(false);
     expect(
       isUnitConfigTestFile(
         bundledPluginFile("imessage", "src/monitor.shutdown.unhandled-rejection.test.ts"),

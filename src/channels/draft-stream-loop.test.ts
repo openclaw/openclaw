@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+// Draft stream loop tests cover incremental draft updates while channel replies stream.
+import { setImmediate as nextMacrotask } from "node:timers/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createDraftStreamLoop } from "./draft-stream-loop.js";
 
 const flushMicrotasks = async () => {
@@ -7,8 +10,19 @@ const flushMicrotasks = async () => {
 };
 
 const flushMacrotask = async () => {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await nextMacrotask();
 };
+
+async function waitForBackgroundFlushError(
+  onBackgroundFlushError: ReturnType<typeof vi.fn<(err: unknown) => void>>,
+) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await flushMicrotasks();
+    if (onBackgroundFlushError.mock.calls.length > 0) {
+      return;
+    }
+  }
+}
 
 async function captureUnhandledRejections(
   run: (rejections: unknown[]) => Promise<void>,
@@ -28,6 +42,18 @@ async function captureUnhandledRejections(
 }
 
 describe("createDraftStreamLoop", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    if (vi.isFakeTimers()) {
+      vi.clearAllTimers();
+    }
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it("contains immediate background flush rejections and preserves pending text", async () => {
     await captureUnhandledRejections(async (rejections) => {
       const error = new Error("send failed");
@@ -45,7 +71,7 @@ describe("createDraftStreamLoop", () => {
       });
 
       loop.update("hello");
-      await flushMicrotasks();
+      await waitForBackgroundFlushError(onBackgroundFlushError);
       await flushMacrotask();
       await loop.flush();
 
@@ -90,8 +116,68 @@ describe("createDraftStreamLoop", () => {
         },
       );
     } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("clamps oversized throttle timers", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const sendOrEditStreamMessage = vi.fn(async () => true);
+      const loop = createDraftStreamLoop({
+        throttleMs: Number.MAX_SAFE_INTEGER,
+        isStopped: () => false,
+        sendOrEditStreamMessage,
+      });
+
+      loop.update("hello");
+
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(MAX_TIMER_TIMEOUT_MS - 1);
+      expect(sendOrEditStreamMessage).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("hello");
+      loop.stop();
+    } finally {
+      vi.clearAllTimers();
       vi.useRealTimers();
     }
+  });
+
+  it("takes the latest queued text without interrupting the in-flight send", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    let releaseSend: (() => void) | undefined;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const sendOrEditStreamMessage = vi.fn(async () => {
+      await sendPending;
+      return true;
+    });
+    const loop = createDraftStreamLoop({
+      throttleMs: 0,
+      isStopped: () => false,
+      sendOrEditStreamMessage,
+    });
+
+    loop.update("in flight");
+    await flushMicrotasks();
+    loop.update("queued first");
+    loop.update("queued latest");
+
+    expect(vi.getTimerCount()).toBe(1);
+    expect(loop.takePending()).toBe("queued latest");
+    expect(vi.getTimerCount()).toBe(0);
+
+    releaseSend?.();
+    await loop.waitForInFlight();
+    await flushMicrotasks();
+
+    expect(sendOrEditStreamMessage).toHaveBeenCalledExactlyOnceWith("in flight");
   });
 
   it("contains synchronous sender failures from background flushes", async () => {
@@ -113,7 +199,7 @@ describe("createDraftStreamLoop", () => {
       });
 
       loop.update("hello");
-      await flushMicrotasks();
+      await waitForBackgroundFlushError(onBackgroundFlushError);
       await flushMacrotask();
       await loop.flush();
 
@@ -143,7 +229,7 @@ describe("createDraftStreamLoop", () => {
       });
 
       loop.update("hello");
-      await flushMicrotasks();
+      await waitForBackgroundFlushError(onBackgroundFlushError);
       await flushMacrotask();
       await loop.flush();
 

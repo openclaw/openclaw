@@ -1,3 +1,6 @@
+/**
+ * Runtime SDK subpath for channel setup wizards, prompts, and allowlist helpers.
+ */
 export type { OpenClawConfig } from "../config/config.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
 export { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -8,6 +11,7 @@ export type {
   ChannelSetupDmPolicy,
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardCredential,
   ChannelSetupWizardTextInput,
 } from "../channels/plugins/setup-wizard-types.js";
 
@@ -47,3 +51,4 @@ export {
   createDelegatedTextInputShouldPrompt,
 } from "../channels/plugins/setup-wizard-binary.js";
 export { createDelegatedSetupWizardProxy } from "../channels/plugins/setup-wizard-proxy.js";
+export { baseUrlTextInput, defineTokenCredential } from "./setup-credential.js";

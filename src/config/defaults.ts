@@ -1,9 +1,11 @@
+// Provides canonical default config values and model/provider defaults.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -11,7 +13,6 @@ import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "./agent-limits.js";
-import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "./cron-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
@@ -27,12 +28,12 @@ type ProviderPolicyDefaultsOptions = {
   loadManifestRegistry?: () => Pick<PluginManifestRegistry, "plugins"> | undefined;
 };
 
-let defaultWarnState: WarnState = { warned: false };
+const defaultWarnState: WarnState = { warned: false };
 
-const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-4-8",
-  sonnet: "anthropic/claude-sonnet-4-6",
+  sonnet: "anthropic/claude-sonnet-5",
 
   // OpenAI
   gpt: "openai/gpt-5.4",
@@ -168,7 +169,7 @@ export function applyModelDefaults(
       const normalizedProvider = normalizeProviderConfigForConfigDefaults({
         provider: providerId,
         providerConfig: provider,
-        manifestRegistry: options.manifestRegistry,
+        manifestRegistry,
       });
       const models = normalizedProvider.models;
       if (!Array.isArray(models) || models.length === 0) {
@@ -179,7 +180,7 @@ export function applyModelDefaults(
         continue;
       }
       const providerApi = normalizedProvider.api;
-      let nextProvider = normalizedProvider;
+      const nextProvider = normalizedProvider;
       if (nextProvider !== provider) {
         mutated = true;
       }
@@ -285,7 +286,7 @@ export function applyModelDefaults(
         return agent;
       }
       let nextAgent = agent;
-      if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+      if (Object.hasOwn(agent, "model")) {
         const normalizedModel = normalizeAgentModelConfigForDefaults(agent.model);
         if (normalizedModel !== agent.model) {
           nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
@@ -349,6 +350,15 @@ export function applyModelDefaults(
       continue;
     }
     if (entry.alias !== undefined) {
+      continue;
+    }
+    const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
+    const aliasAlreadyOwned = Object.entries(nextModels).some(
+      ([modelRef, candidate]) =>
+        modelRef !== target && normalizeLowercaseStringOrEmpty(candidate.alias) === normalizedAlias,
+    );
+    // Preserve explicit alias ownership when a newer default target is also configured.
+    if (aliasAlreadyOwned) {
       continue;
     }
     nextModels[target] = { ...entry, alias };
@@ -449,17 +459,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
-  const raw = cfg.cron?.maxConcurrentRuns;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    cron: {
-      ...cfg.cron,
-      maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    },
-  };
+  return cfg;
 }
 
 export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {

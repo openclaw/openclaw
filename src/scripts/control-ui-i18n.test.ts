@@ -1,3 +1,4 @@
+// Control UI i18n script tests cover locale extraction and validation.
 import { describe, expect, it } from "vitest";
 import {
   findPlaceholderMismatches,
@@ -41,7 +42,7 @@ describe("control-ui-i18n placeholder validation", () => {
 describe("control-ui-i18n translation runtime resolution", () => {
   it("uses the in-tree OpenClaw LLM model catalog", () => {
     expect(resolveTranslationModel()).toMatchObject({
-      id: "gpt-5.5",
+      id: "gpt-5.6-sol",
       provider: "openai",
     });
   });

@@ -1,9 +1,5 @@
+// Cron store row normalization for doctor repair and quarantine decisions.
 import { randomUUID } from "node:crypto";
-import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
-import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
-import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
-import { inferLegacyName } from "../../../cron/service/normalize.js";
-import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,8 +7,24 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
+import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
+import { coerceFiniteScheduleNumber } from "../../../cron/schedule.js";
+import { inferCronJobName } from "../../../cron/service/normalize.js";
+import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import {
+  isBlockedLegacyCodexModelRef,
+  type LegacyCodexModelIdentity,
+} from "../shared/codex-route-model-ref.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
-import { hasLegacyOpenAICodexCronModelRef, migrateLegacyCronPayload } from "./payload-migration.js";
+import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
+import {
+  classifyUnresolvedAgentTurnShellToolPrompt,
+  collectLegacyOpenAICodexCronModelRoutes,
+  hasLegacyOpenAICodexCronModelRef,
+  migrateLegacyAgentTurnCommandPayload,
+  migrateLegacyCronPayload,
+} from "./payload-migration.js";
 
 type CronStoreIssueKey =
   | "jobId"
@@ -22,6 +34,8 @@ type CronStoreIssueKey =
   | "legacyScheduleCron"
   | "legacyPayloadKind"
   | "legacyPayloadCodexModel"
+  | "legacyAgentTurnCommandPayload"
+  | "unresolvedAgentTurnShellToolPrompt"
   | "legacyPayloadProvider"
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
@@ -31,10 +45,59 @@ type CronStoreIssueKey =
 
 type CronStoreIssues = Partial<Record<CronStoreIssueKey, number>>;
 
+export type CronCodexRuntimePolicyTarget = {
+  agentId?: string;
+  modelRef: string;
+  legacyModelRef?: string;
+};
+
+export function cronCodexRuntimePolicyTargetKey(target: CronCodexRuntimePolicyTarget): string {
+  return `${target.agentId ?? ""}\u0000${target.modelRef}\u0000${target.legacyModelRef ?? ""}`;
+}
+
+export function collectStoredCronCodexRuntimePolicyTargets(
+  jobs: ReadonlyArray<Record<string, unknown>>,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): CronCodexRuntimePolicyTarget[] {
+  const targets = new Map<string, CronCodexRuntimePolicyTarget>();
+  for (const job of jobs) {
+    const agentId = normalizeOptionalString(job.agentId);
+    const payload =
+      job.payload && typeof job.payload === "object" && !Array.isArray(job.payload)
+        ? (job.payload as Record<string, unknown>)
+        : {};
+    const routes = [
+      ...collectLegacyOpenAICodexCronModelRoutes(payload),
+      ...collectLegacyOpenAICodexCronModelRoutes({ model: job.model }),
+    ];
+    for (const route of routes) {
+      if (
+        isBlockedLegacyCodexModelRef({
+          modelRef: route.legacyModelRef,
+          blockedModelIdentities,
+        })
+      ) {
+        continue;
+      }
+      const target = {
+        ...(agentId ? { agentId } : {}),
+        modelRef: route.canonicalModelRef,
+        legacyModelRef: route.legacyModelRef,
+      };
+      targets.set(cronCodexRuntimePolicyTargetKey(target), target);
+    }
+  }
+  return [...targets.values()];
+}
+
 type NormalizeCronStoreJobsResult = {
+  codexRuntimePolicyTargets: CronCodexRuntimePolicyTarget[];
   issues: CronStoreIssues;
+  unresolvedAgentTurnCommandPromptJobs: string[];
+  unresolvedAgentTurnShellToolPromptJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
+  removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
 };
 
 function incrementIssue(issues: CronStoreIssues, key: CronStoreIssueKey) {
@@ -51,7 +114,8 @@ function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
   const hadJobIdKey = "jobId" in raw;
   const id = normalizeOptionalStringifiedId(raw.id);
   const legacyJobId = normalizeOptionalStringifiedId(raw.jobId);
-  const canonicalId = id ?? legacyJobId ?? `cron-${randomUUID()}`;
+  const canonicalId =
+    id ?? legacyJobId ?? resolveLegacyCronMigrationId(raw) ?? `cron-${randomUUID()}`;
   const nonStringIdIssue = hadIdKey && raw.id != null && typeof raw.id !== "string";
   const missingIdIssue = !id && !legacyJobId;
   let mutated = false;
@@ -231,14 +295,27 @@ function stripLegacyTopLevelFields(raw: Record<string, unknown>) {
   }
 }
 
+/** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
+  options: {
+    migrateCodexModelRefs?: boolean;
+    shouldMigrateCodexRuntimePolicyTarget?: (target: CronCodexRuntimePolicyTarget) => boolean;
+  } = {},
 ): NormalizeCronStoreJobsResult {
   const issues: CronStoreIssues = {};
+  const unresolvedAgentTurnCommandPromptJobs: string[] = [];
+  const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
+  const unresolvedAgentTurnPromptJobsByKind = {
+    commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
+    shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
+  };
   let mutated = false;
   const keptJobs: Array<Record<string, unknown>> = [];
+  const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
+  const codexRuntimePolicyTargets = new Map<string, CronCodexRuntimePolicyTarget>();
 
-  for (const raw of jobs) {
+  for (const [sourceIndex, raw] of jobs.entries()) {
     const jobIssues = new Set<CronStoreIssueKey>();
     const trackIssue = (key: CronStoreIssueKey) => {
       if (jobIssues.has(key)) {
@@ -247,12 +324,6 @@ export function normalizeStoredCronJobs(
       jobIssues.add(key);
       incrementIssue(issues, key);
     };
-
-    const state = raw.state;
-    if (!state || typeof state !== "object" || Array.isArray(state)) {
-      raw.state = {};
-      mutated = true;
-    }
 
     const idNorm = normalizeStoredCronJobIdentity(raw);
     if (idNorm.mutated) {
@@ -268,6 +339,12 @@ export function normalizeStoredCronJobs(
       trackIssue("nonStringId");
     }
 
+    const state = raw.state;
+    if (!state || typeof state !== "object" || Array.isArray(state)) {
+      raw.state = {};
+      mutated = true;
+    }
+
     if (typeof raw.schedule === "string") {
       const expr = raw.schedule.trim();
       raw.schedule = { kind: "cron", expr };
@@ -277,7 +354,7 @@ export function normalizeStoredCronJobs(
 
     const nameRaw = raw.name;
     if (typeof nameRaw !== "string" || nameRaw.trim().length === 0) {
-      raw.name = inferLegacyName({
+      raw.name = inferCronJobName({
         schedule: raw.schedule as never,
         payload: raw.payload as never,
       });
@@ -355,6 +432,15 @@ export function normalizeStoredCronJobs(
       if (payloadRecord.kind === "agentTurn" && copyTopLevelAgentTurnFields(raw, payloadRecord)) {
         mutated = true;
       }
+      if (payloadRecord.kind === "systemEvent" && !normalizeOptionalString(payloadRecord.text)) {
+        const message = normalizeOptionalString(payloadRecord.message);
+        if (message) {
+          payloadRecord.text = message;
+          delete payloadRecord.message;
+          mutated = true;
+          trackIssue("legacyPayloadKind");
+        }
+      }
     }
 
     const hadLegacyTopLevelPayloadFields =
@@ -387,13 +473,51 @@ export function normalizeStoredCronJobs(
     if (payloadRecord) {
       const hadLegacyPayloadProvider = Boolean(normalizeOptionalString(payloadRecord.provider));
       const hadLegacyPayloadCodexModel = hasLegacyOpenAICodexCronModelRef(payloadRecord);
-      if (migrateLegacyCronPayload(payloadRecord)) {
+      const legacyCodexModelRoutes = collectLegacyOpenAICodexCronModelRoutes(payloadRecord);
+      const agentId = normalizeOptionalString(raw.agentId);
+      const shouldMigrateCodexModelRef = (modelRef: string, legacyModelRef: string) =>
+        options.shouldMigrateCodexRuntimePolicyTarget?.({
+          ...(agentId ? { agentId } : {}),
+          modelRef,
+          legacyModelRef,
+        }) !== false;
+      if (hadLegacyPayloadCodexModel) {
+        trackIssue("legacyPayloadCodexModel");
+      }
+      if (
+        migrateLegacyCronPayload(payloadRecord, {
+          migrateCodexModelRefs: options.migrateCodexModelRefs,
+          shouldMigrateCodexModelRef,
+        })
+      ) {
         mutated = true;
-        if (hadLegacyPayloadCodexModel) {
-          trackIssue("legacyPayloadCodexModel");
-        }
         if (hadLegacyPayloadProvider) {
           trackIssue("legacyPayloadProvider");
+        }
+      }
+      if (hadLegacyPayloadCodexModel && options.migrateCodexModelRefs === true) {
+        for (const route of legacyCodexModelRoutes) {
+          const target = {
+            ...(agentId ? { agentId } : {}),
+            modelRef: route.canonicalModelRef,
+            legacyModelRef: route.legacyModelRef,
+          };
+          if (shouldMigrateCodexModelRef(route.canonicalModelRef, route.legacyModelRef)) {
+            codexRuntimePolicyTargets.set(cronCodexRuntimePolicyTargetKey(target), target);
+          }
+        }
+      }
+      if (migrateLegacyAgentTurnCommandPayload(payloadRecord)) {
+        mutated = true;
+        trackIssue("legacyAgentTurnCommandPayload");
+      } else {
+        const unresolvedPromptKind = classifyUnresolvedAgentTurnShellToolPrompt(payloadRecord);
+        if (unresolvedPromptKind) {
+          trackIssue("unresolvedAgentTurnShellToolPrompt");
+          const name = normalizeOptionalString(raw.name) ?? normalizeOptionalString(raw.id);
+          if (name) {
+            unresolvedAgentTurnPromptJobsByKind[unresolvedPromptKind].push(name);
+          }
         }
       }
     }
@@ -532,7 +656,10 @@ export function normalizeStoredCronJobs(
         mutated = true;
       }
     } else {
-      const inferredSessionTarget = payloadKind === "agentTurn" ? "isolated" : "main";
+      const inferredSessionTarget =
+        payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"
+          ? "isolated"
+          : "main";
       if (raw.sessionTarget !== inferredSessionTarget) {
         raw.sessionTarget = inferredSessionTarget;
         mutated = true;
@@ -540,18 +667,22 @@ export function normalizeStoredCronJobs(
     }
 
     const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
-    const isIsolatedAgentTurn =
+    const isIsolatedRunnablePayload =
       sessionTarget === "isolated" ||
       sessionTarget === "current" ||
       sessionTarget.startsWith("session:") ||
-      (sessionTarget === "" && payloadKind === "agentTurn");
+      (sessionTarget === "" &&
+        (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script"));
     const hasDelivery = delivery && typeof delivery === "object" && !Array.isArray(delivery);
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery: hasDelivery ? (delivery as Record<string, unknown>) : null,
       payload: payloadRecord,
     });
 
-    if (isIsolatedAgentTurn && payloadKind === "agentTurn") {
+    if (
+      isIsolatedRunnablePayload &&
+      (payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script")
+    ) {
       if (!hasDelivery && normalizedLegacy.delivery) {
         raw.delivery = normalizedLegacy.delivery;
         mutated = true;
@@ -573,6 +704,7 @@ export function normalizeStoredCronJobs(
       invalidPersistedReason === "invalid-schedule"
     ) {
       trackIssue("invalidSchedule");
+      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
     }
@@ -581,6 +713,7 @@ export function normalizeStoredCronJobs(
       invalidPersistedReason === "invalid-payload"
     ) {
       trackIssue("invalidPayload");
+      removedJobs.push({ job: structuredClone(raw), reason: invalidPersistedReason, sourceIndex });
       mutated = true;
       continue;
     }
@@ -591,5 +724,13 @@ export function normalizeStoredCronJobs(
     jobs.splice(0, jobs.length, ...keptJobs);
   }
 
-  return { issues, jobs, mutated };
+  return {
+    codexRuntimePolicyTargets: [...codexRuntimePolicyTargets.values()],
+    issues,
+    unresolvedAgentTurnCommandPromptJobs,
+    unresolvedAgentTurnShellToolPromptJobs,
+    jobs,
+    mutated,
+    removedJobs,
+  };
 }

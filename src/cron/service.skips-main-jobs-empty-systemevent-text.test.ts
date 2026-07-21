@@ -1,3 +1,4 @@
+// Empty system event tests cover skipping main jobs with no message content.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
@@ -6,7 +7,7 @@ import {
   withCronServiceForTest,
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
-import { executeJobCore } from "./service/timer.js";
+import { executeJobCore } from "./service/timer.test-support.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();

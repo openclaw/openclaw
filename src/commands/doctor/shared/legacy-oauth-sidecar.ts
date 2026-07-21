@@ -1,3 +1,4 @@
+// Legacy OAuth sidecar reader for migrating encrypted auth-profile secret material.
 import * as childProcess from "node:child_process";
 import { createCipheriv, createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
@@ -6,11 +7,14 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { log } from "../../../agents/auth-profiles/constants.js";
+import { LEGACY_OAUTH_REF_PROVIDER } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
+import type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
 import { loadJsonFile } from "../../../infra/json-file.js";
 
-const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
-const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
+export { isLegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
+export type { LegacyOAuthRef } from "../../../agents/auth-profiles/legacy-oauth-ref.js";
+
 const LEGACY_OAUTH_SECRET_DIRNAME = "auth-profiles";
 const LEGACY_OAUTH_SECRET_VERSION = 1;
 const LEGACY_OAUTH_SECRET_ALGORITHM = "aes-256-gcm";
@@ -19,15 +23,12 @@ const LEGACY_OAUTH_SECRET_KEYCHAIN_SERVICE = "OpenClaw Auth Profile Secrets";
 const LEGACY_OAUTH_SECRET_KEYCHAIN_ACCOUNT = "oauth-profile-master-key";
 const LEGACY_OAUTH_SECRET_KEY_FILE_NAME = "auth-profile-secret-key";
 
-export type LegacyOAuthRef = {
-  source: typeof LEGACY_OAUTH_REF_SOURCE;
-  provider: typeof LEGACY_OAUTH_REF_PROVIDER;
-  id: string;
-};
-
 export type LegacyOAuthSecretMaterial = {
+  /** OAuth access token from the legacy sidecar. */
   access?: string;
+  /** OAuth refresh token from the legacy sidecar. */
   refresh?: string;
+  /** Optional OpenID Connect id token from the legacy sidecar. */
   idToken?: string;
 };
 
@@ -42,18 +43,7 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
-export function isLegacyOAuthRef(value: unknown): value is LegacyOAuthRef {
-  if (!isRecord(value)) {
-    return false;
-  }
-  return (
-    value.source === LEGACY_OAUTH_REF_SOURCE &&
-    value.provider === LEGACY_OAUTH_REF_PROVIDER &&
-    typeof value.id === "string" &&
-    /^[a-f0-9]{32}$/.test(value.id)
-  );
-}
-
+/** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
 export function resolveLegacyOAuthSidecarPath(
   ref: LegacyOAuthRef,
   env: NodeJS.ProcessEnv = process.env,
@@ -90,6 +80,7 @@ function coerceLegacyOAuthEncryptedPayload(raw: unknown): LegacyOAuthEncryptedPa
     : null;
 }
 
+/** Return true when raw JSON has the legacy OAuth sidecar envelope or plaintext token shape. */
 export function isLegacyOAuthSidecarPayload(raw: unknown): boolean {
   if (!isRecord(raw)) {
     return false;
@@ -156,7 +147,7 @@ function encryptLegacyOAuthMaterialForTest(params: {
 function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean {
   const relative = path.relative(path.resolve(parentDir), path.resolve(candidatePath));
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 
@@ -357,11 +348,17 @@ function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
   );
 }
 
-export const legacyOAuthSidecarInternalTestUtils = {
+const legacyOAuthSidecarInternalTestUtils = {
   resetKeychainOnlyMigrationHint(): void {
     keychainOnlyMigrationHintEmitted = false;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.legacyOAuthSidecarInternalTestApi")
+  ] = legacyOAuthSidecarInternalTestUtils;
+}
 
 export function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;

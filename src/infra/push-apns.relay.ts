@@ -1,20 +1,27 @@
+// Sends APNs notifications through the configured relay endpoint.
 import { URL } from "node:url";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayConfig } from "../config/types.gateway.js";
 import {
-  loadOrCreateDeviceIdentity,
+  loadOrCreateProcessDeviceIdentity,
   signDevicePayload,
   type DeviceIdentity,
 } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
+import { readResponseWithLimit } from "./http-body.js";
 import { normalizeHostname } from "./net/hostname.js";
 
 type ApnsRelayPushType = "alert" | "background";
+type ApnsRelayEnvironment = "production" | "sandbox";
 
+/** Resolved APNs relay endpoint and client timeout for gateway-originated sends. */
 export type ApnsRelayConfig = {
   baseUrl: string;
   timeoutMs: number;
@@ -28,15 +35,17 @@ type ApnsRelayConfigResolutionOptions = {
   registrationRelayOrigin?: string;
 };
 
+/** Normalized relay response after the hosted relay has attempted an APNs send. */
 export type ApnsRelayPushResponse = {
   ok: boolean;
   status: number;
   apnsId?: string;
   reason?: string;
-  environment: "production";
+  environment?: ApnsRelayEnvironment;
   tokenSuffix?: string;
 };
 
+/** Test/integration seam for sending a signed APNs relay request. */
 export type ApnsRelayRequestSender = (params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
@@ -50,8 +59,14 @@ export type ApnsRelayRequestSender = (params: {
   payload: object;
 }) => Promise<ApnsRelayPushResponse>;
 
-export const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
+/** Hosted APNs relay origin used only when registrations prove they were minted there. */
+const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
+const DEFAULT_APNS_SANDBOX_RELAY_BASE_URL = "https://ios-push-relay-sandbox.openclaw.ai";
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
+// Hard cap on the relay response body. The hosted relay reply is a tiny JSON status object;
+// without a cap a buggy/hostile/compromised relay could stream an unbounded body and exhaust
+// gateway memory (the existing AbortSignal.timeout only bounds connection latency, not body size).
+const APNS_RELAY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
 const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
 const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
@@ -71,7 +86,7 @@ function normalizeTimeoutMs(value: string | number | undefined): number {
   if (raw === undefined || raw === "") {
     return DEFAULT_APNS_RELAY_TIMEOUT_MS;
   }
-  const parsed = Number(raw);
+  const parsed = typeof raw === "number" ? raw : parseStrictPositiveInteger(raw);
   return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
 }
 
@@ -96,9 +111,17 @@ function parseReason(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalString(value) : undefined;
 }
 
-export function normalizeApnsRelayBaseUrl(
+function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
+  const normalized = typeof value === "string" ? normalizeLowercaseStringOrEmpty(value) : "";
+  if (normalized === "sandbox" || normalized === "production") {
+    return normalized;
+  }
+  return undefined;
+}
+
+function normalizeApnsRelayBaseUrlWithPolicy(
   baseUrl: string,
-  env: NodeJS.ProcessEnv = process.env,
+  allowLoopbackHttpWithoutEnvOptIn: boolean,
 ): { ok: true; value: string } | { ok: false; error: string } {
   try {
     const parsed = new URL(baseUrl);
@@ -108,11 +131,14 @@ export function normalizeApnsRelayBaseUrl(
     if (!parsed.hostname) {
       throw new Error("host required");
     }
-    if (parsed.protocol === "http:" && !readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP)) {
+    // Plain HTTP is only for local relay development; production relay URLs must use TLS.
+    if (parsed.protocol === "http:" && !allowLoopbackHttpWithoutEnvOptIn) {
       throw new Error(
         "http relay URLs require OPENCLAW_APNS_RELAY_ALLOW_HTTP=true (development only)",
       );
     }
+    // Persisted development URLs may bypass only the current env opt-in;
+    // the loopback boundary remains mandatory during every decode.
     if (parsed.protocol === "http:" && !isLoopbackRelayHostname(parsed.hostname)) {
       throw new Error("http relay URLs are limited to loopback hosts");
     }
@@ -128,11 +154,32 @@ export function normalizeApnsRelayBaseUrl(
   }
 }
 
+/** Validate and canonicalize an APNs relay base URL for config and registration origins. */
+export function normalizeApnsRelayBaseUrl(
+  baseUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): { ok: true; value: string } | { ok: false; error: string } {
+  return normalizeApnsRelayBaseUrlWithPolicy(
+    baseUrl,
+    readAllowHttp(env.OPENCLAW_APNS_RELAY_ALLOW_HTTP),
+  );
+}
+
+/** Revalidate a canonical persisted relay URL without reapplying current input policy. */
+export function normalizePersistedApnsRelayBaseUrl(
+  baseUrl: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+  // Stored loopback HTTP URLs already passed the explicit development-only
+  // policy before commit; decoding must survive later environment changes.
+  return normalizeApnsRelayBaseUrlWithPolicy(baseUrl, true);
+}
+
 function buildRelayGatewaySignaturePayload(params: {
   gatewayDeviceId: string;
   signedAtMs: number;
   bodyJson: string;
 }): string {
+  // Domain-separate relay send signatures from other gateway/device signatures.
   return [
     "openclaw-relay-send-v1",
     params.gatewayDeviceId.trim(),
@@ -141,6 +188,7 @@ function buildRelayGatewaySignaturePayload(params: {
   ].join("\n");
 }
 
+/** Resolve the relay endpoint from env/config and require it to match relay-minted registrations. */
 export function resolveApnsRelayConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   gatewayConfig?: GatewayConfig,
@@ -160,11 +208,13 @@ export function resolveApnsRelayConfigFromEnv(
     };
   }
 
-  const baseUrl =
-    explicitBaseUrl ??
-    (normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
+  const hostedRelayBaseUrl =
+    normalizedRegistrationOrigin?.value === DEFAULT_APNS_RELAY_BASE_URL
       ? DEFAULT_APNS_RELAY_BASE_URL
-      : undefined);
+      : normalizedRegistrationOrigin?.value === DEFAULT_APNS_SANDBOX_RELAY_BASE_URL
+        ? DEFAULT_APNS_SANDBOX_RELAY_BASE_URL
+        : undefined;
+  const baseUrl = explicitBaseUrl ?? hostedRelayBaseUrl;
   const baseUrlSource = envBaseUrl
     ? "OPENCLAW_APNS_RELAY_BASE_URL"
     : configBaseUrl
@@ -199,10 +249,23 @@ export function resolveApnsRelayConfigFromEnv(
     value: {
       baseUrl: normalizedBaseUrl.value,
       timeoutMs: normalizeTimeoutMs(
-        env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
+        normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_TIMEOUT_MS) ?? configuredRelay?.timeoutMs,
       ),
     },
   };
+}
+
+// Sentinel marking an over-cap relay body. Carried as a distinct type so the response-read
+// catch path can fail closed on overflow instead of swallowing it into the malformed-JSON
+// (treat-as-empty-body) fallback that would otherwise report a successful send.
+class ApnsRelayResponseTooLargeError extends Error {
+  constructor(
+    readonly size: number,
+    readonly maxBytes: number,
+  ) {
+    super(`APNs relay response exceeded ${maxBytes} bytes (${size} bytes received)`);
+    this.name = "ApnsRelayResponseTooLargeError";
+  }
 }
 
 async function sendApnsRelayRequest(params: {
@@ -230,19 +293,34 @@ async function sendApnsRelayRequest(params: {
     body: params.bodyJson,
     signal: AbortSignal.timeout(params.relayConfig.timeoutMs),
   });
+  // Do not follow relay redirects; grants and signatures are scoped to the configured relay origin.
   if (response.status >= 300 && response.status < 400) {
+    await response.body?.cancel().catch(() => undefined);
     return {
       ok: false,
       status: response.status,
       reason: "RelayRedirectNotAllowed",
-      environment: "production",
     };
   }
 
-  let json: unknown = null;
+  let json: unknown;
   try {
-    json = (await response.json()) as unknown;
-  } catch {
+    // Bound the relay body before buffering it; cancel the stream past the cap.
+    const buffer = await readResponseWithLimit(response, APNS_RELAY_MAX_RESPONSE_BYTES, {
+      onOverflow: ({ size, maxBytes }) => new ApnsRelayResponseTooLargeError(size, maxBytes),
+    });
+    json = JSON.parse(new TextDecoder("utf-8").decode(buffer)) as unknown;
+  } catch (err) {
+    if (err instanceof ApnsRelayResponseTooLargeError) {
+      // Fail closed: an oversized relay body must never be reported as a delivered push.
+      return {
+        ok: false,
+        status: response.status,
+        reason: "RelayResponseTooLarge",
+      };
+    }
+    // Malformed/empty JSON (or a non-overflow body read error) keeps the prior behaviour:
+    // treat the body as absent and derive status/ok from the HTTP response.
     json = null;
   }
   const body =
@@ -254,16 +332,18 @@ async function sendApnsRelayRequest(params: {
     typeof body.status === "number" && Number.isFinite(body.status)
       ? Math.trunc(body.status)
       : response.status;
+  const environment = parseRelayEnvironment(body.environment);
   return {
     ok: typeof body.ok === "boolean" ? body.ok : response.ok && status >= 200 && status < 300,
     status,
     apnsId: parseReason(body.apnsId),
     reason: parseReason(body.reason),
-    environment: "production",
+    ...(environment ? { environment } : {}),
     tokenSuffix: parseReason(body.tokenSuffix),
   };
 }
 
+/** Sign and send an APNs relay push using the gateway device identity. */
 export async function sendApnsRelayPush(params: {
   relayConfig: ApnsRelayConfig;
   sendGrant: string;
@@ -275,7 +355,7 @@ export async function sendApnsRelayPush(params: {
   requestSender?: ApnsRelayRequestSender;
 }): Promise<ApnsRelayPushResponse> {
   const sender = params.requestSender ?? sendApnsRelayRequest;
-  const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateDeviceIdentity();
+  const gatewayIdentity = params.gatewayIdentity ?? loadOrCreateProcessDeviceIdentity();
   const signedAtMs = Date.now();
   const bodyJson = JSON.stringify({
     relayHandle: params.relayHandle,

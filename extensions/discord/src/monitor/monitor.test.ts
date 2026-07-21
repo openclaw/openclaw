@@ -1,8 +1,10 @@
+// Discord tests cover monitor plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
+import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
+import type { DiscordComponentEntry, DiscordModalEntry } from "../components.js";
 import type {
   ButtonInteraction,
   ComponentData,
@@ -22,11 +24,10 @@ import {
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 
 type CreateDiscordComponentButton =
-  typeof import("./agent-components.js").createDiscordComponentButton;
+  (typeof import("./agent-components.js").createDiscordComponentControls)[number];
 type CreateDiscordComponentModal =
   typeof import("./agent-components.js").createDiscordComponentModal;
-type CreateDiscordComponentStringSelect =
-  typeof import("./agent-components.js").createDiscordComponentStringSelect;
+type CreateDiscordComponentStringSelect = CreateDiscordComponentButton;
 type DispatchReplyWithBufferedBlockDispatcherFn =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
@@ -36,13 +37,22 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 let createDiscordComponentButton: CreateDiscordComponentButton;
 let createDiscordComponentStringSelect: CreateDiscordComponentStringSelect;
 let createDiscordComponentModal: CreateDiscordComponentModal;
-let clearDiscordComponentEntries: typeof import("../components-registry.js").clearDiscordComponentEntries;
 let registerDiscordComponentEntries: typeof import("../components-registry.js").registerDiscordComponentEntries;
-let resolveDiscordComponentEntry: typeof import("../components-registry.js").resolveDiscordComponentEntry;
-let resolveDiscordModalEntry: typeof import("../components-registry.js").resolveDiscordModalEntry;
+let resolveDiscordComponentEntryWithPersistence: typeof import("../components-registry.js").resolveDiscordComponentEntryWithPersistence;
+let resolveDiscordModalEntryWithPersistence: typeof import("../components-registry.js").resolveDiscordModalEntryWithPersistence;
 let sendComponents: typeof import("../send.components.js");
 
 let lastDispatchCtx: Record<string, unknown> | undefined;
+
+function requireComponentFactory(index: number): CreateDiscordComponentButton {
+  const factory = createDiscordComponentControlsForTest[index];
+  if (!factory) {
+    throw new Error(`missing Discord component factory ${index}`);
+  }
+  return factory;
+}
+
+let createDiscordComponentControlsForTest: readonly CreateDiscordComponentButton[] = [];
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -281,16 +291,15 @@ describe("discord component interactions", () => {
   }
 
   beforeAll(async () => {
+    const components = await import("./agent-components.js");
+    createDiscordComponentControlsForTest = components.createDiscordComponentControls;
+    createDiscordComponentButton = requireComponentFactory(0);
+    createDiscordComponentStringSelect = requireComponentFactory(1);
+    ({ createDiscordComponentModal } = components);
     ({
-      createDiscordComponentButton,
-      createDiscordComponentStringSelect,
-      createDiscordComponentModal,
-    } = await import("./agent-components.js"));
-    ({
-      clearDiscordComponentEntries,
       registerDiscordComponentEntries,
-      resolveDiscordComponentEntry,
-      resolveDiscordModalEntry,
+      resolveDiscordComponentEntryWithPersistence,
+      resolveDiscordModalEntryWithPersistence,
     } = await import("../components-registry.js"));
     sendComponents = await import("../send.components.js");
   });
@@ -299,7 +308,7 @@ describe("discord component interactions", () => {
     editDiscordComponentMessageMock = vi
       .spyOn(sendComponents, "editDiscordComponentMessage")
       .mockResolvedValue(discordTestSendResult("msg-1"));
-    clearDiscordComponentEntries();
+    clearDiscordComponentEntriesForTest();
     resetDiscordComponentRuntimeMocks();
     lastDispatchCtx = undefined;
     enqueueSystemEventMock.mockClear();
@@ -348,7 +357,7 @@ describe("discord component interactions", () => {
       | undefined;
     expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
     expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
-    expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
+    await expect(resolveDiscordComponentEntryWithPersistence({ id: "btn_1" })).resolves.toBeNull();
   });
 
   it("records DM component interactions with user originating targets", async () => {
@@ -397,6 +406,27 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not execute opaque callback actions as built-in fallback commands", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        createButtonEntry({
+          callbackData: "/codex permissions yolo",
+          callbackDataKind: "callback",
+        }),
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction, reply } = createComponentButtonInteraction();
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves selected values for select fallback when no plugin handler matches", async () => {
     registerDiscordComponentEntries({
       entries: [
@@ -426,6 +456,74 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
+  it("uses selected command action values for select fallback", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "command",
+          selectType: "string",
+          options: [{ value: "/codex permissions yolo", label: "Yolo" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction({
+      values: ["/codex permissions yolo"],
+    });
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex permissions yolo");
+    expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches selected callback action values to plugin interactive handlers", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "sel_1",
+          kind: "select",
+          label: "Pick",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "callback",
+          selectType: "string",
+          options: [{ value: "inspect:123", label: "Inspect" }],
+        },
+      ],
+      modals: [],
+    });
+
+    const select = createDiscordComponentStringSelect(createComponentContext());
+    const { interaction, reply } = createComponentSelectInteraction({
+      values: ["inspect:123"],
+    });
+
+    await select.run(interaction, { cid: "sel_1" } as ComponentData);
+
+    const pluginDispatch = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      -1,
+      "dispatchPluginInteractiveHandler",
+    ) as { data?: unknown; ctx?: { interaction?: { values?: unknown } } };
+    expect(pluginDispatch.data).toBe("inspect:123");
+    expect(pluginDispatch.ctx?.interaction?.values).toEqual(["Inspect"]);
+    expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
+    expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Inspect from "Pick".');
+  });
+
   it("keeps reusable buttons active after use", async () => {
     registerDiscordComponentEntries({
       entries: [createButtonEntry({ reusable: true })],
@@ -445,7 +543,10 @@ describe("discord component interactions", () => {
     await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
-    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    const entry = await resolveDiscordComponentEntryWithPersistence({
+      id: "btn_1",
+      consume: false,
+    });
     if (!entry) {
       throw new Error("expected reusable Discord component entry");
     }
@@ -468,7 +569,10 @@ describe("discord component interactions", () => {
       ephemeral: true,
     });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
-    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    const entry = await resolveDiscordComponentEntryWithPersistence({
+      id: "btn_1",
+      consume: false,
+    });
     if (!entry) {
       throw new Error("expected unauthorized Discord component entry to remain active");
     }
@@ -627,7 +731,7 @@ describe("discord component interactions", () => {
     expect(lastDispatchCtx?.BodyForAgent).toContain('Form "Details" submitted.');
     expect(lastDispatchCtx?.BodyForAgent).toContain("- Name: Casey");
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(resolveDiscordModalEntry({ id: "mdl_1" })).toBeNull();
+    await expect(resolveDiscordModalEntryWithPersistence({ id: "mdl_1" })).resolves.toBeNull();
   });
 
   it.each([
@@ -651,7 +755,10 @@ describe("discord component interactions", () => {
     const { acknowledge } = await runModalSubmission({ reusable: true });
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    const entry = resolveDiscordModalEntry({ id: "mdl_1", consume: false });
+    const entry = await resolveDiscordModalEntryWithPersistence({
+      id: "mdl_1",
+      consume: false,
+    });
     if (!entry) {
       throw new Error("expected reusable Discord modal entry");
     }

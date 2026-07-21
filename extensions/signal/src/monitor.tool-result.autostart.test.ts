@@ -1,6 +1,7 @@
+// Signal tests cover monitor.tool result.autostart plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import type { SignalDaemonExitEvent } from "./daemon.js";
+import type { SignalDaemonHandle } from "./daemon.js";
 import {
   createSignalToolResultConfig,
   createMockSignalDaemonHandle,
@@ -19,6 +20,7 @@ const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 function createMonitorRuntime() {
   return {
@@ -38,7 +40,6 @@ function createAutoAbortController() {
   const abortController = new AbortController();
   streamMock.mockImplementation(async () => {
     abortController.abort();
-    return;
   });
   return abortController;
 }
@@ -178,12 +179,18 @@ describe("monitorSignalProvider autostart", () => {
       async (params: { abortSignal?: AbortSignal | null }) => {
         await new Promise<void>((_resolve, reject) => {
           if (params.abortSignal?.aborted) {
-            reject(params.abortSignal.reason);
+            reject(toLintErrorObject(params.abortSignal.reason, "Non-Error rejection"));
             return;
           }
           params.abortSignal?.addEventListener(
             "abort",
-            () => reject(params.abortSignal?.reason ?? new Error("aborted")),
+            () =>
+              reject(
+                toLintErrorObject(
+                  params.abortSignal?.reason ?? new Error("aborted"),
+                  "Non-Error rejection",
+                ),
+              ),
             { once: true },
           );
         });
@@ -208,7 +215,7 @@ describe("monitorSignalProvider autostart", () => {
     const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
       resolveExit = resolve;
     });
-    const stop = vi.fn(() => {
+    const stop = vi.fn(async () => {
       if (exited) {
         return;
       }
@@ -217,6 +224,7 @@ describe("monitorSignalProvider autostart", () => {
         throw new Error("Expected signal daemon exit resolver to be initialized");
       }
       resolveExit({ source: "process", code: null, signal: "SIGTERM" });
+      await exitedPromise;
     });
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
@@ -238,4 +246,50 @@ describe("monitorSignalProvider autostart", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("awaits daemon exit before resolving aborted monitor shutdown", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = new AbortController();
+    let resolveStop!: () => void;
+    const stopPromise = new Promise<void>((resolve) => {
+      resolveStop = resolve;
+    });
+    const stop = vi.fn(() => stopPromise);
+    spawnSignalDaemonMock.mockReturnValueOnce(createMockSignalDaemonHandle({ stop }));
+    streamMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("stop"));
+    });
+
+    let settled = false;
+    const monitorPromise = runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      runtime,
+      abortSignal: abortController.signal,
+    }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+
+    resolveStop();
+    await monitorPromise;
+    expect(settled).toBe(true);
+  });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

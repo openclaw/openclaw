@@ -1,3 +1,4 @@
+// Discord tests cover access plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
@@ -240,7 +241,7 @@ describe("authorizeDiscordVoiceIngress", () => {
     });
   });
 
-  it("uses resolved account owner allowFrom over merged Discord config", async () => {
+  it("uses resolved account command allowFrom over merged Discord config", async () => {
     const access = await authorizeDiscordVoiceIngress({
       cfg: baseCfg,
       discordConfig: {
@@ -258,7 +259,7 @@ describe("authorizeDiscordVoiceIngress", () => {
       channelId: "c1",
       channelSlug: "",
       memberRoleIds: [],
-      ownerAllowFrom: ["discord:u-account"],
+      admissionAllowFrom: ["discord:u-account"],
       sender: {
         id: "u-account",
         name: "owner",

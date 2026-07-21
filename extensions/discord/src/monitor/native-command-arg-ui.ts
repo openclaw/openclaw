@@ -1,3 +1,4 @@
+// Discord plugin module implements native command arg ui behavior.
 import { ButtonStyle } from "discord-api-types/v10";
 import {
   buildCommandTextFromArgs,
@@ -11,6 +12,7 @@ import {
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
+import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
 import {
   Button,
   Row,
@@ -32,29 +34,17 @@ function createCommandArgsWithValue(params: { argName: string; value: string }):
   return { values };
 }
 
-function encodeDiscordCommandArgValue(value: string): string {
-  return encodeURIComponent(value);
-}
-
-function decodeDiscordCommandArgValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-export function buildDiscordCommandArgCustomId(params: {
+function buildDiscordCommandArgCustomId(params: {
   command: string;
   arg: string;
   value: string;
   userId: string;
 }): string {
   return [
-    `${DISCORD_COMMAND_ARG_CUSTOM_ID_KEY}:command=${encodeDiscordCommandArgValue(params.command)}`,
-    `arg=${encodeDiscordCommandArgValue(params.arg)}`,
-    `value=${encodeDiscordCommandArgValue(params.value)}`,
-    `user=${encodeDiscordCommandArgValue(params.userId)}`,
+    `${DISCORD_COMMAND_ARG_CUSTOM_ID_KEY}:command=${encodeCustomIdComponent(params.command)}`,
+    `arg=${encodeCustomIdComponent(params.arg)}`,
+    `value=${encodeCustomIdComponent(params.value)}`,
+    `user=${encodeCustomIdComponent(params.userId)}`,
   ].join(";");
 }
 
@@ -74,14 +64,14 @@ function parseDiscordCommandArgData(
     return null;
   }
   return {
-    command: decodeDiscordCommandArgValue(rawCommand),
-    arg: decodeDiscordCommandArgValue(rawArg),
-    value: decodeDiscordCommandArgValue(rawValue),
-    userId: decodeDiscordCommandArgValue(rawUser),
+    command: decodeCustomIdComponent(rawCommand),
+    arg: decodeCustomIdComponent(rawArg),
+    value: decodeCustomIdComponent(rawValue),
+    userId: decodeCustomIdComponent(rawUser),
   };
 }
 
-export async function handleDiscordCommandArgInteraction(params: {
+async function handleDiscordCommandArgInteraction(params: {
   interaction: ButtonInteraction;
   data: ComponentData;
   ctx: DiscordCommandArgContext;

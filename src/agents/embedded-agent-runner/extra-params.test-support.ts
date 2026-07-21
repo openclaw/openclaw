@@ -1,16 +1,49 @@
-import type { ThinkLevel } from "../../auto-reply/thinking.shared.js";
+// Shared harness for extra-params wrapper tests.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { Context, Model, SimpleStreamOptions } from "../../llm/types.js";
+import type {
+  prepareProviderExtraParams,
+  resolveProviderExtraParamsForTransport,
+  wrapProviderStreamFn,
+} from "../../plugins/provider-hook-runtime.js";
 import type { StreamFn } from "../runtime/index.js";
-import { testing as extraParamsTesting, applyExtraParamsToAgent } from "./extra-params.js";
+import { applyExtraParamsToAgent } from "./extra-params.js";
+import type { ProviderThinkLevel } from "./utils.js";
 
-export type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
+type ExtraParamsTestApi = {
+  setProviderRuntimeDepsForTest(
+    deps:
+      | Partial<{
+          prepareProviderExtraParams: typeof prepareProviderExtraParams;
+          resolveProviderExtraParamsForTransport: typeof resolveProviderExtraParamsForTransport;
+          wrapProviderStreamFn: typeof wrapProviderStreamFn;
+        }>
+      | undefined,
+  ): void;
+  resetProviderRuntimeDepsForTest(): void;
+};
+
+function getTestApi(): ExtraParamsTestApi {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.extraParamsTestApi")
+  ];
+  if (!api) {
+    throw new Error("extra params test API is unavailable");
+  }
+  return api as ExtraParamsTestApi;
+}
+
+export const testing = getTestApi();
+
+type ExtraParamsCapture<TPayload extends Record<string, unknown>> = {
   headers?: Record<string, string>;
   options?: SimpleStreamOptions;
   payload: TPayload;
 };
 
 function createMockStream(): ReturnType<StreamFn> {
+  // Minimal async stream surface for wrappers that decorate push/result/iterate
+  // behavior without needing a real model provider.
   return {
     push() {},
     async result() {
@@ -34,13 +67,16 @@ type RunExtraParamsCaseParams<
   mockProviderRuntime?: boolean;
   options?: SimpleStreamOptions;
   payload: TPayload;
-  thinkingLevel?: ThinkLevel;
+  thinkingLevel?: ProviderThinkLevel;
+  workspaceDir?: string;
 };
 
 export function runExtraParamsCase<
   TApi extends "openai-completions" | "openai-responses" | "azure-openai-responses",
   TPayload extends Record<string, unknown>,
 >(params: RunExtraParamsCaseParams<TApi, TPayload>): ExtraParamsCapture<TPayload> {
+  // Capture both transport options and payload mutation, which are the two
+  // public effects of applyExtraParamsToAgent.
   const captured: ExtraParamsCapture<TPayload> = {
     payload: params.payload,
   };
@@ -54,7 +90,7 @@ export function runExtraParamsCase<
   const agent = { streamFn: baseStreamFn };
 
   if (params.mockProviderRuntime === true) {
-    extraParamsTesting.setProviderRuntimeDepsForTest({
+    testing.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: () => undefined,
       resolveProviderExtraParamsForTransport: () => undefined,
       wrapProviderStreamFn: () => undefined,
@@ -68,10 +104,12 @@ export function runExtraParamsCase<
       params.applyModelId ?? params.model.id,
       undefined,
       params.thinkingLevel,
+      undefined,
+      params.workspaceDir,
     );
   } finally {
     if (params.mockProviderRuntime === true) {
-      extraParamsTesting.resetProviderRuntimeDepsForTest();
+      testing.resetProviderRuntimeDepsForTest();
     }
   }
 

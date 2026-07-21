@@ -1,10 +1,10 @@
+// Verifies generated config documentation baselines against source metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
-  flattenConfigDocBaselineEntries,
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
@@ -22,6 +22,18 @@ describe("config doc baseline integration", () => {
     Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>
   > | null = null;
   let sharedByPathPromise: Promise<Map<string, ConfigDocBaselineEntry>> | null = null;
+  let deterministicPair: {
+    first: Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>;
+    second: Awaited<ReturnType<typeof renderConfigDocBaselineArtifacts>>;
+  };
+
+  beforeAll(async () => {
+    const first = await getSharedRendered();
+    deterministicPair = {
+      first,
+      second: await renderConfigDocBaselineArtifacts(first.baseline),
+    };
+  });
 
   function getSharedRendered() {
     sharedRenderedPromise ??= renderConfigDocBaselineArtifacts();
@@ -31,7 +43,11 @@ describe("config doc baseline integration", () => {
   function getSharedByPath() {
     sharedByPathPromise ??= getSharedRendered().then(
       ({ baseline }) =>
-        new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
+        new Map(
+          [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries].map(
+            (entry) => [entry.path, entry],
+          ),
+        ),
     );
     return sharedByPathPromise;
   }
@@ -48,9 +64,7 @@ describe("config doc baseline integration", () => {
   }
 
   it("is deterministic across repeated runs", async () => {
-    const first = await getSharedRendered();
-    const { baseline } = first;
-    const second = await renderConfigDocBaselineArtifacts(baseline);
+    const { first, second } = deterministicPair;
 
     expect(second.json.combined).toBe(first.json.combined);
     expect(second.json.core).toBe(first.json.core);
@@ -127,6 +141,14 @@ describe("config doc baseline integration", () => {
     expect(requireEntry(byPath, "bindings.*.match.peer.id").path).toBe("bindings.*.match.peer.id");
   });
 
+  it("merges tuple item branches from the bundled config schema", async () => {
+    const byPath = await getSharedByPath();
+    const rangePath = "models.providers.*.models.*.cost.tieredPricing.*.range";
+
+    expect(requireEntry(byPath, rangePath).type).toBe("array");
+    expect(requireEntry(byPath, `${rangePath}.*`).type).toBe("number");
+  });
+
   it("supports check mode for stale hash files", async () => {
     await withTempDir({ prefix: "openclaw-config-doc-baseline-" }, async (tempRoot) => {
       const rendered = getSharedRendered();
@@ -158,6 +180,55 @@ describe("config doc baseline integration", () => {
       });
       expect(stale.changed).toBe(true);
       expect(stale.wrote).toBe(false);
+    });
+  });
+
+  it("ratchets config entry count budgets in both directions", async () => {
+    await withTempDir({ prefix: "openclaw-config-doc-counts-" }, async (tempRoot) => {
+      const rendered = await getSharedRendered();
+      const countsPath = path.join(tempRoot, "docs/.generated/config-baseline.counts.json");
+
+      await writeConfigDocBaselineArtifacts({ repoRoot: tempRoot, rendered });
+      const counts = JSON.parse(await fs.readFile(countsPath, "utf8")) as Record<string, number>;
+      const coreCount = counts.core;
+      if (coreCount === undefined) {
+        throw new Error("expected generated config baseline counts to include core");
+      }
+
+      await fs.writeFile(
+        countsPath,
+        `${JSON.stringify({ ...counts, core: coreCount - 1 }, null, 2)}\n`,
+        "utf8",
+      );
+      const growth = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        check: true,
+        rendered,
+      });
+      expect(growth.changed).toBe(true);
+      expect(growth.countViolations).toHaveLength(1);
+      expect(growth.countViolations[0]?.message).toContain(
+        `core: current ${coreCount} > budget ${coreCount - 1}; config surface grew`,
+      );
+      expect(growth.countViolations[0]?.message).toContain("See the AGENTS.md config-surface bar");
+
+      await fs.writeFile(
+        countsPath,
+        `${JSON.stringify({ ...counts, core: coreCount + 1 }, null, 2)}\n`,
+        "utf8",
+      );
+      const stale = await writeConfigDocBaselineArtifacts({
+        repoRoot: tempRoot,
+        check: true,
+        rendered,
+      });
+      expect(stale.changed).toBe(true);
+      expect(stale.countViolations[0]?.message).toBe(
+        `core: current ${coreCount} < budget ${coreCount + 1}; budget is stale; run pnpm config:docs:gen to ratchet it down.`,
+      );
+
+      await writeConfigDocBaselineArtifacts({ repoRoot: tempRoot, rendered });
+      expect(JSON.parse(await fs.readFile(countsPath, "utf8"))).toEqual(counts);
     });
   });
 });

@@ -1,3 +1,4 @@
+// Tests subagent routing commands and active focus handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -9,7 +10,6 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
 import {
-  COMMAND,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,
@@ -17,6 +17,8 @@ import {
 } from "./commands-subagents-dispatch.js";
 import { handleSubagentsCommand } from "./commands-subagents.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+
+const COMMAND = "/subagents";
 
 const listControlledSubagentRunsMock = vi.hoisted(() => vi.fn(() => []));
 

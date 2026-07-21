@@ -1,3 +1,4 @@
+// Feishu tests cover policy plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
@@ -5,6 +6,7 @@ import {
   hasExplicitFeishuGroupConfig,
   resolveFeishuGroupConfig,
   resolveFeishuGroupSenderActivationIngressAccess,
+  resolveFeishuGroupToolPolicy,
   resolveFeishuReplyPolicy,
 } from "./policy.js";
 import type { FeishuConfig } from "./types.js";
@@ -138,6 +140,59 @@ describe("resolveFeishuGroupConfig", () => {
     });
 
     expect(resolved).toEqual({ requireMention: true });
+  });
+});
+
+describe("resolveFeishuGroupToolPolicy", () => {
+  it("checks exact keys before the case-insensitive scan", () => {
+    expect(
+      resolveFeishuGroupToolPolicy({
+        cfg: createCfg({
+          groups: {
+            OC_CASE: { tools: { allow: ["case-insensitive"] } },
+            oc_case: { tools: { allow: ["exact"] } },
+          },
+        }),
+        groupId: "oc_case",
+      }),
+    ).toEqual({ allow: ["exact"] });
+  });
+
+  it("keeps wildcard fields hidden by a matched whole group entry", () => {
+    const cfg = createCfg({
+      groups: {
+        "*": { tools: { allow: ["wildcard"] } },
+        OC_EXACT: { requireMention: true },
+      },
+    });
+
+    expect(
+      resolveFeishuGroupToolPolicy({
+        cfg,
+        groupId: "oc_exact",
+      }),
+    ).toBeUndefined();
+    expect(resolveFeishuGroupToolPolicy({ cfg, groupId: "oc_missing" })).toEqual({
+      allow: ["wildcard"],
+    });
+  });
+
+  it("keeps account groups out of the root-only adapter", () => {
+    expect(
+      resolveFeishuGroupToolPolicy({
+        cfg: createCfg({
+          accounts: {
+            work: {
+              groups: {
+                oc_account: { tools: { allow: ["account"] } },
+              },
+            },
+          },
+        }),
+        accountId: "work",
+        groupId: "oc_account",
+      }),
+    ).toBeUndefined();
   });
 });
 

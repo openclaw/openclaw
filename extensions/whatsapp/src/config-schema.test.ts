@@ -1,3 +1,4 @@
+// Whatsapp tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { WhatsAppConfigSchema } from "../config-api.js";
 
@@ -67,6 +68,14 @@ describe("whatsapp config schema", () => {
     expectWhatsAppConfigValid({
       enabled: true,
     });
+  });
+
+  it("accepts the experimental call action opt-in", () => {
+    const res = expectWhatsAppConfigValid({ actions: { calls: true } });
+
+    if (res.success) {
+      expect(res.data.actions?.calls).toBe(true);
+    }
   });
 
   it("keeps inherited account defaults unset at account scope", () => {

@@ -1,3 +1,4 @@
+// Xai provider module implements model/runtime integration.
 import {
   isProviderAuthProfileConfigured,
   type OpenClawConfig,
@@ -194,9 +195,8 @@ function createXaiRealtimeTranscriptionSession(
       }
       case "error":
         config.onError?.(new Error(readErrorDetail(event.error ?? event.message)));
-        return;
+
       default:
-        return;
     }
   };
 
@@ -237,8 +237,10 @@ export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionPr
     autoSelectOrder: 25,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
-      isProviderAuthProfileConfigured({ provider: "xai", cfg }),
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ??
+        normalizeOptionalString(process.env.XAI_API_KEY),
+      ) || isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().

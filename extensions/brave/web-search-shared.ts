@@ -1,25 +1,15 @@
+/**
+ * Shared Brave Search provider metadata and credential lookup. Contract tests
+ * and runtime provider creation both use this lightweight descriptor.
+ */
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
-
-export function resolveLegacyTopLevelBraveCredential(
-  config: unknown,
-): { path: string; value: unknown } | undefined {
-  if (!isRecord(config)) {
-    return undefined;
-  }
-  const tools = isRecord(config.tools) ? config.tools : undefined;
-  const web = isRecord(tools?.web) ? tools.web : undefined;
-  const search = isRecord(web?.search) ? web.search : undefined;
-  if (!search || !("apiKey" in search)) {
-    return undefined;
-  }
-  return { path: "tools.web.search.apiKey", value: search.apiKey };
-}
+/** Canonical config path for the Brave Search API key. */
+const BRAVE_CREDENTIAL_PATH = "plugins.entries.brave.config.webSearch.apiKey";
 
 function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unknown> | undefined {
   if (!isRecord(config)) {
@@ -32,13 +22,12 @@ function resolveBraveWebSearchPluginConfig(config: unknown): Record<string, unkn
   return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
 }
 
-export function resolveConfiguredBraveCredential(config: unknown): unknown {
-  return (
-    resolveBraveWebSearchPluginConfig(config)?.apiKey ??
-    resolveLegacyTopLevelBraveCredential(config)?.value
-  );
+/** Resolve Brave credentials from current plugin config. */
+function resolveConfiguredBraveCredential(config: unknown): unknown {
+  return resolveBraveWebSearchPluginConfig(config)?.apiKey;
 }
 
+/** Build the common Brave provider metadata without the runtime tool executor. */
 export function buildBraveWebSearchProviderBase(): Omit<WebSearchProviderPlugin, "createTool"> {
   return {
     id: "brave",
@@ -58,6 +47,5 @@ export function buildBraveWebSearchProviderBase(): Omit<WebSearchProviderPlugin,
       configuredCredential: { pluginId: "brave" },
     }),
     getConfiguredCredentialValue: resolveConfiguredBraveCredential,
-    getConfiguredCredentialFallback: resolveLegacyTopLevelBraveCredential,
   };
 }

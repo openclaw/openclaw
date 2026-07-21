@@ -1,3 +1,4 @@
+// Runs tsgo through local heavy-check policy and sparse-checkout guards.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -5,21 +6,23 @@ import { readFlagValue } from "./lib/arg-utils.mjs";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalTsgoPolicy,
+  ensureRepoToolNodeModulesLink,
   resolveLocalHeavyCheckEnv,
+  resolveRepoToolBinPath,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mjs";
-import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 
 const { args: finalArgs, env } = applyLocalTsgoPolicy(
   process.argv.slice(2),
   resolveLocalHeavyCheckEnv(process.env),
 );
 
-const tsgoPath = path.resolve("node_modules", ".bin", "tsgo");
+const tsgoPath = resolveRepoToolBinPath("tsgo");
 const tsBuildInfoFile = readFlagValue(finalArgs, "--tsBuildInfoFile");
 if (tsBuildInfoFile) {
   fs.mkdirSync(path.dirname(path.resolve(tsBuildInfoFile)), { recursive: true });
@@ -46,6 +49,7 @@ try {
       process.exitCode = 1;
     }
   } else {
+    ensureRepoToolNodeModulesLink(tsgoPath);
     const tsgo = createManagedCommandInvocation({
       args: finalArgs,
       bin: tsgoPath,

@@ -1,11 +1,14 @@
+// Media reference helpers resolve media refs to file, URL, or inline payloads.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolveUserPath } from "../utils.js";
 import { getMediaDir, resolveMediaBufferPath } from "./store.js";
 
 type MediaReferenceErrorCode = "invalid-path" | "path-not-allowed";
 
+/** Error raised when a media reference cannot be mapped to an allowed local media file. */
 export class MediaReferenceError extends Error {
   code: MediaReferenceErrorCode;
 
@@ -28,6 +31,7 @@ type InboundMediaUri = {
   normalizedSource: string;
 };
 
+/** Strips legacy MEDIA: prefixes while preserving canonical media:// references. */
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
   if (/^media:\/\//i.test(trimmed)) {
@@ -46,6 +50,7 @@ type MediaReferenceSourceInfo = {
   looksLikeWindowsDrivePath: boolean;
 };
 
+/** Classifies media reference schemes before local resolution or sandbox rewriting. */
 export function classifyMediaReferenceSource(
   source: string,
   options?: { allowDataUrl?: boolean },
@@ -54,7 +59,7 @@ export function classifyMediaReferenceSource(
   const looksLikeWindowsDrivePath = /^[a-zA-Z]:[\\/]/.test(source);
   const hasScheme = /^[a-z][a-z0-9+.-]*:/i.test(source);
   const isFileUrl = /^file:/i.test(source);
-  const isHttpUrl = /^https?:\/\//i.test(source);
+  const isHttpUrl = hasHttpUrlPrefix(source);
   const isDataUrl = /^data:/i.test(source);
   const isMediaStoreUrl = /^media:\/\//i.test(source);
   const hasUnsupportedScheme =
@@ -109,6 +114,7 @@ async function resolvePathForContainment(candidate: string): Promise<string> {
   }
 }
 
+/** Parses canonical inbound media-store URIs and rejects nested or cross-bucket references. */
 export function parseInboundMediaUri(source: string): InboundMediaUri | null {
   const normalizedSource = normalizeMediaReferenceSource(source);
   if (!/^media:\/\//i.test(normalizedSource)) {
@@ -164,6 +170,7 @@ async function resolveInboundMediaUri(
   };
 }
 
+/** Rewrites inbound media-store URIs to sandbox-relative paths for staged agent inputs. */
 export function resolveMediaReferenceSandboxPath(
   source: string,
   inboundDir = "media/inbound",
@@ -179,6 +186,7 @@ export function resolveMediaReferenceSandboxPath(
   };
 }
 
+/** Resolves inbound media:// URIs or first-level inbound file paths to concrete store files. */
 export async function resolveInboundMediaReference(
   source: string,
 ): Promise<InboundMediaReference | null> {
@@ -200,6 +208,7 @@ export async function resolveInboundMediaReference(
   const rawInboundDir = path.resolve(getMediaDir(), "inbound");
   const rawResolvedPath = path.resolve(localPath);
   const rawRel = path.relative(rawInboundDir, rawResolvedPath);
+  // Realpath fallback catches symlinks and moved state dirs before accepting direct paths.
   const rel =
     rawRel && !relativePathEscapesBase(rawRel)
       ? rawRel
@@ -219,9 +228,18 @@ export async function resolveInboundMediaReference(
   };
 }
 
-export async function resolveMediaReferenceLocalPath(source: string): Promise<string> {
+/** Resolves a media reference while preserving whether it belongs to the inbound store. */
+export async function resolveMediaReferenceLocalPathInfo(source: string) {
   const normalizedSource = normalizeMediaReferenceSource(source);
-  return (await resolveInboundMediaReference(normalizedSource))?.physicalPath ?? normalizedSource;
+  const inboundReference = await resolveInboundMediaReference(normalizedSource);
+  return inboundReference
+    ? { kind: "inbound" as const, path: inboundReference.physicalPath }
+    : { kind: "local" as const, path: normalizedSource };
+}
+
+/** Converts inbound media references for callers that need a direct local file path. */
+export async function resolveMediaReferenceLocalPath(source: string): Promise<string> {
+  return (await resolveMediaReferenceLocalPathInfo(source)).path;
 }
 
 async function resolveInboundMediaPath(id: string, source: string): Promise<string> {

@@ -1,3 +1,4 @@
+/** Shared E2E mocks for directive behavior tests that exercise reply-agent dispatch. */
 import { vi, type Mock } from "vitest";
 
 export const runEmbeddedAgentMock: Mock = vi.fn();
@@ -21,6 +22,7 @@ function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: un
   const replyToCurrentPattern = /\[\[\s*reply_to_current\s*\]\]/gi;
   const hasReplyToCurrent = replyToCurrentPattern.test(text);
   const currentMessageId = objectRecord(objectRecord(params)?.sessionCtx)?.MessageSid;
+  // Directive tests encode reply targets in text markers so mocked agents can stay lightweight.
   const cleanedText = text
     .replace(replyToCurrentPattern, "")
     .replace(/\[\[\s*reply_to\s*:\s*([^\]]+?)\s*\]\]/gi, "")
@@ -53,6 +55,7 @@ async function runMockedReplyAgent(runParams: unknown, params: unknown) {
   return normalized.length === 1 ? normalized[0] : normalized;
 }
 
+/** Runs the mocked reply agent using the follow-up run payload from directive tests. */
 export async function runDirectiveBehaviorReplyAgent(params: unknown) {
   const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
   return await runMockedReplyAgent(runParams, params);
@@ -60,6 +63,7 @@ export async function runDirectiveBehaviorReplyAgent(params: unknown) {
 
 export const runReplyAgentMock: Mock = vi.fn(runDirectiveBehaviorReplyAgent);
 
+/** Runs the mocked prepared-reply path with the resolved model and elevation settings. */
 export async function runDirectiveBehaviorPreparedReply(params: unknown) {
   const input = objectRecord(params) ?? {};
   const runParams = {
@@ -84,7 +88,6 @@ vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
@@ -94,7 +97,6 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
   runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
-  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
@@ -102,9 +104,19 @@ vi.mock("../agents/embedded-agent.runtime.js", () => ({
   waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: loadModelCatalogMock,
+vi.mock("../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: loadModelCatalogMock,
 }));
+
+vi.mock("../agents/thinking-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/thinking-runtime.js")>();
+  return {
+    ...actual,
+    // These tests cover directive acknowledgements and persistence, not harness selection.
+    // Keep each directive from loading unrelated provider-route metadata through auto selection.
+    resolveEffectiveAgentRuntime: () => "openclaw",
+  };
+});
 
 vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: (...args: unknown[]) =>

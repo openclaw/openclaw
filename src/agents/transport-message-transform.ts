@@ -1,4 +1,11 @@
+import { resolveModelBoundThinkingReplayMode } from "@openclaw/ai/internal/anthropic";
+/**
+ * Normalizes transcript messages before provider transport replay. It drops
+ * unsafe failed turns, maps tool-call ids across model boundaries, and fills
+ * strict provider tool-result gaps when supported.
+ */
 import type { Api, Context, Model } from "../llm/types.js";
+import { isReasoningOnlyLengthAssistantTurn } from "./replay-turn-classification.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -34,9 +41,23 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
   if (message.role !== "assistant") {
     return false;
   }
-  return message.stopReason === "error" || message.stopReason === "aborted";
+  return (
+    message.stopReason === "error" ||
+    message.stopReason === "aborted" ||
+    isReasoningOnlyLengthAssistantTurn(message)
+  );
 }
 
+function failedAssistantHasToolCalls(message: Context["messages"][number]): boolean {
+  return (
+    message.role === "assistant" &&
+    (message.stopReason === "error" || message.stopReason === "aborted") &&
+    Array.isArray(message.content) &&
+    message.content.some((block) => block.type === "toolCall")
+  );
+}
+
+/** Transforms transcript messages into a provider-safe replay context. */
 export function transformTransportMessages(
   messages: Context["messages"],
   model: Model,
@@ -68,8 +89,23 @@ export function transformTransportMessages(
     if (msg.role !== "assistant") {
       return msg;
     }
+    const modelBoundThinkingReplayMode = resolveModelBoundThinkingReplayMode({
+      source: {
+        provider: msg.provider,
+        api: msg.api,
+        modelId: msg.model,
+        responseModelId: msg.responseModel,
+      },
+      target: {
+        provider: model.provider,
+        api: model.api,
+        modelId: model.id,
+        modelParams: model.params,
+      },
+    });
     const isSameModel =
-      msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
+      modelBoundThinkingReplayMode === "preserve" ||
+      (msg.provider === model.provider && msg.api === model.api && msg.model === model.id);
     const sourceContent = Array.isArray(msg.content)
       ? msg.content
       : msg.content != null && typeof msg.content === "object"
@@ -78,6 +114,9 @@ export function transformTransportMessages(
     const content: typeof msg.content = [];
     for (const block of sourceContent) {
       if (block.type === "thinking") {
+        if (modelBoundThinkingReplayMode === "drop") {
+          continue;
+        }
         if (block.redacted) {
           if (isSameModel) {
             content.push(block);
@@ -125,10 +164,18 @@ export function transformTransportMessages(
     }
     return { ...msg, content };
   });
-  // Preserve the old transport replay filter: failed streamed turns can contain
-  // partial text, partial tool calls, or both, and strict providers can treat
-  // them as valid assistant context on retry unless we drop the whole turn.
-  const replayable = transformed.filter((msg) => !isFailedAssistantTurn(msg));
+  // Pairing-aware transports must let shared repair see errored tool-call frames and
+  // their adjacent results together; pre-filtering the call can misattribute its result
+  // to an older turn that reused the same provider id.
+  const replayable = transformed.filter((_, index) => {
+    const original = messages[index];
+    if (!original) {
+      return true;
+    }
+    return allowSyntheticToolResults
+      ? !isFailedAssistantTurn(original) || failedAssistantHasToolCalls(original)
+      : !isFailedAssistantTurn(original);
+  });
 
   if (!allowSyntheticToolResults) {
     return replayable;
@@ -136,8 +183,7 @@ export function transformTransportMessages(
 
   // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
-  // handles both, while preserving the previous transport behavior of dropping
-  // aborted/error assistant tool-call turns before replaying strict providers.
+  // handles both and drops aborted/error turns together with their owned results.
   return repairToolUseResultPairing(replayable, {
     erroredAssistantResultPolicy: "drop",
     missingToolResultText: syntheticToolResultText,

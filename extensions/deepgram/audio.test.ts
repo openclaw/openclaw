@@ -1,8 +1,9 @@
+// Deepgram tests cover audio plugin behavior.
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it, vi } from "vitest";
 import { transcribeDeepgramAudio } from "./audio.js";
 

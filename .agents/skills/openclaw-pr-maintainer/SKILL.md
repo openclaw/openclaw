@@ -76,9 +76,11 @@ gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees
 - If `name` is empty, use the login only. If profile lookup is rate-limited or unavailable, say `account age unknown` rather than omitting the opener.
 - Use identity and activity as triage signal, not proof by itself: new, low-activity, or bot-like accounts can raise review caution, but code, repro, and CI evidence still decide.
 
-## Suppress top-maintainer items in issue triage
+## Suppress recent wide-access maintainer PRs in triage
 
-When asked for issue triage, hot issues, pressing bugs, Discord-correlated issues, or "what is still open", do not surface issues or PRs authored by top maintainers by default. Prefer external/user-reported hot issues and external PRs, not maintainer-owned work queues.
+In generic issue/PR triage, hot queues, landable shortlists, or "what is still open", exclude PRs authored by maintainers with broad repository access until 14 days after `created_at`. Prefer external contributors' PRs. An ordinary request for landing candidates does not override the age gate. Continue suppressing maintainer-authored issues by default.
+
+Treat live repository permission as the source of truth. Before surfacing a finalist whose access is not already known, check `gh api repos/openclaw/openclaw/collaborators/<login>/permission`; suppress write, maintain, or admin access even when the login is absent from the fast-path list below. Read or triage access alone does not trigger suppression unless the login is explicitly listed.
 
 Suppress by default when the opener/author is one of:
 
@@ -89,6 +91,8 @@ Suppress by default when the opener/author is one of:
 - `@shakkernerd`
 - `@mbelinky`
 - `@joshavant`
+- `@pgondhi987`
+- `@mmaps`
 - `@ngutman`
 - `@vignesh07`
 - `@huntharo`
@@ -107,8 +111,9 @@ Also suppress lower-priority maintainer-owned noise from the broader keep/top-ma
 
 Exceptions:
 
-- Show maintainer-authored items when the requester explicitly asks for maintainer PRs/issues, PR landing candidates, release-blocking maintainer work, or a specific PR/issue number.
-- Show a maintainer-authored item when it is the canonical fix for an external hot issue, but frame it as the fix path rather than as a user-facing issue candidate.
+- Once a maintainer-authored PR is at least 14 days old, triage it normally.
+- A specific PR/issue number or an explicit request for maintainer-owned work overrides suppression.
+- When a recent maintainer PR is the canonical fix for an external hot issue, mention it only as the fix path; do not count it as a triage or landing candidate.
 - Do not close, label, or deprioritize solely because an item is maintainer-authored; this section only controls what appears in triage shortlists.
 
 ## Apply close and triage labels correctly
@@ -187,11 +192,37 @@ gh pr view <number> --json additions,deletions,changedFiles \
 ## Read beyond the diff
 
 - Review the surrounding code path, not just changed lines. Open the caller, callee, data contracts, adjacent tests, and owner module.
+- Before any verdict, read enough code to fill this map: changed surface, runtime entry point, owner boundary, one caller, one callee, sibling implementations sharing the invariant, adjacent tests, current `main` behavior, and shipped/dependency/Codex contracts when relevant.
 - For large-codebase PRs, sample enough related files to understand the runtime boundary before deciding. Default to more code reading when the change touches agents, gateway, plugins, auth, sessions, process, config, or provider/runtime seams.
 - Compare the PR against current `origin/main` behavior. Check whether recent main already changed the same surface.
 - Dependency-backed behavior: MUST read upstream docs/source/types before judging API use, defaults, output shapes, errors, timeouts, memory behavior, or compatibility. Do not assume dependency contracts from memory or PR text.
 - Judge solution quality, not only correctness. Ask whether the PR is the clean owner-boundary fix or a wart/workaround that should be replaced by a small refactor, moved seam, contract change, or deletion of duplicate logic.
 - Mention the main files read when the verdict depends on code-path evidence.
+- If the user challenges the verdict or asks whether the idea is really good, resume code reading first. Do not defend, soften, or reverse the verdict until the missing caller/callee/sibling/dependency path is checked.
+
+## Best-fix review loop
+
+Every PR review must explicitly answer: "Is this the best fix, or only a plausible fix?"
+
+Before verdict:
+
+1. Reconstruct the bug, feature need, or behavior claim from issue/PR/proof.
+2. Trace current behavior from entry point to failure or decision point.
+3. Read touched files, callers, callees, owner modules, adjacent tests, and relevant docs.
+4. Read sibling surfaces that should share the invariant or could be broken by a one-sided fix.
+5. Compare against current `origin/main` and shipped behavior when regression/compat matters.
+6. Inspect upstream dependency/Codex source or docs for dependency-backed behavior.
+7. Identify at least one alternative fix location or shape, then reject it with evidence.
+8. If any required path above is uninspected, keep reading or mark `Remaining uncertainty`; do not call the PR best, blocked, proof-sufficient, or merge-ready.
+
+Review output must include:
+
+- `Best-fix verdict:` best / acceptable mitigation / wrong layer / too narrow / too broad.
+- `Alternatives considered:` 1-3 concrete alternatives and why rejected.
+- `Code read:` compact list of main files/contracts checked.
+- `Remaining uncertainty:` what was not proven.
+
+If the best-fix answer is only "maybe", keep reading or state the missing evidence. Do not call proof sufficient until the best-fix judgment is explicit.
 
 ## Enforce the bug-fix evidence bar
 
@@ -253,12 +284,32 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
+- At the start of code-changing or landing work that will need tests or heavy
+  proof, classify source trust and pre-warm the safe backend through `$crabbox`
+  in the background. Trusted maintainer code defaults to Blacksmith Testbox;
+  contributor/fork code stays untrusted unless a maintainer explicitly approves
+  credentialed execution after review; it uses secretless fork CI or
+  sanitized direct AWS Crabbox with `CRABBOX_ENV_ALLOW=CI`,
+  `--no-hydrate`, and a fresh temporary remote `HOME`, never the
+  credential-hydrated Testbox workflow or a previously hydrated lease. Launch
+  an installed trusted Crabbox binary from clean trusted `main`, fetch the PR
+  with `--fresh-pr`, unset and reject any resolved AWS instance profile, verify
+  trusted IMDS reports no IAM credentials, bind the lease to the reviewed head
+  SHA, and never execute its local wrapper or config. Upload trusted
+  `scripts/crabbox-untrusted-bootstrap.sh` from clean `main` alongside
+  `--fresh-pr`; it installs the pinned Node/pnpm runtime before executing PR
+  code. Force public networking, disable and
+  unset inherited Tailscale/exit-node settings, and fail closed unless
+  `crabbox inspect` reports no Tailscale state before any script. Rewarm after
+  any head change. Continue
+  review/editing while it hydrates, sync every run, reuse the lease, then stop
+  it before handoff. Skip warmup for read-only triage and docs-only work.
 - Never mention release-note bookkeeping in review-only output. It is landing
   or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
-- When landing or merging any PR, follow the global `/landpr` process.
+- When an agent is landing or merging a PR targeting `main`, use only the repo-native `scripts/pr` wrapper: run `scripts/pr review-init <PR>`, follow its emitted checkout/guard guidance, initialize and complete review artifacts with `scripts/pr review-artifacts-init <PR>`, validate them with `scripts/pr review-validate-artifacts <PR>`, then run `OPENCLAW_TESTBOX=1 scripts/pr prepare-run <PR>` and `scripts/pr merge-run <PR>`. The Testbox flag is mandatory for agents: it verifies hosted CI/Testbox on the current head or reuses a patch-identical pre-rebase run green within 24 hours instead of running full `pnpm` gates locally. Do not rebase only because `main` advanced; behind-main drift is advisory unless strict drift is explicitly enabled, while GitHub still blocks conflicts.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.
 - Group related changes; avoid bundling unrelated refactors.
@@ -267,5 +318,5 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Extra safety
 
-- If a close or reopen action would affect more than 5 PRs, ask for explicit confirmation with the exact count and target query first.
+- If a close or reopen action would affect more than 20 PRs, ask for explicit confirmation with the exact count and target query first.
 - `sync` means: if the tree is dirty, commit all changes with a sensible Conventional Commit message, then `git pull --rebase`, then `git push`. Stop if rebase conflicts cannot be resolved safely.

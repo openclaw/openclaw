@@ -1,3 +1,9 @@
+/**
+ * Gateway config mutation for local non-interactive onboarding.
+ *
+ * This module owns port/bind/auth validation and existing-setting preservation
+ * before the final config write happens.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import { formatInvalidPortOption } from "../../../cli/error-format.js";
@@ -8,6 +14,7 @@ import { resolveDefaultSecretProviderAlias } from "../../../secrets/ref-contract
 import { normalizeGatewayTokenInput, randomToken } from "../../onboard-helpers.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
+/** Applies gateway CLI options to the pending config and returns normalized runtime settings. */
 export function applyNonInteractiveGatewayConfig(params: {
   nextConfig: OpenClawConfig;
   opts: OnboardOptions;
@@ -33,25 +40,44 @@ export function applyNonInteractiveGatewayConfig(params: {
     return null;
   }
 
+  const existingGateway = params.nextConfig.gateway;
   const port = gatewayPort ?? params.defaultPort;
-  let bind = opts.gatewayBind ?? "loopback";
-  const authModeRaw = opts.gatewayAuth ?? "token";
-  if (authModeRaw !== "token" && authModeRaw !== "password") {
+  let bind = opts.gatewayBind ?? existingGateway?.bind ?? "loopback";
+  const explicitAuthMode = opts.gatewayAuth;
+  if (
+    explicitAuthMode !== undefined &&
+    explicitAuthMode !== "token" &&
+    explicitAuthMode !== "password"
+  ) {
     runtime.error('Invalid --gateway-auth. Use "token" or "password".');
     runtime.exit(1);
     return null;
   }
-  let authMode = authModeRaw;
-  const tailscaleMode = opts.tailscale ?? "off";
-  const tailscaleResetOnExit = Boolean(opts.tailscaleResetOnExit);
+  const hasExplicitTokenAuthInput =
+    opts.gatewayToken !== undefined || opts.gatewayTokenRefEnv !== undefined;
+  let authMode =
+    explicitAuthMode ??
+    (hasExplicitTokenAuthInput ? "token" : existingGateway?.auth?.mode) ??
+    "token";
+  const tailscaleMode = opts.tailscale ?? existingGateway?.tailscale?.mode ?? "off";
+  const tailscaleResetOnExit =
+    opts.tailscaleResetOnExit ?? existingGateway?.tailscale?.resetOnExit ?? false;
 
   // Tighten config to safe combos:
   // - If Tailscale is on, force loopback bind (the tunnel handles external access).
   // - If using Tailscale Funnel, require password auth.
-  if (tailscaleMode !== "off" && bind !== "loopback") {
+  // Preserve an existing combination on unrelated reruns; only normalize when
+  // the operator is changing one of the fields that participates in the rule.
+  const changesBindOrTailscale = opts.gatewayBind !== undefined || opts.tailscale !== undefined;
+  if (changesBindOrTailscale && tailscaleMode !== "off" && bind !== "loopback") {
     bind = "loopback";
   }
-  if (tailscaleMode === "funnel" && authMode !== "password") {
+  const changesAuthOrTailscale =
+    explicitAuthMode !== undefined || hasExplicitTokenAuthInput || opts.tailscale !== undefined;
+  if (changesAuthOrTailscale && tailscaleMode === "serve" && authMode === "none") {
+    authMode = "token";
+  }
+  if (changesAuthOrTailscale && tailscaleMode === "funnel" && authMode !== "password") {
     authMode = "password";
   }
 
@@ -73,6 +99,8 @@ export function applyNonInteractiveGatewayConfig(params: {
 
   if (authMode === "token") {
     if (gatewayTokenRefEnv) {
+      // Env refs must be validated before writing config because the daemon
+      // install plan will later depend on this exact env-var id.
       if (!isValidEnvSecretRefId(gatewayTokenRefEnv)) {
         runtime.error(
           "Invalid --gateway-token-ref-env. Use an environment variable name like OPENCLAW_GATEWAY_TOKEN.",
@@ -81,6 +109,8 @@ export function applyNonInteractiveGatewayConfig(params: {
         return null;
       }
       if (explicitGatewayToken) {
+        // Avoid ambiguous persistence: a plaintext token and a ref target cannot
+        // both represent the same gateway auth field.
         runtime.error(
           "Use either --gateway-token or --gateway-token-ref-env, not both. Prefer --gateway-token-ref-env to avoid writing plaintext tokens.",
         );
@@ -95,7 +125,6 @@ export function applyNonInteractiveGatewayConfig(params: {
         runtime.exit(1);
         return null;
       }
-      gatewayToken = resolvedFromEnv;
       nextConfig = {
         ...nextConfig,
         gateway: {
@@ -148,7 +177,12 @@ export function applyNonInteractiveGatewayConfig(params: {
   }
 
   if (authMode === "password") {
-    const password = opts.gatewayPassword?.trim();
+    const input = opts.gatewayPassword;
+    const password =
+      input === undefined
+        ? (nextConfig.gateway?.auth?.password ??
+          normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD))
+        : normalizeOptionalString(input);
     if (!password) {
       runtime.error(
         "Missing --gateway-password for password auth. Pass --gateway-password or use --gateway-auth token.",
@@ -163,7 +197,7 @@ export function applyNonInteractiveGatewayConfig(params: {
         auth: {
           ...nextConfig.gateway?.auth,
           mode: "password",
-          password,
+          ...(input !== undefined ? { password } : {}),
         },
       },
     };

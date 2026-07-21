@@ -1,3 +1,5 @@
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+// Slack helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
@@ -5,26 +7,26 @@ export const slackChannelConfigUiHints = {
     label: "Slack",
     help: "Slack channel provider configuration for bot/app tokens, streaming behavior, and DM policy controls. Keep token handling and thread behavior explicit to avoid noisy workspace interactions.",
   },
-  "dm.policy": {
-    label: "Slack DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"] (legacy: channels.slack.dm.allowFrom).',
+  enterpriseOrgInstall: {
+    label: "Slack Enterprise Grid Org Install",
+    help: 'Enable only for an Enterprise Grid org-wide bot installation. OpenClaw verifies the token with Slack auth.test at startup; DMs must be disabled or use dmPolicy="open" with allowFrom=["*"].',
   },
-  dmPolicy: {
-    label: "Slack DM Policy",
-    help: 'Direct message access control ("pairing" recommended). "open" requires channels.slack.allowFrom=["*"].',
+  identity: {
+    label: "Slack Identity",
+    help: 'Select "bot" (default) for the classic Slack app/bot identity or "user" to post as the authorizing human through a user token while the app carries event transport.',
   },
-  configWrites: {
-    label: "Slack Config Writes",
-    help: "Allow Slack to write config in response to channel events/commands (default: true).",
-  },
-  "commands.native": {
-    label: "Slack Native Commands",
-    help: 'Override native commands for Slack (bool or "auto").',
-  },
-  "commands.nativeSkills": {
-    label: "Slack Native Skill Commands",
-    help: 'Override native skill commands for Slack (bool or "auto").',
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Slack",
+    dmPolicy: { channelKey: "slack" },
+    configWrites: true,
+    mentionPatterns: {
+      targetDescription: "Slack channel IDs",
+      policyNote: "Native Slack @mentions still trigger even when regex patterns are denied.",
+      denyNote: "Native @mentions still trigger.",
+    },
+    nativeCommands: true,
+    implicitMentions: true,
+  }),
   allowBots: {
     label: "Slack Allow Bot Messages",
     help: "Allow bot-authored messages to trigger Slack replies (default: false).",
@@ -65,6 +67,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Socket Mode Ping/Pong Logging",
     help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
   },
+  relay: {
+    label: "Slack Relay Mode",
+    help: 'Relay-delivered Slack events. Use with mode="relay" when openclaw-slack-router owns the Slack Socket Mode connection.',
+  },
+  "relay.url": {
+    label: "Slack Relay URL",
+    help: "Full websocket URL for openclaw-slack-router. Include the route path, for example ws://127.0.0.1:8081/gateway/ws.",
+  },
+  "relay.authToken": {
+    label: "Slack Relay Auth Token",
+    help: "Bearer token used by this gateway to authenticate its reverse websocket connection to openclaw-slack-router.",
+  },
+  "relay.gatewayId": {
+    label: "Slack Relay Gateway ID",
+    help: "Destination id that openclaw-slack-router uses when routing user-group mentions to this gateway.",
+  },
   botToken: {
     label: "Slack Bot Token",
     help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",
@@ -88,6 +106,18 @@ export const slackChannelConfigUiHints = {
   execApprovals: {
     label: "Slack Exec Approvals",
     help: "Slack-native exec approval routing and approver authorization. When unset, OpenClaw auto-enables DM-first native approvals if approvers can be resolved for this workspace account.",
+  },
+  presenceEvents: {
+    label: "Slack Presence Events",
+    help: 'Poll observed human participants and wake the routed agent on away-to-active transitions. Default: "off".',
+  },
+  "presenceEvents.mode": {
+    label: "Slack Presence Event Mode",
+    help: '"off" disables polling; "auto" covers DMs, MPIMs, and recent threads with up to 8 observed people; "on" also covers larger threads and top-level channels.',
+  },
+  "channels.*.presenceEvents.mode": {
+    label: "Slack Channel Presence Event Mode",
+    help: 'Override presence events for one Slack channel. Use "on" to include large threads or top-level channel sessions.',
   },
   "execApprovals.enabled": {
     label: "Slack Exec Approvals Enabled",
@@ -184,9 +214,5 @@ export const slackChannelConfigUiHints = {
   "thread.initialHistoryLimit": {
     label: "Slack Thread Initial History Limit",
     help: "Maximum number of existing Slack thread messages to fetch when starting a new thread session (default: 20, set to 0 to disable).",
-  },
-  "thread.requireExplicitMention": {
-    label: "Slack Thread Require Explicit Mention",
-    help: "If true, require an explicit @mention even inside threads where the bot has participated. Suppresses implicit thread mention behavior so the bot only responds to explicit @bot mentions in threads (default: false).",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

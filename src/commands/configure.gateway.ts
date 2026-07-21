@@ -1,4 +1,5 @@
-import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+// Configure wizard Gateway port, bind, auth, and Tailscale prompts.
+import { validateDottedDecimalIPv4Input } from "@openclaw/net-policy/ipv4";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -20,7 +21,7 @@ import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
-import { confirm, select, text } from "./configure.shared.js";
+import { confirm, password, select, text } from "./configure.shared.js";
 import {
   guardCancel,
   normalizeGatewayTokenInput,
@@ -38,6 +39,7 @@ function validateGatewayPortInput(value: unknown): string | undefined {
   return undefined;
 }
 
+/** Prompt for local Gateway network/auth settings and return config plus call token. */
 export async function promptGatewayConfig(
   cfg: OpenClawConfig,
   runtime: RuntimeEnv,
@@ -68,7 +70,7 @@ export async function promptGatewayConfig(
         {
           value: "tailnet",
           label: "Tailnet (Tailscale IP)",
-          hint: "Bind to your Tailscale IP only (100.x.x.x)",
+          hint: "Bind to your Tailscale IP plus local loopback",
         },
         {
           value: "auto",
@@ -83,7 +85,7 @@ export async function promptGatewayConfig(
         {
           value: "custom",
           label: "Custom IP",
-          hint: "Specify a specific IP address, with 0.0.0.0 fallback if unavailable",
+          hint: "Specific IPv4s also bind 127.0.0.1",
         },
       ],
     }),
@@ -96,7 +98,7 @@ export async function promptGatewayConfig(
       await text({
         message: "Custom IP address",
         placeholder: "192.168.1.100",
-        validate: validateIPv4AddressInput,
+        validate: validateDottedDecimalIPv4Input,
       }),
       runtime,
     );
@@ -231,9 +233,8 @@ export async function promptGatewayConfig(
       note(`Validated ${envVarName}. OpenClaw will store a token SecretRef.`, "Gateway token");
     } else {
       const tokenInput = guardCancel(
-        await text({
+        await password({
           message: "Gateway token (blank to generate)",
-          initialValue: randomToken(),
         }),
         runtime,
       );
@@ -243,14 +244,14 @@ export async function promptGatewayConfig(
   }
 
   if (authMode === "password") {
-    const password = guardCancel(
-      await text({
+    const passwordInput = guardCancel(
+      await password({
         message: "Gateway password",
         validate: validateGatewayPasswordInput,
       }),
       runtime,
     );
-    gatewayPassword = normalizeOptionalString(password) ?? "";
+    gatewayPassword = normalizeOptionalString(passwordInput) ?? "";
   }
 
   if (authMode === "trusted-proxy") {

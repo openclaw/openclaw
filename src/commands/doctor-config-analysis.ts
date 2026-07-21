@@ -1,3 +1,4 @@
+/** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ZodIssue } from "zod";
@@ -13,14 +14,15 @@ type UnrecognizedKeysIssue = ZodIssue & {
   keys: PropertyKey[];
 };
 
-function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
-  return path.filter((part): part is string | number => typeof part !== "symbol");
+function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
+  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
 }
 
 function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
   return issue.code === "unrecognized_keys";
 }
 
+/** Formats a parsed config issue path into a user-facing dotted path. */
 export function formatConfigPath(parts: Array<string | number>): string {
   if (parts.length === 0) {
     return "<root>";
@@ -36,9 +38,10 @@ export function formatConfigPath(parts: Array<string | number>): string {
   return out || "<root>";
 }
 
-export function resolveConfigPathTarget(root: unknown, path: Array<string | number>): unknown {
+/** Resolves a config path against a loose config tree, returning null for invalid traversal. */
+export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
   let current: unknown = root;
-  for (const part of path) {
+  for (const part of pathLocal) {
     if (typeof part === "number") {
       if (!Array.isArray(current)) {
         return null;
@@ -66,11 +69,16 @@ function isUpdateInProgress(): boolean {
   return value === "1" || value === "true";
 }
 
-const ROOT_STRIP_PROTECTED_KEYS = new Set(["defaultModel"]);
 const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
   plugins: new Set(["installs"]),
 };
 
+/**
+ * Removes unknown config keys reported by schema validation, except protected migration keys.
+ *
+ * Doctor skips this while an update is in progress so partially written upgrade state is not
+ * stripped before its migration can finish.
+ */
 export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
@@ -99,11 +107,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
     const parentKey =
       issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
     const protectedSet =
-      issuePath.length === 0
-        ? ROOT_STRIP_PROTECTED_KEYS
-        : parentKey
-          ? STRIP_PROTECTED_KEYS[parentKey]
-          : undefined;
+      issuePath.length === 0 ? undefined : parentKey ? STRIP_PROTECTED_KEYS[parentKey] : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
         continue;
@@ -119,6 +123,7 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
   return { config: next, removed };
 }
 
+/** Warns when legacy OpenCode provider overrides shadow the built-in catalog. */
 export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
   const providers = cfg.models?.providers;
   if (!providers) {
@@ -174,7 +179,8 @@ function isImplicitFallbackClobber(model: unknown): boolean {
   return false;
 }
 
-export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
+/** Collects warnings for agent model shapes that unintentionally drop default fallbacks. */
+function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): string[] {
   const defaultFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
   if (defaultFallbacks.length === 0) {
     return [];
@@ -204,6 +210,7 @@ export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): str
   return warnings;
 }
 
+/** Emits doctor notes for model fallback clobber warnings. */
 export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
   const warnings = collectImplicitFallbackClobberWarnings(cfg);
   if (warnings.length === 0) {
@@ -212,6 +219,7 @@ export function noteImplicitFallbackClobberWarnings(cfg: OpenClawConfig): void {
   note(warnings.join("\n"), "Doctor warnings");
 }
 
+/** Emits a config include warning when an include path escapes the config directory. */
 export function noteIncludeConfinementWarning(snapshot: {
   path?: string | null;
   issues?: Array<{ message: string }>;
@@ -231,6 +239,26 @@ export function noteIncludeConfinementWarning(snapshot: {
       `- $include paths must stay under: ${configRoot}`,
       '- Move shared include files under that directory and update to relative paths like "./shared/common.json".',
       `- Error: ${includeIssue.message}`,
+    ].join("\n"),
+    "Doctor warnings",
+  );
+}
+
+/** Warns when a trusted-proxy gateway has no public sandbox origin for widget/MCP-app frames. */
+export function noteSandboxOriginProxyWarning(cfg: OpenClawConfig): void {
+  // trusted-proxy auth means the Control UI is reached through a reverse proxy
+  // or tunnel. Widget and MCP-app frames load from a separate sandbox listener
+  // (gateway port + 1); without mcp.apps.sandboxOrigin the browser derives that
+  // URL by port substitution, which such proxies do not route, and every
+  // pinned widget fails to render.
+  if (cfg.gateway?.auth?.mode !== "trusted-proxy" || cfg.mcp?.apps?.sandboxOrigin) {
+    return;
+  }
+  note(
+    [
+      '- gateway.auth.mode is "trusted-proxy" but mcp.apps.sandboxOrigin is not set.',
+      "  Dashboard widgets and MCP apps render from a separate sandbox listener (gateway port + 1). If your proxy or tunnel does not also route that port, widget frames cannot load.",
+      "  Check: either route the sandbox port through your proxy, or set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener (see the MCP Apps section of docs/cli/mcp.md).",
     ].join("\n"),
     "Doctor warnings",
   );

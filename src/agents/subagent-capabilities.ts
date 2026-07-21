@@ -1,10 +1,19 @@
+/**
+ * Subagent capability resolution.
+ * Combines session-key shape, stored envelopes, spawn depth, and inherited tool
+ * policy to decide role, control scope, and subagent permissions.
+ */
 import {
   resolveIntegerOption,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isAcpSessionKey,
@@ -16,8 +25,8 @@ import {
   normalizeInheritedToolDenylist,
 } from "./inherited-tool-deny.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
+/** Resolved role for a main session, orchestrating subagent, or leaf subagent. */
 export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
 const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
   "main",
@@ -38,6 +47,7 @@ type SessionCapabilityEntry = {
   inheritedToolDeny?: unknown;
 };
 
+/** Minimal persisted session-store shape needed to resolve subagent capabilities. */
 export type SessionCapabilityStore = Record<
   string,
   {
@@ -62,6 +72,8 @@ function normalizeSubagentControlScope(value: unknown): SubagentControlScope | u
 }
 
 function shouldInspectStoredSubagentEnvelope(sessionKey: string): boolean {
+  // ACP session keys can represent resumed subagents only when their persisted
+  // envelope carries subagent metadata or points back to a subagent parent.
   return isSubagentSessionKey(sessionKey) || isAcpSessionKey(sessionKey);
 }
 
@@ -75,9 +87,17 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function readSessionStore(storePath: string): Record<string, SessionCapabilityEntry> {
+function readSessionStore(
+  storePath: string,
+  agentId: string,
+): Record<string, SessionCapabilityEntry> {
   try {
-    return loadSessionStore(storePath);
+    return Object.fromEntries(
+      listSessionEntries({ agentId, storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
   } catch {
     return {};
   }
@@ -87,12 +107,14 @@ function findEntryBySessionId(
   store: SessionCapabilityStore,
   sessionId: string,
 ): SessionCapabilityEntry | undefined {
-  const normalizedSessionId = normalizeSubagentSessionKey(sessionId);
+  const normalizedSessionId = normalizeOptionalString(sessionId);
   if (!normalizedSessionId) {
     return undefined;
   }
   for (const entry of Object.values(store)) {
-    const candidateSessionId = normalizeSubagentSessionKey(entry?.sessionId);
+    // Older callers may know the session id but not the exact store key, so
+    // persisted entries are searchable by their normalized embedded sessionId.
+    const candidateSessionId = normalizeOptionalString(entry?.sessionId);
     if (candidateSessionId === normalizedSessionId) {
       return entry;
     }
@@ -116,10 +138,11 @@ function resolveSessionCapabilityEntry(params: {
     return undefined;
   }
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
-  const store = readSessionStore(storePath);
+  const store = readSessionStore(storePath, parsed.agentId);
   return store[params.sessionKey] ?? findEntryBySessionId(store, params.sessionKey);
 }
 
+/** Resolve the session-store subset used for subagent capability lookup. */
 export function resolveSubagentCapabilityStore(
   sessionKey: string | undefined | null,
   opts?: {
@@ -127,7 +150,7 @@ export function resolveSubagentCapabilityStore(
     store?: SessionCapabilityStore;
   },
 ): SessionCapabilityStore | undefined {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey) {
     return opts?.store;
   }
@@ -142,9 +165,10 @@ export function resolveSubagentCapabilityStore(
     return undefined;
   }
   const storePath = resolveStorePath(opts.cfg.session?.store, { agentId: parsed.agentId });
-  return readSessionStore(storePath);
+  return readSessionStore(storePath, parsed.agentId);
 }
 
+/** Resolve depth-derived role/scope booleans for a subagent position. */
 function resolveSubagentRoleForDepth(params: {
   depth: number;
   maxSpawnDepth?: number;
@@ -165,6 +189,7 @@ function resolveSubagentControlScopeForRole(role: SubagentSessionRole): Subagent
   return role === "leaf" ? "none" : "children";
 }
 
+/** Resolve depth-derived role, scope, and spawn/control booleans. */
 export function resolveSubagentCapabilities(params: { depth: number; maxSpawnDepth?: number }) {
   const depth = resolveNonNegativeIntegerOption(params.depth, 0);
   const role = resolveSubagentRoleForDepth(params);
@@ -187,7 +212,7 @@ function isStoredSubagentEnvelopeSession(
   },
   visited = new Set<string>(),
 ): boolean {
-  const normalizedSessionKey = normalizeSubagentSessionKey(params.sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(params.sessionKey);
   if (!normalizedSessionKey || visited.has(normalizedSessionKey)) {
     return false;
   }
@@ -214,13 +239,15 @@ function isStoredSubagentEnvelopeSession(
     return true;
   }
 
-  const spawnedBy = normalizeSubagentSessionKey(entry?.spawnedBy);
+  const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   if (!spawnedBy) {
     return false;
   }
   const parentStore = isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
     ? params.store
     : undefined;
+  // Follow parent links across stored ACP envelopes to recover subagent identity
+  // for resumed sessions, while `visited` prevents malformed cycles.
   return isStoredSubagentEnvelopeSession(
     {
       sessionKey: spawnedBy,
@@ -231,6 +258,7 @@ function isStoredSubagentEnvelopeSession(
   );
 }
 
+/** Return true when a session key or persisted ACP envelope represents a subagent. */
 export function isSubagentEnvelopeSession(
   sessionKey: string | undefined | null,
   opts?: {
@@ -239,7 +267,7 @@ export function isSubagentEnvelopeSession(
     entry?: SessionCapabilityEntry;
   },
 ): boolean {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey) {
     return false;
   }
@@ -258,6 +286,10 @@ export function isSubagentEnvelopeSession(
   });
 }
 
+/**
+ * Resolve the effective subagent role/scope, combining stored envelope metadata
+ * with depth-derived fallback behavior.
+ */
 export function resolveStoredSubagentCapabilities(
   sessionKey: string | undefined | null,
   opts?: {
@@ -265,7 +297,7 @@ export function resolveStoredSubagentCapabilities(
     store?: SessionCapabilityStore;
   },
 ) {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   const maxSpawnDepth =
     opts?.cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   if (!normalizedSessionKey) {
@@ -287,6 +319,8 @@ export function resolveStoredSubagentCapabilities(
       })
     : undefined;
   const depthStore = opts?.cfg && typeof entry?.spawnDepth !== "number" ? undefined : store;
+  // If config is available but the envelope lacks an explicit spawnDepth, let
+  // the depth helper read canonical persisted state instead of trusting a partial store.
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
     store: depthStore,
@@ -308,6 +342,7 @@ export function resolveStoredSubagentCapabilities(
   };
 }
 
+/** Resolve inherited tool deny rules stored on a subagent envelope. */
 export function resolveStoredSubagentInheritedToolDenylist(
   sessionKey: string | undefined | null,
   opts?: {
@@ -315,7 +350,7 @@ export function resolveStoredSubagentInheritedToolDenylist(
     store?: SessionCapabilityStore;
   },
 ): string[] {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
     return [];
   }
@@ -328,6 +363,7 @@ export function resolveStoredSubagentInheritedToolDenylist(
   return normalizeInheritedToolDenylist(entry?.inheritedToolDeny);
 }
 
+/** Resolve inherited tool allow rules stored on a subagent envelope. */
 export function resolveStoredSubagentInheritedToolAllowlist(
   sessionKey: string | undefined | null,
   opts?: {
@@ -335,7 +371,7 @@ export function resolveStoredSubagentInheritedToolAllowlist(
     store?: SessionCapabilityStore;
   },
 ): string[] {
-  const normalizedSessionKey = normalizeSubagentSessionKey(sessionKey);
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
   if (!normalizedSessionKey || !shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
     return [];
   }

@@ -1,20 +1,20 @@
+// Covers plugin CLI command behavior and output paths.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
+import { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "./command-specs.js";
 import {
-  testing,
   clearPluginCommands,
   executePluginCommand,
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
   listPluginCommands,
   matchPluginCommand,
   registerPluginCommand,
 } from "./commands.js";
-import { createPluginRegistry, type PluginRecord } from "./registry.js";
+import { createPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { createBundledPluginRecord } from "./status.test-fixtures.js";
 
 const completionMocks = vi.hoisted(() => ({
   prepareSimpleCompletionModelForAgent: vi.fn(),
@@ -47,44 +47,6 @@ function createVoiceCommand(overrides: Partial<Parameters<typeof registerPluginC
   };
 }
 
-function createBundledPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: `bundled:${id}`,
-    rootDir: `/bundled/${id}`,
-    origin: "bundled",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    embeddingProviderIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    transcriptSourceProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  } as PluginRecord;
-}
-
 function registerHostTrustedReservedCommandForTest(
   command: Parameters<typeof registerPluginCommand>[1],
 ) {
@@ -105,12 +67,6 @@ function registerVoiceCommandForTest(
   overrides: Partial<Parameters<typeof registerPluginCommand>[1]> = {},
 ) {
   return registerPluginCommand("demo-plugin", createVoiceCommand(overrides));
-}
-
-function resolveBindingConversationFromCommand(
-  params: Parameters<typeof testing.resolveBindingConversationFromCommand>[0],
-) {
-  return testing.resolveBindingConversationFromCommand(params);
 }
 
 function expectCommandMatch(
@@ -166,13 +122,6 @@ function expectUnsupportedBindingApiResult(result: { text?: string }) {
       detached: { removed: false },
     }),
   );
-}
-
-function expectBindingConversationCase(
-  params: Parameters<typeof resolveBindingConversationFromCommand>[0],
-  expected: ReturnType<typeof resolveBindingConversationFromCommand>,
-) {
-  expect(resolveBindingConversationFromCommand(params)).toEqual(expected);
 }
 
 beforeEach(() => {
@@ -516,6 +465,21 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("matches plugin slash commands when users insert whitespace after the slash", () => {
+    registerPluginCommand("device-pair", {
+      name: "pair",
+      description: "Pair command",
+      acceptsArgs: true,
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expectCommandMatch("/ pair qr", {
+      name: "pair",
+      pluginId: "device-pair",
+      args: "qr",
+    });
+  });
+
   it("supports provider-specific native command aliases", () => {
     const result = registerVoiceCommandForTest({
       nativeNames: {
@@ -584,7 +548,6 @@ describe("registerPluginCommand", () => {
     const env = {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     };
 
     expect(getPluginCommandSpecs("discord", { env })).toStrictEqual([]);
@@ -695,6 +658,29 @@ describe("registerPluginCommand", () => {
     });
   });
 
+  it("reserves the built-in learn command name", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "learn",
+      description: "Fake learn command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: 'Command name "learn" is reserved by a built-in command',
+    });
+  });
+
+  it("does not reserve login globally for external plugins", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "login",
+      description: "Plugin-owned login command",
+      handler: async () => ({ text: "ok" }),
+    });
+
+    expect(result).toEqual({ ok: true });
+  });
+
   it("rejects reserved ownership on non-reserved direct command registrations", () => {
     const result = registerPluginCommand(
       "demo-plugin",
@@ -735,6 +721,29 @@ describe("registerPluginCommand", () => {
     });
 
     expect(observedOwnerStatus).toBeUndefined();
+  });
+
+  it("sanitizes oversized arguments before passing them to plugin handlers", async () => {
+    let observedArgs: string | undefined;
+    registerVoiceCommandForTest({
+      acceptsArgs: true,
+      handler: async (ctx) => {
+        observedArgs = ctx.args;
+        return { text: "ok" };
+      },
+    });
+    const match = requirePluginCommandMatch(`/voice \0${"a".repeat(4094)}😀tail`);
+
+    await executePluginCommand({
+      command: match.command,
+      args: match.args,
+      channel: "telegram",
+      isAuthorizedSender: true,
+      commandBody: "/voice",
+      config: {},
+    });
+
+    expect(observedArgs).toBe("a".repeat(4094));
   });
 
   it("ignores owner status opt-in from direct plugin command registration", async () => {
@@ -1028,7 +1037,7 @@ describe("registerPluginCommand", () => {
       ),
     ).toEqual({ ok: true });
 
-    expect(second.getPluginCommandSpecs("telegram")).toEqual([
+    expect(getPluginCommandSpecs("telegram")).toEqual([
       {
         name: "voice",
         description: "Voice command",
@@ -1104,78 +1113,6 @@ describe("registerPluginCommand", () => {
   ] as const)("$name", ({ setup, candidate, expected }) => {
     setup?.();
     expect(registerPluginCommand("other-plugin", candidate)).toEqual(expected);
-  });
-
-  it.each([
-    {
-      name: "resolves Discord DM command bindings with the user target prefix intact",
-      params: {
-        channel: "discord",
-        from: "discord:1177378744822943744",
-        to: "slash:1177378744822943744",
-        accountId: "default",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
-    },
-    {
-      name: "resolves Discord guild command bindings with the channel target prefix intact",
-      params: {
-        channel: "discord",
-        from: "discord:channel:1480554272859881494",
-        accountId: "default",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1480554272859881494",
-      },
-    },
-    {
-      name: "resolves Discord thread command bindings with parent channel context intact",
-      params: {
-        channel: "discord",
-        from: "discord:channel:1480554272859881494",
-        accountId: "default",
-        messageThreadId: "thread-42",
-        threadParentId: "channel-parent-7",
-      },
-      expected: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1480554272859881494",
-        parentConversationId: "channel-parent-7",
-        threadId: "thread-42",
-      },
-    },
-    {
-      name: "does not resolve binding conversations for unsupported command channels",
-      params: {
-        channel: "slack",
-        from: "slack:U123",
-        to: "C456",
-        accountId: "default",
-      },
-      expected: null,
-    },
-    {
-      name: "resolves sender-keyed command bindings when only senderId is available",
-      params: {
-        channel: "signal",
-        senderId: "signal-user-42",
-        accountId: "default",
-      },
-      expected: {
-        channel: "signal",
-        accountId: "default",
-        conversationId: "dm:signal-user-42",
-      },
-    },
-  ] as const)("$name", ({ params, expected }) => {
-    expectBindingConversationCase(params, expected);
   });
 
   it("does not expose binding APIs to plugin commands on unsupported channels", async () => {
@@ -1482,3 +1419,4 @@ describe("registerPluginCommand", () => {
     expect(receivedCtx?.accountId).toBe("work");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

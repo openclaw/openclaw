@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for process-tool supervisor cancellation.
+ * Verifies managed session cancellation, process-tree fallback, and registry state.
+ */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { supervisorMock } = vi.hoisted(() => ({
@@ -5,7 +9,6 @@ const { supervisorMock } = vi.hoisted(() => ({
     spawn: vi.fn(),
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   },
 }));
@@ -23,9 +26,11 @@ vi.mock("../process/kill-tree.js", () => ({
 }));
 
 let addSession: typeof import("./bash-process-registry.js").addSession;
+let getActiveBackgroundExecSessionCount: typeof import("./bash-process-registry.js").getActiveBackgroundExecSessionCount;
 let getFinishedSession: typeof import("./bash-process-registry.js").getFinishedSession;
 let getSession: typeof import("./bash-process-registry.js").getSession;
-let resetProcessRegistryForTests: typeof import("./bash-process-registry.js").resetProcessRegistryForTests;
+let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
+let resetProcessRegistryForTests: typeof import("./bash-process-registry.test-support.js").resetProcessRegistryForTests;
 let createProcessSessionFixture: typeof import("./bash-process-registry.test-helpers.js").createProcessSessionFixture;
 let createProcessTool: typeof import("./bash-tools.process.js").createProcessTool;
 
@@ -73,8 +78,14 @@ function expectTextContent(value: unknown, text: string) {
 
 describe("process tool supervisor cancellation", () => {
   beforeAll(async () => {
-    ({ addSession, getFinishedSession, getSession, resetProcessRegistryForTests } =
-      await import("./bash-process-registry.js"));
+    ({
+      addSession,
+      getActiveBackgroundExecSessionCount,
+      getFinishedSession,
+      getSession,
+      markBackgrounded,
+    } = await import("./bash-process-registry.js"));
+    ({ resetProcessRegistryForTests } = await import("./bash-process-registry.test-support.js"));
     ({ createProcessSessionFixture } = await import("./bash-process-registry.test-helpers.js"));
     ({ createProcessTool } = await import("./bash-tools.process.js"));
   });
@@ -83,7 +94,6 @@ describe("process tool supervisor cancellation", () => {
     supervisorMock.spawn.mockClear();
     supervisorMock.cancel.mockClear();
     supervisorMock.cancelScope.mockClear();
-    supervisorMock.reconcileOrphans.mockClear();
     supervisorMock.getRecord.mockClear();
     killProcessTreeMock.mockClear();
   });
@@ -144,6 +154,29 @@ describe("process tool supervisor cancellation", () => {
     expectFinishedSessionState("sess-fallback", { status: "failed", exitSignal: "SIGKILL" });
     expectTextContent(result.content[0], "Killed session sess-fallback.");
   });
+
+  it.each(["kill", "remove"] as const)(
+    "refuses %s while sandbox finalization owns the terminal transition",
+    async (action) => {
+      supervisorMock.getRecord.mockReturnValue({ runId: "sess-finalizing", state: "exited" });
+      const session = createBackgroundSession("sess-finalizing", 4242);
+      session.finalizing = true;
+      addSession(session);
+      markBackgrounded(session);
+      const processTool = createProcessTool();
+
+      const result = await processTool.execute("toolcall", {
+        action,
+        sessionId: "sess-finalizing",
+      });
+
+      expect(supervisorMock.cancel).not.toHaveBeenCalled();
+      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      expectSessionState("sess-finalizing", { exited: false });
+      expect(getActiveBackgroundExecSessionCount()).toBe(1);
+      expectTextContent(result.content[0], "Session sess-finalizing is finalizing.");
+    },
+  );
 
   it("fails remove when no supervisor record and no pid is available", async () => {
     supervisorMock.getRecord.mockReturnValue(undefined);

@@ -1,8 +1,10 @@
 import type { CancelNotification } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
+/** Tests ACP translator permission relay for Gateway exec approvals. */
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { promptAgent } from "./translator.prompt-harness.test-support.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -301,7 +303,12 @@ describe("ACP translator permission relay", () => {
     expect(requestPermission).not.toHaveBeenCalled();
     expect(approvalResolveCalls(request)).toHaveLength(0);
 
-    await agent.handleGatewayEvent(createApprovalEvent({ runId: runIds[1], approvalId }));
+    await agent.handleGatewayEvent(
+      createApprovalEvent({
+        runId: expectDefined(runIds[1], "runIds[1] test invariant"),
+        approvalId,
+      }),
+    );
 
     await vi.waitFor(() => {
       expect(requestPermission).toHaveBeenCalledTimes(1);

@@ -1,3 +1,4 @@
+// Channel runtime context helpers build plugin runtime context for channel execution.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelRuntimeContextEvent,
@@ -69,6 +70,7 @@ function doesRuntimeContextWatcherMatch(params: {
   return true;
 }
 
+/** Creates the in-memory channel runtime context registry used by plugin runtime surfaces. */
 export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegistry {
   const runtimeContexts = new Map<string, StoredRuntimeContext>();
   const runtimeContextWatchers = new Set<{
@@ -113,6 +115,9 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
           return;
         }
         disposed = true;
+        // Detach before the token check: stale leases disposed after a replacement
+        // registered must still release their listener on long-lived signals.
+        params.abortSignal?.removeEventListener("abort", dispose);
         const current = runtimeContexts.get(normalized.mapKey);
         if (!current || current.token !== token) {
           return;

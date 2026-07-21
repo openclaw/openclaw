@@ -1,3 +1,4 @@
+// Register service command tests cover daemon service subcommand registration.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
@@ -86,6 +87,14 @@ describe("addGatewayServiceCommands", () => {
       argv: ["restart", "--force"],
       assert: () => {
         const opts = expectSingleDaemonCall(runDaemonRestart);
+        expect(opts.force).toBe(true);
+      },
+    },
+    {
+      name: "forwards stop force control",
+      argv: ["stop", "--force"],
+      assert: () => {
+        const opts = expectSingleDaemonCall(runDaemonStop);
         expect(opts.force).toBe(true);
       },
     },

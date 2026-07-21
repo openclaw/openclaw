@@ -1,8 +1,6 @@
-/**
- * Minimal PNG encoder for generating simple RGBA images without native dependencies.
- * Used for QR codes, live probes, and other programmatic image generation.
- */
+// PNG encode helpers build small PNG files without external image dependencies.
 import { deflateSync } from "node:zlib";
+import { expectDefined } from "@openclaw/normalization-core";
 
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -19,8 +17,10 @@ const CRC_TABLE = (() => {
 /** Compute CRC32 checksum for a buffer (used in PNG chunk encoding). */
 function crc32(buf: Buffer): number {
   let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i += 1) {
-    crc = CRC_TABLE[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  for (const byte of buf) {
+    crc =
+      expectDefined(CRC_TABLE[(crc ^ byte) & 0xff], "crc table entry at (crc ^ byte) & 0xff") ^
+      (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
 }
@@ -36,7 +36,10 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([len, typeBuf, data, crcBuf]);
 }
 
-/** Write a pixel to an RGBA buffer. Ignores out-of-bounds writes. */
+/**
+ * Writes one RGBA pixel into a width-strided buffer.
+ * Out-of-bounds coordinates are ignored so fixture drawing code can clip shapes cheaply.
+ */
 export function fillPixel(
   buf: Buffer,
   x: number,
@@ -65,7 +68,8 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
   const raw = Buffer.alloc((stride + 1) * height);
   for (let row = 0; row < height; row += 1) {
     const rawOffset = row * (stride + 1);
-    raw[rawOffset] = 0; // filter: none
+    // Each scanline starts with PNG filter byte 0 so raw RGB/RGBA rows stay literal.
+    raw[rawOffset] = 0;
     buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
   }
   const compressed = deflateSync(raw);
@@ -88,12 +92,12 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
   ]);
 }
 
-/** Encode an RGB buffer as a PNG image. */
+/** Encodes tightly packed RGB bytes (`width * height * 3`) as a PNG image. */
 export function encodePngRgb(buffer: Buffer, width: number, height: number): Buffer {
   return encodePng(buffer, width, height, 3);
 }
 
-/** Encode an RGBA buffer as a PNG image. */
+/** Encodes tightly packed RGBA bytes (`width * height * 4`) as a PNG image. */
 export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
   return encodePng(buffer, width, height, 4);
 }

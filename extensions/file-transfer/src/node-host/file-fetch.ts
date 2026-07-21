@@ -1,3 +1,4 @@
+// File Transfer plugin module implements file fetch behavior.
 import crypto from "node:crypto";
 import path from "node:path";
 import { detectMime } from "openclaw/plugin-sdk/media-mime";
@@ -8,8 +9,8 @@ import {
   resolveCanonicalReadPath,
 } from "./path-errors.js";
 
-export const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
-export const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+const FILE_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
+const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const TEXT_SNIFF_MAX_BYTES = 8192;
 
 type FileFetchParams = {

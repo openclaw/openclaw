@@ -1,3 +1,5 @@
+// HTTP authorization utility tests protect gateway request authorization,
+// declared operator scopes, origin handling, and failure response routing.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -25,9 +27,12 @@ vi.mock("../config/io.js", () => ({
   })),
 }));
 
+// Export every binding http-auth-utils.js imports from http-common.js so this
+// factory stays safe under isolate:false regardless of which paths execute.
 vi.mock("./http-common.js", () => ({
   sendGatewayAuthFailure: vi.fn(),
   sendJson: vi.fn(),
+  sendMissingScopeForbidden: vi.fn(),
 }));
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");

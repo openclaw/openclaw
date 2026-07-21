@@ -1,5 +1,7 @@
+// Voice Call tests cover media stream plugin behavior.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderPlugin,
   RealtimeTranscriptionSession,
@@ -8,7 +10,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -183,18 +185,72 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
-  it("wraps malformed Twilio media stream JSON with an owned parser error", () => {
-    let error: unknown;
-    try {
-      parseTwilioMediaMessage(Buffer.from("{not json"));
-    } catch (caught) {
-      error = caught;
-    }
+  it("wraps malformed Twilio media stream JSON with an owned parser error", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
 
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
-    expect(error).not.toBeInstanceOf(SyntaxError);
-    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+    try {
+      const ws = await connectWs(server.url);
+      ws.send("{not json");
+
+      await vi.waitFor(() => {
+        expect(errorSpy).toHaveBeenCalledWith(
+          "[MediaStream] Error processing message:",
+          expect.objectContaining({
+            message: "Twilio media stream message was malformed JSON",
+          }),
+        );
+      });
+      const error = errorSpy.mock.calls.find(
+        ([message]) => message === "[MediaStream] Error processing message:",
+      )?.[1];
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(SyntaxError);
+      expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      errorSpy.mockRestore();
+      await server.close();
+    }
+  });
+
+  it("rejects start frames when no stream acceptance validator is configured", async () => {
+    const createSession = vi.fn(() => createStubSession());
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-unvalidated",
+          start: { callSid: "CA-unvalidated" },
+        }),
+      );
+
+      const closed = await waitForClose(ws);
+
+      expect(closed.code).toBe(1008);
+      expect(closed.reason).toBe("Unauthorized stream");
+      expect(createSession).not.toHaveBeenCalled();
+    } finally {
+      await server.close();
+    }
   });
 
   it("emits common Talk events for telephony STT/TTS sessions", async () => {
@@ -354,8 +410,8 @@ describe("MediaStreamHandler security hardening", () => {
     const result = handler.sendAudio("MZ-backpressure", Buffer.alloc(160, 0xff));
 
     expect(result.sent).toBe(false);
-    expect(ws.send).not.toHaveBeenCalled();
-    expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
+    expect(ws["send"]).not.toHaveBeenCalled();
+    expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
   it("fails sends when buffered bytes exceed cap after enqueueing a frame", () => {
@@ -396,17 +452,64 @@ describe("MediaStreamHandler security hardening", () => {
 
     const result = handler.sendMark("MZ-overflow", "mark-1");
 
-    expect(ws.send).toHaveBeenCalledTimes(1);
+    expect(ws["send"]).toHaveBeenCalledTimes(1);
     expect(result.sent).toBe(false);
-    expect(ws.close).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
+    expect(ws["close"]).toHaveBeenCalledWith(1013, "Backpressure: send buffer exceeded");
   });
 
-  it("sanitizes websocket close reason before logging", () => {
-    const reason = sanitizeLogText("forged\nline\r\tentry", 120);
-    expect(reason).not.toContain("\n");
-    expect(reason).not.toContain("\r");
-    expect(reason).not.toContain("\t");
-    expect(reason).toContain("forged line entry");
+  it("sanitizes websocket close reason before logging", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.close(1000, "forged\nline\r\tentry");
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("reason: forged line entry"));
+      });
+      const line = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("WebSocket closed"));
+      expect(line).not.toContain("\n");
+      expect(line).not.toContain("\r");
+      expect(line).not.toContain("\t");
+    } finally {
+      logSpy.mockRestore();
+      await server.close();
+    }
+  });
+
+  it("truncates websocket close reason without splitting UTF-16 surrogate pairs", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: createStubSttProvider(),
+      providerConfig: {},
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.close(1000, `${"a".repeat(119)}\uD83D\uDE80`);
+      await waitForClose(ws);
+      await vi.waitFor(() => {
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.stringContaining(`reason: ${"a".repeat(119)}...`),
+        );
+      });
+      const line = logSpy.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("WebSocket closed"));
+      expect(line).not.toContain("\uD83D");
+      expect(line).not.toContain("\uDE80");
+    } finally {
+      logSpy.mockRestore();
+      await server.close();
+    }
   });
 
   it("closes idle pre-start connections after timeout", async () => {
@@ -432,6 +535,30 @@ describe("MediaStreamHandler security hardening", () => {
       expect(shouldAcceptStreamCalls).toStrictEqual([]);
     } finally {
       await server.close();
+    }
+  });
+
+  it("clamps oversized pre-start connection timeouts", () => {
+    vi.useFakeTimers();
+    try {
+      const handler = new MediaStreamHandler({
+        transcriptionProvider: createStubSttProvider(),
+        providerConfig: {},
+        preStartTimeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const ws = { close: vi.fn() } as unknown as WebSocket;
+
+      const registered = (
+        handler as unknown as {
+          registerPendingConnection(ws: WebSocket, ip: string): boolean;
+        }
+      ).registerPendingConnection(ws, "203.0.113.10");
+
+      expect(registered).toBe(true);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -476,12 +603,20 @@ describe("MediaStreamHandler security hardening", () => {
       const first = new WebSocket(server.url, {
         headers: { "x-forwarded-for": "198.51.100.10" },
       });
-      await withTimeout(new Promise((resolve) => first.once("open", resolve)));
+      await withTimeout(
+        new Promise((resolve) => {
+          first.once("open", resolve);
+        }),
+      );
 
       const second = new WebSocket(server.url, {
         headers: { "x-forwarded-for": "203.0.113.20" },
       });
-      await withTimeout(new Promise((resolve) => second.once("open", resolve)));
+      await withTimeout(
+        new Promise((resolve) => {
+          second.once("open", resolve);
+        }),
+      );
 
       expect(first.readyState).toBe(WebSocket.OPEN);
       expect(second.readyState).toBe(WebSocket.OPEN);
@@ -909,7 +1044,7 @@ describe("MediaStreamHandler security hardening", () => {
       expect(onTranscriptionReady).not.toHaveBeenCalled();
       expect(onDisconnect).toHaveBeenCalledTimes(1);
       expect(onDisconnect).toHaveBeenCalledWith("CA-stt-fail", "MZ-stt-fail");
-      expect(session.close).toHaveBeenCalledTimes(1);
+      expect(session["close"]).toHaveBeenCalledTimes(1);
     } finally {
       await server.close();
     }

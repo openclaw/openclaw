@@ -1,3 +1,7 @@
+/**
+ * Browser doctor checks for Chrome MCP readiness and legacy managed-profile
+ * residue cleanup.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -8,6 +12,7 @@ import {
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
 import { DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME, resolveBrowserConfig } from "./browser/config.js";
+import { listSystemProfiles } from "./browser/system-profiles.js";
 import { movePathToTrash } from "./browser/trash.js";
 import type { OpenClawConfig } from "./config/config.js";
 import { asRecord } from "./record-shared.js";
@@ -31,6 +36,7 @@ type ManagedProfile = {
   name: string;
 };
 
+/** Legacy managed clawd profile paths that can be archived by doctor --fix. */
 export type LegacyClawdBrowserProfileResidue = {
   legacyProfileDir: string;
   legacyUserDataDir: string;
@@ -133,7 +139,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   if (!configuredProfiles) {
     return false;
   }
-  if (Object.prototype.hasOwnProperty.call(configuredProfiles, LEGACY_CLAWD_BROWSER_PROFILE_NAME)) {
+  if (Object.hasOwn(configuredProfiles, LEGACY_CLAWD_BROWSER_PROFILE_NAME)) {
     return true;
   }
 
@@ -147,6 +153,7 @@ function isLegacyClawdProfileConfigured(cfg: OpenClawConfig, legacyProfileDir: s
   return false;
 }
 
+/** Detects unmanaged legacy clawd browser profile residue on disk. */
 export function detectLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,
@@ -198,6 +205,7 @@ function formatLegacyClawdBrowserProfileResidueNote(
   ].join("\n");
 }
 
+/** Emits Browser doctor notes for Chrome MCP, managed Chrome, and legacy residue readiness. */
 export async function noteChromeMcpBrowserReadiness(
   cfg: OpenClawConfig,
   deps?: {
@@ -210,6 +218,7 @@ export async function noteChromeMcpBrowserReadiness(
     readVersion?: (executablePath: string) => string | null;
     configDir?: string;
     pathExists?: (targetPath: string) => boolean;
+    homeDir?: string;
   },
 ) {
   const noteFn = deps?.noteFn ?? note;
@@ -230,6 +239,25 @@ export async function noteChromeMcpBrowserReadiness(
   });
   if (legacyClawdResidue) {
     noteFn(formatLegacyClawdBrowserProfileResidueNote(legacyClawdResidue), "Browser");
+  }
+  if (platform === "darwin") {
+    const importEnabled = cfg.browser?.allowSystemProfileImport !== false;
+    const systemProfileCount = (["chrome", "brave", "edge", "chromium"] as const).reduce(
+      (count, browser) =>
+        count +
+        listSystemProfiles(browser, { homeDir: deps?.homeDir }).filter(
+          (profile) => profile.hasCookies,
+        ).length,
+      0,
+    );
+    noteFn(
+      [
+        `- System browser profile cookie import is ${importEnabled ? "enabled" : "disabled"} (browser.allowSystemProfileImport).`,
+        `- Importable Chrome-family profile cookie databases found: ${systemProfileCount}.`,
+        "- Doctor does not access the macOS Keychain; importing asks for consent separately.",
+      ].join("\n"),
+      "Browser",
+    );
   }
   const browserExecutable =
     managedProfiles.length > 0 ? resolveManagedExecutable(resolved, platform) : null;
@@ -348,6 +376,7 @@ export async function noteChromeMcpBrowserReadiness(
   noteFn(lines.join("\n"), "Browser");
 }
 
+/** Archives legacy clawd browser profile residue when doctor --fix is requested. */
 export async function maybeArchiveLegacyClawdBrowserProfileResidue(
   cfg: OpenClawConfig,
   deps?: BrowserDoctorFilesystemDeps,

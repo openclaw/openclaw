@@ -1,9 +1,10 @@
+// Verifies plugin dependency denylist enforcement.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import YAML from "yaml";
+import { BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES } from "./dependency-denylist-packages.js";
 import {
-  blockedInstallDependencyPackageNames,
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,
   findBlockedManifestDependencies,
@@ -90,10 +91,8 @@ describe("dependency denylist guardrails", () => {
     ]);
   });
 
-  it("pins the axios override to an exact version", () => {
-    const manifest = readRootManifest();
+  it("pins the active axios override to an exact version", () => {
     const pnpmWorkspace = readPnpmWorkspaceConfig();
-    expect(manifest.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pnpmWorkspace.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
@@ -210,7 +209,7 @@ describe("dependency denylist guardrails", () => {
 
   it("keeps blocked packages out of the lockfile graph", () => {
     const lockfile = readRootLockfile();
-    for (const packageName of blockedInstallDependencyPackageNames) {
+    for (const packageName of BLOCKED_INSTALL_DEPENDENCY_PACKAGE_NAMES) {
       expect(lockfile).not.toContain(`\n  ${packageName}@`);
       expect(lockfile).not.toContain(`\n      ${packageName}: `);
     }

@@ -1,3 +1,4 @@
+// Nostr tests cover channel.lifecycle plugin behavior.
 import {
   createStartAccountContext,
   createPluginRuntimeMock,
@@ -22,7 +23,7 @@ vi.mock("./nostr-bus.js", () => ({
 function createMockBus() {
   return {
     sendDm: vi.fn(async () => {}),
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
@@ -92,5 +93,23 @@ describe("nostr gateway lifecycle", () => {
 
     expect(mocks.startNostrBus).toHaveBeenCalledOnce();
     expect(bus.close).toHaveBeenCalledOnce();
+  });
+
+  it("describes configured relays without claiming they are already connected", async () => {
+    const bus = createMockBus();
+    mocks.startNostrBus.mockResolvedValueOnce(bus as never);
+    const abort = new AbortController();
+    const account = buildResolvedNostrAccount({ relays: ["wss://relay.example.com"] });
+    const context = createStartAccountContext({ account, abortSignal: abort.signal });
+
+    const task = startNostrGatewayAccount(context);
+    await vi.waitFor(() => expect(mocks.startNostrBus).toHaveBeenCalledOnce());
+
+    expect(context.log?.info).toHaveBeenCalledWith(
+      "[default] Nostr provider started with 1 configured relay(s)",
+    );
+
+    abort.abort();
+    await task;
   });
 });

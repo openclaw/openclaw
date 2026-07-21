@@ -1,3 +1,4 @@
+/** Tests core secrets runtime snapshot preparation and activation behavior. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import {
@@ -5,7 +6,7 @@ import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import {
@@ -241,6 +242,48 @@ describe("secrets runtime snapshot core lanes", () => {
       | undefined;
     expect(copilotProfile?.type).toBe("token");
     expect(copilotProfile?.token).toBe("ghp-env-token");
+  });
+
+  it("can materialize auth stores without resolving unrelated config refs", async () => {
+    const resolvedApiKey = ["test", "auth", "profile", "value"].join("-");
+    const apiKeyRef = {
+      source: "env",
+      provider: "default",
+      id: "UNRELATED_PROVIDER_KEY",
+    } as const;
+    const config = asConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: apiKeyRef,
+            models: [],
+          },
+        },
+      },
+    });
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config,
+      assignmentConfig: config,
+      env: { OPENAI_API_KEY: resolvedApiKey },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      includeConfigRefs: false,
+      loadablePluginOrigins: new Map(),
+      loadAuthStore: () =>
+        loadAuthStoreWithProfiles({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: OPENAI_ENV_KEY_REF,
+          },
+        }),
+    });
+
+    expect(snapshot.config.models?.providers?.openai?.apiKey).toEqual(apiKeyRef);
+    expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+      key: resolvedApiKey,
+    });
   });
 
   it("resolves inline placeholder auth profiles to env refs", async () => {

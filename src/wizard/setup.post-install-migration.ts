@@ -1,3 +1,4 @@
+// Post-install migration helpers guide users through setup after package install.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -7,9 +8,10 @@ import {
 } from "../plugin-sdk/migration.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { WizardPrompter } from "./prompts.js";
 
-export type PostInstallMigrationOptions = {
+type PostInstallMigrationOptions = {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
   // Required only on interactive paths; non-interactive callers can omit it
@@ -24,7 +26,7 @@ export type PostInstallMigrationOptions = {
   nonInteractive?: boolean;
 };
 
-export type PostInstallMigrationResult = {
+type PostInstallMigrationResult = {
   config: OpenClawConfig;
 };
 
@@ -33,19 +35,11 @@ type ResolvedProviderCandidate = {
   source?: string;
 };
 
-let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
-  null;
-let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+const loadMigrationContextModule = createLazyRuntimeModule(
+  () => import("../commands/migrate/context.js"),
+);
 
-const loadMigrationContextModule = async () => {
-  migrationContextModulePromise ??= import("../commands/migrate/context.js");
-  return await migrationContextModulePromise;
-};
-
-const loadConfigPathsModule = async () => {
-  configPathsModulePromise ??= import("../config/paths.js");
-  return await configPathsModulePromise;
-};
+const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
 
 async function resolveCandidates(params: {
   config: OpenClawConfig;
@@ -183,7 +177,7 @@ export async function offerPostInstallMigrations(
       continue;
     }
     const description = describeCandidate(candidate);
-    let accepted = false;
+    let accepted;
     try {
       accepted = await prompter.confirm({
         message: `Migrate ${description} into this agent now?`,

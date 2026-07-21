@@ -1,3 +1,4 @@
+// Telegram tests cover reaction level plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
@@ -118,6 +119,24 @@ describe("resolveTelegramReactionLevel", () => {
     };
 
     const result = resolveTelegramReactionLevel({ cfg, accountId: "work" });
+    expectExtensiveFlags(result);
+  });
+
+  it("resolves omitted-account reaction level from the configured defaultAccount (#61012)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-default",
+          reactionLevel: "off",
+          defaultAccount: "work",
+          accounts: {
+            work: { botToken: "tok-work", reactionLevel: "extensive" },
+          },
+        },
+      },
+    };
+
+    const result = resolveTelegramReactionLevel({ cfg });
     expectExtensiveFlags(result);
   });
 

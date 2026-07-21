@@ -1,5 +1,7 @@
+// Tests retry backoff timing and cancellation behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { getRetryAttemptErrors } from "./retry-attempt-errors.js";
 import { resolveRetryConfig, retryAsync } from "./retry.js";
 
 const randomMocks = vi.hoisted(() => ({
@@ -70,7 +72,7 @@ async function runRetryNumberCase(
     const promise = retryAsync(fn as () => Promise<unknown>, attempts, initialDelayMs);
     const settled = promise.then(
       (value) => ({ ok: true as const, value }),
-      (error) => ({ ok: false as const, error }),
+      (error: unknown) => ({ ok: false as const, error }),
     );
     await vi.runAllTimersAsync();
     const result = await settled;
@@ -143,6 +145,21 @@ describe("retryAsync", () => {
     expect(shouldRetry).toHaveBeenCalledWith(err, 1);
   });
 
+  it("retains every failed attempt without replacing the terminal error", async () => {
+    const firstError = new Error("first");
+    const terminalError = new Error("terminal");
+    const fn = vi.fn().mockRejectedValueOnce(firstError).mockRejectedValueOnce(terminalError);
+
+    const failure = await retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+    }).catch((err: unknown) => err);
+
+    expect(failure).toBe(terminalError);
+    expect(getRetryAttemptErrors(failure)).toEqual([firstError, terminalError]);
+  });
+
   it("calls onRetry with retry metadata before retrying", async () => {
     const err = new Error("boom");
     const fn = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce("ok");
@@ -207,9 +224,9 @@ describe("retryAsync", () => {
     const fn = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce("ok");
     try {
       const promise = retryAsync(fn, 2, 3_000_000_000);
-      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       await expect(promise).resolves.toBe("ok");
-      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
       vi.clearAllTimers();
@@ -228,19 +245,11 @@ describe("retryAsync", () => {
       .mockResolvedValueOnce("ok");
     try {
       const promise = retryAsync(fn, 3, Number.MAX_VALUE);
-      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
-      await vi.advanceTimersByTimeAsync(MAX_SAFE_TIMEOUT_DELAY_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
       await expect(promise).resolves.toBe("ok");
-      expect(timeoutSpy).toHaveBeenNthCalledWith(
-        1,
-        expect.any(Function),
-        MAX_SAFE_TIMEOUT_DELAY_MS,
-      );
-      expect(timeoutSpy).toHaveBeenNthCalledWith(
-        2,
-        expect.any(Function),
-        MAX_SAFE_TIMEOUT_DELAY_MS,
-      );
+      expect(timeoutSpy).toHaveBeenNthCalledWith(1, expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(timeoutSpy).toHaveBeenNthCalledWith(2, expect.any(Function), MAX_TIMER_TIMEOUT_MS);
     } finally {
       timeoutSpy.mockRestore();
       vi.clearAllTimers();
@@ -267,6 +276,120 @@ describe("retryAsync", () => {
   ])("$name", async ({ params, expectedDelay }) => {
     const delays = await runRetryAfterCase(params);
     expect(delays[0]).toBe(expectedDelay);
+  });
+
+  async function runFullJitterCase(params: {
+    attempts: number;
+    minDelayMs: number;
+    maxDelayMs: number;
+    random: () => number;
+    failures: number;
+    retryAfterMs?: number;
+  }): Promise<number[]> {
+    vi.clearAllTimers();
+    vi.useFakeTimers();
+    try {
+      let fn = vi.fn();
+      for (let i = 0; i < params.failures; i += 1) {
+        fn = fn.mockRejectedValueOnce(new Error(`boom-${i}`));
+      }
+      fn = fn.mockResolvedValueOnce("ok");
+      const delays: number[] = [];
+      const promise = retryAsync(fn as () => Promise<unknown>, {
+        attempts: params.attempts,
+        minDelayMs: params.minDelayMs,
+        maxDelayMs: params.maxDelayMs,
+        jitter: "full",
+        random: params.random,
+        retryAfterMs: params.retryAfterMs === undefined ? undefined : () => params.retryAfterMs,
+        onRetry: (info) => delays.push(info.delayMs),
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toBe("ok");
+      return delays;
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  }
+
+  it.each([
+    {
+      name: "full jitter draws uniformly from [delay, 2*delay)",
+      random: () => 0.5,
+      expectedDelays: [150, 300],
+    },
+    {
+      name: "full jitter keeps the backoff delay as a hard floor",
+      random: () => 0,
+      expectedDelays: [100, 200],
+    },
+    {
+      name: "full jitter stays within twice the backoff delay at the draw ceiling",
+      random: () => 0.999,
+      expectedDelays: [200, 400],
+    },
+  ])("$name", async ({ random, expectedDelays }) => {
+    const delays = await runFullJitterCase({
+      attempts: 3,
+      minDelayMs: 100,
+      maxDelayMs: 10_000,
+      random,
+      failures: 2,
+    });
+    expect(delays).toEqual(expectedDelays);
+  });
+
+  it("full jitter applies maxDelayMs after the draw", async () => {
+    const delays = await runFullJitterCase({
+      attempts: 4,
+      minDelayMs: 1000,
+      maxDelayMs: 2500,
+      random: () => 0.75,
+      failures: 3,
+    });
+    // Second retry draws 2000 * 1.75 = 3500 before the cap clamps it; a
+    // cap-before-jitter schedule would have reported 3500 here.
+    expect(delays).toEqual([1750, 2500, 2500]);
+  });
+
+  it("full jitter draws on top of the minDelayMs floor for Retry-After hints", async () => {
+    const delays = await runFullJitterCase({
+      attempts: 2,
+      minDelayMs: 250,
+      maxDelayMs: 1000,
+      random: () => 0.5,
+      failures: 1,
+      retryAfterMs: 50,
+    });
+    expect(delays).toEqual([375]);
+  });
+
+  it("full jitter spreads below the cap for unsatisfiable Retry-After hints", async () => {
+    const delays = await runFullJitterCase({
+      attempts: 2,
+      minDelayMs: 100,
+      maxDelayMs: 1000,
+      random: () => 0.5,
+      failures: 1,
+      retryAfterMs: 5000,
+    });
+    // Lockstep at the 1000ms cap would reintroduce the herd the over-cap
+    // Retry-After exception exists to avoid; the draw must land in
+    // [cap/2, cap) instead.
+    expect(delays).toEqual([750]);
+  });
+
+  it("uses the injected random source instead of the secure default", async () => {
+    const delays = await runFullJitterCase({
+      attempts: 2,
+      minDelayMs: 100,
+      maxDelayMs: 1000,
+      random: () => 0.25,
+      failures: 1,
+    });
+    expect(delays).toEqual([125]);
+    expect(randomMocks.generateSecureFraction).not.toHaveBeenCalled();
   });
 
   it("uses secure jitter when configured", async () => {
@@ -324,12 +447,22 @@ describe("resolveRetryConfig", () => {
       },
       expected: {
         attempts: 3,
-        minDelayMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-        maxDelayMs: MAX_SAFE_TIMEOUT_DELAY_MS,
+        minDelayMs: MAX_TIMER_TIMEOUT_MS,
+        maxDelayMs: MAX_TIMER_TIMEOUT_MS,
         jitter: 0,
       },
     },
+    {
+      name: "passes through full jitter",
+      overrides: { jitter: "full" as const },
+      expected: { attempts: 3, minDelayMs: 300, maxDelayMs: 30000, jitter: "full" },
+    },
   ])("$name", ({ overrides, expected }) => {
     expect(resolveRetryConfig(undefined, overrides)).toEqual(expected);
+  });
+
+  it("keeps full-jitter defaults when the override is malformed", () => {
+    const defaults = { attempts: 3, minDelayMs: 300, maxDelayMs: 30000, jitter: "full" as const };
+    expect(resolveRetryConfig(defaults, { jitter: Number.NaN })).toEqual(defaults);
   });
 });

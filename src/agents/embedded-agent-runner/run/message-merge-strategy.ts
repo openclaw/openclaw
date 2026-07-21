@@ -1,13 +1,18 @@
+/**
+ * Reconciles orphaned trailing user prompts before provider submission.
+ */
 import { mergeOrphanedTrailingUserPrompt } from "./attempt.prompt-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export type OrphanedTrailingUserPromptMergeParams = {
+/** Inputs required to reconcile an active session leaf with the prompt about to be sent. */
+type OrphanedTrailingUserPromptMergeParams = {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 };
 
-export type OrphanedTrailingUserPromptMergeResult = {
+/** Result of merging or dropping a trailing user leaf before provider submission. */
+type OrphanedTrailingUserPromptMergeResult = {
   prompt: string;
   merged: boolean;
   /**
@@ -18,8 +23,10 @@ export type OrphanedTrailingUserPromptMergeResult = {
   removeLeaf: boolean;
 };
 
-export type MessageMergeStrategyId = "orphan-trailing-user-prompt";
+/** Registry id for the transcript message merge behavior currently supported by embedded runs. */
+type MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
+/** Strategy seam for tests and future runtime variants that alter prompt/leaf reconciliation. */
 export type MessageMergeStrategy = {
   id: MessageMergeStrategyId;
   mergeOrphanedTrailingUserPrompt: (
@@ -27,28 +34,15 @@ export type MessageMergeStrategy = {
   ) => OrphanedTrailingUserPromptMergeResult;
 };
 
-export const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId =
-  "orphan-trailing-user-prompt";
+/** Strategy used by embedded attempts. */
+const DEFAULT_MESSAGE_MERGE_STRATEGY_ID: MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
 const defaultMessageMergeStrategy: MessageMergeStrategy = {
   id: DEFAULT_MESSAGE_MERGE_STRATEGY_ID,
   mergeOrphanedTrailingUserPrompt,
 };
 
-let activeMessageMergeStrategy = defaultMessageMergeStrategy;
-
+/** Returns the transcript merge strategy used by embedded attempts. */
 export function resolveMessageMergeStrategy(): MessageMergeStrategy {
-  return activeMessageMergeStrategy;
-}
-
-function registerMessageMergeStrategy(strategy: MessageMergeStrategy): () => void {
-  const previous = activeMessageMergeStrategy;
-  activeMessageMergeStrategy = strategy;
-  return () => {
-    activeMessageMergeStrategy = previous;
-  };
-}
-
-export function registerMessageMergeStrategyForTest(strategy: MessageMergeStrategy): () => void {
-  return registerMessageMergeStrategy(strategy);
+  return defaultMessageMergeStrategy;
 }

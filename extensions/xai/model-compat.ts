@@ -1,3 +1,4 @@
+// Xai plugin module implements model compat behavior.
 import {
   applyModelCompatPatch,
   type ModelCompatConfig,
@@ -8,16 +9,11 @@ export { normalizeXaiModelId as normalizeNativeXaiModelId } from "./model-id.js"
 export const XAI_TOOL_SCHEMA_PROFILE = "xai";
 export const HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING = "html-entities";
 
-export const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
-  "minLength",
-  "maxLength",
-  "minItems",
-  "maxItems",
-  "minContains",
-  "maxContains",
-]);
+// Native xAI accepts common length/item bounds; only contains-count bounds remain
+// outside its documented schema contract. Proxy providers own stricter downstream policy.
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["minContains", "maxContains"]);
 
-export function resolveXaiModelCompatPatch(): ModelCompatConfig {
+function resolveXaiModelCompatPatch(): ModelCompatConfig {
   return {
     toolSchemaProfile: XAI_TOOL_SCHEMA_PROFILE,
     unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),

@@ -1,6 +1,9 @@
+// Matrix plugin module implements cli behavior.
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictInteger, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -36,25 +39,15 @@ import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
-type MatrixActionClientModule = typeof import("./matrix/actions/client.js");
-type MatrixDirectManagementModule = typeof import("./matrix/direct-management.js");
+const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
 
-let matrixActionClientModulePromise: Promise<MatrixActionClientModule> | undefined;
-let matrixDirectManagementModulePromise: Promise<MatrixDirectManagementModule> | undefined;
+const loadMatrixActionClientModule = createLazyRuntimeModule(
+  () => import("./matrix/actions/client.js"),
+);
 
-function loadMatrixActionClientModule(): Promise<MatrixActionClientModule> {
-  matrixActionClientModulePromise ??= import("./matrix/actions/client.js");
-  return matrixActionClientModulePromise;
-}
-
-function loadMatrixDirectManagementModule(): Promise<MatrixDirectManagementModule> {
-  matrixDirectManagementModulePromise ??= import("./matrix/direct-management.js");
-  return matrixDirectManagementModulePromise;
-}
-
-export function resetMatrixCliStateForTests(): void {
-  matrixCliExitScheduled = false;
-}
+const loadMatrixDirectManagementModule = createLazyRuntimeModule(
+  () => import("./matrix/direct-management.js"),
+);
 
 function scheduleMatrixCliExit(): void {
   if (matrixCliExitScheduled || process.env.VITEST) {
@@ -76,11 +69,11 @@ function markCliFailure(): void {
 }
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  }
-  const recoveryKey = Buffer.concat(chunks).toString("utf8").trim();
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) => new Error(`Matrix recovery key stdin exceeds ${maxBytes} bytes.`),
+  });
+  const recoveryKey = bytes.toString("utf8").trim();
   if (!recoveryKey) {
     throw new Error("Matrix recovery key was requested from stdin, but stdin was empty.");
   }
@@ -231,7 +224,11 @@ function configureCliLogMode(verbose: boolean): void {
   setMatrixSdkConsoleLogging(verbose);
 }
 
-function parseOptionalInt(value: string | undefined, fieldName: string): number | undefined {
+function parseOptionalInt(
+  value: string | undefined,
+  fieldName: string,
+  opts: { min?: number } = {},
+): number | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {
     return undefined;
@@ -242,6 +239,13 @@ function parseOptionalInt(value: string | undefined, fieldName: string): number 
   const parsed = parseStrictInteger(trimmed);
   if (parsed === undefined) {
     throw new Error(`${fieldName} must be an integer`);
+  }
+  if (opts.min !== undefined && parsed < opts.min) {
+    throw new Error(
+      opts.min === 1
+        ? `${fieldName} must be a positive integer`
+        : `${fieldName} must be a non-negative integer`,
+    );
   }
   return parsed;
 }
@@ -288,6 +292,9 @@ async function addMatrixAccount(params: {
   useEnv?: boolean;
   enableEncryption?: boolean;
 }): Promise<MatrixCliAccountAddResult> {
+  const initialSyncLimit = parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit", {
+    min: 0,
+  });
   const runtime = getMatrixRuntime();
   const cfg = runtime.config.current() as CoreConfig;
   if (!matrixSetupAdapter.applyAccountConfig) {
@@ -304,7 +311,7 @@ async function addMatrixAccount(params: {
     accessToken: params.accessToken,
     password: params.password,
     deviceName: params.deviceName,
-    initialSyncLimit: parseOptionalInt(params.initialSyncLimit, "--initial-sync-limit"),
+    initialSyncLimit,
     useEnv: params.useEnv === true,
   };
   const accountId =
@@ -399,10 +406,7 @@ async function addMatrixAccount(params: {
     }
   }
 
-  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"] = {
-    currentDeviceId: null,
-    staleOpenClawDeviceIds: [],
-  };
+  let deviceHealth: MatrixCliAccountAddResult["deviceHealth"];
   try {
     const addedDevices = await listMatrixOwnDevices({ accountId, cfg: updated });
     deviceHealth = {
@@ -532,13 +536,11 @@ async function repairMatrixDirectRoom(params: {
   });
 }
 
-type MatrixCliProfileSetResult = MatrixProfileUpdateResult;
-
 async function setMatrixProfile(params: {
   account?: string;
   name?: string;
   avatarUrl?: string;
-}): Promise<MatrixCliProfileSetResult> {
+}): Promise<MatrixProfileUpdateResult> {
   return await applyMatrixProfileUpdate({
     account: params.account,
     displayName: params.name,
@@ -1161,15 +1163,18 @@ async function runMatrixCliVerificationSummaryCommand(params: {
 async function runMatrixCliSelfVerificationCommand(
   options: MatrixCliSelfVerificationCommandOptions,
 ): Promise<void> {
-  const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+  let resolvedAccountId: string | undefined;
   await runMatrixCliCommand({
     verbose: options.verbose === true,
     json: false,
-    run: async () =>
-      await runMatrixSelfVerification({
+    run: async () => {
+      const timeoutMs = parseOptionalInt(options.timeoutMs, "--timeout-ms", { min: 1 });
+      const { accountId, cfg } = resolveMatrixCliAccountContext(options.account);
+      resolvedAccountId = accountId;
+      return await runMatrixSelfVerification({
         accountId,
         cfg,
-        timeoutMs: parseOptionalInt(options.timeoutMs, "--timeout-ms"),
+        timeoutMs,
         onRequested: (summary) => {
           printAccountLabel(accountId);
           printMatrixVerificationSummary(summary);
@@ -1186,7 +1191,8 @@ async function runMatrixCliSelfVerificationCommand(
           console.log("Compare this SAS with the other Matrix client.");
         },
         confirmSas: async () => await promptMatrixVerificationSasMatch(),
-      }),
+      });
+    },
     onText: (summary, verbose) => {
       printMatrixVerificationSummary(summary);
       console.log(`Device verified by owner: ${summary.deviceOwnerVerified ? "yes" : "no"}`);
@@ -1198,6 +1204,7 @@ async function runMatrixCliSelfVerificationCommand(
       console.log("Self-verification complete.");
     },
     onTextError: () => {
+      const accountId = resolvedAccountId ?? options.account;
       printGuidance([
         `Run ${formatMatrixCliCommand("verify self", accountId)} again and accept the request in another verified Matrix client for this account.`,
         `Then run ${formatMatrixCliCommand("verify status --verbose", accountId)} to confirm Cross-signing verified: yes and Signed by owner: yes.`,
@@ -1629,14 +1636,22 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("setup")
     .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
     .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
-    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+    .option(
+      "--recovery-key <key>",
+      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
+    .option(
+      "--force-reset-cross-signing",
+      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
+    )
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
       async (options: {
         account?: string;
         recoveryKey?: string;
+        recoveryKeyStdin?: boolean;
         forceResetCrossSigning?: boolean;
         verbose?: boolean;
         json?: boolean;
@@ -1647,7 +1662,10 @@ export function registerMatrixCli(params: { program: Command }): void {
           run: async () =>
             await setupMatrixEncryption({
               account: options.account,
-              recoveryKey: options.recoveryKey,
+              recoveryKey: await resolveMatrixCliRecoveryKeyInput({
+                recoveryKey: options.recoveryKey,
+                recoveryKeyStdin: options.recoveryKeyStdin,
+              }),
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
           onText: (result, verbose) => {
@@ -2104,7 +2122,10 @@ export function registerMatrixCli(params: { program: Command }): void {
       "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
     )
     .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
-    .option("--force-reset-cross-signing", "Force reset cross-signing identity before bootstrap")
+    .option(
+      "--force-reset-cross-signing",
+      "Force reset cross-signing identity before bootstrap (requires active recovery key)",
+    )
     .option("--verbose", "Show detailed diagnostics")
     .option("--json", "Output as JSON")
     .action(
@@ -2301,3 +2322,4 @@ export function registerMatrixCli(params: { program: Command }): void {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

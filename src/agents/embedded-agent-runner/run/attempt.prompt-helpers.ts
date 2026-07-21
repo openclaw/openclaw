@@ -1,7 +1,12 @@
+import { prependSystemPromptAdditionAfterCacheBoundary } from "@openclaw/ai/internal/shared";
+/**
+ * Builds and repairs prompt inputs for embedded-agent attempts.
+ */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
 import { drainPluginNextTurnInjectionContext } from "../../../plugins/host-hook-state.js";
 import { buildPluginAgentTurnPrepareContext } from "../../../plugins/host-hooks.js";
@@ -9,20 +14,20 @@ import type {
   PluginAgentTurnPrepareResult,
   PluginNextTurnInjectionRecord,
   PluginHookAgentContext,
-  PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { truncateUtf16Safe } from "../../../utils.js";
 import { resolveProcessToolScopeKey } from "../../agent-tools.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { wrapPluginSystemContextSection } from "../../hook-system-context-boundary.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
-import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
-import { derivePromptTokens, type NormalizedUsage } from "../../usage.js";
+import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../../video-generation-task-status.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
@@ -30,13 +35,9 @@ import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export type PromptBuildHookRunner = {
+type PromptBuildHookRunner = {
   hasHooks: (
-    hookName:
-      | "agent_turn_prepare"
-      | "heartbeat_prompt_contribution"
-      | "before_prompt_build"
-      | "before_agent_start",
+    hookName: "agent_turn_prepare" | "heartbeat_prompt_contribution" | "before_prompt_build",
   ) => boolean;
   runAgentTurnPrepare?: (
     event: {
@@ -54,10 +55,6 @@ export type PromptBuildHookRunner = {
     event: { prompt: string; messages: unknown[] },
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
-  runBeforeAgentStart: (
-    event: { prompt: string; messages: unknown[] },
-    ctx: PluginHookAgentContext,
-  ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
 // Cache drained next-turn injections by runId so retry attempts within the
@@ -93,28 +90,43 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+/**
+ * Resolves prompt-build hook contributions for one attempt. Next-turn
+ * injections are drained once per run and cached for retries so destructive
+ * session-store reads do not lose plugin context after a failed first attempt.
+ */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): Promise<PluginHookBeforePromptBuildResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
-  const queuedContext = cachedInjections
+  const commitmentOnly = params.bootstrapContextRunKind === "commitment-only";
+  // Commitment fan-out must leave global queued context intact for the next
+  // normal turn and must not inherit heartbeat-wide prompt policy.
+  const queuedContext = commitmentOnly
     ? {
-        queuedInjections: cachedInjections,
-        ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        queuedInjections: [],
+        ...buildPluginAgentTurnPrepareContext({ queuedInjections: [] }),
       }
-    : await drainPluginNextTurnInjectionContext({
-        cfg: params.config,
-        sessionKey: params.hookCtx.sessionKey,
-      });
-  if (runId && !cachedInjections) {
+    : cachedInjections
+      ? {
+          queuedInjections: cachedInjections,
+          ...buildPluginAgentTurnPrepareContext({ queuedInjections: cachedInjections }),
+        }
+      : await drainPluginNextTurnInjectionContext({
+          cfg: params.config,
+          sessionKey: params.hookCtx.sessionKey,
+        });
+  if (runId && !commitmentOnly && !cachedInjections) {
     rememberDrainedInjections(runId, queuedContext.queuedInjections);
   }
+  // Hook ordering mirrors the prompt assembly boundary: queued injections first,
+  // then prepare/heartbeat contributions, then prompt-build hooks.
   const turnPrepareResult =
     params.hookRunner?.runAgentTurnPrepare && params.hookRunner.hasHooks("agent_turn_prepare")
       ? await params.hookRunner
@@ -133,6 +145,7 @@ export async function resolvePromptBuildHookResult(params: {
       : undefined;
   const heartbeatContribution =
     params.hookCtx.trigger === "heartbeat" &&
+    !commitmentOnly &&
     params.hookRunner?.runHeartbeatPromptContribution &&
     params.hookRunner.hasHooks("heartbeat_prompt_contribution")
       ? await params.hookRunner
@@ -163,48 +176,22 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
-  const beforeAgentStartResult =
-    params.beforeAgentStartResult ??
-    (params.hookRunner?.hasHooks("before_agent_start")
-      ? await params.hookRunner
-          .runBeforeAgentStart(
-            {
-              prompt: params.prompt,
-              messages: params.messages,
-            },
-            params.hookCtx,
-          )
-          .catch((hookErr: unknown) => {
-            log.warn(
-              `deprecated before_agent_start hook failed during prompt build: ${String(hookErr)}`,
-            );
-            return undefined;
-          })
-      : undefined);
   return {
-    systemPrompt: promptBuildResult?.systemPrompt ?? beforeAgentStartResult?.systemPrompt,
+    systemPrompt: promptBuildResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
       turnPrepareResult?.prependContext,
       heartbeatContribution?.prependContext,
       promptBuildResult?.prependContext,
-      beforeAgentStartResult?.prependContext,
     ]),
     appendContext: joinPresentTextSegments([
       queuedContext.appendContext,
       turnPrepareResult?.appendContext,
       heartbeatContribution?.appendContext,
       promptBuildResult?.appendContext,
-      beforeAgentStartResult?.appendContext,
     ]),
-    prependSystemContext: joinPresentTextSegments([
-      wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
-      wrapPluginSystemContextSection(beforeAgentStartResult?.prependSystemContext),
-    ]),
-    appendSystemContext: joinPresentTextSegments([
-      wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
-      wrapPluginSystemContextSection(beforeAgentStartResult?.appendSystemContext),
-    ]),
+    prependSystemContext: wrapPluginSystemContextSection(promptBuildResult?.prependSystemContext),
+    appendSystemContext: wrapPluginSystemContextSection(promptBuildResult?.appendSystemContext),
   };
 }
 
@@ -215,15 +202,22 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+/**
+ * Determines whether the default agent's heartbeat run should include the
+ * heartbeat prompt contribution. Non-default agents and non-heartbeat triggers
+ * keep their normal prompt shape.
+ */
 export function shouldInjectHeartbeatPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
   defaultAgentId?: string;
   isDefaultAgent: boolean;
   trigger?: EmbeddedRunAttemptParams["trigger"];
+  bootstrapContextRunKind?: EmbeddedRunAttemptParams["bootstrapContextRunKind"];
 }): boolean {
   return (
     params.isDefaultAgent &&
+    params.bootstrapContextRunKind !== "commitment-only" &&
     shouldInjectHeartbeatPromptForTrigger(params.trigger) &&
     Boolean(
       resolveHeartbeatPromptForSystemPrompt({
@@ -235,55 +229,16 @@ export function shouldInjectHeartbeatPrompt(params: {
   );
 }
 
+/** User-visible runs warn when transcript repair had to merge an orphaned user turn. */
 export function shouldWarnOnOrphanedUserRepair(
   trigger: EmbeddedRunAttemptParams["trigger"],
 ): boolean {
   return trigger === "user" || trigger === "manual";
 }
 
-export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
-
-export function resolvePromptSubmissionSkipReason(params: {
-  prompt: string;
-  messages: readonly unknown[];
-  imageCount: number;
-  runtimeOnly?: boolean;
-}): PromptSubmissionSkipReason | null {
-  if (params.prompt.trim().length > 0 || params.imageCount > 0) {
-    return null;
-  }
-  return params.messages.some(hasVisiblePromptHistory)
-    ? "blank_user_prompt"
-    : "empty_prompt_history_images";
-}
-
-function hasVisiblePromptHistory(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const record = message as { role?: unknown; content?: unknown };
-  if (record.role !== "user" && record.role !== "assistant") {
-    return false;
-  }
-  return hasNonEmptyContent(record.content);
-}
-
-function hasNonEmptyContent(content: unknown): boolean {
-  if (typeof content === "string") {
-    return content.trim().length > 0;
-  }
-  if (Array.isArray(content)) {
-    return content.some(hasNonEmptyContent);
-  }
-  if (!content || typeof content !== "object") {
-    return false;
-  }
-  const record = content as { text?: unknown; content?: unknown };
-  return hasNonEmptyContent(record.text) || hasNonEmptyContent(record.content);
-}
-
 const QUEUED_USER_MESSAGE_MARKER =
-  "[Queued user message that arrived while the previous turn was still active]";
+  "[Queued user message from a previous active turn; preserved as context only. " +
+  "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
 const MAX_STRUCTURED_JSON_STRING_CHARS = 300;
 const MAX_STRUCTURED_JSON_DEPTH = 4;
@@ -304,7 +259,7 @@ function summarizeStructuredMediaRef(label: string, value: unknown): string | un
     return `[${label}] inline data URI (${mimeType}, ${trimmed.length} chars)`;
   }
   if (trimmed.length > MAX_STRUCTURED_MEDIA_REF_CHARS) {
-    return `[${label}] ${trimmed.slice(0, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
+    return `[${label}] ${truncateUtf16Safe(trimmed, MAX_STRUCTURED_MEDIA_REF_CHARS)}... (${trimmed.length} chars)`;
   }
   return `[${label}] ${trimmed}`;
 }
@@ -316,7 +271,7 @@ function summarizeStructuredJsonString(value: string): string {
   }
   const trimmed = value.trim();
   if (trimmed.length > MAX_STRUCTURED_JSON_STRING_CHARS) {
-    return `${trimmed.slice(0, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
+    return `${truncateUtf16Safe(trimmed, MAX_STRUCTURED_JSON_STRING_CHARS)}... (${trimmed.length} chars)`;
   }
   return value;
 }
@@ -385,7 +340,7 @@ function stringifyStructuredJsonFallback(part: unknown): string | undefined {
       (match) => `[inline data URI: ${match.length} chars]`,
     );
     return withoutInlineData.length > 1_000
-      ? `${withoutInlineData.slice(0, 1_000)}... (${withoutInlineData.length} chars)`
+      ? `${truncateUtf16Safe(withoutInlineData, 1_000)}... (${withoutInlineData.length} chars)`
       : withoutInlineData;
   } catch {
     return undefined;
@@ -440,8 +395,8 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
   }
   const text = content
     .flatMap((part) => {
-      const text = stringifyStructuredContentPart(part);
-      return text ? [text] : [];
+      const textLocal = stringifyStructuredContentPart(part);
+      return textLocal ? [textLocal] : [];
     })
     .join("\n")
     .trim();
@@ -463,16 +418,39 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+function shouldDropStaleInternalOrphanedUserPrompt(params: {
+  prompt: string;
+  leafMessage: { provenance?: unknown };
+}): boolean {
+  return (
+    params.prompt.trim().length > 0 &&
+    shouldPreserveUserFacingSessionStateForInputProvenance(params.leafMessage.provenance)
+  );
+}
+
+/**
+ * Merges a trailing user message that was queued in transcript history but not
+ * present in the active prompt. The leaf is removed whether merged or already
+ * present so the transcript cannot submit the same user turn twice.
+ */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
-  leafMessage: { content?: unknown };
+  leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
   if (!orphanText) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
   if (promptAlreadyIncludesQueuedUserMessage(params.prompt, orphanText)) {
+    return { prompt: params.prompt, merged: false, removeLeaf: true };
+  }
+  if (
+    shouldDropStaleInternalOrphanedUserPrompt({
+      prompt: params.prompt,
+      leafMessage: params.leafMessage,
+    })
+  ) {
     return { prompt: params.prompt, merged: false, removeLeaf: true };
   }
 
@@ -500,27 +478,27 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-export function resolveAttemptPrependSystemContext(params: {
+// Per-turn media-generation task hints depend on live session state, so they must
+// be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
+// rather than placed in the static prepend slot — keeping them above the boundary
+// shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
+export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
-  hookPrependSystemContext?: string;
 }): string | undefined {
-  const activeMediaTaskPromptContexts =
-    params.trigger === "user" || params.trigger === "manual"
-      ? [
-          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
-          buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
-        ]
-      : [];
+  if (params.trigger !== "user" && params.trigger !== "manual") {
+    return undefined;
+  }
   return joinPresentTextSegments([
-    ...activeMediaTaskPromptContexts,
-    params.hookPrependSystemContext,
+    buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
+    buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
   ]);
 }
 
 type AfterTurnRuntimeContextAttempt = Pick<
   EmbeddedRunAttemptParams,
+  | "sessionTarget"
   | "sessionKey"
   | "sandboxSessionKey"
   | "messageChannel"
@@ -535,15 +513,44 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "provider"
   | "modelId"
   | "agentHarnessId"
+  | "modelSelectionLocked"
   | "thinkLevel"
   | "reasoningLevel"
   | "bashElevated"
   | "extraSystemPrompt"
   | "ownerNumbers"
   | "authProfileId"
+  | "authProfileIdSource"
+  | "runtimePlan"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
+
+function resolveRuntimeContextSessionTarget(params: {
+  attempt: AfterTurnRuntimeContextAttempt;
+  activeAgentId?: string;
+}): ContextEngineSessionTarget | undefined {
+  const sessionTarget = params.attempt.sessionTarget;
+  const agentId = sessionTarget?.agentId ?? params.activeAgentId;
+  const sessionId = sessionTarget?.sessionId ?? params.attempt.sessionId;
+  const sessionKey = sessionTarget?.sessionKey ?? params.attempt.sessionKey;
+  if (
+    !agentId &&
+    !sessionId &&
+    !sessionKey &&
+    !sessionTarget?.storePath &&
+    sessionTarget?.threadId === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(agentId ? { agentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(sessionTarget?.storePath ? { storePath: sessionTarget.storePath } : {}),
+    ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
+  };
+}
 
 /** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
@@ -557,6 +564,10 @@ export function buildAfterTurnRuntimeContext(params: {
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
+  const sessionTarget = resolveRuntimeContextSessionTarget({
+    attempt: params.attempt,
+    activeAgentId: params.activeAgentId,
+  });
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -567,6 +578,8 @@ export function buildAfterTurnRuntimeContext(params: {
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,
       authProfileId: params.attempt.authProfileId,
+      authProfileIdSource: params.attempt.authProfileIdSource,
+      runtimeAuthPlan: params.attempt.runtimePlan?.auth,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -576,6 +589,7 @@ export function buildAfterTurnRuntimeContext(params: {
       provider: params.attempt.provider,
       modelId: params.attempt.modelId,
       harnessRuntime: params.attempt.agentHarnessId,
+      modelSelectionLocked: params.attempt.modelSelectionLocked,
       thinkLevel: params.attempt.thinkLevel,
       reasoningLevel: params.attempt.reasoningLevel,
       bashElevated: params.attempt.bashElevated,
@@ -608,6 +622,8 @@ export function buildAfterTurnRuntimeContext(params: {
       ? { currentTokenCount: Math.floor(params.currentTokenCount) }
       : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
+    transcriptStorage: { kind: "sqlite" },
+    ...(sessionTarget ? { sessionTarget } : {}),
   };
 }
 
@@ -618,6 +634,6 @@ export function buildAfterTurnRuntimeContextFromUsage(
 ): ContextEngineRuntimeContext {
   return buildAfterTurnRuntimeContext({
     ...params,
-    currentTokenCount: derivePromptTokens(params.lastCallUsage),
+    currentTokenCount: deriveContextPromptTokens({ lastCallUsage: params.lastCallUsage }),
   });
 }

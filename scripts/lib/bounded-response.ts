@@ -1,3 +1,4 @@
+// Bounded Response script supports OpenClaw repository automation.
 type BoundedResponseTextOptions = {
   createTooLargeError?: (message: string) => Error;
   formatTooLargeMessage?: (label: string, maxBytes: number) => string;
@@ -9,6 +10,21 @@ const defaultTooLargeMessage = (label: string, maxBytes: number) =>
   `${label} response body exceeded ${maxBytes} bytes`;
 
 const defaultTooLargeError = (message: string) => new Error(`${message}.`);
+
+function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
+}
+
+function parseContentLengthHeader(headers: Headers): number | undefined {
+  const raw = headers.get("content-length");
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
 
 async function readResponseChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
@@ -29,10 +45,10 @@ async function readResponseChunk(
   const abortPromise = new Promise<ReadableStreamReadResult<Uint8Array>>((_resolve, reject) => {
     const onAbort = () => {
       markCanceled();
-      void reader.cancel().catch(() => undefined);
       reject(
         signal.reason instanceof Error ? signal.reason : new Error(`${label} request aborted`),
       );
+      cancelReaderSoon(reader);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     removeAbortListener = () => signal.removeEventListener("abort", onAbort);
@@ -45,6 +61,44 @@ async function readResponseChunk(
   }
 }
 
+function toErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  return new Error(fallbackMessage, { cause: value });
+}
+
+async function readResponseChunkWithTimeout(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  label: string,
+  signal: AbortSignal | undefined,
+  timeoutPromise: Promise<never> | undefined,
+  markCanceled: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const readPromise = readResponseChunk(reader, label, signal, markCanceled);
+  if (!timeoutPromise) {
+    return await readPromise;
+  }
+
+  let waitingForRead = true;
+  const timeoutReadPromise = timeoutPromise.catch((error: unknown) => {
+    if (waitingForRead) {
+      markCanceled();
+      cancelReaderSoon(reader);
+    }
+    throw toErrorObject(error, `${label} response body read timed out`);
+  });
+
+  try {
+    return await Promise.race([readPromise, timeoutReadPromise]);
+  } finally {
+    waitingForRead = false;
+  }
+}
+
 export async function readBoundedResponseText(
   response: Response,
   label: string,
@@ -54,8 +108,8 @@ export async function readBoundedResponseText(
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
   const tooLargeError = () => createTooLargeError(formatTooLargeMessage(label, maxBytes));
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+  const contentLength = parseContentLengthHeader(response.headers);
+  if (contentLength !== undefined && contentLength > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw tooLargeError();
   }
@@ -72,16 +126,15 @@ export async function readBoundedResponseText(
 
   try {
     for (;;) {
-      const { done, value } = await (options.timeoutPromise
-        ? Promise.race([
-            readResponseChunk(reader, label, options.signal, () => {
-              canceled = true;
-            }),
-            options.timeoutPromise,
-          ])
-        : readResponseChunk(reader, label, options.signal, () => {
-            canceled = true;
-          }));
+      const { done, value } = await readResponseChunkWithTimeout(
+        reader,
+        label,
+        options.signal,
+        options.timeoutPromise,
+        () => {
+          canceled = true;
+        },
+      );
       if (done) {
         const tail = decoder.decode();
         if (tail) {

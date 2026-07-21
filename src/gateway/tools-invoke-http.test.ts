@@ -1,6 +1,13 @@
+// Tool invoke HTTP tests cover request auth, tool context construction, hook
+// filtering, plugin metadata, payload validation, and response shaping.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
@@ -20,6 +27,8 @@ const hookMocks = vi.hoisted(() => ({
     }),
   ),
 }));
+
+const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 
 let cfg: Record<string, unknown> = {};
 let lastCreateOpenClawToolsContext: Record<string, unknown> | undefined;
@@ -49,6 +58,16 @@ vi.mock("../config/sessions.js", () => ({
     return `agent:${agentId}:${mainKey}`;
   },
 }));
+
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
+  return {
+    ...actual,
+    resolveSessionEntryAccessTarget: (params: { sessionKey: string }) => ({
+      entry: sessionEntries.get(params.sessionKey),
+    }),
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: vi.fn(async () => ({ ok: true })),
@@ -106,6 +125,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
           agentTo: lastCreateOpenClawToolsContext?.agentTo,
           agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
         },
+        inheritedToolDenylist: lastCreateOpenClawToolsContext?.inheritedToolDenylist,
       }),
     },
     {
@@ -119,6 +139,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => {
         throw toolInputError("invalid args");
       },
+    },
+    {
+      name: "cron",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "cron" }),
     },
     {
       name: "exec",
@@ -236,7 +261,7 @@ beforeAll(async () => {
       }
       res.statusCode = 404;
       res.end("not found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       res.statusCode = 500;
       res.end(String(err));
     });
@@ -257,7 +282,9 @@ afterAll(async () => {
   if (!server) {
     return;
   }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
   sharedServer = undefined;
 });
 
@@ -268,6 +295,7 @@ beforeEach(() => {
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
   pluginToolMetaState.clear();
+  sessionEntries.clear();
   pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
@@ -399,13 +427,28 @@ const firstHookCallArg = () => {
   return call[0];
 };
 
-const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {
+const invokeToolsRpc = async (
+  params: Record<string, unknown>,
+  scopes = ["operator.write"],
+  clientInfo?: { id: string; mode: string },
+  caps?: string[],
+) => {
   const respond = vi.fn();
-  await toolsInvokeHandlers["tools.invoke"]({
+  await expectDefined(
+    toolsInvokeHandlers["tools.invoke"],
+    'toolsInvokeHandlers["tools.invoke"] test invariant',
+  )({
     params,
     respond,
     context: { getRuntimeConfig: () => cfg } as never,
-    client: { connect: { role: "operator", scopes } } as never,
+    client: {
+      connect: {
+        role: "operator",
+        scopes,
+        ...(clientInfo ? { client: clientInfo } : {}),
+        ...(caps ? { caps } : {}),
+      },
+    } as never,
     req: { type: "req", id: "req-rpc-1", method: "tools.invoke" },
     isWebchatConnect: () => false,
   });
@@ -438,6 +481,46 @@ const setMainAllowedTools = (params: {
 };
 
 describe("POST /tools/invoke", () => {
+  it("rejects reserved harness session contexts before tool resolution", async () => {
+    allowAgentsListForMain();
+    const res = await invokeAgentsListAuthed({
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    });
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      error: { type: "invalid_request", message: expect.stringContaining("reserved") },
+    });
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+  });
+
+  it("allows tools for an existing unlocked legacy harness-prefixed session", async () => {
+    allowAgentsListForMain();
+    const sessionKey = "agent:main:harness:legacy-notes";
+    sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
+
+    const res = await invokeAgentsListAuthed({ sessionKey });
+
+    expect(res.status).toBe(200);
+    await expectOkInvokeResponse(res);
+  });
+
+  it("rejects tools for an existing locked harness session", async () => {
+    allowAgentsListForMain();
+    const sessionKey = "agent:main:harness:codex:supervision:native-thread";
+    sessionEntries.set(sessionKey, {
+      sessionId: "locked-session",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
+
+    const res = await invokeAgentsListAuthed({ sessionKey });
+
+    expect(res.status).toBe(400);
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+  });
+
   it("invokes a tool and returns {ok:true,result}", async () => {
     allowAgentsListForMain();
     const res = await invokeAgentsListAuthed({ sessionKey: "main" });
@@ -448,6 +531,7 @@ describe("POST /tools/invoke", () => {
     expect(body).toHaveProperty("result");
     expect(lastCreateOpenClawToolsContext?.allowMediaInvokeCommands).toBe(true);
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(true);
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
     const hookArg = firstHookCallArg();
     expect(hookArg.toolName).toBe("agents_list");
     const hookCtx = hookArg.ctx;
@@ -522,6 +606,7 @@ describe("POST /tools/invoke", () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
       blocked: true,
+      kind: "veto",
       reason: "blocked by test hook",
     });
 
@@ -688,6 +773,34 @@ describe("POST /tools/invoke", () => {
     });
   });
 
+  it("propagates owner-only HTTP denies into spawned session inheritance", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: { allow: ["sessions_spawn", "cron", "gateway", "nodes"] },
+          },
+        ],
+      },
+      gateway: { tools: { allow: ["sessions_spawn", "cron", "gateway", "nodes"] } },
+    };
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      tool: "sessions_spawn",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result?.inheritedToolDenylist).toEqual(
+      expect.arrayContaining(["cron", "gateway", "nodes"]),
+    );
+  });
+
   it("denies sessions_send via HTTP gateway", async () => {
     setMainAllowedTools({ allow: ["sessions_send"] });
 
@@ -724,6 +837,47 @@ describe("POST /tools/invoke", () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.error?.type).toBe("tool_error");
+  });
+
+  it("keeps owner-only tools unavailable to non-owner HTTP callers despite gateway.tools.allow", async () => {
+    setMainAllowedTools({
+      allow: ["cron", "gateway", "nodes"],
+      gatewayAllow: ["cron", "gateway", "nodes"],
+    });
+
+    for (const tool of ["cron", "gateway", "nodes"]) {
+      const res = await invokeToolAuthed({
+        tool,
+        sessionKey: "main",
+      });
+
+      expect(res.status, tool).toBe(404);
+      const body = await res.json();
+      expect(body.ok, tool).toBe(false);
+      expect(body.error?.type, tool).toBe("not_found");
+    }
+  });
+
+  it("keeps shared-secret bearer auth as owner for explicitly allowed owner-only tools", async () => {
+    setMainAllowedTools({ allow: ["nodes"], gatewayAllow: ["nodes"] });
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "token",
+    });
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.write",
+      },
+      tool: "nodes",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toEqual({ ok: true, result: "nodes" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 
   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
@@ -962,6 +1116,37 @@ describe("POST /tools/invoke", () => {
 });
 
 describe("tools.invoke Gateway RPC", () => {
+  it("rejects reserved harness session contexts", async () => {
+    allowAgentsListForMain();
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey: "agent:main:harness:codex:supervision:native-thread",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      error: { code: "validation_error", message: expect.stringContaining("reserved") },
+    });
+    expect(lastCreateOpenClawToolsContext).toBeUndefined();
+  });
+
+  it("allows existing unlocked legacy harness-prefixed sessions", async () => {
+    allowAgentsListForMain();
+    const sessionKey = "agent:main:harness:legacy-notes";
+    sessionEntries.set(sessionKey, { sessionId: "legacy-session" });
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      args: {},
+      sessionKey,
+    });
+
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.output).toBeDefined();
+  });
+
   it("invokes a tool through the SDK-facing RPC envelope", async () => {
     allowAgentsListForMain();
 
@@ -981,7 +1166,7 @@ describe("tools.invoke Gateway RPC", () => {
     const hookArg = firstHookCallArg();
     expect(hookArg.approvalMode).toBe("report");
     expect(hookArg.toolName).toBe("agents_list");
-    expect(hookArg.toolCallId).toBe("rpc-rpc-tool-test");
+    expect(hookArg.toolCallId).toBe("rpc-delegated-rpc-tool-test");
     const hookCtx = hookArg.ctx;
     if (!hookCtx) {
       throw new Error("Expected before-tool-call hook context");
@@ -989,12 +1174,91 @@ describe("tools.invoke Gateway RPC", () => {
     expect(hookCtx.agentId).toBe("main");
     expect(hookCtx.config).toBe(cfg);
     expect(hookCtx.sessionKey).toBe("agent:main:main");
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("requires an operation-local marker for direct conversation reads", async () => {
+    allowAgentsListForMain();
+
+    await invokeToolsRpc(
+      {
+        name: "agents_list",
+        args: {},
+        sessionKey: "main",
+        conversationReadOrigin: "direct-operator",
+      },
+      ["operator.write"],
+      {
+        id: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+        mode: GATEWAY_CLIENT_MODES.BACKEND,
+      },
+      ["tool-events", "inline-widgets"],
+    );
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("direct-operator");
+    expect(lastCreateOpenClawToolsContext?.clientCaps).toEqual(["tool-events", "inline-widgets"]);
+
+    await invokeToolsRpc(
+      {
+        name: "agents_list",
+        args: {},
+        sessionKey: "main",
+      },
+      ["operator.write"],
+      {
+        id: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
+      },
+    );
+    expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
+  });
+
+  it("keeps owner-only tools unavailable to non-owner RPC callers despite gateway.tools.allow", async () => {
+    setMainAllowedTools({
+      allow: ["cron", "gateway", "nodes"],
+      gatewayAllow: ["cron", "gateway", "nodes"],
+    });
+
+    for (const tool of ["cron", "gateway", "nodes"]) {
+      const call = await invokeToolsRpc({
+        name: tool,
+        args: {},
+        sessionKey: "main",
+      });
+
+      expect(call?.[0], tool).toBe(true);
+      expect(call?.[1]?.ok, tool).toBe(false);
+      expect(call?.[1]?.toolName, tool).toBe(tool);
+      const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
+      expect(error?.code, tool).toBe("not_found");
+    }
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+  });
+
+  it("keeps operator.admin RPC callers as owner for explicitly allowed owner-only tools", async () => {
+    setMainAllowedTools({ allow: ["nodes"], gatewayAllow: ["nodes"] });
+
+    const call = await invokeToolsRpc(
+      {
+        name: "nodes",
+        args: {},
+        sessionKey: "main",
+      },
+      ["operator.admin"],
+    );
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("nodes");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: "nodes" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 
   it("returns typed approval-needed refusal when the policy hook blocks", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
       blocked: true,
+      kind: "failure",
+      disposition: "blocked",
       deniedReason: "plugin-approval",
       reason: "Plugin approval required",
       params: { mode: "ok" },
@@ -1049,3 +1313,4 @@ describe("tools.invoke Gateway RPC", () => {
     expect(error?.message).toContain("invalid tools.invoke params");
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

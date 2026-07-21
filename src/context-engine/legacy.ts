@@ -1,3 +1,4 @@
+// Legacy context engine wraps pre-plugin context behavior behind the pluggable interface.
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { delegateCompactionToRuntime } from "./delegate.js";
@@ -7,6 +8,7 @@ import type {
   AssembleResult,
   CompactResult,
   ContextEngineRuntimeContext,
+  ContextEngineSessionTarget,
   IngestResult,
 } from "./types.js";
 
@@ -69,8 +71,9 @@ export class LegacyContextEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
-    sessionFile: string;
+    sessionKey: string;
+    agentId?: string;
+    sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
     force?: boolean;
     currentTokenCount?: number;

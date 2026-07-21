@@ -1,7 +1,10 @@
+// Tracks temporary directories created by tests so leaks can be detected.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 
+/** Allocates temp directories under reusable roots with explicit cleanup control. */
 export function createTrackedTempDirs() {
   const prefixRoots = new Map<string, { root: string; nextIndex: number }>();
   const pendingPrefixRoots = new Map<string, Promise<{ root: string; nextIndex: number }>>();
@@ -56,7 +59,7 @@ export function createTrackedTempDirs() {
       );
       await Promise.all(
         roots.flatMap((dir, i) =>
-          dirlists[i].map((entry) =>
+          expectDefined(dirlists[i], "dirlists entry at i").map((entry) =>
             fs.rm(path.join(dir, entry), { recursive: true, force: true }),
           ),
         ),

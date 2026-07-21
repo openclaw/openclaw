@@ -1,3 +1,4 @@
+// Slack plugin module implements interactive dispatch behavior.
 import {
   createInteractiveConversationBindingHelpers,
   dispatchPluginInteractiveHandler,
@@ -8,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import type { ModalInputSummary } from "./monitor/events/modal-input-summary.js";
 
-export type SlackInteractiveHandlerResult = {
+type SlackInteractiveHandlerResult = {
   handled?: boolean;
   systemEvent?: {
     summary?: string;

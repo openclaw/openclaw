@@ -1,15 +1,31 @@
+// Daemon service audit tests cover installed service inspection and warnings.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { VERSION } from "../version.js";
 import {
   auditGatewayServiceConfig,
   checkTokenDrift,
-  readGatewayServiceCommandPort,
   SERVICE_AUDIT_CODES,
 } from "./service-audit.js";
-import { buildMinimalServicePath } from "./service-env.js";
+import { buildServiceEnvironment } from "./service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
+
+function buildMinimalServicePath(options: {
+  platform: NodeJS.Platform;
+  env: Record<string, string | undefined>;
+}): string {
+  const servicePath = buildServiceEnvironment({
+    env: options.env,
+    platform: options.platform,
+    port: 18789,
+  }).PATH;
+  if (!servicePath) {
+    throw new Error("expected managed service PATH");
+  }
+  return servicePath;
+}
 
 function hasIssue(
   audit: Awaited<ReturnType<typeof auditGatewayServiceConfig>>,
@@ -21,7 +37,7 @@ function hasIssue(
 function createGatewayAudit({
   expectedGatewayToken,
   expectedManagedServiceEnvKeys,
-  path = "/usr/local/bin:/usr/bin:/bin",
+  path: pathLocal = "/usr/local/bin:/usr/bin:/bin",
   serviceToken,
   extraEnvironment,
   environmentValueSources,
@@ -41,7 +57,7 @@ function createGatewayAudit({
     command: {
       programArguments: ["/usr/bin/node", "gateway"],
       environment: {
-        PATH: path,
+        PATH: pathLocal,
         ...(serviceToken ? { OPENCLAW_GATEWAY_TOKEN: serviceToken } : {}),
         ...extraEnvironment,
       },
@@ -96,6 +112,9 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayRuntimeBun)).toBe(true);
+    expect(
+      audit.issues.find((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun)?.message,
+    ).toContain("runtime state requires node:sqlite");
   });
 
   it("flags version-managed node paths", async () => {
@@ -342,20 +361,40 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
-  it("reads gateway service ports from split and equals-form arguments", () => {
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port", "18888"]),
-    ).toBe(18888);
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=18889"]),
-    ).toBe(18889);
-    expect(readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway"])).toBe(undefined);
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=0"]),
-    ).toBe(undefined);
-    expect(
-      readGatewayServiceCommandPort(["/usr/bin/node", "entry.js", "gateway", "--port=65536"]),
-    ).toBe(undefined);
+  it("treats zsh -lc LaunchAgent commands as opaque for the gateway token audit", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      expectedPort: 18889,
+      command: {
+        programArguments: [
+          "/bin/zsh",
+          "-lc",
+          "exec /usr/bin/node /opt/openclaw/dist/index.js gateway --port 18890",
+        ],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissing)).toBe(true);
+  });
+
+  it.each([
+    ["non-shell command", ["/usr/local/bin/helper", "-lc", "exec node gateway"]],
+    ["shell without an inline-command flag", ["/bin/zsh", "-l", "exec node gateway"]],
+  ])("keeps exact gateway token audit for %s", async (_name, programArguments) => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "darwin",
+      command: {
+        programArguments,
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayCommandMissing)).toBe(true);
   });
 
   it("flags gateway service port drift from the expected config port", async () => {
@@ -414,6 +453,44 @@ describe("auditGatewayServiceConfig", () => {
     });
 
     expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+  });
+
+  it("audits the final repeated gateway port flag", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: [
+          "/usr/bin/node",
+          "entry.js",
+          "gateway",
+          "--port",
+          "18789",
+          "--port=18888",
+        ],
+        environment: {},
+      },
+    });
+
+    expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPortMismatch)).toBe(false);
+  });
+
+  it("does not reinterpret a consumed gateway port value as another flag", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp" },
+      platform: "win32",
+      expectedPort: 18888,
+      command: {
+        programArguments: ["/usr/bin/node", "entry.js", "gateway", "--port", "--port=18888"],
+        environment: {},
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPortMismatch,
+    );
+    expect(issue?.detail).toBe("--port=18888 -> 18888");
   });
 
   it("flags gateway token mismatch when service token is stale", async () => {
@@ -694,5 +771,42 @@ describe("checkTokenDrift", () => {
     // This is not really drift - service will work, just config is incomplete
     const result = checkTokenDrift({ serviceToken: "service-token", configToken: undefined });
     expect(result).toBeNull();
+  });
+});
+
+describe("gateway service version mismatch detection", () => {
+  it("flags stale gateway service version metadata", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: { OPENCLAW_SERVICE_VERSION: "2026.4.15-beta.1" },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.message).toContain("2026.4.15-beta.1");
+    expect(issue?.message).toContain(VERSION);
+    expect(issue?.level).toBe("recommended");
+  });
+
+  it("accepts current gateway service version metadata", async () => {
+    const audit = await createGatewayAudit({
+      extraEnvironment: { OPENCLAW_SERVICE_VERSION: VERSION },
+    });
+
+    expect(
+      audit.issues.some(
+        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
+      ),
+    ).toBe(false);
+  });
+
+  it("does not flag missing gateway service version metadata", async () => {
+    const audit = await createGatewayAudit();
+    expect(
+      audit.issues.some(
+        (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayServiceVersionMismatch,
+      ),
+    ).toBe(false);
   });
 });

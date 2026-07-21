@@ -1,3 +1,4 @@
+// Discord plugin module implements runtime.messaging.reactions behavior.
 import {
   jsonResult,
   readPositiveIntegerParam,
@@ -21,6 +22,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         removeErrorMessage: "Emoji is required to remove a Discord reaction.",
       });
       if (remove) {
+        await ctx.assertReadTargetAllowed({ channelId });
         await discordMessagingActionRuntime.removeReactionDiscord(
           channelId,
           messageId,
@@ -30,6 +32,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         return jsonResult({ ok: true, removed: emoji });
       }
       if (isEmpty) {
+        await ctx.assertReadTargetAllowed({ channelId });
         const removed = await discordMessagingActionRuntime.removeOwnReactionsDiscord(
           channelId,
           messageId,
@@ -37,6 +40,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         );
         return jsonResult({ ok: true, removed: removed.removed });
       }
+      await ctx.assertReadTargetAllowed({ channelId });
       await discordMessagingActionRuntime.reactMessageDiscord(
         channelId,
         messageId,

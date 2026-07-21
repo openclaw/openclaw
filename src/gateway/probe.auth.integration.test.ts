@@ -1,6 +1,9 @@
+// Probe auth integration tests verify cached operator device tokens and pairing
+// state work with call/probe flows against a real local gateway harness.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { createGatewaySuiteHarness, installGatewayTestHooks, testState } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -107,19 +110,19 @@ describe("probeGateway auth integration", () => {
     expect(result.status).toBeNull();
     expect(result.configSnapshot).toBeNull();
     expect(result.auth.capability).toBe("connected_no_operator_scope");
-    expect(fs.existsSync(statePath("devices", "paired.json"))).toBe(false);
-    expect(fs.existsSync(statePath("devices", "pending.json"))).toBe(false);
+    const pairing = await listDevicePairing();
+    expect(pairing.paired).toEqual([]);
+    expect(pairing.pending).toEqual([]);
     expect(fs.existsSync(statePath("identity", "device-auth.json"))).toBe(false);
   });
 
   it("keeps detail RPCs available for local authenticated probes with cached device auth", async () => {
     const token = requireGatewayToken();
     await seedCachedOperatorToken(["operator.read"]);
-
     const result = await probeGateway({
       url: `ws://127.0.0.1:${gatewayHarness.port}`,
       auth: { token },
-      timeoutMs: 5_000,
+      timeoutMs: 10_000,
     });
 
     expect(result.ok).toBe(true);

@@ -1,3 +1,8 @@
+/**
+ * Effective tool inventory resolver.
+ *
+ * Builds model-visible tool lists after profile, provider, plugin, policy, and compatibility filters.
+ */
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -17,22 +22,14 @@ import { resolveModel } from "./embedded-agent-runner/model.js";
 import { resolveBundledStaticCatalogModel } from "./embedded-agent-runner/model.static-catalog.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { normalizeToolName } from "./tool-policy.js";
-import {
-  buildEffectiveToolInventoryGroups,
-  buildRuntimeCompatibleToolInventory,
-} from "./tools-effective-inventory-build.js";
+import { buildRuntimeCompatibleToolInventory } from "./tools-effective-inventory-build.js";
+import { buildEffectiveToolInventoryGroups } from "./tools-effective-inventory-groups.js";
 import type {
   EffectiveToolInventoryNotice,
   EffectiveToolInventoryEntry,
   EffectiveToolInventoryResult,
   ResolveEffectiveToolInventoryParams,
 } from "./tools-effective-inventory.types.js";
-
-export {
-  buildEffectiveToolInventoryEntries,
-  buildEffectiveToolInventoryGroups,
-  buildRuntimeCompatibleToolInventory,
-} from "./tools-effective-inventory-build.js";
 
 function listIncludesTool(list: string[] | undefined, toolName: string): boolean {
   if (!Array.isArray(list)) {
@@ -65,6 +62,7 @@ function buildToolInventoryNotices(params: {
     return undefined;
   }
 
+  // Browser can be configured yet absent after policy/profile/plugin filtering; surface why.
   const browserDenied = [
     params.effectivePolicy.globalPolicy,
     params.effectivePolicy.globalProviderPolicy,
@@ -118,12 +116,14 @@ function applyProviderTransportNormalization(params: {
 }): ProviderRuntimeModel {
   const normalized = normalizeProviderTransportWithPlugin({
     provider: params.provider,
+    modelId: params.runtimeModel.id,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     context: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       provider: params.provider,
+      modelId: params.runtimeModel.id,
       api: params.runtimeModel.api,
       baseUrl: params.runtimeModel.baseUrl,
     },
@@ -152,12 +152,14 @@ function resolveConfiguredFallbackApi(
 
 function resolveDynamicRuntimeModelContext(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   provider: string;
   modelId: string;
 }): { modelApi?: string; runtimeModel?: ProviderRuntimeModel } {
   const runtimeModel = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
   }).model as ProviderRuntimeModel | undefined;
   if (!runtimeModel) {
@@ -169,6 +171,7 @@ function resolveDynamicRuntimeModelContext(params: {
   };
 }
 
+/** Resolves the runtime model metadata needed to filter model-compatible tools. */
 export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -203,6 +206,7 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
     workspaceDir,
   });
   if (configuredModel) {
+    // Configured model entries override the bundled catalog but inherit missing transport details.
     const configuredApi =
       normalizeOptionalString(configuredModel.api) ??
       normalizeOptionalString(providerConfig?.api) ??
@@ -233,6 +237,7 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   if (!bundledStaticModel) {
     return resolveDynamicRuntimeModelContext({
       cfg: params.cfg,
+      agentId,
       agentDir: params.agentDir,
       workspaceDir,
       provider,
@@ -255,7 +260,8 @@ export function resolveEffectiveToolInventoryRuntimeModelContext(params: {
   };
 }
 
-function resolveEffectiveModelCompat(params: {
+/** Resolves compatibility metadata explicitly configured for a provider/model pair. */
+export function resolveConfiguredModelCompat(params: {
   cfg: OpenClawConfig;
   modelProvider?: string;
   modelId?: string;
@@ -283,6 +289,7 @@ function resolveEffectiveModelCompat(params: {
   return extractModelCompat(match);
 }
 
+/** Resolves the grouped effective tool inventory and user-visible filtering notices. */
 export function resolveEffectiveToolInventory(
   params: ResolveEffectiveToolInventoryParams,
 ): EffectiveToolInventoryResult {
@@ -305,7 +312,7 @@ export function resolveEffectiveToolInventory(
           modelProvider: params.modelProvider,
           modelId: params.modelId,
         });
-  const modelCompat = resolveEffectiveModelCompat({
+  const modelCompat = resolveConfiguredModelCompat({
     cfg: params.cfg,
     modelProvider: params.modelProvider,
     modelId: params.modelId,

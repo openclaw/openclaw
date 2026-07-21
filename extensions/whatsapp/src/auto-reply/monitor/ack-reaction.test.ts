@@ -1,7 +1,8 @@
+// Whatsapp tests cover ack reaction plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
-import type { WebInboundMessage } from "../../inbound/types.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
+import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -12,30 +13,31 @@ vi.mock("../../send.js", () => ({
   sendReactionWhatsApp: hoisted.sendReactionWhatsApp,
 }));
 
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+vi.mock("./group-activation.js", () => ({
+  resolveGroupActivationFor: vi.fn(async () => "always"),
+}));
 
-function createMessage(overrides: Partial<WebInboundMessage> = {}): WebInboundMessage {
-  return {
-    id: "msg-1",
-    from: "15551234567",
-    conversationId: "15551234567",
-    to: "15559876543",
-    accountId: "default",
-    body: "hello",
-    chatType: "direct",
-    chatId: "15551234567@s.whatsapp.net",
-    sendComposing: async () => {},
-    reply: async () => acceptedSendResult("text", "r1"),
-    sendMedia: async () => acceptedSendResult("media", "m1"),
+type TestMsgOverrides = NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>;
+
+function createMessage(overrides: TestMsgOverrides = {}): AdmittedWebInboundMessage {
+  return createTestWebInboundMessage({
+    event: { id: "msg-1" },
+    platform: {
+      chatJid: "15551234567@s.whatsapp.net",
+      recipientJid: "15559876543",
+    },
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "direct",
+        id: "15551234567",
+      },
+      sender: {
+        id: "15551234567",
+      },
+    },
     ...overrides,
-  };
+  });
 }
 
 function createConfig(
@@ -65,9 +67,7 @@ const runAckReaction = (overrides: Partial<AckReactionParams> = {}) =>
     msg: createMessage(),
     agentId: "agent",
     sessionKey: "whatsapp:default:15551234567",
-    conversationId: "15551234567",
     verbose: false,
-    accountId: "default",
     info: vi.fn(),
     warn: vi.fn(),
     ...overrides,
@@ -126,10 +126,11 @@ describe("maybeSendAckReaction", () => {
     const ackReaction = await runAckReaction({
       cfg,
       msg: createMessage({
-        accountId: "work",
+        admission: {
+          accountId: "work",
+        },
       }),
       sessionKey: "whatsapp:work:15551234567",
-      accountId: "work",
     });
 
     expect(ackReaction?.ackReactionValue).toBe("👀");
@@ -182,6 +183,67 @@ describe("maybeSendAckReaction", () => {
       {
         verbose: false,
         fromMe: false,
+        accountId: "default",
+        cfg,
+      },
+    );
+  });
+
+  it("uses the sender LID as the group reaction participant when no sender JID is available", async () => {
+    const cfg = createConfig("ack", {
+      ackReaction: {
+        emoji: "👀",
+        direct: true,
+        group: "always",
+      },
+    });
+    const ackReaction = await runAckReaction({
+      cfg,
+      msg: createMessage({
+        platform: {
+          chatJid: "120363000000000000@g.us",
+          sender: {
+            jid: null,
+            lid: "277038292303944@lid",
+          },
+        },
+        admission: {
+          conversation: {
+            kind: "group",
+            id: "120363000000000000@g.us",
+          },
+          sender: {
+            id: "277038292303944@lid",
+          },
+        },
+      }),
+      sessionKey: "whatsapp:default:120363000000000000@g.us",
+    });
+
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "120363000000000000@g.us",
+      "msg-1",
+      "👀",
+      {
+        verbose: false,
+        fromMe: false,
+        participant: "277038292303944@lid",
+        accountId: "default",
+        cfg,
+      },
+    );
+
+    await ackReaction?.remove();
+
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenLastCalledWith(
+      "120363000000000000@g.us",
+      "msg-1",
+      "",
+      {
+        verbose: false,
+        fromMe: false,
+        participant: "277038292303944@lid",
         accountId: "default",
         cfg,
       },

@@ -1,7 +1,9 @@
+// Channel import guardrail tests cover forbidden imports across channel plugin boundaries.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
@@ -395,7 +397,10 @@ function readSetupBarrelImportBlock(path: string): string {
     return "";
   }
   let startLineIndex = targetLineIndex;
-  while (startLineIndex >= 0 && !lines[startLineIndex].includes("import")) {
+  while (
+    startLineIndex >= 0 &&
+    !expectDefined(lines[startLineIndex], "lines[startLineIndex] test invariant").includes("import")
+  ) {
     startLineIndex -= 1;
   }
   return lines.slice(startLineIndex, targetLineIndex + 1).join("\n");
@@ -561,9 +566,9 @@ function expectOnlyApprovedExtensionSeams(file: string, imports: string[]): void
     if (!extensionId || !GUARDED_CHANNEL_EXTENSIONS.has(extensionId)) {
       continue;
     }
-    const basename = resolved.split("/").at(-1) ?? "";
+    const basenameLocal = resolved.split("/").at(-1) ?? "";
     expect(
-      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basename),
+      ALLOWED_EXTENSION_PUBLIC_SURFACES.has(basenameLocal),
       `${file} should only import approved extension surfaces, got ${specifier}`,
     ).toBe(true);
   }

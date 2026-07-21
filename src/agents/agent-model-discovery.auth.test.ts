@@ -1,30 +1,17 @@
+/** Tests model discovery auth storage, SecretRef placeholders, and env-backed credentials. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { resolveAgentCredentialMapFromStore } from "./agent-auth-credentials.js";
-import {
-  addEnvBackedAgentCredentials,
-  scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./agent-auth-discovery-core.js";
+import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
 import { discoverAuthStorage } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
+import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
-  resolveProviderEnvApiKeyCandidates: () => ({
-    mistral: ["MISTRAL_API_KEY"],
-  }),
-  resolveProviderEnvAuthEvidence: () => ({
-    "workspace-cloud": [
-      {
-        type: "local-file-with-env",
-        credentialMarker: "workspace-cloud-local-credentials",
-        source: "workspace cloud credentials",
-      },
-    ],
-  }),
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {
@@ -74,22 +61,8 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
   }
 }
 
-async function writeLegacyAuthJson(
-  agentDir: string,
-  authEntries: Record<string, unknown>,
-): Promise<void> {
-  await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
-}
-
-async function writeAuthProfilesJson(agentDir: string, store: AuthProfileStore): Promise<void> {
-  await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store, null, 2));
-}
-
-async function readLegacyAuthJson(agentDir: string): Promise<Record<string, unknown>> {
-  return JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as Record<
-    string,
-    unknown
-  >;
+function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): void {
+  writePersistedAuthProfileStoreRaw(store, agentDir);
 }
 
 describe("discoverAuthStorage", () => {
@@ -157,6 +130,96 @@ describe("discoverAuthStorage", () => {
     expect(credentials.openai).toBeUndefined();
   });
 
+  it("keeps expired OAuth when it is the sole profile for a provider", () => {
+    const resolved = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:sole-expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "fake",
+          refresh: "sample",
+          expires: Date.now() - 3600_000,
+        },
+      },
+    });
+
+    expect(resolved.openai).toEqual({
+      type: "oauth",
+      access: "fake",
+      refresh: "sample",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("uses canonical mode and expiry ordering instead of profile insertion order", () => {
+    const resolved = resolveAgentCredentialMapFromStore({
+      version: 1,
+      profiles: {
+        "openai:key": {
+          type: "api_key",
+          provider: "openai",
+          key: "test-key",
+        },
+        "openai:expired": {
+          type: "oauth",
+          provider: "openai",
+          access: "dummy",
+          refresh: "placeholder",
+          expires: Date.now() - 3600_000,
+        },
+        "openai:valid": {
+          type: "oauth",
+          provider: "openai",
+          access: "fake",
+          refresh: "sample",
+          expires: Date.now() + 3600_000,
+        },
+      },
+    });
+
+    expect(resolved.openai).toEqual({
+      type: "oauth",
+      access: "fake",
+      refresh: "sample",
+      expires: expect.any(Number),
+    });
+  });
+
+  it("passes configured auth order through discovery selection", async () => {
+    await withAgentDir(async (agentDir) => {
+      writeAuthProfilesSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:oauth": {
+            type: "oauth",
+            provider: "openai",
+            access: "fake",
+            refresh: "sample",
+            expires: Date.now() + 3600_000,
+          },
+          "openai:key": {
+            type: "api_key",
+            provider: "openai",
+            key: "test-key",
+          },
+        },
+      });
+      const authStorage = discoverAuthStorage(agentDir, {
+        skipExternalAuthProfiles: true,
+        env: {},
+        config: {
+          auth: { order: { openai: ["openai:key", "openai:oauth"] } },
+        },
+      });
+
+      expect(authStorage.get("openai")).toEqual({
+        type: "api_key",
+        key: "test-key",
+      });
+    });
+  });
+
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
@@ -213,7 +276,7 @@ describe("discoverAuthStorage", () => {
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      await writeAuthProfilesJson(agentDir, {
+      writeAuthProfilesSqlite(agentDir, {
         version: 1,
         profiles: {
           "fixture-ref-provider:default": {
@@ -239,50 +302,50 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
-    await withAgentDir(async (agentDir) => {
-      await writeLegacyAuthJson(agentDir, {
-        openrouter: { type: "api_key", key: "legacy-static-key" },
-        openai: {
-          type: "oauth",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        },
-      });
-
-      scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
-
-      const parsed = await readLegacyAuthJson(agentDir);
-      expect(parsed.openrouter).toBeUndefined();
-      const codexEntry = parsed["openai"] as { type?: string; access?: string } | undefined;
-      expect(codexEntry?.type).toBe("oauth");
-      expect(codexEntry?.access).toBe("oauth-access");
-    });
-  });
-
-  it("preserves legacy auth.json when auth store is forced read-only", async () => {
-    await withAgentDir(async (agentDir) => {
-      const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
-      process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
-      try {
-        await writeLegacyAuthJson(agentDir, {
-          openrouter: { type: "api_key", key: "legacy-static-key" },
+  it("uses the lifecycle owner's explicit inherited auth directory", async () => {
+    await withAgentDir(async (inheritedAuthDir) => {
+      await withAgentDir(async (agentDir) => {
+        writeAuthProfilesSqlite(inheritedAuthDir, {
+          version: 1,
+          profiles: {
+            "inherited-provider:default": {
+              type: "api_key",
+              provider: "inherited-provider",
+              key: "inherited-key",
+            },
+            "shared-provider:inherited": {
+              type: "api_key",
+              provider: "shared-provider",
+              key: "inherited-shared-key",
+            },
+          },
+        });
+        writeAuthProfilesSqlite(agentDir, {
+          version: 1,
+          profiles: {
+            "shared-provider:local": {
+              type: "api_key",
+              provider: "shared-provider",
+              key: "local-shared-key",
+            },
+          },
         });
 
-        scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
+        const storage = discoverAuthStorage(agentDir, {
+          inheritedAuthDir,
+          skipExternalAuthProfiles: true,
+          env: {},
+        });
 
-        const parsed = await readLegacyAuthJson(agentDir);
-        const openrouterEntry = parsed.openrouter as { type?: string; key?: string } | undefined;
-        expect(openrouterEntry?.type).toBe("api_key");
-        expect(openrouterEntry?.key).toBe("legacy-static-key");
-      } finally {
-        if (previous === undefined) {
-          delete process.env.OPENCLAW_AUTH_STORE_READONLY;
-        } else {
-          process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
-        }
-      }
+        expect(storage.get("inherited-provider")).toEqual({
+          type: "api_key",
+          key: "inherited-key",
+        });
+        expect(storage.get("shared-provider")).toEqual({
+          type: "api_key",
+          key: "local-shared-key",
+        });
+      });
     });
   });
 

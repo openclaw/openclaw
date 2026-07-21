@@ -1,3 +1,4 @@
+// CJK character tests cover detection and width handling for CJK text.
 import { describe, expect, it } from "vitest";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
@@ -43,6 +44,13 @@ describe("estimateStringChars", () => {
     // "안녕하세요" = 5 hangul chars
     // .length = 5, adjusted = 5 + 5 * 3 = 20
     expect(estimateStringChars("안녕하세요")).toBe(20);
+  });
+
+  it("handles East Asian fullwidth letters, numbers, and punctuation", () => {
+    expect(estimateStringChars("ＡＢＣ１２３")).toBe(6 * CHARS_PER_TOKEN_ESTIMATE);
+    expect(estimateStringChars("hello，world")).toBe(
+      "helloworld".length + CHARS_PER_TOKEN_ESTIMATE,
+    );
   });
 
   it("handles CJK punctuation and symbols in the extended range", () => {

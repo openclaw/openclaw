@@ -1,7 +1,11 @@
+/**
+ * Browser CLI inspection commands for screenshots and snapshots.
+ */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserNonNegativeIntegerValue,
   parseBrowserPositiveIntegerValue,
@@ -35,6 +39,7 @@ function parseOptionalIntegerOption(
   return parsed;
 }
 
+/** Registers Browser screenshot and snapshot commands. */
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -42,11 +47,15 @@ export function registerBrowserInspectCommands(
   browser
     .command("screenshot")
     .description("Capture a screenshot (prints the saved path)")
-    .argument("[targetId]", "CDP target id (or unique prefix)")
+    .argument("[targetId]", BROWSER_TAB_REFERENCE_HELP)
     .option("--full-page", "Capture full scrollable page", false)
     .option("--ref <ref>", "ARIA ref from ai snapshot")
     .option("--element <selector>", "CSS selector for element screenshot")
-    .option("--labels", "Overlay role refs on the screenshot", false)
+    .option(
+      "--labels",
+      "Overlay role refs on the screenshot (works with --full-page, --ref, and --element)",
+      false,
+    )
     .option("--type <png|jpeg>", "Output type (default: png)", "png")
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -84,7 +93,7 @@ export function registerBrowserInspectCommands(
     .command("snapshot")
     .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option("--limit <n>", "Max nodes (default: 500/800)")
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)
@@ -93,16 +102,14 @@ export function registerBrowserInspectCommands(
     .option("--depth <n>", "Role snapshot: max depth")
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
     .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
-    .option("--labels", "Include viewport label overlay screenshot", false)
+    .option("--labels", "Include label overlay screenshot with annotations", false)
     .option("--urls", "Append discovered link URLs to AI snapshots", false)
     .option("--out <path>", "Write snapshot to a file")
-    .action(async (opts, cmd) => {
+    .action(async (opts, cmd: Command) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
-      const formatWasExplicit =
-        typeof cmd.getOptionValueSource === "function" &&
-        cmd.getOptionValueSource("format") === "cli";
+      const formatWasExplicit = cmd.getOptionValueSource("format") === "cli";
       const configMode =
         !formatWasExplicit &&
         format === "ai" &&

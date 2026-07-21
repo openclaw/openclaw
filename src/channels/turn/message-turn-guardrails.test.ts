@@ -1,3 +1,4 @@
+// Message turn guardrail tests cover channel turn safety checks and fixture boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,7 @@ const migratedMessageTurnFiles = [
   "extensions/slack/src/monitor/message-handler/prepare.ts",
   "extensions/telegram/src/bot-message-context.body.ts",
   "extensions/telegram/src/bot-message-context.session.ts",
+  "extensions/telegram/src/bot-message-dispatch-context.ts",
   "extensions/telegram/src/bot-message-dispatch.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
   "extensions/zalouser/src/monitor.ts",
@@ -30,15 +32,14 @@ const historyWindowFiles = [
   "extensions/feishu/src/bot.ts",
   "extensions/imessage/src/monitor/inbound-processing.ts",
   "extensions/line/src/bot-handlers.ts",
-  "extensions/line/src/bot-message-context.ts",
+  "extensions/line/src/group-history.ts",
   "extensions/mattermost/src/mattermost/monitor.ts",
   "extensions/msteams/src/monitor-handler/message-handler.ts",
   "extensions/qqbot/src/bridge/sdk-adapter.ts",
   "extensions/signal/src/monitor/event-handler.ts",
   "extensions/slack/src/monitor/message-handler/prepare.ts",
-  "extensions/telegram/src/bot-message-context.body.ts",
-  "extensions/telegram/src/bot-message-context.session.ts",
-  "extensions/telegram/src/bot-message-dispatch.ts",
+  "extensions/telegram/src/bot-message-dispatch-context.ts",
+  "extensions/telegram/src/group-history-window.ts",
   "extensions/whatsapp/src/auto-reply/monitor/group-gating.ts",
   "extensions/zalouser/src/monitor.ts",
 ];

@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // Shared image-generation implementation helpers for bundled and third-party plugins.
 
 export type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -33,20 +34,17 @@ export { parseImageGenerationModelRef } from "../image-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
 export { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+/** Default OpenAI image model used when image-generation provider config omits one. */
 export const OPENAI_DEFAULT_IMAGE_MODEL = "gpt-image-2";
 
 type ImageGenerationCoreAuthRuntimeModule =
   typeof import("./image-generation-core.auth.runtime.js");
 
-let imageGenerationCoreAuthRuntimePromise:
-  | Promise<ImageGenerationCoreAuthRuntimeModule>
-  | undefined;
+const loadImageGenerationCoreAuthRuntime = createLazyRuntimeModule(
+  () => import("./image-generation-core.auth.runtime.js"),
+);
 
-async function loadImageGenerationCoreAuthRuntime(): Promise<ImageGenerationCoreAuthRuntimeModule> {
-  imageGenerationCoreAuthRuntimePromise ??= import("./image-generation-core.auth.runtime.js");
-  return imageGenerationCoreAuthRuntimePromise;
-}
-
+/** Resolve image-generation provider API keys through the lazy auth runtime helper. */
 export async function resolveApiKeyForProvider(
   ...args: Parameters<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>
 ): Promise<Awaited<ReturnType<ImageGenerationCoreAuthRuntimeModule["resolveApiKeyForProvider"]>>> {

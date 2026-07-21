@@ -1,28 +1,43 @@
+/**
+ * Builds runtime context for context-engine backed embedded compaction.
+ */
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
+import { DEFAULT_PROVIDER } from "../defaults.js";
 import {
-  openAIProviderUsesCodexRuntimeByDefault,
-  resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-routing.js";
+  buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
+  resolveModelRefFromString,
+} from "../model-selection-shared.js";
+import { resolveSelectedOpenAIRuntimeProvider } from "../openai-routing.js";
+import { agentRuntimeAuthPlanMatchesTarget } from "../runtime-plan/prepare-auth.js";
+import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/types.js";
+import { resolveCandidateThinkingLevel } from "../thinking-runtime.js";
 
-export type EmbeddedCompactionRuntimeContext = {
+type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
   messageProvider?: string;
+  clientCaps?: string[];
+  chatType?: ChatType;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   agentHarnessId?: string;
+  modelSelectionLocked?: boolean;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -43,6 +58,37 @@ export type EmbeddedCompactionRuntimeContext = {
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
 
+/** Resolve the configured compaction override against the actual model/runtime candidate. */
+export function resolveEmbeddedCompactionThinkingLevel(params: {
+  config?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  inheritedLevel?: ThinkLevel;
+  agentId?: string;
+  sessionKey?: string;
+  agentRuntime?: string | null;
+}): ThinkLevel {
+  const requestedLevel =
+    params.config?.agents?.defaults?.compaction?.thinkingLevel ?? params.inheritedLevel;
+  if (!requestedLevel) {
+    return "off";
+  }
+  // A compaction model override or fallback can change the supported level set.
+  // Revalidate the immutable request for every concrete candidate instead of
+  // carrying a level clamped for an earlier model into a later attempt.
+  return (
+    resolveCandidateThinkingLevel({
+      cfg: params.config,
+      provider: params.provider,
+      modelId: params.modelId,
+      level: requestedLevel,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      agentRuntime: params.agentRuntime,
+    }) ?? "off"
+  );
+}
+
 /**
  * Resolve the effective compaction target from config, falling back to the
  * caller-supplied provider/model and optionally applying runtime defaults.
@@ -53,18 +99,24 @@ export function resolveEmbeddedCompactionTarget(params: {
   modelId?: string | null;
   authProfileId?: string | null;
   harnessRuntime?: string | null;
+  modelSelectionLocked?: boolean;
   defaultProvider?: string;
   defaultModel?: string;
 }): {
   provider: string | undefined;
   runtimeProvider?: string;
   contextProvider?: string;
+  nativeHarnessCompaction?: boolean;
   model: string | undefined;
   authProfileId: string | undefined;
 } {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
-  const override = params.config?.agents?.defaults?.compaction?.model?.trim();
+  // A locked session's creating model owns every transcript read, including
+  // summaries. Compaction-specific model overrides would cross that boundary.
+  const override = params.modelSelectionLocked
+    ? undefined
+    : params.config?.agents?.defaults?.compaction?.model?.trim();
   const resolveTargetProviders = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,
@@ -72,12 +124,14 @@ export function resolveEmbeddedCompactionTarget(params: {
     if (!targetProvider) {
       return {};
     }
-    const useCodexHarnessRuntime = shouldUseCodexRuntimeProviderForCompaction({
-      config: params.config,
-      provider: targetProvider,
-      harnessRuntime: params.harnessRuntime,
-    });
-    const harnessRuntime = useCodexHarnessRuntime ? params.harnessRuntime : "openclaw";
+    const selectedHarnessRuntime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
+    // Compaction follows the concrete session or prepared-plan owner. Provider
+    // defaults choose new runs; they cannot move an existing transcript.
+    const useNativeHarnessRuntime =
+      selectedHarnessRuntime !== undefined &&
+      selectedHarnessRuntime !== "openclaw" &&
+      !isDefaultAgentRuntimeId(selectedHarnessRuntime);
+    const harnessRuntime = useNativeHarnessRuntime ? selectedHarnessRuntime : "openclaw";
     const runtimeProvider = resolveSelectedOpenAIRuntimeProvider({
       provider: targetProvider,
       harnessRuntime: harnessRuntime ?? undefined,
@@ -87,7 +141,8 @@ export function resolveEmbeddedCompactionTarget(params: {
     const routedRuntimeProvider = runtimeProvider === targetProvider ? undefined : runtimeProvider;
     return {
       runtimeProvider: routedRuntimeProvider,
-      contextProvider: useCodexHarnessRuntime ? routedRuntimeProvider : undefined,
+      contextProvider: useNativeHarnessRuntime ? routedRuntimeProvider : undefined,
+      ...(useNativeHarnessRuntime ? { nativeHarnessCompaction: true } : {}),
     };
   };
   if (!override) {
@@ -106,13 +161,64 @@ export function resolveEmbeddedCompactionTarget(params: {
     // When switching provider via override, drop the primary auth profile to
     // avoid sending the wrong credentials.
     const authProfileId =
-      overrideProvider !== (params.provider ?? "")?.trim()
-        ? undefined
-        : (params.authProfileId ?? undefined);
+      overrideProvider !== provider ? undefined : (params.authProfileId ?? undefined);
     return {
       provider: overrideProvider,
       ...resolveTargetProviders(overrideProvider, authProfileId),
       model: overrideModel,
+      authProfileId,
+    };
+  }
+  const config = params.config ?? {};
+  const currentProvider = provider?.trim();
+  if (
+    currentProvider &&
+    hasBareConfiguredModelForProvider({
+      cfg: config,
+      provider: currentProvider,
+      model: override,
+    })
+  ) {
+    const authProfileId = params.authProfileId ?? undefined;
+    return {
+      provider: currentProvider,
+      ...resolveTargetProviders(currentProvider, authProfileId),
+      model: override,
+      authProfileId,
+    };
+  }
+  const inferredLiteralProvider = inferUniqueProviderFromConfiguredModels({
+    cfg: config,
+    model: override,
+  });
+  if (inferredLiteralProvider) {
+    const authProfileId =
+      inferredLiteralProvider !== provider ? undefined : (params.authProfileId ?? undefined);
+    return {
+      provider: inferredLiteralProvider,
+      ...resolveTargetProviders(inferredLiteralProvider, authProfileId),
+      model: override,
+      authProfileId,
+    };
+  }
+  const defaultProvider = provider || DEFAULT_PROVIDER;
+  const aliasResolution = resolveModelRefFromString({
+    cfg: config,
+    raw: override,
+    defaultProvider,
+    aliasIndex: buildModelAliasIndex({
+      cfg: config,
+      defaultProvider,
+    }),
+  });
+  if (aliasResolution?.alias) {
+    const resolvedProvider = aliasResolution.ref.provider;
+    const authProfileId =
+      resolvedProvider !== provider ? undefined : (params.authProfileId ?? undefined);
+    return {
+      provider: resolvedProvider,
+      ...resolveTargetProviders(resolvedProvider, authProfileId),
+      model: aliasResolution.ref.model,
       authProfileId,
     };
   }
@@ -125,29 +231,85 @@ export function resolveEmbeddedCompactionTarget(params: {
   };
 }
 
-function shouldUseCodexRuntimeProviderForCompaction(params: {
-  config?: OpenClawConfig;
+function normalizeCompactionConfigKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function hasBareConfiguredModelForProvider(params: {
+  cfg: OpenClawConfig;
   provider: string;
-  harnessRuntime?: string | null;
+  model: string;
 }): boolean {
-  if (normalizeOptionalAgentRuntimeId(params.harnessRuntime) !== "codex") {
+  const providerKey = normalizeCompactionConfigKey(params.provider);
+  const modelKey = normalizeCompactionConfigKey(params.model);
+  if (!providerKey || !modelKey || params.model.includes("/")) {
     return false;
   }
-  if (!openAIProviderUsesCodexRuntimeByDefault(params)) {
-    return false;
+  for (const rawRef of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
+    const slashIdx = rawRef.indexOf("/");
+    if (slashIdx <= 0 || rawRef.endsWith("/*")) {
+      continue;
+    }
+    const rawProvider = rawRef.slice(0, slashIdx);
+    const rawModel = rawRef.slice(slashIdx + 1);
+    if (
+      normalizeCompactionConfigKey(rawProvider) === providerKey &&
+      normalizeCompactionConfigKey(rawModel) === modelKey
+    ) {
+      return true;
+    }
   }
-  return true;
+  const configuredProvider = Object.entries(params.cfg.models?.providers ?? {}).find(([key]) => {
+    return normalizeCompactionConfigKey(key) === providerKey;
+  })?.[1];
+  return (configuredProvider?.models ?? []).some((entry) => {
+    return normalizeCompactionConfigKey(entry?.id ?? "") === modelKey;
+  });
+}
+
+/** Resolves the concrete harness already bound to this exact compaction target. */
+export function resolveCompactionHarnessRuntime(params: {
+  boundHarnessRuntime?: string | null;
+  preparedRuntimePlan?: AgentRuntimePlan;
+  configuredHarnessRuntime?: string | null;
+  provider: string;
+  modelId: string;
+}): string | undefined {
+  const boundHarnessRuntime = normalizeOptionalAgentRuntimeId(params.boundHarnessRuntime);
+  if (boundHarnessRuntime) {
+    return boundHarnessRuntime;
+  }
+  const preparedRuntimePlan = params.preparedRuntimePlan;
+  if (
+    preparedRuntimePlan &&
+    agentRuntimeAuthPlanMatchesTarget(preparedRuntimePlan.auth, {
+      provider: params.provider,
+      modelId: params.modelId,
+    })
+  ) {
+    const preparedHarnessRuntime = normalizeOptionalAgentRuntimeId(
+      preparedRuntimePlan.resolvedRef.harnessId,
+    );
+    if (preparedHarnessRuntime) {
+      return preparedHarnessRuntime;
+    }
+  }
+  return normalizeOptionalAgentRuntimeId(params.configuredHarnessRuntime);
 }
 
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
   messageProvider?: string | null;
+  clientCaps?: string[];
+  chatType?: ChatType | null;
   agentAccountId?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
   authProfileId?: string | null;
+  authProfileIdSource?: "auto" | "user";
+  runtimeAuthPlan?: AgentRuntimeAuthPlan;
   workspaceDir: string;
   cwd?: string | null;
   agentDir: string;
@@ -158,6 +320,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   provider?: string | null;
   modelId?: string | null;
   harnessRuntime?: string | null;
+  modelSelectionLocked?: boolean;
   modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
@@ -173,8 +336,19 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     modelId: params.modelId,
     authProfileId: params.authProfileId,
     harnessRuntime: params.harnessRuntime,
+    modelSelectionLocked: params.modelSelectionLocked,
   });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
+  const runtimeAuthPlan =
+    params.runtimeAuthPlan &&
+    resolved.provider &&
+    resolved.model &&
+    agentRuntimeAuthPlanMatchesTarget(params.runtimeAuthPlan, {
+      provider: resolved.provider,
+      modelId: resolved.model,
+    })
+      ? params.runtimeAuthPlan
+      : undefined;
   const processScopeKey = params.sessionKey?.trim();
   const activeProcessSessions =
     params.activeProcessSessions ??
@@ -185,12 +359,17 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     sessionKey: params.sessionKey ?? undefined,
     messageChannel: params.messageChannel ?? undefined,
     messageProvider: params.messageProvider ?? undefined,
+    clientCaps: params.clientCaps,
+    chatType: params.chatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
+    authProfileIdSource: params.authProfileIdSource,
+    runtimeAuthPlan,
     agentHarnessId,
+    modelSelectionLocked: params.modelSelectionLocked,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,

@@ -1,3 +1,8 @@
+/**
+ * Runtime validators for Codex app-server protocol payloads, including schema
+ * normalization for generated JSON Schema before TypeBox compilation.
+ */
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import dynamicToolCallParamsSchema from "./protocol-generated/json/DynamicToolCallParams.json" with { type: "json" };
 import errorNotificationSchema from "./protocol-generated/json/v2/ErrorNotification.json" with { type: "json" };
@@ -11,6 +16,7 @@ import type {
   CodexErrorNotification,
   CodexModelListResponse,
   CodexThreadForkResponse,
+  CodexThreadForkParams,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurn,
@@ -34,10 +40,6 @@ function compileCodexSchema<T>(schema: unknown): CodexValidator<T> {
     check: (value): value is T => validator.Check(value),
     errors: (value) => [...validator.Errors(value)] as ValidationError[],
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 const schemaMapKeywords = new Set([
@@ -86,6 +88,8 @@ function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<stri
 }
 
 function normalizeJsonSchemaNode(schema: unknown): unknown {
+  // Generated schemas can use JSON Schema type arrays; TypeBox validators need
+  // equivalent anyOf branches to preserve nullable/union semantics.
   if (Array.isArray(schema)) {
     return schema.map((entry) => normalizeJsonSchemaNode(entry));
   }
@@ -107,7 +111,7 @@ function normalizeJsonSchemaNode(schema: unknown): unknown {
 }
 
 function readDefault(schema: unknown): unknown {
-  if (!isRecord(schema) || !Object.prototype.hasOwnProperty.call(schema, "default")) {
+  if (!isRecord(schema) || !Object.hasOwn(schema, "default")) {
     return undefined;
   }
   return structuredClone(schema.default);
@@ -140,6 +144,8 @@ function applySchemaDefaults(
   root = schema,
   resolvingRefs = new Set<string>(),
 ): unknown {
+  // Codex omits some fields that generated schemas default. Apply those defaults
+  // before validation so callers get stable normalized protocol shapes.
   if (value === undefined) {
     const defaultValue = readDefault(schema);
     if (defaultValue !== undefined) {
@@ -176,7 +182,7 @@ function applySchemaDefaults(
     }
     if (isRecord(schema.additionalProperties)) {
       for (const key of Object.keys(nextValue)) {
-        if (Object.prototype.hasOwnProperty.call(schema.properties, key)) {
+        if (Object.hasOwn(schema.properties, key)) {
           continue;
         }
         nextValue[key] = applySchemaDefaults(
@@ -219,30 +225,40 @@ const validateTurnCompletedNotification = compileCodexSchema<CodexTurnCompletedN
 const validateTurnStartResponse =
   compileCodexSchema<CodexTurnStartResponse>(turnStartResponseSchema);
 
+/** Asserts and normalizes a Codex thread/start response. */
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
-  const normalized = normalizeWithDefaults(
-    threadStartResponseSchema,
-    normalizeThreadResponse(value),
-  );
+  const normalized = normalizeWithDefaults(threadStartResponseSchema, value);
   return assertCodexShape(validateThreadStartResponse, normalized, "thread/start response");
 }
 
+/** Asserts and normalizes a Codex thread/fork response. */
 export function assertCodexThreadForkResponse(value: unknown): CodexThreadForkResponse {
-  const normalized = normalizeWithDefaults(
-    threadStartResponseSchema,
-    normalizeThreadResponse(value),
-  );
+  const normalized = normalizeWithDefaults(threadStartResponseSchema, value);
   return assertCodexShape(validateThreadStartResponse, normalized, "thread/fork response");
 }
 
+/** Asserts the experimental beforeTurnId request field before it crosses the app-server boundary. */
+export function assertCodexThreadForkParams(value: unknown): CodexThreadForkParams {
+  if (
+    !isRecord(value) ||
+    typeof value.threadId !== "string" ||
+    !value.threadId.trim() ||
+    (value.beforeTurnId !== undefined &&
+      value.beforeTurnId !== null &&
+      typeof value.beforeTurnId !== "string")
+  ) {
+    throw new Error("Invalid Codex app-server thread/fork params");
+  }
+  return value as CodexThreadForkParams;
+}
+
+/** Asserts and normalizes a Codex thread/resume response. */
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
-  const normalized = normalizeWithDefaults(
-    threadResumeResponseSchema,
-    normalizeThreadResponse(value),
-  );
+  const normalized = normalizeWithDefaults(threadResumeResponseSchema, value);
   return assertCodexShape(validateThreadResumeResponse, normalized, "thread/resume response");
 }
 
+/** Asserts and normalizes a Codex turn/start response. */
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
   const normalized = normalizeWithDefaults(
     turnStartResponseSchema,
@@ -251,6 +267,7 @@ export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResp
   return assertCodexShape(validateTurnStartResponse, normalized, "turn/start response");
 }
 
+/** Reads Codex dynamic-tool call params, returning undefined for invalid payloads. */
 export function readCodexDynamicToolCallParams(
   value: unknown,
 ): CodexDynamicToolCallParams | undefined {
@@ -260,6 +277,7 @@ export function readCodexDynamicToolCallParams(
   );
 }
 
+/** Reads a Codex error notification payload if it matches the protocol schema. */
 export function readCodexErrorNotification(value: unknown): CodexErrorNotification | undefined {
   return readCodexShape(
     validateErrorNotification,
@@ -267,6 +285,7 @@ export function readCodexErrorNotification(value: unknown): CodexErrorNotificati
   );
 }
 
+/** Reads a Codex model/list response if it matches the protocol schema. */
 export function readCodexModelListResponse(value: unknown): CodexModelListResponse | undefined {
   return readCodexShape(
     validateModelListResponse,
@@ -274,6 +293,7 @@ export function readCodexModelListResponse(value: unknown): CodexModelListRespon
   );
 }
 
+/** Reads and normalizes a Codex turn object. */
 export function readCodexTurn(value: unknown): CodexTurn | undefined {
   const response = readCodexShape(
     validateTurnStartResponse,
@@ -282,6 +302,7 @@ export function readCodexTurn(value: unknown): CodexTurn | undefined {
   return response?.turn;
 }
 
+/** Reads a Codex turn/completed notification payload if it matches the protocol schema. */
 export function readCodexTurnCompletedNotification(
   value: unknown,
 ): CodexTurnCompletedNotification | undefined {
@@ -346,23 +367,6 @@ function normalizeThreadItem(value: unknown): unknown {
     default:
       return value;
   }
-}
-
-function normalizeThreadResponse(value: unknown): unknown {
-  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
-    return value;
-  }
-  const thread = (value as { thread?: unknown }).thread;
-  if (thread && typeof thread === "object" && !Array.isArray(thread)) {
-    const t = thread as { id?: string; sessionId?: string };
-    if (typeof t.id === "string" && typeof t.sessionId !== "string") {
-      return { ...value, thread: { ...thread, sessionId: t.id } };
-    }
-    if (typeof t.sessionId === "string" && typeof t.id !== "string") {
-      return { ...value, thread: { ...thread, id: t.sessionId } };
-    }
-  }
-  return value;
 }
 
 function normalizeTurnStartResponse(value: unknown): unknown {

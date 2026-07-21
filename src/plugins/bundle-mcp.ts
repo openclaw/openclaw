@@ -1,3 +1,4 @@
+// Bundles MCP metadata exposed by plugins for package output.
 import fs from "node:fs";
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
@@ -31,11 +32,11 @@ export type BundleMcpDiagnostic = {
   message: string;
 };
 
-export type EnabledBundleMcpConfigResult = {
+type EnabledBundleMcpConfigResult = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
 };
-export type BundleMcpRuntimeSupport = {
+type BundleMcpRuntimeSupport = {
   hasSupportedStdioServer: boolean;
   supportedServerNames: string[];
   unsupportedServerNames: string[];

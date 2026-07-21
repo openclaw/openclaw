@@ -1,3 +1,4 @@
+/** Integration tests for auth-profile secret runtime preparation. */
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -56,12 +57,22 @@ vi.mock("./runtime-prepare.runtime.js", () => ({
       }
     }
   },
-  resolveSecretRefValues: async () => new Map(),
-  applyResolvedAssignments: () => {},
   resolveRuntimeWebTools: async () => ({
-    search: { providerSource: "none", diagnostics: [] },
-    fetch: { providerSource: "none", diagnostics: [] },
-    diagnostics: [],
+    metadata: {
+      search: { providerSource: "none", diagnostics: [] },
+      fetch: { providerSource: "none", diagnostics: [] },
+      diagnostics: [],
+    },
+    degradedOwners: [],
+    secretOwners: [],
+  }),
+}));
+
+vi.mock("./runtime-owner-assignments.js", () => ({
+  listSecretAssignmentOwners: () => [],
+  resolveAndApplySecretAssignments: async () => ({
+    degradedOwners: [],
+    resolvedValues: new Map(),
   }),
 }));
 

@@ -1,9 +1,21 @@
+// Discord plugin module implements model picker preferences migrations behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { BundledChannelLegacyStateMigrationDetector } from "openclaw/plugin-sdk/channel-entry-contract";
 import { MAX_DATE_TIMESTAMP_MS, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+  DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+} from "../command-deploy-store.js";
+import {
+  normalizePersistedBinding,
+  THREAD_BINDINGS_MAX_ENTRIES,
+  THREAD_BINDINGS_NAMESPACE,
+  toBindingRecordKey,
+} from "./thread-bindings.state.js";
 
 const PREFERENCE_MAX_ENTRIES = 2_000;
 const MAX_PLUGIN_STATE_KEY_BYTES = 512;
@@ -16,6 +28,11 @@ type LegacyModelPickerPreferencesEntry = {
 
 type LegacyModelPickerPreferencesStore = {
   entries?: unknown;
+};
+
+type LegacyThreadBindingsStore = {
+  version?: unknown;
+  bindings?: unknown;
 };
 
 function fileExists(filePath: string): boolean {
@@ -35,6 +52,14 @@ function readLegacyStore(filePath: string): LegacyModelPickerPreferencesStore | 
   } catch {
     return null;
   }
+}
+
+function readLegacyThreadBindingsStore(filePath: string): LegacyThreadBindingsStore {
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("legacy Discord thread bindings store must be an object");
+  }
+  return parsed as LegacyThreadBindingsStore;
 }
 
 function normalizeLegacyPreferenceKey(key: string): string | undefined {
@@ -104,18 +129,71 @@ function legacyUpdatedAtForIndex(updatedAt: unknown, index: number, total: numbe
   );
 }
 
+function readFiniteNumberField(entry: Record<string, unknown>, key: string): number | undefined {
+  const value = entry[key];
+  return typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+// Doctor-owned legacy-shape repair: pre-account-scoped stores carried a flat
+// `sessionKey` alias and an absolute `expiresAt`. Runtime normalization reads
+// canonical fields only, so the one-time JSON import maps them here.
+function upgradeLegacyThreadBindingShape(rawEntry: unknown): unknown {
+  if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+    return rawEntry;
+  }
+  const entry = { ...(rawEntry as Record<string, unknown>) };
+  if (entry.targetSessionKey === undefined && typeof entry.sessionKey === "string") {
+    entry.targetSessionKey = entry.sessionKey;
+  }
+  delete entry.sessionKey;
+  const expiresAt = readFiniteNumberField(entry, "expiresAt");
+  delete entry.expiresAt;
+  if (
+    entry.idleTimeoutMs === undefined &&
+    entry.maxAgeMs === undefined &&
+    expiresAt !== undefined
+  ) {
+    // Legacy expiresAt was an absolute timestamp; map it to max-age and disable idle timeout.
+    entry.idleTimeoutMs = 0;
+    if (expiresAt <= 0) {
+      entry.maxAgeMs = 0;
+    } else {
+      const boundAt = readFiniteNumberField(entry, "boundAt") ?? 0;
+      const lastActivityAt = readFiniteNumberField(entry, "lastActivityAt") ?? 0;
+      const base = boundAt > 0 ? boundAt : lastActivityAt;
+      entry.maxAgeMs = Math.max(1, expiresAt - Math.max(0, base));
+    }
+  }
+  return entry;
+}
+
 export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrationDetector = ({
   stateDir,
 }) => {
-  const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-  if (!fileExists(sourcePath)) {
-    return [];
+  const plans: ChannelLegacyStateMigrationPlan[] = [];
+  const commandDeployCacheSourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+  if (fileExists(commandDeployCacheSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord command deployment cache",
+      sourcePath: commandDeployCacheSourcePath,
+      targetPath: `plugin state:${DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: DISCORD_COMMAND_DEPLOY_HASH_NAMESPACE,
+      maxEntries: DISCORD_COMMAND_DEPLOY_HASH_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "remove",
+      cleanupWhenEmpty: true,
+      // Rebuildable cache: discard file-era hashes and reconcile once against Discord.
+      readEntries: () => [],
+    });
   }
-  return [
-    {
+  const modelPickerSourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
+  if (fileExists(modelPickerSourcePath)) {
+    plans.push({
       kind: "plugin-state-import",
       label: "Discord model picker preferences",
-      sourcePath,
+      sourcePath: modelPickerSourcePath,
       targetPath: "plugin state:model-picker-preferences",
       pluginId: "discord",
       namespace: "model-picker-preferences",
@@ -123,7 +201,7 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
       scopeKey: "",
       cleanupSource: "rename",
       readEntries: () => {
-        const store = readLegacyStore(sourcePath);
+        const store = readLegacyStore(modelPickerSourcePath);
         if (!store || !store.entries || typeof store.entries !== "object") {
           return [];
         }
@@ -149,6 +227,46 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         }
         return out;
       },
-    },
-  ];
+    });
+  }
+
+  const threadBindingsSourcePath = path.join(stateDir, "discord", "thread-bindings.json");
+  if (fileExists(threadBindingsSourcePath)) {
+    plans.push({
+      kind: "plugin-state-import",
+      label: "Discord thread bindings",
+      sourcePath: threadBindingsSourcePath,
+      targetPath: `plugin state:${THREAD_BINDINGS_NAMESPACE}`,
+      pluginId: "discord",
+      namespace: THREAD_BINDINGS_NAMESPACE,
+      maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+      scopeKey: "",
+      cleanupSource: "rename",
+      cleanupWhenEmpty: true,
+      readEntries: () => {
+        const store = readLegacyThreadBindingsStore(threadBindingsSourcePath);
+        if (store?.version !== 1 || !store.bindings || typeof store.bindings !== "object") {
+          throw new Error("legacy Discord thread bindings store must have version 1 bindings");
+        }
+        const out: Array<{ key: string; value: unknown }> = [];
+        for (const [rawKey, rawEntry] of Object.entries(
+          store.bindings as Record<string, unknown>,
+        )) {
+          const normalized = normalizePersistedBinding(
+            rawKey,
+            upgradeLegacyThreadBindingShape(rawEntry),
+          );
+          if (normalized) {
+            out.push({
+              key: toBindingRecordKey(normalized),
+              value: normalized,
+            });
+          }
+        }
+        return out;
+      },
+    });
+  }
+
+  return plans;
 };

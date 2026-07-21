@@ -1,18 +1,49 @@
+// Covers compaction token splitting and history pruning helpers.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import "./test-helpers/agent-session-token-mock.js";
 
-let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
-let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
-let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
+let estimateMessagesTokens: typeof import("./compaction-planning.js").estimateMessagesTokens;
+let buildHistoryPrunePlan: typeof import("./compaction-planning.js").buildHistoryPrunePlan;
+let buildStageSplitPlan: typeof import("./compaction-planning.js").buildStageSplitPlan;
 
 beforeAll(async () => {
   vi.resetModules();
-  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
-    await import("./compaction.js"));
+  ({ buildHistoryPrunePlan, buildStageSplitPlan, estimateMessagesTokens } =
+    await import("./compaction-planning.js"));
 });
+
+function splitMessagesByTokenShare(messages: AgentMessage[], parts: number): AgentMessage[][] {
+  const plan = buildStageSplitPlan({
+    messages,
+    maxChunkTokens: 0,
+    parts,
+    minMessagesForSplit: 2,
+  });
+  return plan.mode === "split" ? plan.chunks : [messages];
+}
+
+function pruneHistoryForContextShare(params: {
+  messages: AgentMessage[];
+  maxContextTokens: number;
+  maxHistoryShare?: number;
+  parts?: number;
+}) {
+  const plan = buildHistoryPrunePlan({
+    messagesToSummarize: params.messages,
+    turnPrefixMessages: [],
+    tokensBefore: Number.MAX_SAFE_INTEGER,
+    contextWindowTokens: params.maxContextTokens,
+    maxHistoryShare: params.maxHistoryShare ?? 0.5,
+    parts: params.parts,
+  });
+  if (!plan.pruned) {
+    throw new Error("expected history prune planning to run");
+  }
+  return plan.pruned;
+}
 
 function makeMessage(id: number, size: number): AgentMessage {
   return {
@@ -36,6 +67,8 @@ function makeAssistantToolCall(
   text = "x".repeat(4000),
   stopReason: AssistantMessage["stopReason"] = "stop",
 ): AssistantMessage {
+  // Tool-call fixtures use real assistant message structure so split/prune
+  // helpers preserve tool-call/result adjacency like production transcripts.
   return makeAgentAssistantMessage({
     content: [
       { type: "text", text },
@@ -103,6 +136,8 @@ describe("splitMessagesByTokenShare", () => {
   });
 
   it("keeps tool_use and matching toolResult in the same chunk", () => {
+    // Splitting a tool call from its result creates invalid replay context for
+    // downstream summarization and provider transcript reuse.
     const messages: AgentMessage[] = [
       makeMessage(1, 4000),
       makeAssistantToolCall(2, "call_split"),
@@ -194,6 +229,8 @@ describe("splitMessagesByTokenShare", () => {
   });
 
   it("does not block splits after aborted tool-call assistants", () => {
+    // Aborted tool-use turns have no required result, so they should not pin
+    // later messages to the same chunk.
     const messages: AgentMessage[] = [
       makeAssistantToolCall(1, "call_abort", "y".repeat(4000), "aborted"),
       makeMessage(2, 4000),
@@ -291,6 +328,8 @@ describe("pruneHistoryForContextShare", () => {
   });
 
   it("removes orphaned tool_result messages when tool_use is dropped", () => {
+    // Pruning the assistant tool_use must also drop its result; orphaned
+    // toolResult messages are not meaningful model context.
     const messages: AgentMessage[] = [
       makeAssistantToolCall(1, "call_123"),
       makeToolResult(2, "call_123", "result".repeat(500)),

@@ -1,3 +1,4 @@
+// Qqbot tests cover slash commands impl plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { resolveQQBotCommandsAllowFrom, resolveSlashCommandAuth } from "./slash-command-auth.js";
@@ -16,7 +17,7 @@ function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): S
     args: "",
     accountId: "default",
     appId: "app",
-    accountConfig: { allowFrom: ["*"], streaming: false },
+    accountConfig: { allowFrom: ["*"], streaming: { mode: "off" } },
     commandAuthorized: false,
     queueSnapshot: {
       totalPending: 0,
@@ -72,6 +73,68 @@ describe("QQBot framework slash commands", () => {
     expect(getFrameworkCommands().map((command) => command.name)).toContain("bot-streaming");
   });
 
+  it("rejects private-only plugin commands in groups with the shared private-chat message", async () => {
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/bot-me",
+        groupOpenid: "group-1",
+        commandAuthorized: true,
+      }),
+    );
+
+    expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
+  });
+
+  it("keeps private-only plugin commands private even when command level is all", async () => {
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/bot-me",
+        groupOpenid: "group-1",
+        commandAuthorized: true,
+        groupCommandLevel: "all",
+      }),
+    );
+
+    expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
+  });
+
+  it("rejects plugin commands in groups when command level is strict", async () => {
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/bot-ping",
+        groupOpenid: "group-1",
+        commandAuthorized: true,
+        groupCommandLevel: "strict",
+      }),
+    );
+
+    expect(result).toBe("该命令仅限私聊使用，请在私聊中发送。");
+  });
+
+  it("keeps requireAuth commands gated in default all group mode", async () => {
+    const registry = new SlashCommandRegistry();
+    registry.register({
+      name: "shared-admin",
+      description: "shared admin command",
+      requireAuth: true,
+      handler: () => "ok",
+    });
+
+    const result = await registry.matchSlashCommand(
+      createStreamingContext({
+        type: "group",
+        rawContent: "/shared-admin",
+        groupOpenid: "group-1",
+        commandAuthorized: false,
+      }),
+    );
+
+    expect(result).toContain("权限不足");
+  });
+
   it("does not write streaming config when the sender is not command-authorized", async () => {
     const writes: OpenClawConfig[] = [];
     installCommandRuntime(
@@ -79,7 +142,7 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom: ["*"],
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -100,7 +163,7 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom,
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -114,7 +177,7 @@ describe("QQBot framework slash commands", () => {
     });
     const result = await matchSlashCommand(
       createStreamingContext({
-        accountConfig: { allowFrom, streaming: false },
+        accountConfig: { allowFrom, streaming: { mode: "off" } },
         commandAuthorized,
       }),
     );
@@ -136,7 +199,7 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom: ["*"],
-            streaming: false,
+            streaming: { mode: "off" },
           },
         },
       },
@@ -158,7 +221,7 @@ describe("QQBot framework slash commands", () => {
     const result = await matchSlashCommand(
       createStreamingContext({
         senderId: "TRUSTED_OPENID",
-        accountConfig: { allowFrom: ["*"], streaming: false },
+        accountConfig: { allowFrom: ["*"], streaming: { mode: "off" } },
         commandAuthorized,
       }),
     );
@@ -167,7 +230,7 @@ describe("QQBot framework slash commands", () => {
     expect(commandAuthorized).toBe(true);
     expect(result).toContain("已开启");
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
   });
 
   it("writes streaming config when the sender is command-authorized", async () => {
@@ -178,11 +241,11 @@ describe("QQBot framework slash commands", () => {
         channels: {
           qqbot: {
             allowFrom,
-            streaming: false,
+            streaming: { mode: "off" },
             accounts: {
               default: {
                 allowFrom,
-                streaming: false,
+                streaming: { mode: "off" },
               },
             },
           },
@@ -199,7 +262,7 @@ describe("QQBot framework slash commands", () => {
     const result = await matchSlashCommand(
       createStreamingContext({
         senderId: "TRUSTED_OPENID",
-        accountConfig: { allowFrom, streaming: false },
+        accountConfig: { allowFrom, streaming: { mode: "off" } },
         commandAuthorized,
       }),
     );
@@ -208,7 +271,37 @@ describe("QQBot framework slash commands", () => {
     expect(commandAuthorized).toBe(true);
     expect(result).toContain("已开启");
     expect(writes).toHaveLength(1);
-    expect(qqbot?.streaming).toBe(true);
-    expect(qqbot?.accounts?.default?.streaming).toBe(true);
+    expect(qqbot?.streaming).toEqual({ mode: "partial", nativeTransport: true });
+    expect(qqbot?.accounts?.default?.streaming).toEqual({ mode: "partial", nativeTransport: true });
+  });
+
+  it("writes streaming mode off when toggled off", async () => {
+    const writes: OpenClawConfig[] = [];
+    const allowFrom = ["*", "TRUSTED_OPENID"];
+    installCommandRuntime(
+      {
+        channels: {
+          qqbot: {
+            allowFrom,
+            streaming: { mode: "partial", nativeTransport: true },
+          },
+        },
+      },
+      writes,
+    );
+
+    const result = await matchSlashCommand(
+      createStreamingContext({
+        senderId: "TRUSTED_OPENID",
+        rawContent: "/bot-streaming off",
+        accountConfig: { allowFrom, streaming: { mode: "partial", nativeTransport: true } },
+        commandAuthorized: true,
+      }),
+    );
+
+    const qqbot = getWrittenQQBotConfig(writes[0]);
+    expect(result).toContain("已关闭");
+    expect(writes).toHaveLength(1);
+    expect(qqbot?.streaming).toEqual({ mode: "off" });
   });
 });

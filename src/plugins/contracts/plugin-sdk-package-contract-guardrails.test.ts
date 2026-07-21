@@ -1,7 +1,8 @@
+// Plugin SDK package guardrail tests cover package export and contract drift checks.
 import fs from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   deprecatedBarrelPluginSdkEntrypoints,
   deprecatedPublicPluginSdkEntrypoints,
@@ -37,21 +38,16 @@ const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
 const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
 const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk",
+  // Bundled code uses the canonical channel-config-schema subpath; the
+  // primitives/legacy shells stay export-compatible for third parties only.
+  "openclaw/plugin-sdk/channel-config-primitives",
   "openclaw/plugin-sdk/channel-config-schema-legacy",
   "openclaw/plugin-sdk/compat",
-  "openclaw/plugin-sdk/testing",
   "openclaw/plugin-sdk/test-utils",
 ]);
-const DEPRECATED_TEST_BARREL_SPECIFIERS = new Set([
-  "openclaw/plugin-sdk/testing",
-  "openclaw/plugin-sdk/test-utils",
-]);
-const DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES = new Set([
-  "src/plugin-sdk/testing.ts",
-  "src/plugin-sdk/test-utils.ts",
-  "packages/plugin-sdk/src/testing.ts",
+const DEPRECATED_TEST_ALIAS_SPECIFIERS = new Set(["openclaw/plugin-sdk/test-utils"]);
+const DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES = new Set([
   "src/plugins/compat/registry.ts",
-  "src/plugins/contracts/plugin-entry-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
 ]);
 const LEGACY_MEMORY_EMBEDDING_PROVIDER_API_FILES = new Set([
@@ -481,24 +477,24 @@ function collectCodeFiles(dir: string): string[] {
   return files;
 }
 
-function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: string }> {
+function collectDeprecatedTestAliasImports(): string[] {
   const leaks: Array<{ file: string; specifier: string }> = [];
   const importPatterns = [
-    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
-    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']\s*\)/g,
-    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk\/(?:testing|test-utils))["']/g,
+    /\b(?:import|export)\b[\s\S]*?\bfrom\s*["'](openclaw\/plugin-sdk\/test-utils)["']/g,
+    /\bimport\s*\(\s*["'](openclaw\/plugin-sdk\/test-utils)["']\s*\)/g,
+    /\bvi\.(?:mock|doMock)\s*\(\s*["'](openclaw\/plugin-sdk\/test-utils)["']/g,
   ];
   for (const root of ["src", "test", "extensions", "packages"]) {
     for (const file of collectCodeFiles(resolve(REPO_ROOT, root))) {
       const repoRelativePath = toRepoRelativePath(file);
-      if (DEPRECATED_TEST_BARREL_ALLOWED_REFERENCE_FILES.has(repoRelativePath)) {
+      if (DEPRECATED_TEST_ALIAS_ALLOWED_REFERENCE_FILES.has(repoRelativePath)) {
         continue;
       }
       const source = fs.readFileSync(file, "utf8");
       for (const importPattern of importPatterns) {
         for (const match of source.matchAll(importPattern)) {
           const specifier = match[1];
-          if (!specifier || !DEPRECATED_TEST_BARREL_SPECIFIERS.has(specifier)) {
+          if (!specifier || !DEPRECATED_TEST_ALIAS_SPECIFIERS.has(specifier)) {
             continue;
           }
           leaks.push({
@@ -509,16 +505,7 @@ function collectDeprecatedTestBarrelImports(): Array<{ file: string; specifier: 
       }
     }
   }
-  return leaks;
-}
-
-function collectDeprecatedPackageTestingBridgeDrift(): string[] {
-  const source = fs
-    .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
-    .trim();
-  return source === 'export * from "../../../src/plugin-sdk/testing.js";'
-    ? []
-    : ["packages/plugin-sdk/src/testing.ts"];
+  return leaks.map((entry) => `${entry.file}: ${entry.specifier}`).toSorted();
 }
 
 function parseTestApiNamedExports(source: string): string[] {
@@ -724,6 +711,17 @@ function collectExtensionProductionSdkSubpathImports(subpaths: ReadonlySet<strin
 }
 
 describe("plugin-sdk package contract guardrails", () => {
+  let deprecatedTestAliasImports: string[] = [];
+  let unusedReservedSdkSubpaths: string[] = [];
+
+  beforeAll(() => {
+    deprecatedTestAliasImports = collectDeprecatedTestAliasImports();
+    const usedReserved = new Set(collectReservedSdkSubpathImports());
+    unusedReservedSdkSubpaths = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
+    );
+  });
+
   it("lists package guardrail scan inputs from git without walking roots", () => {
     expectNoReaddirSyncDuring(() => {
       const pluginIds = collectBundledPluginIds();
@@ -757,7 +755,7 @@ describe("plugin-sdk package contract guardrails", () => {
     const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
 
     expect(
-      ["plugin-test-contracts", "provider-test-contracts", "testing"].every((entrypoint) =>
+      ["plugin-test-contracts", "provider-test-contracts"].every((entrypoint) =>
         localOnly.has(entrypoint),
       ),
     ).toBe(true);
@@ -786,7 +784,8 @@ describe("plugin-sdk package contract guardrails", () => {
     const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unknownLocalOnly = [...localOnly].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
-      (entrypoint) => !reserved.has(entrypoint) && !supported.has(entrypoint),
+      (entrypoint) =>
+        !reserved.has(entrypoint) && !supported.has(entrypoint) && !localOnly.has(entrypoint),
     );
     const unreservedPrivateSurfaces = collectPrivateBundledSdkSurfaceEntrypoints().filter(
       (entrypoint) => !reserved.has(entrypoint) && !localOnly.has(entrypoint),
@@ -938,12 +937,8 @@ describe("plugin-sdk package contract guardrails", () => {
     });
   });
 
-  it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
-    expect(collectDeprecatedTestBarrelImports()).toStrictEqual([]);
-  });
-
-  it("keeps the package testing barrel as a single deprecated bridge", () => {
-    expect(collectDeprecatedPackageTestingBridgeDrift()).toStrictEqual([]);
+  it("keeps real tests off the deprecated plugin-sdk test-utils alias", () => {
+    expect(deprecatedTestAliasImports).toStrictEqual([]);
   });
 
   it(
@@ -959,12 +954,7 @@ describe("plugin-sdk package contract guardrails", () => {
   });
 
   it("keeps reserved SDK compatibility subpaths actively used", () => {
-    const usedReserved = new Set(collectReservedSdkSubpathImports());
-    const unusedReserved = reservedBundledPluginSdkEntrypoints.filter(
-      (entrypoint) => !usedReserved.has(entrypoint),
-    );
-
-    expect(unusedReserved).toStrictEqual([]);
+    expect(unusedReservedSdkSubpaths).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

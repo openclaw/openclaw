@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Syncs source docs into the generated publish tree.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -90,6 +91,13 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "hi",
+    dir: "hi",
+    navFile: "hi-navigation.json",
+    tmFile: "hi.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "ar",
     dir: "ar",
     navFile: "ar-navigation.json",
@@ -167,9 +175,24 @@ const GENERATED_LOCALES = [
     // once the docs host accepts it.
     navigation: false,
   },
+  {
+    language: "ru",
+    dir: "ru",
+    navFile: "ru-navigation.json",
+    tmFile: "ru.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
-function parseArgs(argv) {
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const args = {
     target: "",
     sourceRepo: "",
@@ -184,27 +207,27 @@ function parseArgs(argv) {
     const part = argv[index];
     switch (part) {
       case "--target":
-        args.target = argv[index + 1] ?? "";
+        args.target = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--source-repo":
-        args.sourceRepo = argv[index + 1] ?? "";
+        args.sourceRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--source-sha":
-        args.sourceSha = argv[index + 1] ?? "";
+        args.sourceSha = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-repo":
-        args.clawhubRepo = argv[index + 1] ?? "";
+        args.clawhubRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-repo":
-        args.clawhubSourceRepo = argv[index + 1] ?? "";
+        args.clawhubSourceRepo = readOptionValue(argv, index, part);
         index += 1;
         break;
       case "--clawhub-source-sha":
-        args.clawhubSourceSha = argv[index + 1] ?? "";
+        args.clawhubSourceSha = readOptionValue(argv, index, part);
         index += 1;
         break;
       default:
@@ -298,6 +321,9 @@ function getGitHeadSha(repoPath) {
   }
 }
 
+/**
+ * Resolves the local ClawHub repository path used for docs mirroring.
+ */
 export function resolveClawHubRepoPath(value = "", options = {}) {
   const required = options.required !== false;
   const candidates = [
@@ -413,30 +439,33 @@ function composeDocsConfig() {
   };
 }
 
-function pruneOrphanLocaleDocs(targetDocsDir) {
-  let pruned = 0;
+export function reportOrphanLocaleDocs(targetDocsDir) {
+  let orphaned = 0;
   for (const locale of GENERATED_LOCALES) {
     const localeDir = path.join(targetDocsDir, locale.dir);
     if (!fs.existsSync(localeDir)) {
       continue;
     }
     for (const filePath of walkMarkdownFiles(localeDir)) {
-      const relativeToLocale = path.relative(localeDir, filePath);
-      // The English source file lives at docs/<relativeToLocale> with either .md or .mdx.
-      const englishBase = path.join(SOURCE_DOCS_DIR, relativeToLocale);
+      const relativePath = path.relative(localeDir, filePath);
+      // Check the assembled publish tree so externally mirrored docs, such as
+      // ClawHub pages, count as valid English sources too.
+      const englishBase = path.join(targetDocsDir, relativePath);
       const englishMd = englishBase.replace(/\.mdx?$/i, ".md");
       const englishMdx = englishBase.replace(/\.mdx?$/i, ".mdx");
       if (fs.existsSync(englishMd) || fs.existsSync(englishMdx)) {
         continue;
       }
-      fs.rmSync(filePath, { force: true });
-      pruned += 1;
+      orphaned += 1;
     }
   }
 
-  if (pruned > 0) {
-    console.log(`Pruned ${pruned} orphan localized doc(s) with no matching English source file.`);
+  if (orphaned > 0) {
+    // Translation artifacts update inbound links and delete their old target
+    // together. Docs sync must not publish the deletion ahead of that step.
+    console.log(`Deferred ${orphaned} orphan localized doc(s) to translation finalization.`);
   }
+  return orphaned;
 }
 
 function repairGeneratedLocaleDocs(targetDocsDir) {
@@ -542,7 +571,7 @@ function rewriteClawHubMarkdownLinkTarget(rawTarget, relativeSourceDir, source) 
     return rawTarget;
   }
 
-  let normalizedRelative = "";
+  let normalizedRelative;
   if (pathPart.startsWith("docs/")) {
     normalizedRelative = normalizeSlashes(pathPart.slice("docs/".length));
   } else if (
@@ -579,6 +608,9 @@ function rewriteClawHubMarkdownLinks(raw, relativeSourcePath, source) {
   });
 }
 
+/**
+ * Mirrors ClawHub docs into the target docs tree.
+ */
 export function syncClawHubDocsTree(targetDocsDir, options = {}) {
   const repoPath = resolveClawHubRepoPath(options.repoPath || "", {
     required: options.required !== false,
@@ -680,7 +712,7 @@ function syncDocsTree(targetRoot, options = {}) {
     sourceRepo: options.clawhubSourceRepo,
     sourceSha: options.clawhubSourceSha,
   });
-  pruneOrphanLocaleDocs(targetDocsDir);
+  reportOrphanLocaleDocs(targetDocsDir);
   repairGeneratedLocaleDocs(targetDocsDir);
   writeJson(path.join(targetDocsDir, "docs.json"), composeDocsConfig());
   return { clawhub: clawhubSource };

@@ -1,6 +1,10 @@
+/**
+ * Handles assistant-stage failover decisions during embedded-agent attempts.
+ */
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { classifyRateLimitWindow } from "../../../llm/utils/rate-limit-window.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   formatAssistantErrorText,
@@ -24,14 +28,38 @@ type AssistantFailoverOutcome =
       action: "retry";
       overloadProfileRotations: number;
       lastRetryFailoverReason: FailoverReason | null;
-      retryKind?: "same_model_idle_timeout";
+      retryKind: "profile_rotation" | "same_model_idle_timeout" | "same_model_rate_limit";
     }
   | {
       action: "throw";
       overloadProfileRotations: number;
       error: FailoverError;
     };
+type ShortWindowRateLimitRetry = {
+  retryAfterSeconds?: number;
+};
 
+function resolveShortWindowRateLimitRetry(
+  message: string | undefined,
+): ShortWindowRateLimitRetry | null {
+  const window = classifyRateLimitWindow(message);
+  if (window.kind !== "short") {
+    return null;
+  }
+  return window.retryAfterSeconds === undefined
+    ? {}
+    : { retryAfterSeconds: window.retryAfterSeconds };
+}
+
+export function isShortWindowRateLimitMessage(message: string | undefined): boolean {
+  return resolveShortWindowRateLimitRetry(message) !== null;
+}
+
+/**
+ * Applies an assistant-stage failover decision and returns the next run action.
+ * It owns auth-profile rotation, overload/rate-limit escalation, same-model
+ * idle-timeout retry, and FailoverError construction for outer model fallback.
+ */
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -43,7 +71,9 @@ export async function handleAssistantFailover(params: {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  timedOutByRunBudget: boolean;
   allowSameModelIdleTimeoutRetry: boolean;
+  allowSameModelRateLimitRetry: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
   lastProfileId?: string;
   modelId: string;
@@ -55,6 +85,8 @@ export async function handleAssistantFailover(params: {
   authFailure: boolean;
   rateLimitFailure: boolean;
   billingFailure: boolean;
+  /** Credential auth mode (e.g. "oauth", "token", "api_key") for billing copy (#80877). */
+  authMode?: string;
   cloudCodeAssistFormatError: boolean;
   isProbeSession: boolean;
   overloadProfileRotations: number;
@@ -75,6 +107,7 @@ export async function handleAssistantFailover(params: {
     failoverModel: string;
     logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
   }) => void;
+  maybeRetrySameModelRateLimit: (retry?: ShortWindowRateLimitRetry) => Promise<boolean>;
   maybeBackoffBeforeOverloadFailover: (reason: FailoverReason | null) => Promise<void>;
   advanceAuthProfile: () => Promise<boolean>;
 }): Promise<AssistantFailoverOutcome> {
@@ -95,6 +128,16 @@ export async function handleAssistantFailover(params: {
       }),
     };
   };
+  const sameModelRateLimitRetry = (): AssistantFailoverOutcome => ({
+    action: "retry",
+    overloadProfileRotations,
+    retryKind: "same_model_rate_limit",
+    lastRetryFailoverReason: mergeRetryFailoverReason({
+      previous: params.previousRetryFailoverReason,
+      failoverReason: params.failoverReason,
+      timedOut: params.timedOut || params.idleTimedOut,
+    }),
+  });
 
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
@@ -146,6 +189,17 @@ export async function handleAssistantFailover(params: {
     }
 
     if (params.failoverReason === "rate_limit") {
+      // Minute-scale RPM windows can clear without spending a profile rotation
+      // or model fallback. Keep the retry bounded; once exhausted, continue
+      // through the existing rate-limit escalation path.
+      const shortWindowRetry = resolveShortWindowRateLimitRetry(params.lastAssistant?.errorMessage);
+      if (
+        params.allowSameModelRateLimitRetry &&
+        shortWindowRetry &&
+        (await params.maybeRetrySameModelRateLimit(shortWindowRetry))
+      ) {
+        return sameModelRateLimitRetry();
+      }
       params.maybeEscalateRateLimitProfileFallback({
         failoverProvider: params.activeErrorContext.provider,
         failoverModel: params.activeErrorContext.model,
@@ -165,12 +219,15 @@ export async function handleAssistantFailover(params: {
       );
     }
     if (rotated) {
+      // Marking the failed profile is non-blocking after rotation succeeds; the
+      // retry can proceed with the next profile while the failure record settles.
       void markFailedProfilePromise;
       params.logAssistantFailoverDecision("rotate_profile");
       await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
       return {
         action: "retry",
         overloadProfileRotations,
+        retryKind: "profile_rotation",
         lastRetryFailoverReason: mergeRetryFailoverReason({
           previous: params.previousRetryFailoverReason,
           failoverReason: params.failoverReason,
@@ -195,11 +252,14 @@ export async function handleAssistantFailover(params: {
       idleTimedOut: params.idleTimedOut,
       timedOutDuringCompaction: params.timedOutDuringCompaction,
       timedOutDuringToolExecution: params.timedOutDuringToolExecution,
+      timedOutByRunBudget: params.timedOutByRunBudget,
       profileRotated: true,
     });
   }
 
   if (decision.action === "fallback_model") {
+    // Backoff runs before throwing so the outer fallback model starts after the
+    // provider-specific overload delay.
     await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);
     const message = resolveAssistantFailoverErrorMessage(params);
     const status =
@@ -217,6 +277,7 @@ export async function handleAssistantFailover(params: {
         provider: params.activeErrorContext.provider,
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
+        authMode: params.authMode,
         status,
         rawError: params.lastAssistant?.errorMessage?.trim(),
         suspend: shouldSuspend,
@@ -248,6 +309,7 @@ export async function handleAssistantFailover(params: {
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
           profileId: params.lastProfileId,
+          authMode: params.authMode,
           status,
           rawError: params.lastAssistant?.errorMessage?.trim(),
           suspend: shouldSuspend,
@@ -272,6 +334,8 @@ function resolveAssistantFailoverErrorMessage(params: {
   rateLimitFailure: boolean;
   billingFailure: boolean;
   authFailure: boolean;
+  /** Credential auth mode passed through to billing copy formatter (#80877). */
+  authMode?: string;
 }): string {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
   return (
@@ -281,6 +345,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           sessionKey: params.sessionKey,
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
+          authMode: params.authMode,
         })
       : undefined) ||
     params.lastAssistant?.errorMessage?.trim() ||
@@ -292,6 +357,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           ? formatBillingErrorMessage(
               params.activeErrorContext.provider,
               params.activeErrorContext.model,
+              params.authMode,
             )
           : params.authFailure
             ? "LLM request unauthorized."

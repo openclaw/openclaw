@@ -1,11 +1,15 @@
+// Structured heartbeat response tool payload helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import { readTrimmedStringAlias } from "../utils/string-readers.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
+/** Tool name used by heartbeat runs to report visible or silent progress. */
 export const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
 const HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY = "openclawHeartbeatResponse";
 
+/** Allowed heartbeat response outcomes. */
 export const HEARTBEAT_TOOL_OUTCOMES = [
   "no_change",
   "progress",
@@ -15,9 +19,11 @@ export const HEARTBEAT_TOOL_OUTCOMES = [
 ] as const;
 type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
 
+/** Allowed heartbeat notification priorities. */
 export const HEARTBEAT_TOOL_PRIORITIES = ["low", "normal", "high"] as const;
 type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
 
+/** Normalized response emitted by the heartbeat response tool. */
 export type HeartbeatToolResponse = {
   outcome: HeartbeatToolOutcome;
   notify: boolean;
@@ -31,16 +37,6 @@ export type HeartbeatToolResponse = {
 const OUTCOMES = new Set<string>(HEARTBEAT_TOOL_OUTCOMES);
 const PRIORITIES = new Set<string>(HEARTBEAT_TOOL_PRIORITIES);
 
-function readStringAlias(record: Record<string, unknown>, ...keys: string[]) {
-  for (const key of keys) {
-    const value = readString(record[key]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
-}
-
 function readBooleanAlias(record: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {
     const value = record[key];
@@ -51,6 +47,7 @@ function readBooleanAlias(record: Record<string, unknown>, ...keys: string[]) {
   return undefined;
 }
 
+/** Validate and normalize unknown heartbeat tool output. */
 export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolResponse | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -63,9 +60,9 @@ export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolRes
   }
 
   const priority = readString(value.priority);
-  const notificationText = readStringAlias(value, "notificationText", "notification_text");
+  const notificationText = readTrimmedStringAlias(value, ["notificationText", "notification_text"]);
   const reason = readString(value.reason);
-  const nextCheck = readStringAlias(value, "nextCheck", "next_check");
+  const nextCheck = readTrimmedStringAlias(value, ["nextCheck", "next_check"]);
   return {
     outcome: outcome as HeartbeatToolOutcome,
     notify,
@@ -79,10 +76,12 @@ export function normalizeHeartbeatToolResponse(value: unknown): HeartbeatToolRes
   };
 }
 
+/** Resolve the user-visible notification text for a heartbeat response. */
 export function getHeartbeatToolNotificationText(response: HeartbeatToolResponse): string {
   return response.notify ? (response.notificationText ?? response.summary).trim() : "";
 }
 
+/** Store a heartbeat tool response in reply channel data for later extraction. */
 export function createHeartbeatToolResponsePayload(response: HeartbeatToolResponse): ReplyPayload {
   return {
     text: response.notify ? getHeartbeatToolNotificationText(response) : HEARTBEAT_TOKEN,
@@ -100,6 +99,7 @@ function getHeartbeatToolResponseFromPayload(
   );
 }
 
+/** Find the last heartbeat tool response embedded in a reply result. */
 export function resolveHeartbeatToolResponseFromReplyResult(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): HeartbeatToolResponse | undefined {

@@ -1,3 +1,6 @@
+/**
+ * Browser-local SDK security bridge plus directory creation helper.
+ */
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,36 +8,26 @@ import {
   pathScope as sdkPathScope,
 } from "openclaw/plugin-sdk/security-runtime";
 
-export { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 export {
   ensurePortAvailable,
   extractErrorCode,
   formatErrorMessage,
   hasProxyEnvConfigured,
-  isNotFoundPathError,
-  isPathInside,
   isPrivateNetworkAllowedByPolicy,
   matchesHostnameAllowlist,
   normalizeHostname,
-  pathScope,
-  redactSensitiveText,
   resolveExistingPathsWithinRoot,
   resolvePinnedHostnameWithPolicy,
-  resolvePathsWithinRoot,
-  resolvePathWithinRoot,
-  root,
-  safeEqualSecret,
   sanitizeUntrustedFileName,
   resolveStrictExistingPathsWithinRoot,
-  resolveWritablePathWithinRoot,
-  FsSafeError,
   SsrFBlockedError,
   writeExternalFileWithinRoot,
-  writeViaSiblingTempPath,
   wrapExternalContent,
 } from "openclaw/plugin-sdk/security-runtime";
 export type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
+export { sdkPathScope as pathScope };
 
+/** Ensures an absolute directory exists without escaping its nearest existing ancestor. */
 export async function ensureAbsoluteDirectory(
   dirPath: string,
   options?: { scopeLabel?: string; mode?: number },

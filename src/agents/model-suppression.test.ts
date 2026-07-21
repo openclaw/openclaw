@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for built-in model suppression helpers.
+ * Verifies plugin manifest suppression rules, cache reuse, and lifecycle clears.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -8,13 +12,10 @@ vi.mock("../plugins/manifest-model-suppression.js", () => ({
   buildManifestBuiltInModelSuppressionResolver: mocks.buildManifestBuiltInModelSuppressionResolver,
 }));
 
-import {
-  clearCurrentPluginMetadataSnapshotState,
-  setCurrentPluginMetadataSnapshotState,
-} from "../plugins/current-plugin-metadata-state.js";
+import { setCurrentPluginMetadataSnapshotState } from "../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   buildShouldSuppressBuiltInModel,
-  clearModelSuppressionResolverCacheForTest,
   shouldSuppressBuiltInModel,
 } from "./model-suppression.js";
 
@@ -22,8 +23,7 @@ const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
 describe("model suppression", () => {
   beforeEach(() => {
-    clearCurrentPluginMetadataSnapshotState();
-    clearModelSuppressionResolverCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
   });
 

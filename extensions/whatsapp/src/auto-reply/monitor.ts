@@ -1,10 +1,13 @@
+// Whatsapp plugin module implements monitor behavior.
+import type { WAMessageKey } from "baileys";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -25,20 +28,22 @@ import {
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
-import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
+import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
+import {
+  attachWebInboxToSocket,
+  readWhatsAppBaileysCacheEntry,
+  type WhatsAppBaileysGroupMetadataCache,
+  type WhatsAppBaileysMessageCache,
+  type WhatsAppGroupMetadataCache,
+} from "../inbound/monitor.js";
+import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,
   resolveHeartbeatSeconds,
   resolveReconnectPolicy,
   sleepWithAbort,
 } from "../reconnect.js";
-import {
-  formatError,
-  getStatusCode,
-  getWebAuthAgeMs,
-  logoutWeb,
-  readWebSelfId,
-} from "../session.js";
+import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
@@ -47,7 +52,7 @@ import { createWebChannelStatusController } from "./monitor-state.js";
 import { createEchoTracker } from "./monitor/echo.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
-import type { WebInboundMsg, WebMonitorTuning } from "./types.js";
+import type { WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
 
 function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
@@ -61,13 +66,9 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
 type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
 
-let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime.js")> | null =
-  null;
-
-function loadReplyResolverRuntime() {
-  replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
-  return replyResolverRuntimePromise;
-}
+const loadReplyResolverRuntime = createLazyRuntimeModule(
+  () => import("./reply-resolver.runtime.js"),
+);
 
 function resolveWebMonitorConfigSnapshot(params: {
   cfg: WhatsAppRuntimeConfig;
@@ -92,9 +93,11 @@ function resolveWebMonitorConfigSnapshot(params: {
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
         textChunkLimit: account.textChunkLimit,
-        chunkMode: account.chunkMode,
+        // Account merge replaces `streaming` wholesale, so pinning the
+        // account-resolved object here keeps downstream root-level resolver
+        // reads (chunk mode, block enable/coalesce) on this account's config.
+        streaming: account.streaming,
         mediaMaxMb: account.mediaMaxMb,
-        blockStreaming: account.blockStreaming,
         groups: account.groups,
       },
     },
@@ -145,44 +148,8 @@ function isRetryableAuthUnstableError(error: unknown): error is WhatsAppAuthUnst
   );
 }
 
-async function clearTerminalWebAuthState(params: {
-  account: ReturnType<typeof resolveWhatsAppAccount>;
-  runtime: RuntimeEnv;
-  statusLabel: number | "unknown";
-  healthState: "logged-out" | "conflict";
-  log: ReturnType<typeof getChildLogger>;
-}) {
-  try {
-    const cleared = await logoutWeb({
-      authDir: params.account.authDir,
-      isLegacyAuthDir: params.account.isLegacyAuthDir,
-      runtime: params.runtime,
-    });
-    params.log.warn(
-      {
-        accountId: params.account.accountId,
-        cleared,
-        healthState: params.healthState,
-        status: params.statusLabel,
-      },
-      "web reconnect: cleared cached auth after terminal close",
-    );
-  } catch (error) {
-    params.log.warn(
-      {
-        accountId: params.account.accountId,
-        error: formatError(error),
-        healthState: params.healthState,
-        status: params.statusLabel,
-      },
-      "web reconnect: failed clearing cached auth after terminal close",
-    );
-    params.runtime.error(
-      `WhatsApp Web cleanup failed after terminal close (status ${params.statusLabel}). Run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\`, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`.`,
-    );
-  }
-}
 const DEFAULT_TRANSPORT_TIMEOUT_MS = 5 * 60 * 1000;
+const WHATSAPP_RECONNECT_CATCH_UP_MAX_MS = 20 * 60_000;
 
 export async function monitorWebChannel(
   verbose: boolean,
@@ -199,9 +166,6 @@ export async function monitorWebChannel(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const statusController = createWebChannelStatusController(tuning.statusSink);
-  statusController.emit();
-
   const baseCfg = getRuntimeConfig();
   const sourceCfg = getRuntimeConfigSourceSnapshot();
   const { cfg, account } = resolveWebMonitorConfigSnapshot({
@@ -217,7 +181,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
-  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
+  const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??
@@ -236,6 +200,8 @@ export async function monitorWebChannel(
   >();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
+  const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
+  const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
   const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
@@ -258,6 +224,10 @@ export async function monitorWebChannel(
 
   const transportTimeoutMs = tuning.transportTimeoutMs ?? DEFAULT_TRANSPORT_TIMEOUT_MS;
   const messageTimeoutMs = tuning.messageTimeoutMs ?? 30 * 60 * 1000;
+  const reconnectCatchUpWindowMs = Math.min(
+    Math.max(messageTimeoutMs, 60_000),
+    WHATSAPP_RECONNECT_CATCH_UP_MAX_MS,
+  );
   const watchdogCheckMs = tuning.watchdogCheckMs ?? 60 * 1000;
   const controller = new WhatsAppConnectionController({
     accountId: account.accountId,
@@ -274,6 +244,8 @@ export async function monitorWebChannel(
     sleep,
     isNonRetryableStatus: isNonRetryableWebCloseStatus,
   });
+  const statusController = createWebChannelStatusController(tuning.statusSink);
+  statusController.emit();
 
   try {
     while (true) {
@@ -291,24 +263,33 @@ export async function monitorWebChannel(
           accountId: account.accountId,
         }),
       });
-      const shouldDebounce = (msg: WebInboundMsg) => {
-        if (msg.mediaPath || msg.mediaType) {
-          return false;
-        }
-        if (msg.location) {
-          return false;
-        }
-        if (msg.replyToId || msg.replyToBody) {
-          return false;
-        }
-        return !isControlCommandMessage(msg.body, cfg);
+      const shouldDebounce = (msg: WebInboundMessageInput) => {
+        const normalized = normalizeWebInboundMessage(msg);
+        return shouldDebounceTextInbound({
+          text: normalized.payload.commandBody ?? normalized.payload.body,
+          cfg,
+          hasMedia: Boolean(normalized.payload.media?.path || normalized.payload.media?.type),
+          allowDebounce: !(
+            normalized.payload.location ||
+            normalized.quote?.id ||
+            normalized.quote?.body
+          ),
+        });
       };
 
       let connection;
       try {
         connection = await controller.openConnection({
           connectionId,
-          createListener: async ({ sock, connection }) => {
+          getMessage: async (key: WAMessageKey) =>
+            key.id && key.remoteJid
+              ? readWhatsAppBaileysCacheEntry(recentMessageKeys, `${key.remoteJid}:${key.id}`)
+              : undefined,
+          cachedGroupMetadata: async (jid: string) => {
+            const meta = readWhatsAppBaileysCacheEntry(baileysGroupMetaCache, jid);
+            return meta?.participants?.length ? meta : undefined;
+          },
+          createListener: async ({ sock, connection: connectionLocal }) => {
             const onMessage = createWebOnMessageHandler({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -319,13 +300,12 @@ export async function monitorWebChannel(
               groupHistories,
               groupMemberNames,
               echoTracker,
-              backgroundTasks: connection.backgroundTasks,
+              backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
               baseMentionConfig,
               account,
             });
-
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,
               loadConfig: loadCurrentMonitorConfig,
@@ -335,18 +315,32 @@ export async function monitorWebChannel(
               mediaMaxMb: account.mediaMaxMb,
               selfChatMode: account.selfChatMode,
               sendReadReceipts: account.sendReadReceipts,
+              socketTiming,
               debounceMs: inboundDebounceMs,
+              appendReplyWindow: connectionLocal.openedAfterRecentInbound
+                ? {
+                    afterMs: connectionLocal.startedAt - reconnectCatchUpWindowMs,
+                    untilMs: connectionLocal.startedAt + reconnectCatchUpWindowMs,
+                    maxAgeMs: reconnectCatchUpWindowMs,
+                  }
+                : undefined,
               shouldDebounce,
               socketRef: controller.socketRef,
               shouldRetryDisconnect: () => !sigintStop && controller.shouldRetryDisconnect(),
               disconnectRetryPolicy: reconnectPolicy,
               disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
               groupMetadataCache,
-              onMessage: async (msg: WebInboundMsg) => {
+              recentMessageKeys,
+              baileysGroupMetaCache,
+              onMessage: async (msg: WebInboundMessageInput) => {
+                const normalized = normalizeWebInboundMessage(msg);
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
-                await onMessage(msg);
+                await onMessage(normalized);
+              },
+              onPendingWorkChanged: (pendingWorkCount, at) => {
+                statusController.noteBusy(pendingWorkCount > 0, at);
               },
               sock,
             })) as ManagedWhatsAppListener;
@@ -407,45 +401,59 @@ export async function monitorWebChannel(
           },
         });
       } catch (error) {
-        if (getStatusCode(error) === 428) {
-          const retryDecision = controller.consumeReconnectAttempt();
-          statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
+        const setupDecision = controller.resolveSetupErrorDecision(error);
+        if (setupDecision === "aborted") {
+          await controller.shutdown();
+          break;
+        }
+        if (setupDecision) {
+          statusController.noteReconnectAttempts(setupDecision.reconnectAttempts);
           statusController.noteClose({
-            statusCode: 428,
+            statusCode: setupDecision.normalized.statusCode,
             error: formatError(error),
-            reconnectAttempts: retryDecision.reconnectAttempts,
-            healthState: retryDecision.healthState,
+            reconnectAttempts: setupDecision.reconnectAttempts,
+            healthState: setupDecision.healthState,
           });
-          if (retryDecision.action === "stop") {
+          if (setupDecision.action === "stop") {
             reconnectLogger.warn(
               {
                 connectionId,
-                status: 428,
-                reconnectAttempts: retryDecision.reconnectAttempts,
+                status: setupDecision.normalized.statusLabel,
+                reconnectAttempts: setupDecision.reconnectAttempts,
                 maxAttempts: reconnectPolicy.maxAttempts,
               },
-              "web reconnect: 428 during opening; max attempts reached",
+              "web reconnect: setup status error; max attempts reached",
             );
-            runtime.error(
-              `WhatsApp Web connection closed during setup (status 428) after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` if the issue persists.`,
-            );
+            if (setupDecision.healthState === "logged-out") {
+              runtime.error(
+                `WhatsApp session logged out during setup. Run \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` to relink.`,
+              );
+            } else if (setupDecision.healthState === "conflict") {
+              runtime.error(
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then restart the channel. To force a fresh QR, run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\` before \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+              );
+            } else {
+              runtime.error(
+                `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}) after ${setupDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` if the issue persists.`,
+              );
+            }
             await controller.shutdown();
             break;
           }
           reconnectLogger.info(
             {
               connectionId,
-              status: 428,
-              reconnectAttempts: retryDecision.reconnectAttempts,
-              delayMs: retryDecision.delayMs,
+              status: setupDecision.normalized.statusLabel,
+              reconnectAttempts: setupDecision.reconnectAttempts,
+              delayMs: setupDecision.delayMs,
             },
-            "web reconnect: 428 during opening; retrying",
+            "web reconnect: setup status error; retrying",
           );
           runtime.error(
-            `WhatsApp Web connection closed during setup (status 428). Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}.`,
+            `WhatsApp Web connection closed during setup (status ${setupDecision.normalized.statusLabel}). Retry ${setupDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(setupDecision.delayMs ?? 0)}.`,
           );
           try {
-            await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
+            await controller.waitBeforeRetry(setupDecision.delayMs ?? 0);
           } catch {
             break;
           }
@@ -545,7 +553,7 @@ export async function monitorWebChannel(
             normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
           bypassBackoff: isNoListenerReconnectError(entry.lastError),
         }),
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         reconnectLogger.warn(
           { connectionId: connection.connectionId, error: String(err) },
           "reconnect drain failed",
@@ -564,7 +572,7 @@ export async function monitorWebChannel(
               normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
             bypassBackoff: false,
           }),
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           reconnectLogger.warn(
             { connectionId: connection.connectionId, error: String(err) },
             "periodic drain failed",
@@ -640,24 +648,10 @@ export async function monitorWebChannel(
         });
 
         if (decision.healthState === "logged-out") {
-          await clearTerminalWebAuthState({
-            account,
-            runtime,
-            statusLabel: decision.normalized.statusLabel,
-            healthState: decision.healthState,
-            log: reconnectLogger,
-          });
           runtime.error(
             `WhatsApp session logged out. Run \`${formatCliCommand("openclaw channels login --channel whatsapp")}\` to relink.`,
           );
         } else if (decision.healthState === "conflict") {
-          await clearTerminalWebAuthState({
-            account,
-            runtime,
-            statusLabel: decision.normalized.statusLabel,
-            healthState: decision.healthState,
-            log: reconnectLogger,
-          });
           reconnectLogger.warn(
             {
               connectionId: connection.connectionId,
@@ -667,7 +661,7 @@ export async function monitorWebChannel(
             "web reconnect: non-retryable close status; stopping monitor",
           );
           runtime.error(
-            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then relink with \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
+            `WhatsApp Web connection closed (status ${decision.normalized.statusLabel}: session conflict). Resolve conflicting WhatsApp Web sessions, then restart the channel. To force a fresh QR, run \`${formatCliCommand("openclaw channels logout --channel whatsapp")}\` before \`${formatCliCommand("openclaw channels login --channel whatsapp")}\`. Stopping web monitoring.`,
           );
         } else {
           reconnectLogger.warn(

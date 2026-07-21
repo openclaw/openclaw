@@ -1,3 +1,6 @@
+/**
+ * Sanitizes historical embedded-agent message images and empty content blocks.
+ */
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
 import type { ToolCallIdMode } from "../tool-call-id.js";
@@ -28,28 +31,7 @@ function ensureNonEmptyContent<T>(content: T[]): T[] {
   return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
 }
 
-export function isEmptyAssistantMessageContent(
-  message: Extract<AgentMessage, { role: "assistant" }>,
-): boolean {
-  const content = message.content;
-  if (content == null) {
-    return true;
-  }
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.every((block) => {
-    if (!block || typeof block !== "object") {
-      return true;
-    }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type !== "text") {
-      return false;
-    }
-    return typeof rec.text !== "string" || rec.text.trim().length === 0;
-  });
-}
-
+/** Resize/remove unsafe image payloads while keeping transcript turns valid. */
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -57,6 +39,7 @@ export async function sanitizeSessionMessagesImages(
     sanitizeMode?: "full" | "images-only";
     sanitizeToolCallIds?: boolean;
     preserveNativeAnthropicToolUseIds?: boolean;
+    duplicateToolCallIdStyle?: "openai";
     /**
      * Mode for tool call ID sanitization:
      * - "strict" (alphanumeric only)
@@ -82,6 +65,7 @@ export async function sanitizeSessionMessagesImages(
   const sanitizedIds = shouldSanitizeToolCallIds
     ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
         preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+        duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
       })
     : messages;
   const out: AgentMessage[] = [];

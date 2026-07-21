@@ -1,3 +1,4 @@
+// Imessage plugin module implements private api status behavior.
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 
 export type IMessagePrivateApiStatus = {
@@ -11,6 +12,10 @@ export type IMessagePrivateApiStatus = {
   cliCapabilities?: {
     sendRichSupportsAttachment?: boolean;
   };
+  // imsg's own `status --json` `message` field. When advanced features are off
+  // it explains why (SIP enabled, library validation, macOS 26 AMFI gate), so
+  // callers can surface a real reason instead of a generic "run imsg launch".
+  statusMessage?: string;
   error?: string;
 };
 
@@ -78,12 +83,4 @@ export function setCachedIMessagePrivateApiStatus(
     return;
   }
   bridgeStatusCache.set(normalizeCliPath(cliPath), { status, expiresAt });
-}
-
-export function clearCachedIMessagePrivateApiStatus(cliPath?: string): void {
-  if (cliPath) {
-    bridgeStatusCache.delete(normalizeCliPath(cliPath));
-  } else {
-    bridgeStatusCache.clear();
-  }
 }

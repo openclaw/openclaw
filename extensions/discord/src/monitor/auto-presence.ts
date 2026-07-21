@@ -1,3 +1,4 @@
+// Discord plugin module implements auto presence behavior.
 import {
   clearExpiredCooldowns,
   ensureAuthProfileStore,
@@ -197,7 +198,7 @@ function resolvePresenceStatus(state: DiscordAutoPresenceState): UpdatePresenceD
   return "idle";
 }
 
-export function resolveDiscordAutoPresenceDecision(params: {
+function resolveDiscordAutoPresenceDecision(params: {
   discordConfig: Pick<
     DiscordAccountConfig,
     "autoPresence" | "activity" | "status" | "activityType" | "activityUrl"
@@ -298,7 +299,7 @@ export function createDiscordAutoPresenceController(params: {
   let lastAppliedAt = 0;
 
   const runEvaluation = (options?: { force?: boolean }) => {
-    let decision: DiscordAutoPresenceDecision | null = null;
+    let decision: DiscordAutoPresenceDecision | null;
     try {
       decision = resolveDiscordAutoPresenceDecision({
         discordConfig: params.discordConfig,

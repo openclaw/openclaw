@@ -1,7 +1,13 @@
+// Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import {
+  applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates,
+} from "../../config/plugin-auto-enable.js";
+import { migrateLegacyOnboardingRecommendationsScope } from "../../infra/state-migrations.onboarding-recommendations.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
+  maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
   maybeRepairOpenAICodexAuthProfileStores,
 } from "../doctor-auth-flat-profiles.js";
@@ -23,27 +29,33 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "./shared/configured-runtime-plugin-installs.js";
 import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
+import type { BlockedLegacyOpenAICodexProviderPlan } from "./shared/legacy-config-migrations.runtime.models.js";
 import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sender.js";
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
+import { maybeRepairStaleConfiguredAuthOrders } from "./shared/stale-auth-order.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
+/** Run doctor auto-repairs in dependency order and collect sanitized user notes. */
 export async function runDoctorRepairSequence(params: {
   state: DoctorConfigMutationState;
   doctorFixCommand: string;
   env?: NodeJS.ProcessEnv;
+  blockedCodexProviderPlan?: BlockedLegacyOpenAICodexProviderPlan;
 }): Promise<{
   state: DoctorConfigMutationState;
   changeNotes: string[];
   warningNotes: string[];
+  authProfilesRepaired: boolean;
 }> {
   let state = params.state;
   const changeNotes: string[] = [];
@@ -91,6 +103,7 @@ export async function runDoctorRepairSequence(params: {
     cfg: state.candidate,
     env,
     shouldRepair: true,
+    blockedProviderPlan: params.blockedCodexProviderPlan,
   });
   applyMutation({
     config: codexRouteRepair.cfg,
@@ -119,9 +132,26 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     changeNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.changes));
     applyMutation(applyPluginAutoEnable({ config: state.candidate, env }));
+    const repairedPluginIds = missingConfiguredPluginInstallRepair.repairedPluginIds ?? [];
+    if (repairedPluginIds.length > 0) {
+      applyMutation(
+        materializePluginAutoEnableCandidates({
+          config: state.candidate,
+          env,
+          candidates: repairedPluginIds.map((pluginId) => ({
+            pluginId,
+            kind: "configured-plugin-repaired" as const,
+          })),
+        }),
+      );
+    }
   }
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
+  }
+  const missingConfiguredPluginInstallNotices = missingConfiguredPluginInstallRepair.notices ?? [];
+  if (missingConfiguredPluginInstallNotices.length > 0) {
+    warningNotes.push(sanitizeLines(missingConfiguredPluginInstallNotices));
   }
   const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
   const hasUnscopedInstallRepairWarnings =
@@ -130,6 +160,9 @@ export async function runDoctorRepairSequence(params: {
     applyMutation(
       maybeRepairStalePluginConfig(state.candidate, env, {
         preservePluginIds: failedPluginIds,
+        // A host-version-bound runtime can be absent between core swap and package
+        // convergence. Preserve its allow, deny, and explicit enable/disable policy.
+        surfacePreservePluginIds: VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE,
       }),
     );
   }
@@ -155,6 +188,16 @@ export async function runDoctorRepairSequence(params: {
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
+  }
+  const onboardingRecommendationsMigration = migrateLegacyOnboardingRecommendationsScope({
+    cfg: state.candidate,
+    env,
+  });
+  if (onboardingRecommendationsMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(onboardingRecommendationsMigration.changes));
+  }
+  if (onboardingRecommendationsMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(onboardingRecommendationsMigration.warnings));
   }
   const legacyOAuthSidecarRepair = await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: state.candidate,
@@ -188,6 +231,37 @@ export async function runDoctorRepairSequence(params: {
   if (staleOAuthShadowRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
+  const authProfileSqliteMigration = await maybeMigrateAuthProfileJsonStoresToSqlite({
+    cfg: state.candidate,
+    prompter: { confirmAutoFix: async () => true },
+    env,
+  });
+  if (authProfileSqliteMigration.configChanged) {
+    state = applyDoctorConfigMutation({
+      state,
+      mutation: {
+        config: state.candidate,
+        changes: ["Auth profile SQLite migration updated auth.profiles."],
+      },
+      shouldRepair: true,
+    });
+  }
+  if (authProfileSqliteMigration.changes.length > 0) {
+    changeNotes.push(sanitizeLines(authProfileSqliteMigration.changes));
+  }
+  if (authProfileSqliteMigration.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(authProfileSqliteMigration.warnings));
+  }
+  const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
+    cfg: state.candidate,
+    env,
+  });
+  applyMutation(staleAuthOrderRepair);
+  const authProfilesRepaired =
+    legacyOAuthSidecarRepair.changes.length > 0 ||
+    openAIAuthProviderRepair.changes.length > 0 ||
+    staleOAuthShadowRepair.changes.length > 0 ||
+    authProfileSqliteMigration.changes.length > 0;
 
   const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
     cfg: state.candidate,
@@ -197,5 +271,5 @@ export async function runDoctorRepairSequence(params: {
     warningNotes.push(sanitizeLines(activeToolSchemaWarnings));
   }
 
-  return { state, changeNotes, warningNotes };
+  return { state, changeNotes, warningNotes, authProfilesRepaired };
 }

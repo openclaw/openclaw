@@ -1,11 +1,19 @@
+/**
+ * Lists and normalizes models exposed by the Codex app-server `model/list`
+ * endpoint, including pagination and shared-client lease handling.
+ */
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
+import type {
+  CodexAppServerAuthRequirement,
+  resolveCodexAppServerAuthProfileIdForAgent,
+} from "./auth-bridge.js";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { readCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
 
-export type CodexAppServerModel = {
+/** Normalized model metadata returned by the Codex app-server model listing helper. */
+type CodexAppServerModel = {
   id: string;
   model: string;
   displayName?: string;
@@ -17,24 +25,28 @@ export type CodexAppServerModel = {
   defaultReasoningEffort?: string;
 };
 
+/** One page of Codex app-server model metadata plus optional pagination state. */
 export type CodexAppServerModelListResult = {
   models: CodexAppServerModel[];
   nextCursor?: string;
   truncated?: boolean;
 };
 
-export type CodexAppServerListModelsOptions = {
+/** Options for querying Codex app-server models through a shared or isolated client. */
+type CodexAppServerListModelsOptions = {
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
   timeoutMs?: number;
   startOptions?: CodexAppServerStartOptions;
   authProfileId?: string;
+  authRequirement?: CodexAppServerAuthRequirement;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
   sharedClient?: boolean;
 };
 
+/** Lists one Codex app-server model page using the configured auth/client options. */
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -43,6 +55,7 @@ export async function listCodexAppServerModels(
   );
 }
 
+/** Walks Codex app-server model pages until exhaustion or the max-page guard. */
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
@@ -84,6 +97,7 @@ async function withCodexAppServerModelClient<T>(
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
+        authRequirement: options.authRequirement,
         agentDir: options.agentDir,
         config: options.config,
       })
@@ -91,6 +105,7 @@ async function withCodexAppServerModelClient<T>(
         startOptions: options.startOptions,
         timeoutMs,
         authProfileId: options.authProfileId,
+        authRequirement: options.authRequirement,
         agentDir: options.agentDir,
         config: options.config,
       });
@@ -121,6 +136,7 @@ async function requestModelListPage(
   return readModelListResult(response);
 }
 
+/** Parses a raw Codex app-server model/list response into OpenClaw's normalized shape. */
 export function readModelListResult(value: unknown): CodexAppServerModelListResult {
   const response = readCodexModelListResponse(value);
   if (!response) {

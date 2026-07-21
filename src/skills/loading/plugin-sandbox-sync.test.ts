@@ -1,3 +1,4 @@
+// Plugin sandbox sync tests cover syncing plugin-provided skills into sandbox state.
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -32,7 +33,9 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 beforeAll(async () => {
-  fixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-skills-sync-"));
+  fixtureRoot = await fsPromises.realpath(
+    await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-plugin-skills-sync-")),
+  );
 });
 
 afterAll(async () => {
@@ -63,10 +66,10 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
 
     mockResolvePluginSkillDirs.mockReturnValueOnce([realPluginSkillDir]);
 
-    await syncSkillsToWorkspace({
+    const skillUsagePaths = await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -86,6 +89,14 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     expect(prompt).not.toContain(realPluginSkillDir.replaceAll("\\", "/"));
     expect(prompt).not.toContain(pluginSkillsDir.replaceAll("\\", "/"));
     expect(prompt).not.toContain(symlinkPath.replaceAll("\\", "/"));
+    expect(skillUsagePaths).toEqual([
+      {
+        readPath: syncedSkillMd,
+        skillFile: path.join(realPluginSkillDir, "SKILL.md"),
+        skillName: "wiki-maintainer",
+        skillSource: "workspace",
+      },
+    ]);
   });
 
   it("syncs multiple plugin skills directories to sandbox workspace", async () => {
@@ -127,7 +138,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });
@@ -170,7 +181,7 @@ describe("syncSkillsToWorkspace for plugin skills", () => {
     await syncSkillsToWorkspace({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
-      pluginSkillsDir: pluginSkillsDir,
+      pluginSkillsDir,
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
       managedSkillsDir: path.join(sourceWorkspace, ".managed"),
     });

@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 
+/**
+ * Stdio MCP proxy used by ACPX wrappers. It injects OpenClaw-provided MCP
+ * servers into session creation/load/fork requests before forwarding to target.
+ */
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -70,6 +74,7 @@ function rewriteLine(line, mcpServers) {
   }
 }
 
+/** Build spawn options for the proxied MCP target process. */
 export function createTargetSpawnOptions(platform = process.platform) {
   const options = {
     stdio: ["pipe", "pipe", "inherit"],
@@ -99,21 +104,48 @@ function main() {
   }
 
   const input = createInterface({ input: process.stdin });
+  let exiting = false;
+
+  const exitWithError = (error) => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
+    input.close();
+    child.kill();
+    process.stderr.write(`${formatErrorMessage(error)}\n`);
+    process.exit(1);
+  };
+
+  child.stdin.on("error", exitWithError);
+  process.stdout.on("error", exitWithError);
+
   input.on("line", (line) => {
-    child.stdin.write(`${rewriteLine(line, mcpServers)}\n`);
+    if (exiting) {
+      return;
+    }
+    child.stdin.write(`${rewriteLine(line, mcpServers)}\n`, (error) => {
+      if (error) {
+        exitWithError(error);
+      }
+    });
   });
   input.on("close", () => {
+    if (exiting || child.stdin.destroyed || child.stdin.writableEnded) {
+      return;
+    }
     child.stdin.end();
   });
 
   child.stdout.pipe(process.stdout);
 
-  child.on("error", (error) => {
-    process.stderr.write(`${formatErrorMessage(error)}\n`);
-    process.exit(1);
-  });
+  child.on("error", exitWithError);
 
   child.on("close", (code, signal) => {
+    if (exiting) {
+      return;
+    }
+    exiting = true;
     if (signal) {
       process.kill(process.pid, signal);
       return;

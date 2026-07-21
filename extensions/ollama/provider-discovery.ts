@@ -1,3 +1,4 @@
+// Ollama provider module implements model/runtime integration.
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
@@ -7,7 +8,7 @@ import {
   shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
-import { buildOllamaProvider } from "./src/provider-models.js";
+import { buildOllamaProvider, capLocalOllamaProviderContext } from "./src/provider-models.js";
 
 type OllamaProviderPlugin = {
   id: string;
@@ -40,7 +41,8 @@ async function runOllamaDiscovery(ctx: ProviderCatalogContext) {
   return await resolveOllamaDiscoveryResult({
     ctx,
     pluginConfig: resolveOllamaPluginConfig(ctx),
-    buildProvider: buildOllamaProvider,
+    buildProvider: async (...args) =>
+      capLocalOllamaProviderContext(await buildOllamaProvider(...args)),
   });
 }
 

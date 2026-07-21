@@ -1,3 +1,8 @@
+/**
+ * Public channel ingress runtime types.
+ *
+ * Defines identity descriptors, resolver inputs, route access, and resolved access results.
+ */
 import type { AccessGroupConfig } from "../../config/types.access-groups.js";
 import type {
   AccessGroupMembershipFact,
@@ -12,13 +17,9 @@ import type {
   IngressReasonCode,
   InternalChannelIngressAdapter,
   InternalChannelIngressSubject,
-  InternalMatchMaterial,
   InternalNormalizedEntry,
   RouteGateFacts,
 } from "./types.js";
-
-/** Normalized identifier material used to match an inbound sender against allowlist entries. */
-export type ChannelIngressSubjectIdentifier = InternalMatchMaterial;
 
 /** Redacted subject identity assembled from a stable id plus optional platform aliases. */
 export type ChannelIngressSubject = InternalChannelIngressSubject;

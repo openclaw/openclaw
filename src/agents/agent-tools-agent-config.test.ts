@@ -1,3 +1,8 @@
+/**
+ * Tests agent-specific tool filtering and filesystem policy.
+ * Covers sandbox inheritance, group policies, and workspace-only behavior in
+ * createOpenClawCodingTools.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,8 +16,8 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
-import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SandboxDockerConfig } from "./sandbox/types.docker.js";
 import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
@@ -143,7 +148,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("write");
     expect(toolNames).not.toContain("exec");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
@@ -164,7 +169,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("exec");
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
@@ -251,9 +256,9 @@ describe("Agent-specific tool filtering", () => {
       );
       const readError = await fs.readFile(escapedPath, "utf8").then(
         () => undefined,
-        (err: NodeJS.ErrnoException) => err,
+        (err: unknown) => err,
       );
-      expect(readError?.code).toBe("ENOENT");
+      expect(readError).toMatchObject({ code: "ENOENT" });
     });
   });
 
@@ -474,6 +479,46 @@ describe("Agent-specific tool filtering", () => {
     expect(names).not.toContain("process");
   });
 
+  it("keeps core tools for owner WebChat while restricting non-owners", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        toolsBySender: {
+          "*": { deny: ["exec", "process"] },
+        },
+      },
+    };
+    const createWebChatTools = (senderIsOwner: boolean) =>
+      createOpenClawCodingTools({
+        config: cfg,
+        messageProvider: "webchat",
+        senderIsOwner,
+        workspaceDir: "/tmp/test-webchat-owner-policy",
+        agentDir: "/tmp/agent-webchat-owner-policy",
+      }).map((tool) => tool.name);
+
+    const ownerTools = createWebChatTools(true);
+    const nonOwnerTools = createWebChatTools(false);
+
+    expect(ownerTools).toContain("exec");
+    expect(ownerTools).toContain("process");
+    expect(ownerTools).toContain("cron");
+    expect(ownerTools).toContain("gateway");
+    expect(ownerTools).toContain("nodes");
+    expect(ownerTools).toContain("openclaw");
+    expect(ownerTools).toContain("conversations_list");
+    expect(ownerTools).toContain("conversations_send");
+    expect(ownerTools).toContain("conversations_turn");
+    expect(nonOwnerTools).not.toContain("exec");
+    expect(nonOwnerTools).not.toContain("process");
+    expect(nonOwnerTools).not.toContain("cron");
+    expect(nonOwnerTools).not.toContain("gateway");
+    expect(nonOwnerTools).not.toContain("nodes");
+    expect(nonOwnerTools).not.toContain("openclaw");
+    expect(nonOwnerTools).not.toContain("conversations_list");
+    expect(nonOwnerTools).not.toContain("conversations_send");
+    expect(nonOwnerTools).not.toContain("conversations_turn");
+  });
+
   it("should let agent per-sender policy override global sender wildcard", () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -687,7 +732,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("browser");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("process");
-    expect(toolNames).not.toContain("apply_patch");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("should work with sandbox tools filtering", () => {

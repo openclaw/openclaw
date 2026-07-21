@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/speech-core",
-  "version": "2026.5.30",
+  "version": "2026.5.31",
   "private": true,
   "description": "OpenClaw speech runtime package",
   "type": "module",
@@ -11,11 +11,6 @@
       "types": "./dist/runtime-api.d.mts",
       "import": "./dist/runtime-api.mjs",
       "default": "./dist/runtime-api.mjs"
-    },
-    "./api": {
-      "types": "./dist/api.d.mts",
-      "import": "./dist/api.mjs",
-      "default": "./dist/api.mjs"
     },
     "./runtime-api": {
       "types": "./dist/runtime-api.d.mts",

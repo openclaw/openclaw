@@ -1,6 +1,9 @@
+// Runtime fetch tests cover header normalization and FormData conversion before
+// calls reach undici's dispatcher-aware fetch.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchWithRuntimeDispatcher } from "./runtime-fetch.js";
-import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "./undici-runtime.js";
+
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
 class RuntimeFormData {
   readonly records: Array<{

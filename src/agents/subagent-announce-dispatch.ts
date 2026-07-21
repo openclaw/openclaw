@@ -1,6 +1,14 @@
-type SubagentDeliveryPath = "steered" | "direct" | "none";
-export type SubagentAnnounceDeliveryFailureReason =
+/**
+ * Subagent announcement dispatch strategy.
+ *
+ * Completion handoff and requester-visible replies use this to choose between
+ * steering a subagent and directly delivering a message, with phase evidence.
+ */
+type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
+/** Stable reasons an announcement delivery can fail without throwing. */
+type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
+  | "completion_handoff_unavailable"
   | "generated_media_missing"
   | "message_tool_delivery_missing"
   | "requester_abandoned"
@@ -10,6 +18,7 @@ type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" };
 
+/** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
@@ -18,6 +27,7 @@ export type SubagentAnnounceDeliveryResult = {
   reason?: SubagentAnnounceDeliveryFailureReason;
   error?: string;
   terminal?: boolean;
+  missingMediaUrls?: string[];
   phases?: SubagentAnnounceDispatchPhaseResult[];
 };
 
@@ -33,7 +43,8 @@ type SubagentAnnounceDispatchPhaseResult = {
   error?: string;
 };
 
-export function mapSteerOutcomeToDeliveryResult(
+/** Converts a steer outcome into the shared delivery result shape. */
+function mapSteerOutcomeToDeliveryResult(
   outcome: SubagentAnnounceSteerOutcome,
 ): SubagentAnnounceDeliveryResult {
   if (outcome.status === "steered") {
@@ -50,6 +61,7 @@ export function mapSteerOutcomeToDeliveryResult(
   };
 }
 
+/** Runs the ordered steer/direct announcement delivery strategy. */
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
   signal?: AbortSignal;
@@ -99,6 +111,8 @@ export async function runSubagentAnnounceDispatch(params: {
     return withPhases(primaryDirect);
   }
 
+  // Completion handoff prefers direct delivery first so the completion agent's
+  // final visible message wins before falling back to steering.
   const primaryDirect = await params.direct();
   appendPhase("direct-primary", primaryDirect);
   if (primaryDirect.delivered || primaryDirect.terminal) {

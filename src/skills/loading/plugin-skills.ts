@@ -1,3 +1,4 @@
+// Plugin skill loaders discover and normalize skills exposed by plugin packages.
 import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -272,6 +273,17 @@ function isGeneratedPluginSkillEntry(
 
 function removeGeneratedPluginSkillEntry(linkPath: string): void {
   try {
+    const entry = fs.lstatSync(linkPath);
+    if (entry.isSymbolicLink()) {
+      fs.unlinkSync(linkPath);
+      return;
+    }
+  } catch (err) {
+    if (isNotFoundError(err)) {
+      return;
+    }
+  }
+  try {
     fs.rmSync(linkPath, { recursive: true, force: true });
   } catch {
     // best-effort cleanup
@@ -285,10 +297,3 @@ function isNotFoundError(err: unknown): boolean {
   const code = (err as Record<string, unknown>).code;
   return code === "ENOENT" || code === "ENOTDIR";
 }
-
-export const testing = {
-  isGeneratedPluginSkillEntry,
-  publishPluginSkills,
-  resolvePluginSkillLinkType,
-};
-export { testing as __testing };

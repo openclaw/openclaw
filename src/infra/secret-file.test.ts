@@ -1,3 +1,4 @@
+// Covers private secret file read/write behavior.
 import * as fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -143,6 +144,57 @@ describe("readSecretFileSync", () => {
   ])("$name", async ({ pathValue, label, options, expected }) => {
     const file = await pathValue();
     expect(tryReadSecretFileSync(file, label, options)).toBe(expected);
+  });
+});
+
+describe("tryReadSecretFileSync diagnostics", () => {
+  it("keeps an explicitly configured empty file unavailable", async () => {
+    const file = await createSecretPath(async (dir) => {
+      const emptyFile = path.join(dir, "empty-token.txt");
+      await fsPromises.writeFile(emptyFile, " \n\t ", "utf8");
+      return emptyFile;
+    });
+
+    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
+      configPath: "channels.telegram.tokenFile",
+    });
+
+    expect(result).toEqual({
+      status: "configured_unavailable",
+      diagnostic: {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "invalid-path",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(file);
+  });
+
+  it("returns a redacted diagnostic for an unavailable explicit file", async () => {
+    const dir = await createTempDir();
+    const file = path.join(dir, "missing-token.txt");
+
+    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
+      configPath: "channels.telegram.tokenFile",
+    });
+
+    expect(result).toEqual({
+      status: "configured_unavailable",
+      diagnostic: {
+        code: "CREDENTIAL_FILE_UNAVAILABLE",
+        path: "channels.telegram.tokenFile",
+        reason: "not-found",
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(file);
+  });
+
+  it("distinguishes missing input from an unavailable configured file", () => {
+    expect(
+      tryReadSecretFileSync(undefined, "Telegram bot token", undefined, {
+        configPath: "channels.telegram.tokenFile",
+      }),
+    ).toEqual({ status: "missing" });
   });
 });
 

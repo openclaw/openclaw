@@ -1,3 +1,4 @@
+// Root Dependency Ownership Audit tests cover root dependency ownership audit script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -37,9 +38,8 @@ describe("collectModuleSpecifiers", () => {
         const runtimeRequire = createRequire(runtimePackagePath);
         require.resolve("gaxios");
         runtimeRequire.resolve("openshell/package.json");
-        resolvePackageFileForCommandExplanation("tree-sitter-bash", "tree-sitter-bash.wasm");
       `),
-    ]).toEqual(["gaxios", "openshell/package.json", "tree-sitter-bash"]);
+    ]).toEqual(["gaxios", "openshell/package.json"]);
   });
 
   it("resolves simple string constants used by lazy runtime imports", () => {

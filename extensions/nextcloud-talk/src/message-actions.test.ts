@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover message actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CoreConfig } from "./types.js";
@@ -130,6 +131,13 @@ describe("nextcloudTalkMessageActions", () => {
 
     it("handles react locally", () => {
       expect(nextcloudTalkMessageActions.supportsAction?.({ action: "react" })).toBe(true);
+    });
+
+    it("rejects unsupported actions", () => {
+      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
+      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
+      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "edit" })).toBe(false);
+      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "read" })).toBe(false);
     });
   });
 

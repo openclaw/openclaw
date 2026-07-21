@@ -1,3 +1,4 @@
+// Provider entry tests cover provider plugin entry contracts and catalog integration.
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { capturePluginRegistration } from "../plugins/captured-registration.js";
@@ -177,9 +178,7 @@ describe("defineSingleProviderPluginEntry", () => {
           }),
           allowExplicitBaseUrl: true,
         },
-        capabilities: {
-          transcriptToolCallIdMode: "strict9",
-        },
+        preserveLiteralProviderPrefix: true,
       },
       register(api) {
         api.registerWebSearchProvider({
@@ -222,7 +221,7 @@ describe("defineSingleProviderPluginEntry", () => {
     expect(provider?.label).toBe("Gateway");
     expect(provider?.aliases).toEqual(["gw"]);
     expect(provider?.envVars).toEqual(["GATEWAY_KEY", "SECONDARY_KEY"]);
-    expect(provider?.capabilities?.transcriptToolCallIdMode).toBe("strict9");
+    expect(provider?.preserveLiteralProviderPrefix).toBe(true);
     expect(provider?.auth[0]?.wizard?.choiceId).toBe("gateway-api-key");
     expect(provider?.auth[0]?.wizard?.groupId).toBe("shared-gateway");
     expect(provider?.auth[0]?.wizard?.groupLabel).toBe("Shared Gateway");
@@ -236,6 +235,139 @@ describe("defineSingleProviderPluginEntry", () => {
         models: [createModel("router", "Router")],
       },
     });
+  });
+
+  it("skips unreadable provider catalog entries while preserving healthy siblings", async () => {
+    const providers = Object.defineProperty(
+      {
+        mockplugin: {
+          api: "openai-completions" as const,
+          baseUrl: "https://mockplugin.test/v1",
+          models: [createModel("mock-model", "Mock Model")],
+        },
+      },
+      "fuzzplugin",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin provider catalog entry read failed");
+        },
+      },
+    );
+    const entry = defineSingleProviderPluginEntry({
+      id: "mockplugin",
+      name: "Mock Provider",
+      description: "Synthetic provider plugin",
+      provider: {
+        label: "Mock",
+        docsPath: "/providers/mockplugin",
+        catalog: {
+          run: async () => ({ providers }),
+        },
+      },
+    });
+
+    const { unifiedCatalog } = await captureProviderEntry({ entry });
+    expect(unifiedCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "mockplugin",
+        model: "mock-model",
+        label: "Mock Model",
+        source: "live",
+      },
+    ]);
+  });
+
+  it("skips unreadable provider catalog model rows while preserving healthy siblings", async () => {
+    const models = Object.defineProperty([createModel("mock-model", "Mock Model")], "1", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin provider model row read failed");
+      },
+    });
+    const entry = defineSingleProviderPluginEntry({
+      id: "mockplugin",
+      name: "Mock Provider",
+      description: "Synthetic provider plugin",
+      provider: {
+        label: "Mock",
+        docsPath: "/providers/mockplugin",
+        catalog: {
+          run: async () => ({
+            providers: {
+              mockplugin: {
+                api: "openai-completions" as const,
+                baseUrl: "https://mockplugin.test/v1",
+                models,
+              },
+            },
+          }),
+        },
+      },
+    });
+
+    const { unifiedCatalog } = await captureProviderEntry({ entry });
+    expect(unifiedCatalog).toEqual([
+      {
+        kind: "text",
+        provider: "mockplugin",
+        model: "mock-model",
+        label: "Mock Model",
+        source: "live",
+      },
+    ]);
+  });
+
+  it("skips unreadable provider auth option rows while preserving healthy entries", async () => {
+    const unreadableAuth = Object.defineProperty(
+      {
+        methodId: "fuzz-api-key",
+        label: "Fuzz API key",
+        optionKey: "fuzzApiKey",
+        flagName: "--fuzz-api-key" as const,
+        envVar: "FUZZ_API_KEY",
+        promptMessage: "Enter Fuzz API key",
+      },
+      "label",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("fuzzplugin provider auth label read failed");
+        },
+      },
+    );
+    const entry = defineSingleProviderPluginEntry({
+      id: "mockplugin",
+      name: "Mock Provider",
+      description: "Synthetic provider plugin",
+      provider: {
+        label: "Mock",
+        docsPath: "/providers/mockplugin",
+        auth: [
+          unreadableAuth,
+          {
+            methodId: "mock-api-key",
+            label: "Mock API key",
+            optionKey: "mockApiKey",
+            flagName: "--mock-api-key",
+            envVar: "MOCK_API_KEY",
+            promptMessage: "Enter Mock API key",
+          },
+        ],
+        catalog: {
+          buildProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://mockplugin.test/v1",
+            models: [],
+          }),
+        },
+      },
+    });
+
+    const { provider } = await captureProviderEntry({ entry });
+    expect(provider?.envVars).toEqual(["MOCK_API_KEY"]);
+    expect(provider?.auth.map((method) => method.id)).toEqual(["mock-api-key"]);
   });
 
   it("registers extra non-api-key auth methods", async () => {

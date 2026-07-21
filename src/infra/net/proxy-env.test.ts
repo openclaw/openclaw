@@ -1,3 +1,5 @@
+// Proxy environment tests cover env precedence, EnvHttpProxyAgent options, and
+// NO_PROXY host/port/CIDR matching.
 import { describe, expect, it } from "vitest";
 import {
   hasEnvHttpProxyConfigured,
@@ -159,6 +161,18 @@ describe("matchesNoProxy", () => {
       name: "returns false for blank NO_PROXY",
       url: "https://api.openai.com",
       env: { NO_PROXY: "   " } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "lets blank lower-case no_proxy shadow upper-case NO_PROXY",
+      url: "https://api.openai.com",
+      env: { no_proxy: "", NO_PROXY: "*" } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "does not treat a whitespace-wrapped wildcard as global bypass",
+      url: "https://api.openai.com",
+      env: { NO_PROXY: " * " } as NodeJS.ProcessEnv,
       expected: false,
     },
     {

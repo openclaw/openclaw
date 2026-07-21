@@ -1,3 +1,6 @@
+/**
+ * Public SDK subpath for realtime voice provider types, runtime helpers, and talk events.
+ */
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
   RealtimeVoiceAudioFormat,
@@ -116,6 +119,7 @@ export {
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "../talk/agent-consult-tool.js";
 export {
+  assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
   consultRealtimeVoiceAgent,
   type RealtimeVoiceAgentConsultResult,
   type RealtimeVoiceAgentConsultRuntime,
@@ -168,6 +172,10 @@ export {
   type RealtimeVoiceMarkStrategy,
 } from "../talk/session-runtime.js";
 export {
+  createRealtimeVoiceSessionHarness,
+  type RealtimeVoiceSessionHarness,
+} from "../talk/realtime-session-harness.js";
+export {
   extendRealtimeVoiceOutputEchoSuppression,
   getRealtimeVoiceBridgeEventHealth,
   getRealtimeVoiceTranscriptHealth,
@@ -179,6 +187,12 @@ export {
   type RealtimeVoiceTranscriptEntry,
   type RealtimeVoiceTranscriptHealth,
 } from "../talk/session-log-runtime.js";
+export {
+  calculateMulawRms,
+  createSpeechThresholdGate,
+  readPcm16AudioStats,
+  type AudioEnergyStats,
+} from "../talk/audio-energy.js";
 export {
   convertPcmToMulaw8k,
   mulawToPcm,

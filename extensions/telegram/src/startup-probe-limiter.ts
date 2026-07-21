@@ -1,3 +1,4 @@
+// Telegram plugin module implements startup probe limiter behavior.
 const TELEGRAM_STARTUP_PROBE_CONCURRENCY = 2;
 
 type StartupProbeSlot = () => void;
@@ -89,14 +90,5 @@ export async function withTelegramStartupProbeSlot<T>(
     return await run();
   } finally {
     release();
-  }
-}
-
-export function resetTelegramStartupProbeLimiterForTests() {
-  activeStartupProbes = 0;
-  const pending = pendingStartupProbeWaiters.splice(0);
-  for (const waiter of pending) {
-    detachAbortHandler(waiter);
-    waiter.reject(buildStartupProbeAbortError());
   }
 }

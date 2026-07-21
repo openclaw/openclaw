@@ -1,4 +1,5 @@
-import { loadQrCodeRuntime, normalizeQrText } from "./qr-runtime.ts";
+// QR terminal helpers render QR codes for terminal output.
+import { loadQrCodeRuntime } from "./qr-runtime.ts";
 
 type QrTerminalModules = {
   data: ArrayLike<boolean | number>;
@@ -44,16 +45,17 @@ function renderCompactTerminalQr(modules: QrTerminalModules): string {
   return lines.join("\n");
 }
 
+/** Renders QR text for terminal display, with an optional compact half-block mode. */
 export async function renderQrTerminal(
   input: string,
   opts: { small?: boolean } = {},
 ): Promise<string> {
-  const text = normalizeQrText(input);
   const qrCode = await loadQrCodeRuntime();
   if (opts.small === true) {
-    return renderCompactTerminalQr(qrCode.create(text).modules);
+    // Avoid qrcode's small terminal mode so we control quiet-zone size and ANSI reset placement.
+    return renderCompactTerminalQr(qrCode.create(input).modules);
   }
-  return await qrCode.toString(text, {
+  return await qrCode.toString(input, {
     small: false,
     type: "terminal",
   });

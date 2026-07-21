@@ -1,3 +1,5 @@
+// Secrets gateway methods reload runtime secret snapshots and resolve scoped
+// command secrets while redacting validation detail to caller-friendly fields.
 import {
   ErrorCodes,
   errorShape,
@@ -5,7 +7,7 @@ import {
   validateSecretsResolveParams,
   validateSecretsResolveResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
+import { isKnownCoreSecretTargetId, isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function errorMessage(error: unknown): string {
@@ -21,6 +23,8 @@ function invalidSecretsResolveField(
   | "optionalActivePaths"
   | "providerOverrides"
   | "targetIds" {
+  // Return the offending top-level field only. Detailed validator output can
+  // include paths and schema internals that are not useful for callers here.
   for (const issue of errors ?? []) {
     const instancePath = issue.instancePath ?? "";
     if (
@@ -105,6 +109,8 @@ export function createSecretsHandlers(params: {
       const targetIds = requestParams.targetIds
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+      // Normalize allow/force/optional path lists before resolving so secrets
+      // code receives policy paths, not UI whitespace artifacts.
       const allowedPaths = requestParams.allowedPaths
         ?.map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
@@ -123,8 +129,10 @@ export function createSecretsHandlers(params: {
           : {}),
       };
 
+      // Target ids are a closed registry. Reject unknown ids before resolving
+      // so callers cannot probe arbitrary config paths through this method.
       for (const targetId of targetIds) {
-        if (!isKnownSecretTargetId(targetId)) {
+        if (!isKnownCoreSecretTargetId(targetId) && !isKnownSecretTargetId(targetId)) {
           respond(
             false,
             undefined,
@@ -153,6 +161,8 @@ export function createSecretsHandlers(params: {
           inactiveRefPaths: result.inactiveRefPaths,
         };
         if (!validateSecretsResolveResult(payload)) {
+          // Validate the returned shape as a final boundary check before any
+          // secret assignment payload leaves the gateway.
           throw new Error("secrets.resolve returned invalid payload.");
         }
         respond(true, payload);

@@ -1,3 +1,4 @@
+// Zalo tests cover actions plugin behavior.
 import { describe, expect, it } from "vitest";
 import { zaloMessageActions } from "./actions.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -28,5 +29,7 @@ describe("zaloMessageActions.describeMessageTool", () => {
       actions: ["send"],
       capabilities: [],
     });
+    expect(zaloMessageActions.supportsAction?.({ action: "send" })).toBe(true);
+    expect(zaloMessageActions.supportsAction?.({ action: "react" })).toBe(false);
   });
 });

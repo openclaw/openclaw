@@ -1,7 +1,9 @@
+// Store entry shape normalization rejects unsafe persisted metadata before runtime use.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { validateSessionId } from "./paths.js";
 import type { SessionEntry } from "./types.js";
 
+// Persisted stores may contain old or malformed ids; reject path-like ids before use.
 function isSafeSessionId(value: unknown): value is string {
   if (typeof value !== "string") {
     return false;
@@ -31,11 +33,13 @@ function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
+/** Normalizes persisted session store entries before they reach runtime callers. */
 export function normalizePersistedSessionEntryShape(value: unknown): SessionEntry | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
 
+  const modelSelectionLocked = value.modelSelectionLocked === true;
   let next = value as unknown as SessionEntry;
   const sessionFile = typeof value.sessionFile === "string" ? value.sessionFile.trim() : undefined;
   if (value.sessionId !== undefined) {
@@ -43,8 +47,17 @@ export function normalizePersistedSessionEntryShape(value: unknown): SessionEntr
       return undefined;
     }
     const sessionId = value.sessionId.trim();
+    if (modelSelectionLocked && sessionId !== value.sessionId) {
+      // A harness lock protects the exact durable identity. Repairing it here
+      // would make a corrupted row look valid before ownership validation.
+      return undefined;
+    }
     const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
     if (!transcriptSessionId && !sessionFile) {
+      if (modelSelectionLocked) {
+        return undefined;
+      }
+      // Old non-transcript ids can survive only when a separate sessionFile pins the path.
       const { sessionId: _dropSessionId, ...rest } = next;
       next = rest as SessionEntry;
     } else if (sessionId !== value.sessionId) {

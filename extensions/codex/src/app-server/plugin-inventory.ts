@@ -1,26 +1,46 @@
+/**
+ * Reads Codex plugin marketplace state and app inventory to decide which
+ * plugin-owned apps can be exposed to a native Codex thread.
+ */
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import {
-  type CodexAppInventoryCache,
-  type CodexAppInventoryCacheRead,
-  type CodexAppInventoryRequest,
+import type {
+  CodexAppInventoryCache,
+  CodexAppInventoryCacheRead,
+  CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
+import { CodexAppServerRpcError } from "./client.js";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
+  CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   resolveCodexPluginsPolicy,
+  type CodexPluginMarketplaceName,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
 } from "./config.js";
+import type {
+  CodexPluginMetadataCache,
+  CodexPluginMetadataQueryKind,
+} from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
+const CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME = `${CODEX_PLUGINS_MARKETPLACE_NAME}-remote`;
+
+/** Request callback used to call Codex app-server plugin/app methods. */
 export type CodexPluginRuntimeRequest = (method: string, params?: unknown) => Promise<unknown>;
 
+type CodexWorkspacePluginListResult =
+  | { kind: "listed"; response: v2.PluginListResponse }
+  | { kind: "rejected" };
+
+/** Stable reference to a supported Codex plugin marketplace. */
 export type CodexPluginMarketplaceRef = {
-  name: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
+  name: CodexPluginMarketplaceName;
   path?: string;
   remoteMarketplaceName?: string;
 };
 
-export type CodexPluginInventoryDiagnosticCode =
+/** Machine-readable inventory diagnostic code used by thread config builders. */
+type CodexPluginInventoryDiagnosticCode =
   | "disabled"
   | "marketplace_missing"
   | "plugin_missing"
@@ -30,12 +50,14 @@ export type CodexPluginInventoryDiagnosticCode =
   | "app_inventory_stale"
   | "app_ownership_ambiguous";
 
+/** Diagnostic explaining why a configured plugin or app cannot be exposed. */
 export type CodexPluginInventoryDiagnostic = {
   code: CodexPluginInventoryDiagnosticCode;
   plugin?: ResolvedCodexPluginPolicy;
   message: string;
 };
 
+/** App owned by a Codex plugin with current accessibility/auth state. */
 export type CodexPluginOwnedApp = {
   id: string;
   name: string;
@@ -44,6 +66,7 @@ export type CodexPluginOwnedApp = {
   needsAuth: boolean;
 };
 
+/** Inventory record for one configured Codex plugin policy. */
 export type CodexPluginInventoryRecord = {
   policy: ResolvedCodexPluginPolicy;
   summary: v2.PluginSummary;
@@ -55,25 +78,28 @@ export type CodexPluginInventoryRecord = {
   apps: CodexPluginOwnedApp[];
 };
 
+/** Complete inventory result for configured Codex plugins and owned apps. */
 export type CodexPluginInventory = {
   policy: ResolvedCodexPluginsPolicy;
-  marketplace?: CodexPluginMarketplaceRef;
   records: CodexPluginInventoryRecord[];
   diagnostics: CodexPluginInventoryDiagnostic[];
   appInventory?: CodexAppInventoryCacheRead;
 };
 
-export type ReadCodexPluginInventoryParams = {
+/** Inputs for reading plugin marketplace/detail state and cached app inventory. */
+type ReadCodexPluginInventoryParams = {
   pluginConfig?: unknown;
   policy?: ResolvedCodexPluginsPolicy;
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;
   appCacheKey?: string;
+  metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
   readPluginDetails?: boolean;
   suppressAppInventoryRefresh?: boolean;
 };
 
+/** Reads configured Codex plugin state and maps owned apps to readiness diagnostics. */
 export async function readCodexPluginInventory(
   params: ReadCodexPluginInventoryParams,
 ): Promise<CodexPluginInventory> {
@@ -92,28 +118,30 @@ export async function readCodexPluginInventory(
   }
 
   const appInventory = readCachedAppInventory(params);
-  const listed = (await params.request("plugin/list", {
-    cwds: [],
-  } satisfies v2.PluginListParams)) as v2.PluginListResponse;
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
+  const curatedListed = await listCodexPluginMetadata(params, "curated-global", {});
+  const shouldListWorkspacePlugins = policy.pluginPolicies.some(
+    (pluginPolicy) =>
+      pluginPolicy.enabled &&
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
   );
-  if (!marketplaceEntry) {
-    return {
-      policy,
-      records: [],
-      diagnostics: policy.pluginPolicies
-        .filter((pluginPolicy) => pluginPolicy.enabled)
-        .map((pluginPolicy) => ({
-          code: "marketplace_missing",
-          plugin: pluginPolicy,
-          message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
-        })),
-      ...(appInventory ? { appInventory } : {}),
-    };
+  let workspaceListResult: CodexWorkspacePluginListResult | undefined;
+  if (shouldListWorkspacePlugins) {
+    try {
+      workspaceListResult = {
+        kind: "listed",
+        response: await listCodexPluginMetadata(params, "workspace-directory", {
+          cwds: [],
+          marketplaceKinds: [CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME],
+        }),
+      };
+    } catch (error) {
+      if (!(error instanceof CodexAppServerRpcError)) {
+        throw error;
+      }
+      workspaceListResult = { kind: "rejected" };
+    }
   }
 
-  const marketplace = marketplaceRef(marketplaceEntry);
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
   if (appInventory?.state === "missing") {
@@ -132,17 +160,50 @@ export async function readCodexPluginInventory(
     if (!pluginPolicy.enabled) {
       continue;
     }
-    const summary = findPluginSummary(marketplaceEntry, pluginPolicy.pluginName);
-    if (!summary) {
+    const listed =
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+        ? workspaceListResult?.kind === "listed"
+          ? workspaceListResult.response
+          : undefined
+        : curatedListed;
+    const hasMarketplace =
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+        ? listed?.marketplaces.some(
+            (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+          ) === true
+        : listed?.marketplaces.some(isOpenAiCuratedMarketplace) === true;
+    if (!listed || !hasMarketplace) {
       diagnostics.push({
-        code: "plugin_missing",
+        code: "marketplace_missing",
         plugin: pluginPolicy,
-        message: `${pluginPolicy.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
+        message: `Codex marketplace ${pluginPolicy.marketplaceName} was not found.`,
       });
       continue;
     }
-
-    const detail = await readPluginDetail(params, marketplace, pluginPolicy, diagnostics);
+    const resolvedPlugin =
+      pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+        ? findWorkspaceMarketplacePlugin(listed, pluginPolicy.pluginName)
+        : findOpenAiCuratedMarketplacePlugin(listed, pluginPolicy.pluginName);
+    if (!resolvedPlugin) {
+      diagnostics.push({
+        code: "plugin_missing",
+        plugin: pluginPolicy,
+        message: `${pluginPolicy.pluginName} was not found in ${pluginPolicy.marketplaceName}.`,
+      });
+      continue;
+    }
+    const { summary } = resolvedPlugin;
+    const pluginMarketplace = marketplaceRef(
+      resolvedPlugin.marketplace,
+      pluginPolicy.marketplaceName,
+    );
+    const detail = await readPluginDetail(
+      params,
+      pluginMarketplace,
+      pluginPolicy,
+      summary,
+      diagnostics,
+    );
     const ownedAppIds =
       detail?.apps
         .map((app) => app.id)
@@ -187,7 +248,6 @@ export async function readCodexPluginInventory(
 
   const inventory = {
     policy,
-    marketplace,
     records,
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
@@ -195,20 +255,21 @@ export async function readCodexPluginInventory(
   return inventory;
 }
 
+/** Finds one plugin summary in the OpenAI curated marketplace response. */
 export function findOpenAiCuratedPluginSummary(
   listed: v2.PluginListResponse,
   pluginName: string,
 ): { marketplace: CodexPluginMarketplaceRef; summary: v2.PluginSummary } | undefined {
-  const marketplaceEntry = listed.marketplaces.find(
-    (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
-  );
-  if (!marketplaceEntry) {
-    return undefined;
-  }
-  const summary = findPluginSummary(marketplaceEntry, pluginName);
-  return summary ? { marketplace: marketplaceRef(marketplaceEntry), summary } : undefined;
+  const resolved = findOpenAiCuratedMarketplacePlugin(listed, pluginName);
+  return resolved
+    ? {
+        marketplace: marketplaceRef(resolved.marketplace, CODEX_PLUGINS_MARKETPLACE_NAME),
+        summary: resolved.summary,
+      }
+    : undefined;
 }
 
+/** Builds plugin/read or plugin/install params from a marketplace reference. */
 export function pluginReadParams(
   marketplace: CodexPluginMarketplaceRef,
   pluginName: string,
@@ -220,6 +281,72 @@ export function pluginReadParams(
       : {}),
     pluginName,
   };
+}
+
+/** Returns configured plugin keys whose current metadata may still recover. */
+export function resolveRecoverableCodexPluginConfigKeys(params: {
+  policy: ResolvedCodexPluginsPolicy;
+  metadataCache: CodexPluginMetadataCache;
+  appCacheKey: string;
+}): string[] {
+  return params.policy.pluginPolicies
+    .filter(
+      (pluginPolicy) =>
+        pluginPolicy.enabled &&
+        !isSettledMissingPluginPolicy({
+          pluginPolicy,
+          metadataCache: params.metadataCache,
+          appCacheKey: params.appCacheKey,
+        }),
+    )
+    .map((pluginPolicy) => pluginPolicy.configKey)
+    .toSorted();
+}
+
+async function listCodexPluginMetadata(
+  params: ReadCodexPluginInventoryParams,
+  queryKind: CodexPluginMetadataQueryKind,
+  requestParams: v2.PluginListParams,
+): Promise<v2.PluginListResponse> {
+  // Workspace-directory plugins are activated OUTSIDE OpenClaw, so a cached
+  // miss has no invalidation signal; keep those queries live so external
+  // activation is visible on the next turn (bounded by the build deadline).
+  if (!params.metadataCache || !params.appCacheKey || queryKind === "workspace-directory") {
+    return (await params.request("plugin/list", requestParams)) as v2.PluginListResponse;
+  }
+  const snapshot = await params.metadataCache.load({
+    appCacheKey: params.appCacheKey,
+    queryKind,
+    requestParams,
+    request: async (method, listedParams) =>
+      (await params.request(method, listedParams)) as v2.PluginListResponse,
+    // Upstream fail-open: with omitted marketplaceKinds a remote catalog fetch
+    // failure only warns and returns local marketplaces (no load error), which
+    // is indistinguishable from a genuinely absent plugin. Settle curated
+    // negatives only when the curated marketplace itself is present.
+    cacheable: (response: v2.PluginListResponse) =>
+      (response.marketplaces ?? []).some((marketplace) => isOpenAiCuratedMarketplace(marketplace)),
+  });
+  return snapshot.response;
+}
+
+function isSettledMissingPluginPolicy(params: {
+  pluginPolicy: ResolvedCodexPluginPolicy;
+  metadataCache: CodexPluginMetadataCache;
+  appCacheKey: string;
+}): boolean {
+  const queryKind: CodexPluginMetadataQueryKind =
+    params.pluginPolicy.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME
+      ? "workspace-directory"
+      : "curated-global";
+  const listed = params.metadataCache.read(params.appCacheKey, queryKind)?.response;
+  if (!listed) {
+    return false;
+  }
+  if (queryKind === "workspace-directory") {
+    return !findWorkspaceMarketplacePlugin(listed, params.pluginPolicy.pluginName);
+  }
+  return !findOpenAiCuratedMarketplacePlugin(listed, params.pluginPolicy.pluginName);
 }
 
 function readCachedAppInventory(
@@ -242,15 +369,33 @@ async function readPluginDetail(
   params: ReadCodexPluginInventoryParams,
   marketplace: CodexPluginMarketplaceRef,
   pluginPolicy: ResolvedCodexPluginPolicy,
+  summary: v2.PluginSummary,
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
   if (params.readPluginDetails === false) {
     return undefined;
   }
+  if (
+    marketplace.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME &&
+    marketplace.remoteMarketplaceName &&
+    !summary.remotePluginId
+  ) {
+    diagnostics.push({
+      code: "plugin_detail_unavailable",
+      plugin: pluginPolicy,
+      message: `${pluginPolicy.pluginName} detail unavailable: Codex did not return a remote plugin id.`,
+    });
+    return undefined;
+  }
   try {
     const response = (await params.request(
       "plugin/read",
-      pluginReadParams(marketplace, pluginPolicy.pluginName),
+      pluginReadParams(
+        marketplace,
+        marketplace.remoteMarketplaceName && summary.remotePluginId
+          ? summary.remotePluginId
+          : pluginPolicy.pluginName,
+      ),
     )) as v2.PluginReadResponse;
     return response.plugin;
   } catch (error) {
@@ -336,6 +481,35 @@ function findPluginSummary(
   );
 }
 
+function findOpenAiCuratedMarketplacePlugin(
+  listed: v2.PluginListResponse,
+  pluginName: string,
+): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
+  for (const marketplace of listed.marketplaces) {
+    if (!isOpenAiCuratedMarketplace(marketplace)) {
+      continue;
+    }
+    const summary = findPluginSummary(marketplace, pluginName);
+    if (summary) {
+      return { marketplace, summary };
+    }
+  }
+  return undefined;
+}
+
+function findWorkspaceMarketplacePlugin(
+  listed: v2.PluginListResponse,
+  pluginName: string,
+): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
+  // Workspace display names are not unique; the configured pluginName is the
+  // exact catalog id returned by plugin/list.
+  const marketplace = listed.marketplaces.find(
+    (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+  );
+  const summary = marketplace?.plugins.find((plugin) => plugin.id === pluginName);
+  return marketplace && summary ? { marketplace, summary } : undefined;
+}
+
 function pluginNameFromPluginId(pluginId: string, marketplaceName: string): string | undefined {
   const trimmed = pluginId.trim();
   if (!trimmed) {
@@ -348,10 +522,21 @@ function pluginNameFromPluginId(pluginId: string, marketplaceName: string): stri
   return withoutMarketplaceSuffix.split("/").at(-1)?.trim() || undefined;
 }
 
-function marketplaceRef(marketplace: v2.PluginMarketplaceEntry): CodexPluginMarketplaceRef {
+function marketplaceRef(
+  marketplace: v2.PluginMarketplaceEntry,
+  name: CodexPluginMarketplaceName,
+): CodexPluginMarketplaceRef {
   return {
-    name: CODEX_PLUGINS_MARKETPLACE_NAME,
+    name,
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };
+}
+
+/** True for either supported OpenAI curated marketplace wire name. */
+export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
+  return (
+    marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME ||
+    marketplace.name === CODEX_PLUGINS_REMOTE_MARKETPLACE_NAME
+  );
 }

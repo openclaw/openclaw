@@ -1,19 +1,8 @@
+// Regresses known config schema edge cases and compatibility expectations.
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./validation.js";
 
 describe("config schema regressions", () => {
-  it("accepts session write-lock acquire timeout", () => {
-    const res = validateConfigObject({
-      session: {
-        writeLock: {
-          acquireTimeoutMs: 60_000,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
   it('accepts memorySearch fallback "voyage"', () => {
     const res = validateConfigObject({
       agents: {
@@ -144,6 +133,20 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(false);
+  });
+
+  it("accepts 1M-character tool result caps for long-context agents", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          contextLimits: {
+            toolResultMaxChars: 1_000_000,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
   });
 
   it("accepts agents.defaults and agents.list contextLimits overrides", () => {
@@ -323,59 +326,10 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
-  it("accepts browser local startup timeout settings", () => {
-    const res = validateConfigObject({
-      browser: {
-        localLaunchTimeoutMs: 45_000,
-        localCdpReadyTimeoutMs: 30_000,
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects out-of-range browser local startup timeout settings", () => {
-    const res = validateConfigObject({
-      browser: {
-        localLaunchTimeoutMs: 120_001,
-        localCdpReadyTimeoutMs: 0,
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
   it("rejects browser.extraArgs with non-array value", () => {
     const res = validateConfigObject({
       browser: {
         extraArgs: "--proxy-server=http://127.0.0.1:7890" as unknown,
-      },
-    });
-
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts browser.tabCleanup overrides", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          enabled: true,
-          idleMinutes: 10,
-          maxTabsPerSession: 10,
-          sweepMinutes: 5,
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
-
-  it("rejects browser.tabCleanup.sweepMinutes when not positive", () => {
-    const res = validateConfigObject({
-      browser: {
-        tabCleanup: {
-          sweepMinutes: 0,
-        },
       },
     });
 
@@ -394,19 +348,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-  it("accepts tools.media.asyncCompletion.directSend", () => {
-    const res = validateConfigObject({
-      tools: {
-        media: {
-          asyncCompletion: {
-            directSend: true,
-          },
-        },
-      },
-    });
-
-    expect(res.ok).toBe(true);
-  });
   it("accepts discovery.wideArea.domain for unicast DNS-SD", () => {
     const res = validateConfigObject({
       discovery: {
@@ -486,5 +427,58 @@ describe("config schema regressions", () => {
     });
 
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts a microsoft-foundry model entry carrying thinkingLevelMap (openclaw#91011)", () => {
+    // Foundry's writer (buildFoundryThinkingLevelMap) persists this during Entra ID onboarding; the
+    // strict schema used to reject thinkingLevelMap, so updateConfig rolled the whole write back.
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            models: [
+              {
+                id: "gpt-5.1-chat",
+                name: "gpt-5.1-chat",
+                api: "openai-responses",
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: "none",
+                  minimal: null,
+                  low: "low",
+                  medium: "medium",
+                  high: "high",
+                  xhigh: null,
+                  max: null,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects thinkingLevelMap keys outside the model thinking levels", () => {
+    // "adaptive" is a valid agent thinkingDefault but not a ModelThinkingLevel; the map stays strict.
+    const res = validateConfigObject({
+      models: {
+        providers: {
+          "microsoft-foundry": {
+            models: [
+              {
+                id: "gpt-5.1-chat",
+                name: "gpt-5.1-chat",
+                thinkingLevelMap: { adaptive: "high" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
   });
 });

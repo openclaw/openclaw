@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// Generates Kysely database types from the SQLite schema.
 import fs from "node:fs";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
@@ -30,8 +31,8 @@ function toInterfaceName(tableName) {
     .join("");
 }
 
-function columnBaseType(columnType) {
-  const normalized = columnType.toUpperCase();
+function columnBaseType(columnTypeLocal) {
+  const normalized = columnTypeLocal.toUpperCase();
   if (normalized.includes("BLOB")) {
     return "Uint8Array";
   }
@@ -50,14 +51,14 @@ function columnBaseType(columnType) {
 
 function columnType(column, primaryKeyColumnCount) {
   const baseType = columnBaseType(String(column.type ?? ""));
-  const generated =
-    column.dflt_value != null ||
-    (primaryKeyColumnCount === 1 &&
-      Number(column.pk) > 0 &&
-      String(column.type ?? "")
-        .toUpperCase()
-        .includes("INT"));
-  const nullable = Number(column.notnull) !== 1 && !generated;
+  const generatedPrimaryKey =
+    primaryKeyColumnCount === 1 &&
+    Number(column.pk) > 0 &&
+    String(column.type ?? "")
+      .toUpperCase()
+      .includes("INT");
+  const generated = column.dflt_value != null || generatedPrimaryKey;
+  const nullable = Number(column.notnull) !== 1 && !generatedPrimaryKey;
   const valueType = nullable ? `${baseType} | null` : baseType;
   return generated ? `Generated<${valueType}>` : valueType;
 }
