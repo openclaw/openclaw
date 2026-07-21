@@ -17,7 +17,6 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
-import { onAISafetyDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   pinActivePluginHttpRouteRegistry,

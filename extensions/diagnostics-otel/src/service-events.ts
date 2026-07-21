@@ -232,6 +232,15 @@ export function createDiagnosticsEventHandler(params: {
           return;
         case "model.failover":
           recordModelFailover(evt, metadata);
+          break;
+        case "ai_safety.eval.result":
+        case "ai_safety.external_content.consumed":
+        case "ai_safety.memory_context.selected":
+        case "ai_safety.prompt_injection.signal":
+        case "ai_safety.tool_policy.decision":
+        case "ai_safety.user_feedback.received":
+          // Handled upstream via the ai_safety-specific subscription path in service.ts
+          break;
       }
     } catch (err) {
       logger.error(`diagnostics-otel: event handler failed (${evt.type}): ${formatError(err)}`);
