@@ -3,7 +3,6 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
-import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
 async function loadNewSessionData(
@@ -14,6 +13,7 @@ async function loadNewSessionData(
   if (!requestedLocation.catalogId) {
     return { ...requestedLocation, model: "", catalogLabel: "" };
   }
+  const targetHelpers = import("./catalog-target.ts");
   // ensureList is fail-closed: offline and request-error paths return cached
   // data or null, allowing the unresolved catalog page to mount and retry.
   const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
@@ -22,6 +22,7 @@ async function loadNewSessionData(
     : requestedLocation.agentId
       ? [{ id: requestedLocation.agentId }]
       : [];
+  const { resolveAgentId, resolveCreateTarget } = await targetHelpers;
   const agentId = resolveAgentId(
     requestedLocation,
     availableAgents,

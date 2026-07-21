@@ -165,6 +165,7 @@ async function promptConfigureSection(
       initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
     }),
     runtime,
+    1,
   );
 }
 
@@ -187,6 +188,7 @@ async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMod
       initialValue: "configure",
     }),
     runtime,
+    1,
   ) as ChannelsWizardMode;
 }
 
@@ -221,6 +223,7 @@ async function promptWebToolsConfig(
       initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
     }),
     runtime,
+    1,
   );
 
   let nextSearch: WebSearchConfig = {
@@ -252,6 +255,7 @@ async function promptWebToolsConfig(
           initialValue: existingSearch?.openaiCodex?.enabled === true,
         }),
         runtime,
+        1,
       );
 
       if (enableCodexNative) {
@@ -273,6 +277,7 @@ async function promptWebToolsConfig(
             initialValue: existingSearch?.openaiCodex?.mode ?? "cached",
           }),
           runtime,
+          1,
         );
         nextSearch = {
           ...nextSearch,
@@ -288,6 +293,7 @@ async function promptWebToolsConfig(
             initialValue: Boolean(existingSearch?.provider),
           }),
           runtime,
+          1,
         );
       } else {
         nextSearch = {
@@ -342,6 +348,7 @@ async function promptWebToolsConfig(
       initialValue: existingFetch?.enabled ?? true,
     }),
     runtime,
+    1,
   );
 
   const nextFetch = {
@@ -422,7 +429,7 @@ export async function runConfigureWizard(
       selectedSections.includes("daemon") ||
       selectedSections.includes("health");
     const promptGatewayRunMode = async (): Promise<OnboardMode> => {
-      const localUrl = "ws://127.0.0.1:18789";
+      const localUrl = `ws://127.0.0.1:${resolveGatewayPort(baseConfig)}`;
       const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
       const localProbePromise = (async () => {
         const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
@@ -482,6 +489,7 @@ export async function runConfigureWizard(
           ],
         }),
         runtime,
+        1,
       );
     };
 
@@ -580,6 +588,7 @@ export async function runConfigureWizard(
           initialValue: workspaceDir,
         }),
         runtime,
+        1,
       );
       workspaceDir = resolveUserPath(
         normalizeOptionalString(workspaceInput ?? "") || DEFAULT_WORKSPACE,
@@ -650,6 +659,7 @@ export async function runConfigureWizard(
           validate: validateGatewayPortInput,
         }),
         runtime,
+        1,
       );
       gatewayPort = parsePort(portInput) ?? gatewayPort;
     };

@@ -19,6 +19,7 @@ type BundledPackageChannelMetadataModule =
   typeof import("../plugins/bundled-package-channel-metadata.js");
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
+const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
 
 type RegisterChannelsCliOptions = {
   includeSetupOptions?: boolean;
@@ -282,7 +283,10 @@ export async function registerChannelsCli(
   addCommand.action(async (channelArg: string | undefined, opts, command) => {
     await runChannelsCommand(async () => {
       const { channelsAddCommand } = await loadChannelsCommands();
-      const hasFlags = hasExplicitOptions(command, getOptionNames(command));
+      const hasFlags = hasExplicitOptions(
+        command,
+        getOptionNames(command).filter((name) => !CHANNEL_ADD_SELECTION_OPTION_NAMES.has(name)),
+      );
       await channelsAddCommand(resolveChannelsAddOptions(channelArg, opts), defaultRuntime, {
         hasFlags,
       });

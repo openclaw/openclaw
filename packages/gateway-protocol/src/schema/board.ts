@@ -20,6 +20,15 @@ export const BoardSizeSchema = Type.Union([
   Type.Literal("xl"),
   Type.Literal("full"),
 ]);
+export const BoardWidgetPresentationSchema = Type.Union([
+  Type.Literal("card"),
+  Type.Literal("full-bleed"),
+  Type.Literal("frameless"),
+]);
+export const BoardWidgetHeightModeSchema = Type.Union([
+  Type.Literal("auto"),
+  Type.Literal("fixed"),
+]);
 
 export const BOARD_CRON_JOB_ID_MAX_LENGTH = 256;
 export const BOARD_CRON_TRIGGER_PREFIX = "cron.trigger:";
@@ -51,6 +60,8 @@ export const BoardWidgetSchema = closedObject({
   tabId: BoardTabIdSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   contentKind: Type.Union([Type.Literal("html"), Type.Literal("mcp-app")]),
+  presentation: Type.Optional(BoardWidgetPresentationSchema),
+  heightMode: Type.Optional(BoardWidgetHeightModeSchema),
   sizeW: Type.Integer({ minimum: 1, maximum: 12 }),
   sizeH: Type.Integer({ minimum: 1, maximum: 20 }),
   position: Type.Integer({ minimum: 0 }),
@@ -115,6 +126,7 @@ export const BoardWidgetResizeOpSchema = closedObject({
   name: BoardWidgetNameSchema,
   sizeW: Type.Integer(),
   sizeH: Type.Integer(),
+  heightMode: Type.Optional(BoardWidgetHeightModeSchema),
 });
 export const BoardWidgetRemoveOpSchema = closedObject({
   kind: Type.Literal("widget_remove"),
@@ -187,6 +199,8 @@ export const BoardWidgetPutParamsSchema = closedObject({
   name: BoardWidgetNameSchema,
   title: Type.Optional(Type.String({ minLength: 1, maxLength: 80 })),
   content: BoardWidgetPutContentSchema,
+  presentation: Type.Optional(BoardWidgetPresentationSchema),
+  heightMode: Type.Optional(BoardWidgetHeightModeSchema),
   placement: Type.Optional(
     closedObject({
       tabId: Type.Optional(BoardTabIdSchema),

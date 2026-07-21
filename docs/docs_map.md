@@ -8992,7 +8992,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /reference/templates/BOOTSTRAP
 - Headings:
   - H1: BOOTSTRAP.md - Birth Sequence
-  - H2: 1. Name Yourself
+  - H2: 1. Ask What to Call You
   - H2: 2. Choose Your Vibe
   - H2: 3. Finish With Recommendations
   - H2: Related

@@ -25,6 +25,12 @@ const TOUCH_TARGET_MIN_PX = 43.5;
 // 8vCPU CI runner that first render can starve well past 10s. Budget the
 // first-render waits for contention while staying inside the 60s testTimeout.
 const APP_FIRST_RENDER_TIMEOUT_MS = 30_000;
+const FULL_APP_TEST_OPTIONS = {
+  // These cases cold-boot Vite through one shared Chromium/server pair. Keep them
+  // as a sequential barrier so concurrent layout pages cannot starve navigation.
+  concurrent: false,
+  timeout: 60_000,
+} as const;
 const LONG_SIDE_CHAT_BODY = Array.from(
   { length: 80 },
   (_, index) => `<p>Line ${index + 1}: keep the complete side result readable.</p>`,
@@ -611,9 +617,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it(
     "reveals message context on timestamp hover and keeps click-to-open",
-    // This full-app case shares Chromium with concurrent layout pages; match
-    // the UI runner's cold-browser budget instead of imposing a flaky 20s cap.
-    { timeout: 60_000 },
+    FULL_APP_TEST_OPTIONS,
     async () => {
       if (!realChatServer) {
         throw new Error("Expected the Control UI server to be ready");
@@ -690,47 +694,51 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("renders encoded media extensions from assistant output and transcript fields", async () => {
-    if (!realChatServer) {
-      throw new Error("Expected the Control UI server to be ready");
-    }
-    const imageUrl = "https://cdn.example/render%2Epng?download=1";
-    const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
-    const page = await openBrowserPage(1366, 900);
-    try {
-      await page.route("https://cdn.example/**", (route) => route.abort());
-      await installMockGateway(page, {
-        historyMessages: [
-          {
-            content: `MEDIA:${imageUrl}`,
-            role: "assistant",
-            timestamp: Date.UTC(2026, 6, 9, 10, 0),
-          },
-          {
-            content: "Encoded transcript video",
-            MediaPath: videoUrl,
-            role: "user",
-            timestamp: Date.UTC(2026, 6, 9, 10, 1),
-          },
-        ],
-      });
-      await page.goto(`${realChatServer.baseUrl}chat`, {
-        waitUntil: "domcontentloaded",
-        timeout: APP_FIRST_RENDER_TIMEOUT_MS,
-      });
+  it(
+    "renders encoded media extensions from assistant output and transcript fields",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const imageUrl = "https://cdn.example/render%2Epng?download=1";
+      const videoUrl = "https://cdn.example/clip%2Emp4?download=1";
+      const page = await openBrowserPage(1366, 900);
+      try {
+        await page.route("https://cdn.example/**", (route) => route.abort());
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              content: `MEDIA:${imageUrl}`,
+              role: "assistant",
+              timestamp: Date.UTC(2026, 6, 9, 10, 0),
+            },
+            {
+              content: "Encoded transcript video",
+              MediaPath: videoUrl,
+              role: "user",
+              timestamp: Date.UTC(2026, 6, 9, 10, 1),
+            },
+          ],
+        });
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
 
-      const image = page.locator("img.chat-message-image");
-      const video = page.locator("video");
-      // First wait absorbs the cold-app render; both elements land in the same
-      // history render pass, so the video follows immediately after.
-      await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
-      await video.waitFor({ timeout: 10_000 });
-      expect(await image.getAttribute("src")).toBe(imageUrl);
-      expect(await video.getAttribute("src")).toBe(videoUrl);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
+        const image = page.locator("img.chat-message-image");
+        const video = page.locator("video");
+        // First wait absorbs the cold-app render; both elements land in the same
+        // history render pass, so the video follows immediately after.
+        await image.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        await video.waitFor({ timeout: 10_000 });
+        expect(await image.getAttribute("src")).toBe(imageUrl);
+        expect(await video.getAttribute("src")).toBe(videoUrl);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it.each([
     [393, 852],

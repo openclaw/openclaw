@@ -1721,6 +1721,21 @@ export async function runReplyAgent(params: {
     requesterAccountId:
       followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
     requesterSenderId: sessionCtx.SenderId,
+    resolveUserTurnTarget: ({
+      entry,
+      sessionId,
+      sessionKey: targetSessionKey,
+      storePath: targetStorePath,
+    }) => ({
+      sessionId,
+      sessionKey: targetSessionKey,
+      sessionEntry: entry,
+      ...(activeSessionStore ? { sessionStore: activeSessionStore } : {}),
+      storePath: targetStorePath,
+      agentId: followupRun.run.agentId,
+      cwd: followupRun.run.workspaceDir,
+      config: cfg,
+    }),
     ...(sessionKey ? { sessionKey } : {}),
     setEntry: (entry) => {
       activeSessionEntry = entry;

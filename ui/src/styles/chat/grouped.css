@@ -388,6 +388,30 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+.chat-group.workspace-conflict .chat-group-messages {
+  max-width: min(760px, calc(100% - 46px));
+}
+
+.chat-group.workspace-conflict .chat-avatar {
+  background: color-mix(in srgb, var(--warn) 14%, var(--secondary));
+  color: var(--warn);
+}
+
+.chat-bubble--workspace-conflict {
+  width: 100%;
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 10%, var(--card)) 0%,
+    color-mix(in srgb, var(--warn) 5%, var(--card)) 100%
+  );
+}
+
+.chat-workspace-conflict-event {
+  display: grid;
+  gap: 8px;
+}
+
 /* Tool messages render flat rows, not bubbles: the shell only constrains
    width; all bubble chrome (border/background/padding) is reset. */
 .chat-bubble--tool-shell {
