@@ -1,0 +1,374 @@
+# Default values for mythos
+# This is a YAML-formatted file.
+
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Mythos Gateway configuration
+gateway:
+  replicaCount: 2
+  
+  image:
+    repository: openclaw/mythos
+    tag: "2026.5.10"
+    pullPolicy: IfNotPresent
+  
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 18789
+    canvasPort: 18793
+    metricsPort: 9090
+  
+  # Ingress configuration
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: mythos.local
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+    tls: []
+  
+  # Resource limits
+  resources:
+    limits:
+      cpu: 2000m
+      memory: 4Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Autoscaling
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+  
+  # Liveness and readiness probes
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 18789
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 18789
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  
+  # Environment variables
+  env:
+    - name: NODE_ENV
+      value: "production"
+    - name: OPENCLAW_GATEWAY_PORT
+      value: "18789"
+  
+  # Secrets
+  secrets:
+    gatewayToken: ""
+    anthropicApiKey: ""
+    openaiApiKey: ""
+    geminiApiKey: ""
+    telegramBotToken: ""
+    discordBotToken: ""
+    slackBotToken: ""
+    githubToken: ""
+  
+  # ConfigMap for openclaw.json
+  config:
+    enabled: true
+    data:
+      gateway:
+        port: 18789
+        bind: "0.0.0.0"
+        auth:
+          mode: "token"
+        diagnostics:
+          enabled: true
+          timeline: true
+          payloadLarge: true
+        talk:
+          provider: "openai"
+          realtime:
+            mode: "realtime"
+            transport: "webrtc"
+            brain: "agent-consult"
+      models:
+        providers:
+          anthropic:
+            apiKey: { source: "env", id: "ANTHROPIC_API_KEY" }
+            models: ["claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-3-5"]
+          openai:
+            apiKey: { source: "env", id: "OPENAI_API_KEY" }
+            models: ["gpt-5.5", "gpt-5.4-mini", "gpt-realtime-2.1"]
+          google:
+            apiKey: { source: "env", id: "GEMINI_API_KEY" }
+            models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview"]
+      agents:
+        defaults:
+          workspace: "/home/openclaw/.openclaw/workspace"
+          bootstrapMaxChars: 20000
+          bootstrapTotalMaxChars: 60000
+          sandbox: true
+          memorySearch:
+            provider: "local"
+            hybrid:
+              vectorWeight: 0.7
+              textWeight: 0.3
+              mmrDiversification: true
+              temporalDecayHalflife: "30d"
+      memory:
+        backend: "builtin"
+      tools:
+        profile: "default"
+        exec:
+          security: "default"
+          ask: "risky"
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity
+  affinity: {}
+  
+  # Pod annotations
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "9090"
+    prometheus.io/path: "/metrics"
+  
+  # Pod security context
+  podSecurityContext:
+    fsGroup: 1000
+  
+  # Container security context
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    readOnlyRootFilesystem: false
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+  
+  # Persistent volumes
+  persistence:
+    enabled: true
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+  
+  # Service account
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+  
+  # Network policy
+  networkPolicy:
+    enabled: true
+    ingress:
+      - from:
+          - namespaceSelector:
+              matchLabels:
+                kubernetes.io/metadata.name: ingress-nginx
+        ports:
+          - protocol: TCP
+            port: 18789
+          - protocol: TCP
+            port: 18793
+    egress:
+      - to:
+          - namespaceSelector: {}
+        ports:
+          - protocol: TCP
+            port: 443
+          - protocol: TCP
+            port: 80
+      - to:
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/name: postgresql
+        ports:
+          - protocol: TCP
+            port: 5432
+      - to:
+          - podSelector:
+              matchLabels:
+                app.kubernetes.io/name: redis
+        ports:
+          - protocol: TCP
+            port: 6379
+
+# PostgreSQL configuration
+postgresql:
+  enabled: true
+  auth:
+    username: mythos
+    password: ""
+    database: mythos
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 250m
+        memory: 512Mi
+
+# Redis configuration
+redis:
+  enabled: true
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 1Gi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+  replica:
+    replicaCount: 0
+
+# Monitoring configuration
+monitoring:
+  enabled: true
+  
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}
+  
+  prometheusRule:
+    enabled: true
+    rules:
+      - alert: MythosHighLatency
+        expr: histogram_quantile(0.95, rate(mythos_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High request latency"
+          description: "95th percentile latency is above 1s"
+      
+      - alert: MythosHighErrorRate
+        expr: rate(mythos_request_errors_total[5m]) / rate(mythos_request_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High error rate"
+          description: "Error rate is above 5%"
+      
+      - alert: MythosHighMemoryUsage
+        expr: container_memory_usage_bytes{container="gateway"} > 3.5e9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 3.5GB"
+
+# Logging configuration
+logging:
+  level: info
+  format: json
+  output: stdout
+
+# Security configuration
+security:
+  podSecurityPolicy:
+    enabled: false
+  
+  networkPolicy:
+    enabled: true
+  
+  secrets:
+    encryption:
+      enabled: true
+      keySecret: ""
+
+# Backup configuration
+backup:
+  enabled: true
+  schedule: "0 2 * * *"
+  retention:
+    days: 30
+  storage:
+    type: persistentVolume
+    size: 5Gi
+
+# Scaling configuration
+scaling:
+  horizontalPodAutoscaler:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 70
+      - type: Resource
+        resource:
+          name: memory
+          target:
+            type: Utilization
+            averageUtilization: 80
+  
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+
+# Resource quota
+resourceQuota:
+  enabled: false
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+
+# Priority class
+priorityClass:
+  enabled: false
+  name: ""
+  value: 1000000
+
+# Topology spread constraints
+topologySpreadConstraints:
+  enabled: false
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: DoNotSchedule

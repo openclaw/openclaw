@@ -1,0 +1,30 @@
+apiVersion: v2
+name: mythos
+description: Mythos-Class OpenClaw with Rust-Powered Multi-Agent AI
+type: application
+version: 1.0.0
+appVersion: "2026.5.10"
+keywords:
+  - ai
+  - agents
+  - rust
+  - openclaw
+  - multi-agent
+home: https://github.com/openclaw/openclaw
+sources:
+  - https://github.com/openclaw/openclaw
+maintainers:
+  - name: OpenClaw Team
+    email: team@openclaw.ai
+dependencies:
+  - name: postgresql
+    version: 15.5.0
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled
+  - name: redis
+    version: 19.5.0
+    repository: https://charts.bitnami.com/bitnami
+    condition: redis.enabled
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/category: ai-machine-learning

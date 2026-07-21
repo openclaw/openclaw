@@ -1,0 +1,12 @@
+{{- if .Values.gateway.config.enabled -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mythos.fullname" . }}-config
+  labels:
+    {{- include "mythos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+data:
+  config.json: |
+    {{- .Values.gateway.config.data | toJson | nindent 4 }}
+{{- end }}

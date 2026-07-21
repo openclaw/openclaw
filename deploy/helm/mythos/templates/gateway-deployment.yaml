@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mythos.fullname" . }}-gateway
+  labels:
+    {{- include "mythos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  {{- if not .Values.gateway.autoscaling.enabled }}
+  replicas: {{ .Values.gateway.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "mythos.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.gateway.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        checksum/config: {{ include (print $.Template.BasePath "/gateway-configmap.yaml") . | sha256sum }}
+        checksum/secrets: {{ include (print $.Template.BasePath "/gateway-secrets.yaml") . | sha256sum }}
+      labels:
+        {{- include "mythos.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "mythos.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.gateway.podSecurityContext | nindent 8 }}
+      containers:
+        - name: gateway
+          securityContext:
+            {{- toYaml .Values.gateway.securityContext | nindent 12 }}
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+          ports:
+            - name: gateway
+              containerPort: 18789
+              protocol: TCP
+            - name: canvas
+              containerPort: 18793
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          
+          env:
+            {{- toYaml .Values.gateway.env | nindent 12 }}
+            - name: OPENCLAW_GATEWAY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mythos.fullname" . }}-secrets
+                  key: gateway-token
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mythos.fullname" . }}-secrets
+                  key: anthropic-api-key
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mythos.fullname" . }}-secrets
+                  key: openai-api-key
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mythos.fullname" . }}-secrets
+                  key: gemini-api-key
+            - name: POSTGRES_HOST
+              value: {{ include "mythos.fullname" . }}-postgresql
+            - name: POSTGRES_PORT
+              value: "5432"
+            - name: POSTGRES_USER
+              value: {{ .Values.postgresql.auth.username }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "mythos.fullname" . }}-postgresql
+                  key: password
+            - name: POSTGRES_DB
+              value: {{ .Values.postgresql.auth.database }}
+            - name: REDIS_HOST
+              value: {{ include "mythos.fullname" . }}-redis-master
+            - name: REDIS_PORT
+              value: "6379"
+          
+          volumeMounts:
+            - name: config
+              mountPath: /home/openclaw/.openclaw/config.json
+              subPath: config.json
+            - name: data
+              mountPath: /home/openclaw/.openclaw
+            - name: workspace
+              mountPath: /home/openclaw/.openclaw/workspace
+          
+          livenessProbe:
+            {{- toYaml .Values.gateway.livenessProbe | nindent 12 }}
+          
+          readinessProbe:
+            {{- toYaml .Values.gateway.readinessProbe | nindent 12 }}
+          
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+      
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "mythos.fullname" . }}-config
+        - name: data
+          {{- if .Values.gateway.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mythos.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: workspace
+          {{- if .Values.gateway.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mythos.fullname" . }}-workspace
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      
+      {{- with .Values.gateway.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.gateway.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- with .Values.gateway.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      
+      {{- if .Values.gateway.topologySpreadConstraints.enabled }}
+      topologySpreadConstraints:
+        - maxSkew: {{ .Values.gateway.topologySpreadConstraints.maxSkew }}
+          topologyKey: {{ .Values.gateway.topologySpreadConstraints.topologyKey }}
+          whenUnsatisfiable: {{ .Values.gateway.topologySpreadConstraints.whenUnsatisfiable }}
+          labelSelector:
+            matchLabels:
+              {{- include "mythos.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: gateway
+      {{- end }}

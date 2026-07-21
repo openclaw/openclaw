@@ -1,0 +1,43 @@
+{{- if .Values.gateway.persistence.enabled -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mythos.fullname" . }}-data
+  labels:
+    {{- include "mythos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  {{- with .Values.gateway.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.gateway.persistence.accessModes | nindent 4 }}
+  {{- if .Values.gateway.persistence.storageClass }}
+  storageClassName: {{ .Values.gateway.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.gateway.persistence.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "mythos.fullname" . }}-workspace
+  labels:
+    {{- include "mythos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+  {{- with .Values.gateway.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.gateway.persistence.accessModes | nindent 4 }}
+  {{- if .Values.gateway.persistence.storageClass }}
+  storageClassName: {{ .Values.gateway.persistence.storageClass }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.gateway.persistence.size }}
+{{- end }}

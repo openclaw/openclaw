@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mythos.fullname" . }}-gateway
+  labels:
+    {{- include "mythos.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: {{ .Values.gateway.service.type }}
+  ports:
+    - port: {{ .Values.gateway.service.port }}
+      targetPort: gateway
+      protocol: TCP
+      name: gateway
+    - port: {{ .Values.gateway.service.canvasPort }}
+      targetPort: canvas
+      protocol: TCP
+      name: canvas
+    - port: {{ .Values.gateway.service.metricsPort }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "mythos.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway

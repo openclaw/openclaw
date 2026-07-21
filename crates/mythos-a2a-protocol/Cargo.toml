@@ -1,0 +1,29 @@
+[package]
+name = "mythos-a2a-protocol"
+version = "0.1.0"
+edition = "2021"
+description = "Agent-to-Agent communication protocol for Mythos multi-agent orchestration"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { version = "2.16", features = ["async", "serde-json", "napi8"] }
+napi-derive = "2.16"
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+dashmap = "6.1"
+tracing = "0.1"
+thiserror = "1.0"
+
+[build-dependencies]
+napi-build = "2.1"
+
+[features]
+default = []
+websocket = []
