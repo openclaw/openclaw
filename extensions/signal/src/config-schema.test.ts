@@ -88,22 +88,135 @@ describe("signal groups schema", () => {
     });
   });
 
-  it("accepts channel apiMode", () => {
-    for (const apiMode of ["auto", "native", "container"]) {
-      expectValidSignalConfig({ apiMode });
-    }
+  it("accepts account-owned transport configurations", () => {
+    expectValidSignalConfig({
+      account: "+15555550123",
+      transport: {
+        kind: "managed-native",
+        cliPath: "/opt/signal-cli",
+        url: "http://127.0.0.1:8181",
+        httpHost: "127.0.0.1",
+        httpPort: 8181,
+      },
+      accounts: {
+        native: {
+          transport: {
+            kind: "external-native",
+            url: "http://signal-native:8080",
+          },
+        },
+        container: {
+          transport: {
+            kind: "container",
+            url: "http://signal-container:8080",
+          },
+        },
+      },
+    });
   });
 
-  it("rejects per-account apiMode", () => {
+  it("rejects a root container transport without an effective account", () => {
+    const issues = expectInvalidSignalConfig({
+      transport: {
+        kind: "container",
+        url: "http://signal-container:8080",
+      },
+    });
+
+    expect(issues.map((issue) => issue.path.join("."))).toContain("account");
+  });
+
+  it("rejects a named container transport without an inherited or owned account", () => {
     const issues = expectInvalidSignalConfig({
       accounts: {
-        primary: {
-          apiMode: "container",
+        work: {
+          transport: {
+            kind: "container",
+            url: "http://signal-container:8080",
+          },
         },
       },
     });
 
-    expect(issues.map((issue) => issue.path.join("."))).toContain("accounts.primary");
+    expect(issues.map((issue) => issue.path.join("."))).toContain("accounts.work.account");
+  });
+
+  it("allows disabled account-less container transports", () => {
+    expectValidSignalConfig({
+      enabled: false,
+      transport: {
+        kind: "container",
+        url: "http://signal-container:8080",
+      },
+    });
+    expectValidSignalConfig({
+      accounts: {
+        work: {
+          enabled: false,
+          transport: {
+            kind: "container",
+            url: "http://signal-container:8080",
+          },
+        },
+      },
+    });
+  });
+
+  it("accepts a default-account number stored beside a root container transport", () => {
+    expectValidSignalConfig({
+      transport: {
+        kind: "container",
+        url: "http://signal-container:8080",
+      },
+      accounts: {
+        Default: {
+          account: "+15555550123",
+        },
+      },
+    });
+  });
+
+  it("rejects managed transport ports outside the TCP range", () => {
+    expectInvalidSignalConfig({
+      transport: {
+        kind: "managed-native",
+        httpPort: 65_536,
+      },
+    });
+  });
+
+  it("rejects the retired apiMode shape", () => {
+    const issues = expectInvalidSignalConfig({ apiMode: "container" });
+
+    expect(issues.map((issue) => issue.path.join("."))).toContain("");
+  });
+
+  it("rejects transport fields that belong to another kind", () => {
+    expectInvalidSignalConfig({
+      transport: {
+        kind: "container",
+        url: "http://signal-container:8080",
+        cliPath: "/opt/signal-cli",
+      },
+    });
+  });
+
+  it("rejects non-HTTP transport URLs", () => {
+    expectInvalidSignalConfig({
+      transport: {
+        kind: "external-native",
+        url: "ftp://signal-native:8080",
+      },
+    });
+  });
+
+  it("rejects transport URLs containing credentials", () => {
+    expectInvalidSignalConfig({
+      transport: {
+        kind: "container",
+        url: "http://user@signal-container:8080",
+      },
+    });
   });
 
   it("accepts top-level group overrides", () => {

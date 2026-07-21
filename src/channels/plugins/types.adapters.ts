@@ -73,18 +73,14 @@ export type ChannelCapabilitiesDiagnostics = {
 
 type ChannelAdapterCallback<T extends (...args: never[]) => unknown> = T;
 
-export type ChannelSetupAdapter = {
-  resolveAccountId?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string;
-    input?: ChannelSetupInput;
-  }) => string;
+export type ChannelSetupAdapter<Input extends { name?: string } = ChannelSetupInput> = {
+  resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string; input?: Input }) => string;
   prepareAccountConfigInput?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
     runtime: RuntimeEnv;
-  }) => Promise<ChannelSetupInput> | ChannelSetupInput;
+  }) => Promise<Input> | Input;
   resolveBindingAccountId?: (params: {
     cfg: OpenClawConfig;
     agentId: string;
@@ -98,19 +94,19 @@ export type ChannelSetupAdapter = {
   applyAccountConfig: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
   }) => OpenClawConfig;
   afterAccountConfigWritten?: (params: {
     previousCfg: OpenClawConfig;
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
     runtime: RuntimeEnv;
   }) => Promise<void> | void;
   validateInput?: (params: {
     cfg: OpenClawConfig;
     accountId: string;
-    input: ChannelSetupInput;
+    input: Input;
   }) => string | null;
   singleAccountKeysToMove?: readonly string[];
   namedAccountPromotionKeys?: readonly string[];

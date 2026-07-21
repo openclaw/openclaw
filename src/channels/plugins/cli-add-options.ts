@@ -29,14 +29,17 @@ function compareChannels(left: PluginPackageChannel, right: PluginPackageChannel
     : leftOrder - rightOrder;
 }
 
-function matchesChannel(channel: PluginPackageChannel, normalizedChannelId: string): boolean {
-  return (
-    channel.id?.toLowerCase() === normalizedChannelId ||
-    Boolean(channel.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId))
-  );
+function channelSetupOptions(channel: PluginPackageChannel): PluginPackageChannelCliOption[] {
+  return [
+    ...(channel.setup?.fields.map((field) => field.cli) ?? []),
+    ...(channel.cliAddOptions ?? []),
+  ];
 }
 
-export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
+export function resolveChannelSetupCliOptionMetadata(
+  channelId?: string,
+  params: { includeAll?: boolean } = {},
+) {
   const bundledChannels = listBundledPackageChannelMetadata().toSorted(compareChannels);
   const catalogChannels = listRawChannelPluginCatalogEntries({
     excludeWorkspace: true,
@@ -46,31 +49,25 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
     .toSorted(compareChannels);
   const orderedChannels = [...bundledChannels, ...catalogChannels];
   const normalizedChannelId = channelId?.trim().toLowerCase();
-  // The selected channel's declarations win switch-identity dedupe so another
-  // channel's same-named option cannot control parsing arity or defaults for
-  // this invocation.
-  const channels = normalizedChannelId
-    ? [
-        ...orderedChannels.filter((channel) => matchesChannel(channel, normalizedChannelId)),
-        ...orderedChannels.filter((channel) => !matchesChannel(channel, normalizedChannelId)),
-      ]
-    : orderedChannels;
+  const selectedChannel = normalizedChannelId
+    ? (orderedChannels.find((channel) => channel.id?.toLowerCase() === normalizedChannelId) ??
+      orderedChannels.find((channel) =>
+        channel.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId),
+      ))
+    : undefined;
+  const channels = params.includeAll ? orderedChannels : selectedChannel ? [selectedChannel] : [];
   const seenSwitches = new Set<string>();
-  const options = channels
-    .flatMap((channel) => channel.cliAddOptions ?? [])
-    .filter((option) => {
-      const key = channelCliOptionSwitchKey(option.flags);
-      if (seenSwitches.has(key)) {
-        return false;
-      }
-      seenSwitches.add(key);
-      return true;
-    });
+  const options = channels.flatMap(channelSetupOptions).filter((option) => {
+    const key = channelCliOptionSwitchKey(option.flags);
+    if (seenSwitches.has(key)) {
+      return false;
+    }
+    seenSwitches.add(key);
+    return true;
+  });
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
-  for (const channel of normalizedChannelId
-    ? channels.filter((candidate) => matchesChannel(candidate, normalizedChannelId))
-    : []) {
-    for (const option of channel.cliAddOptions ?? []) {
+  if (selectedChannel) {
+    for (const option of selectedChannel.cliAddOptions ?? []) {
       if (!option.valueType) {
         continue;
       }
@@ -82,5 +79,5 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
     }
   }
 
-  return { options, valueMetadataByAttributeName };
+  return { options, selectedChannel, valueMetadataByAttributeName };
 }

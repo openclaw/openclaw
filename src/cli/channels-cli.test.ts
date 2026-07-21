@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { registerChannelsCli } from "./channels-cli.js";
+import { registerChannelsCli, resolveChannelsAddOptions } from "./channels-cli.js";
 
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
   vi.fn<() => readonly PluginPackageChannel[]>(() => []),
@@ -21,6 +21,7 @@ const runtimeMock = vi.hoisted(() => ({
 
 vi.mock("../plugins/bundled-package-channel-metadata.js", () => ({
   listBundledPackageChannelMetadata: listBundledPackageChannelMetadataMock,
+  listPackageChannelMetadata: listBundledPackageChannelMetadataMock,
 }));
 
 vi.mock("../channels/plugins/catalog.js", () => ({
@@ -51,6 +52,7 @@ async function runChannelsAddCli(args: string[]) {
   const program = new Command().name("openclaw");
   await registerChannelsCli(program, ["node", "openclaw", ...args]);
   await program.parseAsync(args, { from: "user" });
+  return program;
 }
 
 describe("registerChannelsCli", () => {
@@ -69,7 +71,7 @@ describe("registerChannelsCli", () => {
     expect(listBundledPackageChannelMetadataMock).not.toHaveBeenCalled();
     expect(listRawChannelPluginCatalogEntriesMock).not.toHaveBeenCalled();
 
-    process.argv = ["node", "openclaw", "channels", "add", "--help"];
+    process.argv = ["node", "openclaw", "channels", "add", "clickclack", "--help"];
     await registerChannelsCli(new Command().name("openclaw"));
 
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
@@ -100,7 +102,7 @@ describe("registerChannelsCli", () => {
         ],
       },
     ]);
-    process.argv = ["node", "openclaw", "channels", "add", "--help"];
+    process.argv = ["node", "openclaw", "channels", "add", "clickclack", "--help"];
     const program = new Command().name("openclaw");
 
     await registerChannelsCli(program);
@@ -132,7 +134,15 @@ describe("registerChannelsCli", () => {
     ]);
     const program = new Command().name("openclaw");
 
-    await registerChannelsCli(program, ["node", "openclaw", "channels", "add", "--help"]);
+    await registerChannelsCli(program, [
+      "node",
+      "openclaw",
+      "channels",
+      "add",
+      "--channel",
+      "installed-chat",
+      "--help",
+    ]);
 
     expect(getChannelAddOptionFlags(program)).toContain("--installed-key <key>");
   });
@@ -184,13 +194,21 @@ describe("registerChannelsCli", () => {
     // Commander throws on conflicting switches; registration must survive a
     // plugin redeclaring `--url` with a different placeholder or the static
     // `--token` with a different value name.
-    await registerChannelsCli(program, ["node", "openclaw", "channels", "add", "--help"]);
+    await registerChannelsCli(program, [
+      "node",
+      "openclaw",
+      "channels",
+      "add",
+      "--channel",
+      "chat-a",
+      "--help",
+    ]);
 
     const flags = getChannelAddOptionFlags(program);
     expect(flags).toContain("--url <url>");
     expect(flags).not.toContain("--url <server>");
-    expect(flags).toContain("--token <token>");
-    expect(flags).not.toContain("--token <payload>");
+    expect(flags).toContain("--token <payload>");
+    expect(flags).not.toContain("--token <token>");
   });
 
   it("prefers the selected channel's declaration for a shared switch", async () => {
@@ -248,6 +266,187 @@ describe("registerChannelsCli", () => {
     expect(flags).not.toContain("--url <url>");
   });
 
+  it("projects channel-owned setup fields into Commander options", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "signal",
+        setup: {
+          fields: [
+            {
+              key: "signalTransport",
+              kind: "choice",
+              choices: ["external-native", "container"],
+              cli: {
+                flags: "--signal-transport <kind>",
+                description: "Signal transport kind",
+              },
+            },
+            {
+              key: "autoDiscover",
+              kind: "boolean",
+              cli: {
+                flags: "--auto-discover",
+                negatedFlags: "--no-auto-discover",
+                description: "Discover channels automatically",
+              },
+            },
+          ],
+        },
+      },
+    ]);
+    process.argv = ["node", "openclaw", "channels", "add", "--channel", "signal", "--help"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelAddOptionFlags(program)).toContain("--signal-transport <kind>");
+    expect(getChannelAddOptionFlags(program)).toContain("--no-auto-discover");
+  });
+
+  it("registers only the positional channel setup options", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "token",
+              kind: "string",
+              cli: { flags: "--telegram-token <token>", description: "Telegram bot token" },
+            },
+          ],
+        },
+      },
+      {
+        id: "signal",
+        setup: {
+          fields: [
+            {
+              key: "signalNumber",
+              kind: "string",
+              cli: { flags: "--signal-number <e164>", description: "Signal account number" },
+            },
+          ],
+        },
+      },
+    ]);
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program, [
+      "node",
+      "openclaw",
+      "channels",
+      "add",
+      "telegram",
+      "--help",
+    ]);
+
+    expect(getChannelAddOptionFlags(program)).toEqual(
+      expect.arrayContaining(["--telegram-token <token>"]),
+    );
+    expect(getChannelAddOptionFlags(program)).not.toEqual(
+      expect.arrayContaining(["--signal-number <e164>"]),
+    );
+  });
+
+  it("keeps generic add help limited to the shared control envelope", async () => {
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program, ["node", "openclaw", "channels", "add", "--help"]);
+
+    expect(getChannelAddOptionFlags(program)).toEqual([
+      "--channel <name>",
+      "--account <id>",
+      "--name <name>",
+    ]);
+    expect(listBundledPackageChannelMetadataMock).not.toHaveBeenCalled();
+  });
+
+  it("registers add help when channels reuse a long flag with different placeholders", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "example",
+        setup: {
+          fields: [
+            {
+              key: "apiKey",
+              kind: "string",
+              cli: { flags: "--api-key <token>", description: "Example API key" },
+            },
+            {
+              key: "apiKeyJson",
+              kind: "string",
+              cli: { flags: "--api-key <json>", description: "Example API key JSON" },
+            },
+          ],
+        },
+      },
+    ]);
+    process.argv = ["node", "openclaw", "channels", "add", "example", "--help"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(
+      getChannelAddOptionFlags(program).filter((flags) => flags.startsWith("--api-key ")),
+    ).toHaveLength(1);
+  });
+
+  it("forwards only explicitly supplied setup options", () => {
+    const sources = new Map<string, "cli" | "default">([
+      ["channel", "cli"],
+      ["signalTransport", "cli"],
+      ["useEnv", "default"],
+    ]);
+
+    expect(
+      resolveChannelsAddOptions(
+        undefined,
+        { channel: "signal", signalTransport: "container", useEnv: false },
+        {
+          getOptionValueSource: (key) => sources.get(key),
+        } as Pick<Command, "getOptionValueSource">,
+      ),
+    ).toEqual({ channel: "signal", signalTransport: "container" });
+  });
+
+  it("preserves selected legacy channel defaults", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "legacy-chat",
+        cliAddOptions: [
+          {
+            flags: "--legacy-mode <mode>",
+            description: "Legacy transport mode",
+            defaultValue: "socket",
+          },
+        ],
+      },
+    ]);
+
+    const program = await runChannelsAddCli([
+      "channels",
+      "add",
+      "--channel",
+      "legacy-chat",
+      "--token",
+      "test-token",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "legacy-chat",
+        legacyMode: "socket",
+        token: "test-token",
+        useEnv: false,
+      }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+    expect(getChannelAddOptionFlags(program)).not.toContain("--secret-file <path>");
+    expect(getChannelAddOptionFlags(program)).not.toContain("--workspace <workspace>");
+  });
+
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {
     process.argv = ["node", "openclaw", "channels"];
 
@@ -256,6 +455,7 @@ describe("registerChannelsCli", () => {
       "openclaw",
       "channels",
       "add",
+      "telegram",
       "--help",
     ]);
 

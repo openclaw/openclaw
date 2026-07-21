@@ -8,10 +8,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
-  UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV,
-  UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV,
-} from "../../commands/doctor/shared/update-phase.js";
-import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshot,
 } from "../../config/config.js";
@@ -71,6 +67,10 @@ import {
   writePostCoreSourceConfigFile,
 } from "./update-command-config.js";
 import {
+  completePostCorePluginUpdate,
+  withUpdateFinalizationEnv,
+} from "./update-command-fresh-doctor.js";
+import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
 } from "./update-command-plugins.js";
@@ -127,36 +127,6 @@ type UpdateFinalizeResult = {
     plugins: PostCorePluginUpdateResult;
   };
 };
-
-function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
-  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  const previousDeferConfiguredPluginInstallRepair =
-    process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-  const previousParentSupportsDoctorConfigWrite =
-    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] = "1";
-  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
-  return run().finally(() => {
-    if (previousUpdateInProgress === undefined) {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    } else {
-      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
-    }
-    if (previousDeferConfiguredPluginInstallRepair === undefined) {
-      delete process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV];
-    } else {
-      process.env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV] =
-        previousDeferConfiguredPluginInstallRepair;
-    }
-    if (previousParentSupportsDoctorConfigWrite === undefined) {
-      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
-    } else {
-      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
-        previousParentSupportsDoctorConfigWrite;
-    }
-  });
-}
 
 export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
   suppressDeprecations();
@@ -225,7 +195,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
-  const pluginUpdate = await withUpdateFinalizationEnv(async () => {
+  const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
     await createUpdateConfigSnapshot();
     await doctorCommand(defaultRuntime, {
       nonInteractive: true,
@@ -268,6 +238,16 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       pluginInstallRecords,
     });
   });
+  const completedPluginUpdate = await completePostCorePluginUpdate({
+    root,
+    pluginUpdate: initialPluginUpdate,
+    freshDoctorRequired: initialPluginUpdate.changed,
+    yes: opts.yes === true,
+    json: opts.json === true,
+    timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+  });
+  const pluginUpdate = completedPluginUpdate.pluginUpdate;
+  configSnapshot = completedPluginUpdate.configSnapshot;
 
   const result: UpdateFinalizeResult = {
     status:

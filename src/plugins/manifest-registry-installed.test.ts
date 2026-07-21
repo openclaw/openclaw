@@ -507,6 +507,20 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
               nativeCommandsAutoEnabled: true,
               nativeSkillsAutoEnabled: false,
             },
+            setup: {
+              fields: [
+                {
+                  key: "tenant",
+                  kind: "choice",
+                  choices: ["alpha", "beta"],
+                  cli: {
+                    flags: "--tenant <tenant>",
+                    negatedFlags: "--no-tenant",
+                    description: "Installed tenant",
+                  },
+                },
+              ],
+            },
           },
         },
       }),
@@ -541,6 +555,20 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.channelCatalogMeta?.commands).toEqual({
       nativeCommandsAutoEnabled: true,
       nativeSkillsAutoEnabled: false,
+    });
+    expect(registry.plugins[0]?.packageManifest?.channel?.setup).toEqual({
+      fields: [
+        {
+          key: "tenant",
+          kind: "choice",
+          choices: ["alpha", "beta"],
+          cli: {
+            flags: "--tenant <tenant>",
+            negatedFlags: "--no-tenant",
+            description: "Installed tenant",
+          },
+        },
+      ],
     });
   });
 

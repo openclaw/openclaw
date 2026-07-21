@@ -7,6 +7,11 @@ export function listBundledPackageChannelMetadata(): readonly PluginPackageChann
   return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
 }
 
+/** Lists bundled and installed channel metadata for lazy CLI setup discovery. */
+export function listPackageChannelMetadata(): readonly PluginPackageChannel[] {
+  return listChannelCatalogEntries().map((entry) => entry.channel);
+}
+
 /** Finds bundled package channel metadata by id or alias. */
 export function findBundledPackageChannelMetadata(
   channelId: string,

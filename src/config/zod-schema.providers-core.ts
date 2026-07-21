@@ -4,6 +4,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { z } from "zod";
 import { buildGroupEntrySchema } from "../channels/plugins/config-schema.js";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import {
   normalizeCommandDescription,
   normalizeSlashCommandName,
@@ -49,6 +51,10 @@ import {
   validateTelegramWebhookSecretRequirements,
 } from "./zod-schema.secret-input-validation.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+import {
+  projectSignalConfigForUpdateValidation,
+  SignalTransportSchema,
+} from "./zod-schema.signal.js";
 
 const ToolPolicyBySenderSchema = z.record(z.string(), ToolPolicySchema).optional();
 
@@ -1002,14 +1008,8 @@ const SignalAccountSchemaBase = z
     }),
     account: z.string().optional(),
     accountUuid: z.string().optional(),
-    configPath: z.string().optional(),
-    httpUrl: z.string().optional(),
-    cliPath: ExecutableTokenSchema.optional(),
-    autoStart: z.boolean().optional(),
-    startupTimeoutMs: z.number().int().min(1000).max(120000).optional(),
-    receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
+    transport: SignalTransportSchema.optional(),
     ignoreAttachments: z.boolean().optional(),
-    ignoreStories: z.boolean().optional(),
     sendReadReceipts: ChannelSendReadReceiptsSchema,
     aliases: z.record(z.string(), z.string()).optional(),
     groups: SignalGroupsSchema,
@@ -1028,13 +1028,15 @@ const SignalAccountSchemaBase = z
   })
   .strict();
 
-export const SignalConfigSchema = SignalAccountSchemaBase.extend({
-  apiMode: z.enum(["auto", "native", "container"]).optional(),
+const SignalConfigSchemaBase = SignalAccountSchemaBase.extend({
   // Account-level schemas skip allowFrom validation because accounts inherit
   // allowFrom from the parent channel config at runtime.
   accounts: z.record(z.string(), SignalAccountSchemaBase.optional()).optional(),
   defaultAccount: z.string().optional(),
-}).superRefine((value, ctx) => {
+});
+type SignalConfigValidationValue = z.infer<typeof SignalConfigSchemaBase>;
+
+function validateSignalConfigAllowFrom(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -1077,7 +1079,69 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
         'channels.signal.accounts.*.dmPolicy="allowlist" requires channels.signal.accounts.*.allowFrom (or channels.signal.allowFrom) to contain at least one sender ID',
     });
   }
+}
+
+function validateSignalContainerAccounts(value: SignalConfigValidationValue, ctx: z.RefinementCtx) {
+  const defaultAccount = resolveAccountEntry(value.accounts, DEFAULT_ACCOUNT_ID);
+  const effectiveDefaultAccount =
+    defaultAccount?.account === undefined ? value.account : defaultAccount.account;
+  const channelEnabled = value.enabled !== false;
+  const defaultEnabled = defaultAccount?.enabled !== false;
+  if (
+    value.transport?.kind === "container" &&
+    channelEnabled &&
+    defaultEnabled &&
+    !normalizeOptionalString(effectiveDefaultAccount)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        "channels.signal container transport requires an account number on the channel or default account",
+      path: ["account"],
+    });
+  }
+
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (!account) {
+      continue;
+    }
+    if (!channelEnabled || account.enabled === false) {
+      continue;
+    }
+    const isDefaultAccount = normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID;
+    const effectiveTransport =
+      isDefaultAccount && value.transport ? value.transport : account.transport;
+    if (effectiveTransport?.kind !== "container") {
+      continue;
+    }
+    // Root transport validation already covers the effective default-account shape.
+    if (isDefaultAccount && value.transport) {
+      continue;
+    }
+    const effectiveAccount = account.account === undefined ? value.account : account.account;
+    if (!normalizeOptionalString(effectiveAccount)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.signal account container transport requires an account number on the account or channel",
+        path: ["accounts", accountId, "account"],
+      });
+    }
+  }
+}
+
+const CanonicalSignalConfigSchema = SignalConfigSchemaBase.superRefine((value, ctx) => {
+  validateSignalConfigAllowFrom(value, ctx);
+  validateSignalContainerAccounts(value, ctx);
 });
+
+// Post-core update snapshots retain their authored sourceConfig separately. Strip retired fields
+// only from validation output so the updater can refresh the external owner, then doctor migrates
+// the untouched source before the strict final validation pass.
+export const SignalConfigSchema = z.preprocess(
+  (value) => projectSignalConfigForUpdateValidation(value),
+  CanonicalSignalConfigSchema,
+);
 const IMessageActionSchema = z
   .object({
     reactions: z.boolean().optional(),

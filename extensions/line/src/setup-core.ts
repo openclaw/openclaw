@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Line plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
@@ -150,5 +151,35 @@ export const lineSetupAdapter: ChannelSetupAdapter = {
     });
   },
 };
+
+export const lineSetupContract = defineChannelSetupContract({
+  fields: {
+    channelAccessToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--channel-access-token <token>", description: "LINE channel access token" },
+    },
+    channelSecret: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--channel-secret <secret>", description: "LINE channel secret" },
+    },
+    tokenFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--token-file <path>", description: "LINE access token file" },
+    },
+    secretFile: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--secret-file <path>", description: "LINE channel secret file" },
+    },
+    useEnv: {
+      kind: "boolean",
+      cli: { flags: "--use-env", description: "Use LINE environment credentials" },
+    },
+  },
+  legacyAdapter: lineSetupAdapter,
+});
 
 export { listLineAccountIds };
