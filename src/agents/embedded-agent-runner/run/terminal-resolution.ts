@@ -469,6 +469,8 @@ function completeEmbeddedRun(
     : input.attempt.yieldDetected
       ? "end_turn"
       : (input.attemptAssistant?.stopReason as string | undefined);
+  // Existing visible payloads already avoid the silent-park symptom. The diagnostic
+  // fills only an otherwise empty yielded turn and must not duplicate visible output.
   const terminalPayloads = input.emptyAssistantReplyIsSilent
     ? [{ text: SILENT_REPLY_TOKEN }]
     : input.payloadsForTerminalPath?.length
