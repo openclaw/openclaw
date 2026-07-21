@@ -1,10 +1,8 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { signalCodexResumeProcessTree } from "./node-cli-process-tree.js";
+import { terminateCodexResumeProcess } from "./node-cli-process-tree.js";
 
-type CodexResumeProcessTreeRuntime = NonNullable<
-  Parameters<typeof signalCodexResumeProcessTree>[2]
->;
+type CodexResumeProcessTreeRuntime = NonNullable<Parameters<typeof terminateCodexResumeProcess>[1]>;
 
 function createChild(pid = 4321) {
   return {
@@ -41,11 +39,11 @@ describe("signalCodexResumeProcessTree", () => {
     const systemRootRuntime = createRuntime().runtime;
     const windirRuntime = createRuntime().runtime;
 
-    signalCodexResumeProcessTree(child, "SIGTERM", {
+    terminateCodexResumeProcess(child, {
       ...systemRootRuntime,
       env: { SystemRoot: "D:\\Windows\\" },
     });
-    signalCodexResumeProcessTree(child, "SIGTERM", {
+    terminateCodexResumeProcess(child, {
       ...windirRuntime,
       env: { windir: "E:\\WinNT" },
     });
@@ -68,7 +66,7 @@ describe("signalCodexResumeProcessTree", () => {
       const child = createChild();
       const { runtime } = createRuntime();
 
-      signalCodexResumeProcessTree(child, "SIGTERM", {
+      terminateCodexResumeProcess(child, {
         ...runtime,
         env: { SystemRoot },
       });
@@ -81,18 +79,15 @@ describe("signalCodexResumeProcessTree", () => {
     },
   );
 
-  it.each([
-    ["SIGTERM", ["/F", "/T", "/PID", "4321"]],
-    ["SIGKILL", ["/F", "/T", "/PID", "4321"]],
-  ] as const)("uses taskkill for Windows %s signals", (signal, expectedArgs) => {
+  it("uses taskkill for Windows timeout termination", () => {
     const child = createChild();
     const { once, runtime, spawnTaskkill, unref } = createRuntime();
 
-    signalCodexResumeProcessTree(child, signal, runtime);
+    terminateCodexResumeProcess(child, runtime);
 
     expect(spawnTaskkill).toHaveBeenCalledWith(
       "C:\\Windows\\System32\\taskkill.exe",
-      [...expectedArgs],
+      ["/F", "/T", "/PID", "4321"],
       {
         stdio: "ignore",
         windowsHide: true,
@@ -110,13 +105,14 @@ describe("signalCodexResumeProcessTree", () => {
       throw new Error("missing taskkill");
     }) as unknown as typeof spawn;
 
-    signalCodexResumeProcessTree(child, "SIGKILL", {
+    terminateCodexResumeProcess(child, {
       platform: "win32",
       spawn: spawnTaskkill,
       env: { SystemRoot: "C:\\Windows" },
     });
 
     expect(spawnTaskkill).toHaveBeenCalledTimes(2);
+    expect(child.kill).toHaveBeenCalledOnce();
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -124,7 +120,7 @@ describe("signalCodexResumeProcessTree", () => {
     const child = createChild();
     const { once, runtime } = createRuntime();
 
-    signalCodexResumeProcessTree(child, "SIGTERM", runtime);
+    terminateCodexResumeProcess(child, runtime);
     const errorHandler = once.mock.calls[0]?.[1] as ((error: Error) => void) | undefined;
     expect(errorHandler).toEqual(expect.any(Function));
     errorHandler?.(new Error("missing taskkill"));
@@ -137,7 +133,7 @@ describe("signalCodexResumeProcessTree", () => {
     const child = createChild();
     const { once, runtime } = createRuntime();
 
-    signalCodexResumeProcessTree(child, "SIGTERM", runtime);
+    terminateCodexResumeProcess(child, runtime);
     const closeHandler = once.mock.calls.find(([event]) => event === "close")?.[1] as
       | ((code: number | null) => void)
       | undefined;
@@ -152,7 +148,7 @@ describe("signalCodexResumeProcessTree", () => {
     const child = createChild();
     const { once, runtime } = createRuntime();
 
-    signalCodexResumeProcessTree(child, "SIGTERM", runtime);
+    terminateCodexResumeProcess(child, runtime);
     const closeHandler = once.mock.calls.find(([event]) => event === "close")?.[1] as
       | ((code: number | null) => void)
       | undefined;
@@ -167,8 +163,8 @@ describe("signalCodexResumeProcessTree", () => {
       const child = createChild();
       const { runtime, taskkillKill, unref } = createRuntime();
 
-      signalCodexResumeProcessTree(child, "SIGTERM", runtime);
-      vi.advanceTimersByTime(5_000);
+      terminateCodexResumeProcess(child, runtime);
+      vi.advanceTimersByTime(1_000);
 
       expect(taskkillKill).toHaveBeenCalledWith("SIGKILL");
       expect(unref).toHaveBeenCalledOnce();
@@ -185,25 +181,58 @@ describe("signalCodexResumeProcessTree", () => {
       const child = createChild();
       const { runtime, taskkillKill, unref } = createRuntime();
 
-      signalCodexResumeProcessTree(child, "SIGTERM", runtime);
-      vi.advanceTimersByTime(10_000);
+      terminateCodexResumeProcess(child, runtime);
+      vi.advanceTimersByTime(2_000);
 
       expect(runtime.spawn).toHaveBeenCalledTimes(2);
       expect(taskkillKill).toHaveBeenCalledTimes(2);
       expect(unref).toHaveBeenCalledTimes(2);
-      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(child.kill).toHaveBeenCalledWith("SIGKILL");
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("signals the direct child outside Windows", () => {
-    const child = createChild();
-    const { runtime, spawnTaskkill } = createRuntime("linux");
+  it("preserves the two-stage direct-child termination outside Windows", () => {
+    vi.useFakeTimers();
+    try {
+      const child = createChild();
+      const { runtime, spawnTaskkill } = createRuntime("linux");
 
-    signalCodexResumeProcessTree(child, "SIGTERM", runtime);
+      terminateCodexResumeProcess(child, runtime);
 
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-    expect(spawnTaskkill).not.toHaveBeenCalled();
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawnTaskkill).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2_000);
+      expect(child.kill).toHaveBeenCalledTimes(2);
+      expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses two-stage direct-child termination when Windows has no PID", () => {
+    vi.useFakeTimers();
+    try {
+      const child = {
+        pid: undefined,
+        kill: vi.fn(() => true),
+      } as Pick<ChildProcess, "kill" | "pid">;
+      const { runtime, spawnTaskkill } = createRuntime();
+
+      terminateCodexResumeProcess(child, runtime);
+
+      expect(child.kill).toHaveBeenCalledOnce();
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawnTaskkill).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2_000);
+      expect(child.kill).toHaveBeenCalledTimes(2);
+      expect(child.kill).toHaveBeenLastCalledWith("SIGKILL");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

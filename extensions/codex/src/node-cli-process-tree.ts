@@ -2,8 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
 
-const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
+const RESUME_FORCE_KILL_DELAY_MS = 2_000;
 const WINDOWS_TASKKILL_MAX_ATTEMPTS = 2;
+const WINDOWS_TASKKILL_TIMEOUT_MS = RESUME_FORCE_KILL_DELAY_MS / WINDOWS_TASKKILL_MAX_ATTEMPTS;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 type ResumeChildProcess = Pick<ChildProcess, "kill" | "pid">;
@@ -65,17 +66,11 @@ const defaultRuntime: CodexResumeProcessTreeRuntime = {
   env: process.env,
 };
 
-export function signalCodexResumeProcessTree(
+function terminateWindowsProcessTree(
   child: ResumeChildProcess,
-  signal: NodeJS.Signals,
-  runtime: CodexResumeProcessTreeRuntime = defaultRuntime,
+  pid: number,
+  runtime: CodexResumeProcessTreeRuntime,
 ): void {
-  const pid = child.pid;
-  if (runtime.platform !== "win32" || typeof pid !== "number") {
-    child.kill(signal);
-    return;
-  }
-
   // Windows has no graceful console-tree signal; killing only the parent first
   // would orphan descendants before taskkill can enumerate them.
   const taskkillPath = resolveCodexWindowsTaskkillPath(runtime.env);
@@ -86,7 +81,7 @@ export function signalCodexResumeProcessTree(
       return;
     }
     settled = true;
-    child.kill(signal);
+    child.kill("SIGKILL");
   };
   const finishSuccessfully = () => {
     if (settled) {
@@ -160,4 +155,19 @@ export function signalCodexResumeProcessTree(
   };
 
   runTreeKillAttempt(1);
+}
+
+export function terminateCodexResumeProcess(
+  child: ResumeChildProcess,
+  runtime: CodexResumeProcessTreeRuntime = defaultRuntime,
+): NodeJS.Timeout | undefined {
+  if (runtime.platform === "win32" && typeof child.pid === "number") {
+    terminateWindowsProcessTree(child, child.pid, runtime);
+    return undefined;
+  }
+
+  child.kill("SIGTERM");
+  const forceKillTimeout = setTimeout(() => child.kill("SIGKILL"), RESUME_FORCE_KILL_DELAY_MS);
+  forceKillTimeout.unref?.();
+  return forceKillTimeout;
 }
