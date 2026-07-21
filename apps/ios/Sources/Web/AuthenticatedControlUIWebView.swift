@@ -24,9 +24,7 @@ enum AuthenticatedControlUI {
         default:
             components.scheme = "http"
         }
-        let basePath = self.normalizeBasePath(components.path)
-        let relativePath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        components.path = relativePath.isEmpty ? basePath : basePath + relativePath
+        components.path = self.pagePath(basePath: components.path, path: path)
         components.fragment = nil
         let encodedItems = queryItems.compactMap { item -> String? in
             guard let name = Self.percentEncodedQueryComponent(item.name) else { return nil }
@@ -101,14 +99,6 @@ enum AuthenticatedControlUI {
         return hasher.finalize()
     }
 
-    private static func normalizeBasePath(_ rawPath: String?) -> String {
-        let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "/" }
-        let withLeadingSlash = trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
-        guard withLeadingSlash != "/" else { return "/" }
-        return withLeadingSlash.hasSuffix("/") ? withLeadingSlash : withLeadingSlash + "/"
-    }
-
     private static func percentEncodedQueryComponent(_ value: String) -> String? {
         value.addingPercentEncoding(withAllowedCharacters: self.queryComponentAllowed)
     }
@@ -132,6 +122,16 @@ enum AuthenticatedControlUI {
             return "\"\""
         }
         return String(raw.dropFirst().dropLast())
+    }
+
+    private static func pagePath(basePath rawPath: String?, path: String) -> String {
+        let trimmed = (rawPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let withLeadingSlash = trimmed.isEmpty || trimmed.hasPrefix("/") ? trimmed : "/" + trimmed
+        let basePath = withLeadingSlash.isEmpty || withLeadingSlash == "/"
+            ? "/"
+            : withLeadingSlash.hasSuffix("/") ? withLeadingSlash : withLeadingSlash + "/"
+        let relativePath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return relativePath.isEmpty ? basePath : basePath + relativePath
     }
 }
 

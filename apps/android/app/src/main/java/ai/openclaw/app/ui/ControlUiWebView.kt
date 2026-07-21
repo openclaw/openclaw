@@ -3,10 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.NodeRuntime
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import android.annotation.SuppressLint
-import android.net.http.SslCertificate
-import android.net.http.SslError
 import android.view.View
-import android.webkit.SslErrorHandler
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -22,10 +19,6 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import java.security.MessageDigest
-import java.util.Locale
-
-private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
 
 /** Authenticated, hardened WebView host for gateway-served Control UI pages. */
 @SuppressLint("SetJavaScriptEnabled")
@@ -79,9 +72,8 @@ internal fun ControlUiWebView(
 }
 
 /**
- * Hands gateway credentials to the Control UI through its native startup
- * contract. The script is restricted to the connected gateway origin, so
- * credentials never appear in page URLs or WebView history.
+ * Hands gateway credentials through the origin-restricted native startup contract,
+ * keeping them out of page URLs and WebView history.
  */
 private fun installControlUiAuthScript(
   webView: WebView,
@@ -123,6 +115,8 @@ internal fun controlUiOriginRule(baseUrl: String): String? {
   return "$scheme://$hostPart$port"
 }
 
+private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
+
 private class ControlUiWebViewClient(
   private val page: NodeRuntime.GatewayControlPage,
 ) : WebViewClient() {
@@ -130,12 +124,12 @@ private class ControlUiWebViewClient(
   @SuppressLint("WebViewClientOnReceivedSslError")
   override fun onReceivedSslError(
     view: WebView,
-    handler: SslErrorHandler,
-    error: SslError,
+    handler: android.webkit.SslErrorHandler,
+    error: android.net.http.SslError,
   ) {
     // SslCertificate exposes the encoded leaf only through its AOSP saveState bundle.
     val encodedCertificate =
-      SslCertificate
+      android.net.http.SslCertificate
         .saveState(error.certificate)
         ?.getByteArray(X509_CERTIFICATE_BUNDLE_KEY)
     if (
@@ -161,13 +155,18 @@ internal fun shouldProceedForPinnedControlUiSslError(
   errorUrl: String?,
   encodedCertificate: ByteArray?,
 ): Boolean {
-  val expected = expectedFingerprint?.let(::normalizeGatewayTlsFingerprintInput) ?: return false
+  val expected =
+    expectedFingerprint
+      ?.let(::normalizeGatewayTlsFingerprintInput)
+      ?: return false
   val certificate = encodedCertificate ?: return false
   if (!sameHttpsOrigin(pageBaseUrl, errorUrl)) return false
-  return MessageDigest
+  return java.security.MessageDigest
     .getInstance("SHA-256")
     .digest(certificate)
-    .joinToString(separator = "") { byte -> "%02x".format(Locale.US, byte.toInt() and 0xff) } == expected
+    .joinToString(separator = "") { byte ->
+      "%02x".format(java.util.Locale.US, byte.toInt() and 0xff)
+    } == expected
 }
 
 private fun sameHttpsOrigin(
@@ -187,7 +186,7 @@ private data class HttpsOrigin(
 private fun parsedHttpsOrigin(rawUrl: String): HttpsOrigin? {
   val uri = rawUrl.toUri()
   if (!uri.scheme.equals("https", ignoreCase = true)) return null
-  val host = uri.host?.lowercase(Locale.US) ?: return null
+  val host = uri.host?.lowercase(java.util.Locale.US) ?: return null
   val port = uri.port.takeIf { it >= 0 } ?: 443
   return HttpsOrigin(host = host, port = port)
 }
