@@ -218,7 +218,7 @@ export function deliveryContextFromSession(
     route: entry.route,
     channel: entry.channel ?? entry.origin?.provider,
     lastChannel: entry.lastChannel,
-    lastTo: entry.lastTo,
+    lastTo: entry.lastTo ?? entry.origin?.to,
     lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
     lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
     origin: entry.origin,
