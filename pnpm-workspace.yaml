@@ -104,7 +104,7 @@ overrides:
   "@aws-sdk/xml-builder": 3.972.33
   hono: 4.12.25
   "@hono/node-server": 1.19.14
-  axios: 1.16.0
+  axios: 1.18.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
   defu: 6.1.5
