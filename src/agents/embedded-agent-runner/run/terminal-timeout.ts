@@ -1,6 +1,6 @@
 import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
-import { resolveRunLivenessState } from "./incomplete-turn.js";
+import { resolveRunLivenessState, resolveTurnBudgetTimeoutNotice } from "./incomplete-turn.js";
 import { copyAttemptDeliveryState } from "./terminal-resolution.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -89,6 +89,91 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
             },
           }
         : {}),
+      toolSummary: input.attemptToolSummary,
+      ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
+      agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
+    },
+    ...copyAttemptDeliveryState(input.attempt),
+  };
+}
+
+/**
+ * Surfaces a user-visible notice when a turn times out DURING TOOL EXECUTION
+ * (`timedOutDuringToolExecution`) and would otherwise fall through to the
+ * general terminal path with no payloads — returning silently and leaving the
+ * channel dead (indistinguishable from a hung process). The prompt-timeout path
+ * (`resolveEmbeddedRunTerminalTimeout`, above) only covers
+ * `timedOutDuringPrompt === true`; this is the companion for the tool-execution
+ * sub-case. Returns `undefined` (fall through to the general terminal path) for
+ * any non-tool-execution timeout and for every suppression case that
+ * `resolveTurnBudgetTimeoutNotice` gates out (compaction/silent/messaging
+ * delivery/deterministic approval/pending client tool calls/yield/source-reply),
+ * so those terminal states are preserved untouched.
+ */
+export function resolveEmbeddedRunToolExecutionTimeout(input: {
+  timedOutDuringToolExecution: boolean;
+  terminalTimedOut: boolean;
+  idleTimedOut: boolean;
+  timedOutDuringCompaction: boolean;
+  payloads: EmbeddedAgentRunResult["payloads"];
+  allowEmptyAssistantReplyAsSilent: boolean;
+  attempt: EmbeddedRunAttemptResult;
+  terminalAborted: boolean;
+  resolveReplayInvalid: (incompleteTurnText?: string | null) => boolean;
+  setTerminalLifecycleMeta: NonNullable<EmbeddedRunAttemptResult["setTerminalLifecycleMeta"]>;
+  startedAtMs: number;
+  agentMeta: EmbeddedAgentMeta;
+  finalAssistantVisibleText?: string;
+  finalAssistantRawText?: string;
+  attemptToolSummary: EmbeddedAgentRunResult["meta"]["toolSummary"];
+  failureSignal: EmbeddedAgentRunResult["meta"]["failureSignal"];
+}): EmbeddedAgentRunResult | undefined {
+  if (!input.timedOutDuringToolExecution) {
+    return undefined;
+  }
+  const notice = resolveTurnBudgetTimeoutNotice({
+    timedOut: input.terminalTimedOut,
+    idleTimedOut: input.idleTimedOut,
+    timedOutDuringCompaction: input.timedOutDuringCompaction,
+    payloadCount: input.payloads?.length ?? 0,
+    allowSilentReply: input.allowEmptyAssistantReplyAsSilent,
+    hasMessagingDelivery: hasMessagingToolDeliveryEvidence(input.attempt),
+    hasDeterministicApprovalPrompt: input.attempt.didSendDeterministicApprovalPrompt === true,
+    hasClientToolCalls: (input.attempt.clientToolCalls?.length ?? 0) > 0,
+    yieldDetected: input.attempt.yieldDetected === true,
+    hasSourceReplyDelivery: input.attempt.didDeliverSourceReplyViaMessageTool === true,
+  });
+  if (!notice) {
+    return undefined;
+  }
+  const replayInvalid = input.resolveReplayInvalid(notice);
+  const livenessState = resolveRunLivenessState({
+    payloadCount: 0,
+    aborted: input.terminalAborted,
+    timedOut: input.terminalTimedOut,
+    attempt: input.attempt,
+    incompleteTurnText: notice,
+  });
+  // A tool-execution timeout carries no promptTimeoutOutcome (that is a
+  // prompt-phase artifact); attribute it to the provider phase with the provider
+  // already started, mirroring the prompt-timeout path's hard defaults.
+  const timeoutPhase = input.attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
+  const providerStarted = input.attempt.promptTimeoutOutcome?.providerStarted ?? true;
+  const timeoutAttribution = { timeoutPhase, providerStarted };
+  input.setTerminalLifecycleMeta({ replayInvalid, livenessState, ...timeoutAttribution });
+  return {
+    payloads: [{ text: notice, isError: true }],
+    meta: {
+      durationMs: Date.now() - input.startedAtMs,
+      agentMeta: input.agentMeta,
+      aborted: input.terminalAborted,
+      systemPromptReport: input.attempt.systemPromptReport,
+      finalPromptText: input.attempt.finalPromptText,
+      finalAssistantVisibleText: input.finalAssistantVisibleText,
+      finalAssistantRawText: input.finalAssistantRawText,
+      replayInvalid,
+      livenessState,
+      ...timeoutAttribution,
       toolSummary: input.attemptToolSummary,
       ...(input.failureSignal ? { failureSignal: input.failureSignal } : {}),
       agentHarnessResultClassification: input.attempt.agentHarnessResultClassification,
