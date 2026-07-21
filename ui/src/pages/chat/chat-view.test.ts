@@ -1178,6 +1178,80 @@ describe("chat code-block copy", () => {
 });
 
 describe("chat transcript rendering", () => {
+  it("refreshes cached inline reply handlers when the callback identity changes", () => {
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const firstReply = vi.fn();
+    const currentReply = vi.fn();
+    const message = { role: "assistant", content: "Reply target", timestamp: 1 };
+    const messages = [message];
+    const stableChatItems = [
+      {
+        kind: "group",
+        key: "group:assistant:reply-callback-cache",
+        role: "assistant",
+        messages: [{ key: "message:reply-callback-cache", message }],
+        timestamp: 1,
+        isStreaming: false,
+      },
+    ] as ReturnType<typeof chatThread.buildCachedChatItems>;
+    const defaultBuildChatItems = buildChatItemsMock.getMockImplementation();
+    const defaultRenderMessageGroup = renderMessageGroupMock.getMockImplementation();
+    buildChatItemsMock.mockReturnValue(stableChatItems);
+    renderMessageGroupMock.mockImplementation(
+      (
+        ...[_group, opts]: Parameters<typeof chatMessage.renderMessageGroup>
+      ): ReturnType<typeof chatMessage.renderMessageGroup> => html`
+        <button
+          aria-label="Reply to message"
+          @click=${() =>
+            opts.onReply?.({
+              messageId: "assistant-message",
+              senderLabel: "Val",
+              text: "Reply target",
+            })}
+        >
+          Reply
+        </button>
+      `,
+    );
+    const container = document.createElement("div");
+    const renderWithReply = (onSetReply: typeof firstReply) => {
+      render(
+        renderChat(
+          createChatProps({
+            paneId: "reply-callback-cache",
+            transcript,
+            messages,
+            onSetReply,
+          }),
+        ),
+        container,
+      );
+    };
+
+    renderWithReply(firstReply);
+    renderWithReply(currentReply);
+    requireElement(
+      container,
+      '[aria-label="Reply to message"]',
+      "inline reply button",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    if (defaultRenderMessageGroup) {
+      renderMessageGroupMock.mockImplementation(defaultRenderMessageGroup);
+    }
+    if (defaultBuildChatItems) {
+      buildChatItemsMock.mockImplementation(defaultBuildChatItems);
+    }
+
+    expect(firstReply).not.toHaveBeenCalled();
+    expect(currentReply).toHaveBeenCalledOnce();
+  });
+
   it("passes the full loaded history to one render path and leaves scroll ownership to the pane", () => {
     const messages = Array.from({ length: 80 }, (_, index) => ({
       role: index % 2 === 0 ? "user" : "assistant",
@@ -5458,15 +5532,24 @@ describe("chat model controls", () => {
 });
 
 describe("right-click Reply", () => {
-  it("adds rewind and fork actions only for persisted user bubbles", () => {
+  it("keeps inline actions in the context menu alongside user rewind and fork", () => {
     const onRewindMessage = vi.fn().mockResolvedValue(true);
     const onForkMessage = vi.fn();
-    const container = renderChatView({ onRewindMessage, onForkMessage, onSetReply: vi.fn() });
+    const onOpenSidebar = vi.fn();
+    const onCopy = vi.fn();
+    const container = renderChatView({
+      onRewindMessage,
+      onForkMessage,
+      onOpenSidebar,
+      onSetReply: vi.fn(),
+    });
     const section = container.querySelector<HTMLElement>(".card.chat")!;
     const group = document.createElement("div");
     group.className = "chat-group user";
+    group.dataset.chatRowKey = "group:user:persisted";
     const bubble = document.createElement("div");
     bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "message-1";
     bubble.dataset.entryId = "persisted-user";
     bubble.dataset.messageText = "hello";
     group.appendChild(bubble);
@@ -5477,17 +5560,80 @@ describe("right-click Reply", () => {
     const labels = [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
       button.textContent?.trim(),
     );
-    expect(labels).toEqual(["Reply", "Rewind to here", "Fork from here"]);
+    expect(labels).toEqual(["Reply", "Rewind to here", "Hide message", "Fork from here"]);
     document.querySelector<HTMLButtonElement>('[aria-label="Fork from here"]')!.click();
     expect(onForkMessage).toHaveBeenCalledWith("persisted-user");
 
     group.className = "chat-group assistant";
+    const onSiblingExpand = vi.fn();
+    const siblingActionOwner = document.createElement("div");
+    siblingActionOwner.dataset.messageActionsFor = "message-0";
+    const siblingExpandButton = document.createElement("button");
+    siblingExpandButton.className = "chat-expand-btn";
+    siblingExpandButton.addEventListener("click", onSiblingExpand);
+    siblingActionOwner.append(siblingExpandButton);
+    const expandButton = document.createElement("button");
+    expandButton.className = "chat-expand-btn";
+    expandButton.addEventListener("click", () =>
+      onOpenSidebar({ kind: "markdown", content: "hello" }),
+    );
+    const copyButton = document.createElement("button");
+    copyButton.className = "chat-copy-btn";
+    copyButton.addEventListener("click", onCopy);
+    const actionOwner = document.createElement("div");
+    actionOwner.dataset.messageActionsFor = "message-1";
+    actionOwner.append(expandButton, copyButton);
+    group.append(siblingActionOwner, actionOwner);
     bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     expect(
       [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
         button.textContent?.trim(),
       ),
-    ).toEqual(["Reply"]);
+    ).toEqual(["Reply", "Hide message", "Open in canvas", "Copy as markdown"]);
+    expect(
+      document.querySelector('.chat-reply-context-menu [aria-label="Reply to message"] svg'),
+    ).toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[aria-label="Open in canvas"]')!.click();
+    expect(onOpenSidebar).toHaveBeenCalledWith({ kind: "markdown", content: "hello" });
+    expect(onSiblingExpand).not.toHaveBeenCalled();
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="Copy as markdown"]')!.click();
+    expect(onCopy).toHaveBeenCalledOnce();
+  });
+
+  it("confirms Hide from the context menu before hiding the message locally", () => {
+    const storedValues = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      clear: () => storedValues.clear(),
+      getItem: (key: string) => storedValues.get(key) ?? null,
+      key: (index: number) => [...storedValues.keys()][index] ?? null,
+      get length() {
+        return storedValues.size;
+      },
+      removeItem: (key: string) => storedValues.delete(key),
+      setItem: (key: string, value: string) => storedValues.set(key, value),
+    } satisfies Storage);
+    const onRequestUpdate = vi.fn();
+    const container = renderChatView({ sessionKey: "context-hide-test", onRequestUpdate });
+    const group = document.createElement("div");
+    group.className = "chat-group assistant";
+    group.dataset.chatRowKey = "group:assistant:persisted";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    document.querySelector<HTMLButtonElement>('[aria-label="Hide message"]')!.click();
+    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+    document.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!.click();
+
+    expect(storedValues.get("openclaw:deleted:context-hide-test")).toBe(
+      JSON.stringify(["group:assistant:persisted"]),
+    );
+    expect(onRequestUpdate).toHaveBeenCalledOnce();
   });
 
   it("disables rewind and fork context actions during an active run", () => {
