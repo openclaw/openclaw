@@ -51,17 +51,42 @@ function readMatrixConfigOverrides(
     : undefined;
 }
 
-function resolveMatrixQaReplacePaths(overrides: MatrixQaConfigOverrides | undefined) {
-  const replacePaths = ["channels.matrix", "messages"];
-  // Replacing an untouched root drops config.get-omitted runtime policy and can
-  // invalidate lifecycle-owned state while the Matrix account is restarting.
-  if (overrides?.agentDefaults) {
-    replacePaths.push("agents.defaults");
+function collectMatrixQaArrayPaths(value: unknown, path: string): string[] {
+  if (Array.isArray(value)) {
+    return [path];
   }
-  if (overrides?.toolProfile || overrides?.audio) {
-    replacePaths.push("tools");
+  if (!value || typeof value !== "object") {
+    return [];
   }
-  return replacePaths;
+  // Gateway replacement paths are opaque exact strings built with the same
+  // dot join, so record keys containing dots need no separate escaping.
+  return Object.entries(value).flatMap(([key, child]) =>
+    collectMatrixQaArrayPaths(child, `${path}.${key}`),
+  );
+}
+
+function resolveMatrixQaReplacePaths(params: {
+  accountId: string;
+  config: OpenClawConfig;
+  overrides: MatrixQaConfigOverrides | undefined;
+}) {
+  const accountPath = `channels.matrix.accounts.${params.accountId}`;
+  const accountConfig = params.config.channels?.matrix?.accounts?.[params.accountId];
+  // The scenario builder owns the generated SUT account. Authorize its exact
+  // array leaves so one scenario can intentionally narrow the previous one.
+  const replacePaths = collectMatrixQaArrayPaths(accountConfig, accountPath);
+  if (params.overrides?.agentDefaults) {
+    replacePaths.push(
+      ...collectMatrixQaArrayPaths(params.overrides.agentDefaults, "agents.defaults"),
+    );
+  }
+  if (params.overrides?.groupMentionPatterns) {
+    replacePaths.push("messages.groupChat.mentionPatterns");
+  }
+  if (params.overrides?.audio) {
+    replacePaths.push(...collectMatrixQaArrayPaths(params.overrides.audio, "tools.media.audio"));
+  }
+  return [...new Set(replacePaths)].sort();
 }
 
 function isStaleConfigPatchError(error: unknown) {
@@ -219,7 +244,11 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     const patchResult = await patchGatewayConfig({
       gateway: input.gateway,
       patch: gatewayConfig as Record<string, unknown>,
-      replacePaths: resolveMatrixQaReplacePaths(configOverrides),
+      replacePaths: resolveMatrixQaReplacePaths({
+        accountId: params.accountId,
+        config: gatewayConfig,
+        overrides: configOverrides,
+      }),
     });
     if (patchResult.noop !== true) {
       await input.waitForConfigRestartSettle({

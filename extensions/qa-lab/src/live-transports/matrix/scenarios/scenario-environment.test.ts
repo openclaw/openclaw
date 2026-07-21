@@ -2,7 +2,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const buildMatrixQaConfig = vi.hoisted(() =>
-  vi.fn(() => ({ channels: { matrix: { execApprovals: { enabled: true } } } })),
+  vi.fn((_baseConfig: unknown, params: { sutAccountId: string }) => ({
+    channels: {
+      matrix: {
+        accounts: {
+          [params.sutAccountId]: {
+            dm: { allowFrom: ["@driver:test"] },
+            groupAllowFrom: ["@driver:test"],
+            groups: {
+              "!room:matrix-qa.test": { tools: { allow: ["sessions_spawn"] } },
+            },
+          },
+        },
+      },
+    },
+  })),
 );
 
 vi.mock("../substrate/config.js", () => ({ buildMatrixQaConfig }));
@@ -54,7 +68,7 @@ describe("matrix scenario environment", () => {
             channelAccounts: {
               matrix: [
                 {
-                  accountId: "sut",
+                  accountId: "work",
                   connected: true,
                   healthState: "healthy",
                   lastStartAt: statusReadCount < 3 ? 100 : 200,
@@ -72,7 +86,7 @@ describe("matrix scenario environment", () => {
       }),
     };
     const environment = createMatrixQaScenarioEnvironment({
-      accountId: "sut",
+      accountId: "work",
       harness: { baseUrl: "http://127.0.0.1:8008", recording: {} } as never,
       observedEvents: [],
       provisioning: {
@@ -88,7 +102,13 @@ describe("matrix scenario environment", () => {
     });
 
     const preparing = environment.prepareFlow({
-      config: {},
+      config: {
+        matrixConfigOverrides: {
+          agentDefaults: { model: { fallbacks: ["fixture/fallback"] } },
+          audio: { models: [{ model: "transcribe", provider: "fixture" }] },
+          groupMentionPatterns: ["matrix qa"],
+        },
+      },
       gateway,
       outputDir: "/tmp/matrix-qa/output",
       timeoutMs: 1_000,
@@ -123,7 +143,14 @@ describe("matrix scenario environment", () => {
     expect(gateway.call).toHaveBeenCalledWith(
       "config.patch",
       expect.objectContaining({
-        replacePaths: ["channels.matrix", "messages"],
+        replacePaths: [
+          "agents.defaults.model.fallbacks",
+          "channels.matrix.accounts.work.dm.allowFrom",
+          "channels.matrix.accounts.work.groupAllowFrom",
+          "channels.matrix.accounts.work.groups.!room:matrix-qa.test.tools.allow",
+          "messages.groupChat.mentionPatterns",
+          "tools.media.audio.models",
+        ],
       }),
       { timeoutMs: 60_000 },
     );
@@ -131,6 +158,10 @@ describe("matrix scenario environment", () => {
       "exec.approval.request",
       { id: "approval-1" },
       { expectFinal: false, timeoutMs: 1_000 },
+    );
+    const patchCall = gateway.call.mock.calls.find(([method]) => method === "config.patch");
+    expect((patchCall?.[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
+      "channels.matrix.accounts.sut.groupAllowFrom",
     );
   });
 
