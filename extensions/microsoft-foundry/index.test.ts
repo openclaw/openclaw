@@ -2046,7 +2046,12 @@ describe("isAnthropicFoundryDeployment", () => {
   );
 });
 describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
-  it("reassembles split-byte UTF-8 across spawned process stderr chunks", async () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    spawnMock.mockReset();
+  });
+
+  it("reassembles split-byte UTF-8 across both spawned process streams", async () => {
     const { PassThrough } = await import("node:stream");
     const { EventEmitter } = await import("node:events");
 
@@ -2060,17 +2065,19 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
       pid: 99999,
     });
 
-    spawnMock.mockReturnValue(child as any);
+    spawnMock.mockReturnValue(child);
+    const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
 
     const loginPromise = azLoginDeviceCodeWithOptions({});
 
-    // Write a 4-byte UTF-8 smiley (U+1F60A = 0xF0 0x9F 0x98 0x8A)
-    // split across two stderr writes at the exact byte boundary where
-    // raw Buffer.toString() would produce U+FFFD per chunk.
-    // With setEncoding("utf8") the stream decoder reassembles the full
-    // code point before emitting the data event.
-    stderr.write(Buffer.from([0xf0, 0x9f]));
-    stderr.write(Buffer.from([0x98, 0x8a]));
+    const writeSplitUtf8 = (stream: typeof stdout, text: string) => {
+      const bytes = Buffer.from(text);
+      stream.write(bytes.subarray(0, 2));
+      stream.write(bytes.subarray(2));
+    };
+    writeSplitUtf8(stderr, "😊");
+    writeSplitUtf8(stdout, "🚀");
     stderr.end();
     stdout.end();
 
@@ -2078,50 +2085,9 @@ describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
 
     const err = await loginPromise.catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
-    // The error message contains the cleanly reassembled smiley, not U+FFFD
-    expect((err as Error).message).toBe("az login exited with code 1: 😊");
-  });
-
-  it("real-spawn: setEncoding prevents split-byte corruption in child process output", async () => {
-    const { spawn } =
-      await vi.importActual<typeof import("node:child_process")>("node:child_process");
-
-    // Spawn a real Node.js child that writes a 4-byte smiley split across
-    // two chunks with a delay, simulating the same pipe behavior that
-    // azLoginDeviceCodeWithOptions would see from a real Azure CLI process.
-    const child = spawn(
-      process.execPath,
-      [
-        "-e",
-        `
-const out = Buffer.from([0xf0, 0x9f, 0x98, 0x8a]);
-process.stdout.write(out.subarray(0, 2));
-setTimeout(() => {
-  process.stdout.write(out.subarray(2));
-  process.stdout.end();
-}, 10);
-`,
-      ],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    // Same stateful decoder that the production fix applies
-    child.stdout?.setEncoding("utf8");
-
-    const chunks: string[] = [];
-    child.stdout?.on("data", (chunk: string) => {
-      chunks.push(chunk);
-    });
-
-    await new Promise<void>((resolve, reject) => {
-      child.on("close", () => resolve());
-      child.on("error", reject);
-    });
-
-    // Without setEncoding each partial Buffer would .toString() to U+FFFD;
-    // with it the decoder reassembles the full code point.
-    expect(chunks.join("")).toBe("\u{1F60A}");
-    expect(chunks.join("")).not.toContain("�");
+    expect((err as Error).message).toBe("az login exited with code 1: 😊🚀");
+    expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
+    expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
   });
 });
 
