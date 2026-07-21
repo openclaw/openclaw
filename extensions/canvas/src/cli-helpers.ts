@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import * as path from "node:path";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -23,58 +24,14 @@ function normalizeCanvasSnapshotFormat(value: string | undefined): CanvasSnapsho
   return null;
 }
 
-function isCanvasSnapshotBase64Char(code: number): boolean {
-  return (
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    (code >= 0x30 && code <= 0x39) ||
-    code === 0x2b ||
-    code === 0x2f
-  );
-}
-
-function isCanvasSnapshotBase64Whitespace(code: number): boolean {
-  return code === 0x09 || code === 0x0a || code === 0x0c || code === 0x0d || code === 0x20;
-}
-
 function canonicalizeCanvasSnapshotBase64(value: string | undefined): string | undefined {
-  let cleaned = "";
-  let sawPadding = false;
-  let padding = 0;
-
-  for (let index = 0; index < (value?.length ?? 0); index += 1) {
-    const char = value?.[index] ?? "";
-    const code = char.charCodeAt(0);
-    if (isCanvasSnapshotBase64Whitespace(code)) {
-      continue;
-    }
-    if (char === "=") {
-      padding += 1;
-      if (padding > 2) {
-        return undefined;
-      }
-      sawPadding = true;
-      cleaned += char;
-      continue;
-    }
-    if (sawPadding || !isCanvasSnapshotBase64Char(code)) {
-      return undefined;
-    }
-    cleaned += char;
-  }
-
-  if (!cleaned) {
+  if (!value || /[\0-\x08\x0B\x0E-\x1F\x7F]/.test(value)) {
     return undefined;
   }
-  const remainder = cleaned.length % 4;
-  if (sawPadding && remainder !== 0) {
+  const canonical = canonicalizeBase64(value);
+  if (!canonical) {
     return undefined;
   }
-  if (remainder === 1) {
-    return undefined;
-  }
-  const canonical = remainder === 0 ? cleaned : `${cleaned}${"=".repeat(4 - remainder)}`;
-
   return Buffer.from(canonical, "base64").toString("base64") === canonical ? canonical : undefined;
 }
 
