@@ -160,6 +160,11 @@ This is plain user text`;
     expect(stripInboundMetadata(input)).toBe(input);
   });
 
+  it("preserves a near-miss context header line with trailing text", () => {
+    const input = `Context: production incident\nSource: pager alert\nPlease summarize`;
+    expect(stripInboundMetadata(input)).toBe(input);
+  });
+
   it("strips a leading active-memory prompt prefix block from visible user text", () => {
     const input = `${ACTIVE_MEMORY_PREFIX_BLOCK}\n\nWhat should I grab on the way?`;
     expect(stripInboundMetadata(input)).toBe("What should I grab on the way?");

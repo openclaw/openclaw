@@ -3843,6 +3843,11 @@ describe("memory plugin e2e", () => {
     );
   });
 
+  test("sanitizeForMemoryCapture preserves a near-miss context header with trailing text", () => {
+    const input = "Context: I prefer dark mode at work\nplease remember that";
+    expect(sanitizeForMemoryCapture(input)).toBe(input);
+  });
+
   test("sanitizeForMemoryCapture pre-truncates very large inputs", () => {
     const padding = "x".repeat(11_000);
     const input = `${padding}\nI always prefer dark mode`;
