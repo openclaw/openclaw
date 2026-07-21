@@ -770,8 +770,11 @@ class LobsterPet extends LitElement {
       return nothing;
     }
     const identity = this.identity;
-    const flavor =
-      identity?.elder ? "old as the tides" : identity?.oldFriend ? "an old friend" : null;
+    const flavor = identity?.elder
+      ? "old as the tides"
+      : identity?.oldFriend
+        ? "an old friend"
+        : null;
     return lobsterLook.renderLobsterPetScene({
       look,
       mode: this.mode,

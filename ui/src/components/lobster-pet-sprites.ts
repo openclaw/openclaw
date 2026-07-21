@@ -345,7 +345,10 @@ function renderJellyfishSvg() {
   `;
 }
 
-export const PASSER_SPRITES: Record<Exclude<LobsterPasserKind, "stranger">, () => TemplateResult> = {
+export const PASSER_SPRITES: Record<
+  Exclude<LobsterPasserKind, "stranger">,
+  () => TemplateResult
+> = {
   crab: renderCrabSvg,
   snail: renderSnailSvg,
   duck: renderDuckSvg,
@@ -386,7 +389,6 @@ export const BALLOON = svg`
     <ellipse cx="15" cy="10" rx="4" ry="6" fill="#ffffff" opacity="0.3" />
   </svg>
 `;
-
 
 export const PASSER_TITLES: Record<LobsterPasserKind, string> = {
   stranger: "a stranger",
