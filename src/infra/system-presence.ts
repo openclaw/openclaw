@@ -68,6 +68,8 @@ function initSelfPresence() {
       const res = spawnSync("sysctl", ["-n", "hw.model"], {
         encoding: "utf-8",
         timeout: DARWIN_SYSTEM_PROBE_TIMEOUT_MS,
+        // SIGKILL guarantees the probe is reaped even if the child traps
+        // SIGTERM; a bare timeout would otherwise leave spawnSync waiting.
         killSignal: "SIGKILL",
       });
       const out = normalizeOptionalString(res.stdout) ?? "";

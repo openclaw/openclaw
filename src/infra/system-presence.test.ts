@@ -1,6 +1,65 @@
-// Covers in-memory system presence merging and expiry behavior.
 import { randomUUID } from "node:crypto";
+// Covers in-memory system presence merging and expiry behavior.
+import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+const spawnSyncMock = vi.hoisted(() => {
+  const fn = vi.fn();
+  // Safe default so the module-level initSelfPresence() probe at import time
+  // (which runs a real sysctl/sw_vers on darwin) never produces an undefined
+  // stdout that would break normalizeOptionalString.
+  fn.mockReturnValue({
+    stdout: "",
+    stderr: "",
+    pid: 1,
+    output: [],
+    status: 0,
+    signal: null,
+  });
+  return fn;
+});
+
+vi.mock("node:child_process", async () => {
+  const { mockNodeChildProcessSpawnSync } = await import("openclaw/plugin-sdk/test-node-mocks");
+  return mockNodeChildProcessSpawnSync(spawnSyncMock, () =>
+    vi.importActual<typeof import("node:child_process")>("node:child_process"),
+  );
+});
+
+describe("system-presence macOS probe bounds", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes a timeout to the sysctl and sw_vers presence probes", async () => {
+    vi.spyOn(os, "platform").mockReturnValue("darwin");
+    spawnSyncMock.mockReturnValue({
+      stdout: "MacBookPro18,1\n",
+      stderr: "",
+      pid: 1,
+      output: [],
+      status: 0,
+      signal: null,
+    });
+
+    vi.resetModules();
+    const { upsertPresence } = await import("./system-presence.js");
+
+    upsertPresence(randomUUID(), { host: "probe-host", mode: "ui", reason: "connect" });
+
+    const probedCommands = spawnSyncMock.mock.calls
+      .filter(([cmd]) => cmd === "sysctl" || cmd === "sw_vers")
+      .map((call) => call[2]);
+    expect(probedCommands.length).toBeGreaterThan(0);
+    for (const opts of probedCommands) {
+      expect(opts?.timeout).toBeGreaterThan(0);
+      // Enforceable termination: a child that traps SIGTERM must still be
+      // reaped, so the probe uses SIGKILL rather than relying on SIGTERM.
+      expect(opts?.killSignal).toBe("SIGKILL");
+    }
+  });
+});
+
 import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
 
 describe("system-presence", () => {
