@@ -404,7 +404,7 @@ describeControlUiE2e("Control UI Model Providers mocked Gateway E2E", () => {
 
       await openaiCard.getByRole("button", { name: "Test connection" }).click();
       const probe = await gateway.waitForRequest("models.probe");
-      expect(probe.params).toEqual({ provider: "openai" });
+      expect(probe.params).toEqual({ provider: "openai", agentId: "main" });
       await expect.poll(async () => openaiCard.textContent()).toContain("87 ms");
 
       const primary = page.locator(".model-providers__defaults select").first();
