@@ -82,7 +82,10 @@ struct GatewaySettings: View {
         HStack(alignment: .top, spacing: 16) {
             SettingsPageHeader(
                 title: "Gateways",
-                subtitle: "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.")
+                subtitle: """
+                Save Gateway connections for chat windows. The primary Gateway under \
+                Connection still owns Mac integrations and Talk Mode.
+                """)
             Spacer(minLength: 16)
             Button {
                 guard !self.isRemoving else { return }
@@ -112,7 +115,10 @@ struct GatewaySettings: View {
                     Text("No Gateways saved")
                         .font(.callout.weight(.medium))
                     Text(
-                        "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.")
+                        """
+                        Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever \
+                        you want another window for it.
+                        """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

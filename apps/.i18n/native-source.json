@@ -30618,7 +30618,7 @@
       "id": "native.apple.bfd13b43b2fd425c"
     },
     {
-      "kind": "ui-named-argument",
+      "kind": "ui-named-argument-multiline",
       "line": 85,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Save Gateway connections for chat windows. The primary Gateway under Connection still owns Mac integrations and Talk Mode.",
@@ -30627,7 +30627,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 104,
+      "line": 107,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Loading Gateways…",
       "surface": "apple",
@@ -30635,7 +30635,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 112,
+      "line": 115,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "No Gateways saved",
       "surface": "apple",
@@ -30643,7 +30643,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 114,
+      "line": 117,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Add a Gateway here, then use File → New Gateway Window… (⌘N) whenever you want another window for it.",
       "surface": "apple",
@@ -30651,7 +30651,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 125,
+      "line": 131,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Saved Gateways",
       "surface": "apple",
@@ -30659,7 +30659,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 133,
+      "line": 139,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Open Window",
       "surface": "apple",
@@ -30667,7 +30667,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 145,
+      "line": 151,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Remove \\(profile.name)",
       "surface": "apple",
@@ -30675,7 +30675,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 194,
+      "line": 200,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Add Gateway",
       "surface": "apple",
@@ -30683,7 +30683,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 195,
+      "line": 201,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Credentials are stored with this profile in your Mac Keychain.",
       "surface": "apple",
@@ -30691,7 +30691,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 199,
+      "line": 205,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Name",
       "surface": "apple",
@@ -30699,7 +30699,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 200,
+      "line": 206,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Studio",
       "surface": "apple",
@@ -30707,7 +30707,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 204,
+      "line": 210,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Gateway URL",
       "surface": "apple",
@@ -30715,7 +30715,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 205,
+      "line": 211,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "wss://gateway.example.com",
       "surface": "apple",
@@ -30723,7 +30723,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 209,
+      "line": 215,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Token",
       "surface": "apple",
@@ -30731,7 +30731,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 214,
+      "line": 220,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Password",
       "surface": "apple",
@@ -30739,7 +30739,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 215,
+      "line": 221,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Optional",
       "surface": "apple",
@@ -30747,7 +30747,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 232,
+      "line": 238,
       "path": "apps/macos/Sources/OpenClaw/GatewaySettings.swift",
       "source": "Cancel",
       "surface": "apple",
