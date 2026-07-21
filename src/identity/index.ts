@@ -88,3 +88,16 @@ export {
   createCompatibilityError,
   createRuntimeError,
 } from './errors.js';
+
+// Export IdentityService
+export {
+  IdentityService,
+  getIdentityService,
+  resetIdentityService,
+} from './identity-service.js';
+
+// Export IdentityService types
+export type {
+  IdentityServiceOptions,
+  ProductInfo,
+} from './identity-service.js';
