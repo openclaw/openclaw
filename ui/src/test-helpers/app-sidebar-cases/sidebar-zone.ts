@@ -234,10 +234,6 @@ describe("AppSidebar interleaved zone", () => {
         name: "Operations",
         icon: "⚙",
         color: "#22c55e",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
       },
     ];
     sidebar.workboardBoardsReady = true;
@@ -263,9 +259,7 @@ describe("AppSidebar interleaved zone", () => {
 
   it("keeps the Workboard parent active when the current board is not pinned", async () => {
     const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [
-      { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
-    ];
+    sidebar.workboardBoards = [{ id: "ops", name: "Operations" }];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["route:workboard"];
     sidebar.activeRouteId = "workboard";
@@ -281,9 +275,7 @@ describe("AppSidebar interleaved zone", () => {
 
   it("hides Workboard board pins and editor choices when the plugin is inactive", async () => {
     const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [
-      { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
-    ];
+    sidebar.workboardBoards = [{ id: "ops", name: "Operations" }];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
     sidebar.enabledRouteIds = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
@@ -307,16 +299,12 @@ describe("AppSidebar interleaved zone", () => {
   it("lists active boards in the WorkBoard pin-editor group", async () => {
     const { sidebar } = await mountZone();
     sidebar.workboardBoards = [
-      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+      { id: "default" },
       {
         id: "ops",
         name: "Operations",
         icon: "⚙",
         color: "#22c55e",
-        total: 0,
-        active: 0,
-        archived: 0,
-        byStatus: {},
       },
     ];
     sidebar.workboardBoardsReady = true;
@@ -417,9 +405,7 @@ describe("AppSidebar interleaved zone", () => {
 
   it("unpins a Workboard board dropped into the session-list region", async () => {
     const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [
-      { id: "ops", name: "Operations", total: 0, active: 0, archived: 0, byStatus: {} },
-    ];
+    sidebar.workboardBoards = [{ id: "ops", name: "Operations" }];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
     const onUpdate = vi.fn();
