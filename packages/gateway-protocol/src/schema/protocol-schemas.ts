@@ -459,7 +459,7 @@ import {
   SessionDiscussionStateSchema,
 } from "./session-discussion.js";
 import { SessionPlacementProtocolSchemas } from "./session-placement.js";
-import * as SessionSchemas from "./session-presentation.js";
+import { SessionPresentationSchema } from "./session-presentation.js";
 import {
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
@@ -758,9 +758,7 @@ export const ProtocolSchemas = {
   SecretsResolveResult: SecretsResolveResultSchema,
   // Session lifecycle, message routing, compaction, and usage accounting.
   SessionsListParams: SessionsListParamsSchema,
-  SessionPresentationFamily: SessionSchemas.SessionPresentationFamilySchema,
-  SessionPresentationTitleSource: SessionSchemas.SessionPresentationTitleSourceSchema,
-  SessionPresentation: SessionSchemas.SessionPresentationSchema,
+  SessionPresentation: SessionPresentationSchema,
   SessionCatalogCapabilities: SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptor: SessionCatalogDescriptorSchema,
   SessionCatalogSession: SessionCatalogSessionSchema,
