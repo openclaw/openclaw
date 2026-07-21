@@ -94,6 +94,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     timedOutByRunBudget,
     sessionIdUsed,
     attemptAssistant,
+    currentAttemptCompletedAssistant,
     terminalInterrupted,
     signalOwnedInterruption,
     setTerminalLifecycleMeta,
@@ -103,6 +104,15 @@ export async function recoverEmbeddedRunAttempt(input: {
     assistantErrorText,
     canRestartForLiveSwitch,
   } = normalizedAttempt;
+  const assistantOverflowCandidate =
+    currentAttemptCompletedAssistant !== undefined
+      ? currentAttemptCompletedAssistant.stopReason === "error" ||
+        currentAttemptCompletedAssistant.stopReason === "length"
+        ? currentAttemptCompletedAssistant
+        : undefined
+      : attemptAssistant?.stopReason === "error" || attemptAssistant?.stopReason === "length"
+        ? attemptAssistant
+        : undefined;
   const retry = (updates?: {
     authRetryPending?: boolean;
     codexAppServerRecoveryRetries?: number;
@@ -191,6 +201,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     signalOwnedInterruption,
     promptError,
     assistantErrorText,
+    assistantOverflowCandidate,
     attemptCompactionCount,
     prepareCurrentTranscriptRetry: sessionPromptState.continueFromCurrentTranscript,
     prepareCompactedTranscriptRetry: sessionPromptState.prepareCompactedTranscriptRetry,

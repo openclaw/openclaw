@@ -10,6 +10,8 @@ import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { hasInternalDiagnosticEventListeners } from "../infra/diagnostic-event-listener-presence.js";
+import { areDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -180,14 +182,6 @@ export async function isCliBindingFlushed(
     }
   }
   return false;
-}
-
-function flushSessionManagerTranscript(sessionManager: SessionManager): void {
-  (
-    sessionManager as unknown as {
-      replacePersistedTranscript?: () => void;
-    }
-  ).replacePersistedTranscript?.();
 }
 
 async function assertSuccessfulCliRuntimeBindingCurrent(
@@ -468,8 +462,12 @@ export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAge
     ...paramsInput,
     lifecycleGeneration,
   };
+  // Observability services register before turns and keep subscriptions process-stable.
+  // Snapshot listener presence here so disabled installs pay no synthetic trace cost.
   return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    isClaudeCliProvider(params.provider)
+    isClaudeCliProvider(params.provider) &&
+    areDiagnosticsEnabledForProcess() &&
+    hasInternalDiagnosticEventListeners()
       ? runClaudeCliAgentTurnWithDiagnostics(params, (diagnosticLifecycle) =>
           runCliAgentInternal(params, diagnosticLifecycle),
         )
@@ -881,7 +879,7 @@ export async function runPreparedCliAgent(
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );
-      flushSessionManagerTranscript(sessionManager);
+      sessionManager.flushPendingPersistence();
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(

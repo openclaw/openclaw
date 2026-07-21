@@ -200,6 +200,21 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(result?.diagnosticTrace).toEqual(harnessStarted?.trace);
   });
 
+  it("bypasses Claude CLI diagnostics when no event listener is active", async () => {
+    executePreparedCliRunMock.mockResolvedValue({ text: "real Claude reply" });
+
+    const result = await runCliAgent({
+      ...baseRunParams,
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-7",
+      runId: "claude-no-diagnostics-listener",
+    });
+
+    expect(result.diagnosticTrace).toBeUndefined();
+    expect(executePreparedCliRunMock).toHaveBeenCalledOnce();
+  });
+
   it("preserves the send phase when execution fails before successful cleanup", async () => {
     executePreparedCliRunMock.mockRejectedValueOnce(new Error("CLI process failed"));
 

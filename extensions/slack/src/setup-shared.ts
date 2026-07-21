@@ -136,10 +136,19 @@ export function isSlackSetupAccountConfigured(account: ResolvedSlackAccount): bo
   if (account.config.mode === "relay") {
     return isSlackPluginAccountConfigured(account);
   }
+  const hasConfiguredUserToken =
+    Boolean(account.userToken?.trim()) || hasConfiguredSecretInput(account.config.userToken);
   const hasConfiguredBotToken =
     Boolean(account.botToken?.trim()) || hasConfiguredSecretInput(account.config.botToken);
   const hasConfiguredAppToken =
     Boolean(account.appToken?.trim()) || hasConfiguredSecretInput(account.config.appToken);
+  if (account.identity === "user") {
+    const hasTransportCredential =
+      account.config.mode === "http"
+        ? hasConfiguredSecretInput(account.config.signingSecret)
+        : hasConfiguredAppToken;
+    return hasConfiguredUserToken && hasTransportCredential;
+  }
   return hasConfiguredBotToken && hasConfiguredAppToken;
 }
 
@@ -150,6 +159,9 @@ export function describeSlackSetupAccount(account: ResolvedSlackAccount) {
     extra: {
       botTokenSource: account.botTokenSource,
       appTokenSource: account.appTokenSource,
+      ...(account.identity === "user"
+        ? { identity: account.identity, userTokenSource: account.userTokenSource }
+        : {}),
     },
   });
 }

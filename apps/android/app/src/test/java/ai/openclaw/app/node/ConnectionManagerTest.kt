@@ -433,20 +433,27 @@ class ConnectionManagerTest {
       listOf(
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
     )
-    assertEquals(listOf(ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY), options.caps)
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
   }
 
   @Test
   fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
     val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
 
-    assertTrue(options.caps.isEmpty())
+    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
   }
 
   @Test

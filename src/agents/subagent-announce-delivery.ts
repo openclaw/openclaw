@@ -24,11 +24,13 @@ import {
   releaseSessionDeliveryClaim,
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
+import { normalizeMediaReferenceForComparison } from "../media/media-reference-comparison.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isAgentMediatedCompletionSourceTool,
+  normalizeInputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -149,6 +151,7 @@ async function runAnnounceAgentCall(params: {
   timeoutMs?: number;
 }): Promise<unknown> {
   let accepted = false;
+  const inputProvenance = normalizeInputProvenance(params.agentParams.inputProvenance);
   try {
     return await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess(
       "agent",
@@ -161,6 +164,10 @@ async function runAnnounceAgentCall(params: {
           shouldPreserveUserFacingSessionStateForInputProvenance(
             params.agentParams.inputProvenance,
           ),
+        delegatedToolPolicyHandoff:
+          inputProvenance?.kind === "inter_session" &&
+          inputProvenance.sourceTool === "subagent_announce" &&
+          Boolean(inputProvenance.sourceSessionKey),
         onAccepted: () => {
           accepted = true;
         },
@@ -1245,7 +1252,7 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
     return expected;
   }
   const delivered = new Set(
-    params.requiresMessageToolDelivery
+    (params.requiresMessageToolDelivery
       ? collectMessagingToolDeliveredMediaUrlsForTarget(result, params.deliveryTarget)
       : collectAutomaticCompletionDeliveredMediaUrls({
           result,
@@ -1253,9 +1260,10 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
           automaticDeliveryRequested: params.automaticDeliveryRequested,
           automaticDeliveryFailed: params.automaticDeliveryFailed === true,
           expectedMediaCount: expected.length,
-        }),
+        })
+    ).map(normalizeMediaReferenceForComparison),
   );
-  return expected.filter((url) => !delivered.has(url));
+  return expected.filter((url) => !delivered.has(normalizeMediaReferenceForComparison(url)));
 }
 
 function collectAutomaticCompletionDeliveredMediaUrls(params: {

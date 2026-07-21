@@ -138,11 +138,13 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
   "operator.pairing",
 ] as const;
 
 const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",
@@ -359,6 +361,10 @@ export class GatewayBrowserClient {
     });
   }
 
+  get instanceId(): string | undefined {
+    return this.opts.instanceId;
+  }
+
   start() {
     this.client.start();
   }
@@ -457,6 +463,7 @@ export class GatewayBrowserClient {
         scopes,
         device,
         caps: [
+          GATEWAY_CLIENT_CAPS.AGENT_KIND,
           GATEWAY_CLIENT_CAPS.APPROVALS,
           GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
           GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,

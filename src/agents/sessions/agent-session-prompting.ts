@@ -14,35 +14,53 @@ import type { CustomMessage } from "./messages.js";
 import { expandPromptTemplate } from "./prompt-templates.js";
 import type { ResourceLoader } from "./resource-loader.js";
 
+type PostAgentRunAction = "continue" | "settled" | "handoff";
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   // =========================================================================
   // Prompting
   // =========================================================================
 
   private async runAgentPrompt(messages: AgentMessage | AgentMessage[]): Promise<void> {
+    let endedForTurnHandoff = false;
     try {
       await this.agent.prompt(messages);
-      while (await this.handlePostAgentRun()) {
+      while (true) {
+        const action = await this.handlePostAgentRun();
+        if (action !== "continue") {
+          endedForTurnHandoff = action === "handoff";
+          break;
+        }
         await this.agent.continue();
       }
     } finally {
       this.systemPromptOverride = undefined;
       this.flushPendingBashMessages();
+      // Consume handoff state before callbacks can start a nested run and set it again.
+      endedForTurnHandoff ||= this.lastRunEndedForTurnHandoff;
+      this.lastRunEndedForTurnHandoff = false;
+      // Failed or aborted runs can still be idle; only handoff leaves external delivery pending.
+      if (!endedForTurnHandoff) {
+        await this.currentExtensionRunner.emit({ type: "agent_settled" });
+      }
     }
   }
 
-  private async handlePostAgentRun(): Promise<boolean> {
+  private async handlePostAgentRun(): Promise<PostAgentRunAction> {
     const msg = this.lastAssistantMessage;
     this.lastAssistantMessage = undefined;
     const endedForTurnHandoff = this.lastRunEndedForTurnHandoff;
     this.lastRunEndedForTurnHandoff = false;
-    if (!msg || endedForTurnHandoff) {
+    if (endedForTurnHandoff) {
       // External delivery owns the next run after a deliberate turn handoff.
-      return false;
+      return "handoff";
+    }
+    if (!msg) {
+      return "settled";
     }
 
     if (this.isRetryableError(msg) && (await this.prepareRetry(msg))) {
-      return true;
+      return "continue";
     }
 
     if (msg.stopReason === "error" && this.retryCount > 0) {
@@ -56,11 +74,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     if (await this.checkCompaction(msg)) {
-      return true;
+      return "continue";
     }
 
     // Messages queued by agent_end handlers arrive after the loop's final queue drain.
-    return this.agent.hasQueuedMessages();
+    return this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
   private createUserContent(

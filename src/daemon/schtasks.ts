@@ -32,6 +32,7 @@ import { formatLine, writeFormattedLines } from "./output.js";
 import { resolveGatewayTaskScriptPath } from "./paths.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -1167,11 +1168,13 @@ async function resolveControllableFallbackRuntime(
 async function stopStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
+  onMutation?: () => void,
 ): Promise<void> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
   }
+  onMutation?.();
   stdout.write(`${formatLine("Stopped Windows login item", resolveTaskName(env))}\n`);
 }
 
@@ -1188,14 +1191,27 @@ async function terminateInstalledStartupRuntime(env: GatewayServiceEnv): Promise
 async function restartStartupEntry(
   env: GatewayServiceEnv,
   stdout: NodeJS.WritableStream,
+  onMutation?: (kind: "stop" | "restart") => void,
 ): Promise<GatewayServiceRestartResult> {
   const runtime = await resolveControllableFallbackRuntime(env);
   if (typeof runtime.pid === "number" && runtime.pid > 0) {
     await terminateGatewayProcessTree(runtime.pid, 300);
+    onMutation?.("stop");
   }
   await launchFallbackTaskScript(env);
+  onMutation?.("restart");
   stdout.write(`${formatLine("Restarted Windows login item", resolveTaskName(env))}\n`);
   return { outcome: "completed" };
+}
+
+async function startStartupEntry(
+  env: GatewayServiceEnv,
+  stdout: NodeJS.WritableStream,
+  onMutation?: () => void,
+): Promise<void> {
+  await launchFallbackTaskScript(env);
+  onMutation?.();
+  stdout.write(`${formatLine("Started Windows login item", resolveTaskName(env))}\n`);
 }
 
 const CALLER_OWNED_SERVICE_IDENTITY_KEYS = [
@@ -1508,11 +1524,13 @@ async function runScheduledTaskOrThrow(params: {
   taskName: string;
   env: GatewayServiceEnv;
   scriptPath: string;
+  onMutation?: () => void;
 }): Promise<ScheduledTaskActivation> {
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
+  params.onMutation?.();
   if (
     !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
   ) {
@@ -1855,20 +1873,25 @@ export async function resumeScheduledTaskAutoStartAfterUpdate(
   return await changeScheduledTaskEnabledState({ env, enabled: true });
 }
 
-export async function stopScheduledTask({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
+export async function stopScheduledTask({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      await stopStartupEntry(effectiveEnv, stdout);
+      await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
       return;
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      await stopStartupEntry(effectiveEnv, stdout);
+      await stopStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-stop"));
       return;
     }
   }
@@ -1877,6 +1900,7 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   if (res.code !== 0 && !isTaskNotRunning(res)) {
     throw new Error(`schtasks end failed: ${res.stderr || res.stdout}`.trim());
   }
+  reportMutation("schtasks-stop");
   const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
   const stopPort = manageGatewayPort ? await resolveScheduledTaskPort(effectiveEnv) : null;
   if (manageGatewayPort) {
@@ -1898,13 +1922,50 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
 
+export async function startScheduledTask({
+  stdout,
+  env,
+  onMutation,
+}: GatewayServiceControlArgs): Promise<void> {
+  const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
+  try {
+    await assertSchtasksAvailable();
+  } catch (err) {
+    if (await isStartupEntryInstalled(effectiveEnv)) {
+      await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
+      return;
+    }
+    throw err;
+  }
+  if (!(await isRegisteredScheduledTask(effectiveEnv))) {
+    if (await isStartupEntryInstalled(effectiveEnv)) {
+      await startStartupEntry(effectiveEnv, stdout, () => reportMutation("startup-entry-start"));
+      return;
+    }
+  }
+  const taskName = resolveTaskName(effectiveEnv);
+  await runScheduledTaskOrThrow({
+    taskName,
+    env: effectiveEnv,
+    scriptPath: resolveTaskScriptPath(effectiveEnv),
+    onMutation: () => reportMutation("schtasks-start"),
+  });
+  stdout.write(`${formatLine("Started Scheduled Task", taskName)}\n`);
+}
+
 async function restartRegisteredScheduledTask(params: {
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   mode: { kind: "standard" } | { kind: "fallback-takeover" };
+  onEndMutation?: () => void;
+  onRunMutation?: () => void;
 }): Promise<GatewayServiceRestartResult> {
   const taskName = resolveTaskName(params.env);
-  await execSchtasks(["/End", "/TN", taskName]);
+  const end = await execSchtasks(["/End", "/TN", taskName]);
+  if (end.code === 0) {
+    params.onEndMutation?.();
+  }
   const manageGatewayPort = shouldManageGatewayListenerPort(params.env);
   const restartPort = manageGatewayPort ? await resolveScheduledTaskPort(params.env) : null;
   if (params.mode.kind === "standard") {
@@ -1945,6 +2006,7 @@ async function restartRegisteredScheduledTask(params: {
     taskName,
     env: params.env,
     scriptPath: resolveTaskScriptPath(params.env),
+    ...(params.onRunMutation ? { onMutation: params.onRunMutation } : {}),
   });
   const startupEntryInstalled = await isStartupEntryInstalled(params.env);
   const hasRunningEvidence = startupEntryInstalled
@@ -1977,26 +2039,37 @@ async function restartRegisteredScheduledTask(params: {
 export async function restartScheduledTask({
   stdout,
   env,
+  onMutation,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
+  const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
   try {
     await assertSchtasksAvailable();
   } catch (err) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      const result = await restartStartupEntry(effectiveEnv, stdout, (kind) =>
+        reportMutation(kind === "stop" ? "startup-entry-stop" : "startup-entry-restart"),
+      );
+      return result;
     }
     throw err;
   }
   if (!(await isRegisteredScheduledTask(effectiveEnv))) {
     if (await isStartupEntryInstalled(effectiveEnv)) {
-      return await restartStartupEntry(effectiveEnv, stdout);
+      const result = await restartStartupEntry(effectiveEnv, stdout, (kind) =>
+        reportMutation(kind === "stop" ? "startup-entry-stop" : "startup-entry-restart"),
+      );
+      return result;
     }
   }
-  return await restartRegisteredScheduledTask({
+  const result = await restartRegisteredScheduledTask({
     env: effectiveEnv,
     stdout,
     mode: { kind: "standard" },
+    onEndMutation: () => reportMutation("schtasks-end"),
+    onRunMutation: () => reportMutation("schtasks-restart"),
   });
+  return result;
 }
 
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {

@@ -26,6 +26,10 @@ import {
   hasVisibleInboundReplyDispatch,
   runChannelInboundEvent,
   shouldDebounceTextInbound,
+  toInboundMediaFacts,
+  toHistoryMediaEntries,
+  type ChannelInboundMediaInput,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   bindIngressLifecycleToReplyOptions,
@@ -46,9 +50,6 @@ import {
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
-import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
-import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   danger,
@@ -76,7 +77,9 @@ import {
   resolveSignalSender,
   type SignalSender,
 } from "../identity.js";
+import { formatSignalMediaText } from "../media-text.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
+import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import {
@@ -110,24 +113,6 @@ function isSignalReplySessionInitConflictError(error: unknown): boolean {
   );
 }
 
-function formatAttachmentKindCount(kind: string, count: number): string {
-  if (kind === "attachment") {
-    return `${count} file${count > 1 ? "s" : ""}`;
-  }
-  return `${count} ${kind}${count > 1 ? "s" : ""}`;
-}
-function formatAttachmentSummaryPlaceholder(contentTypes: Array<string | undefined>): string {
-  const kindCounts = new Map<string, number>();
-  for (const contentType of contentTypes) {
-    const kind = kindFromMime(contentType) ?? "attachment";
-    kindCounts.set(kind, (kindCounts.get(kind) ?? 0) + 1);
-  }
-  const parts = [...kindCounts.entries()].map(([kind, count]) =>
-    formatAttachmentKindCount(kind, count),
-  );
-  return `[${parts.join(" + ")} attached]`;
-}
-
 function resolveSignalInboundRoute(params: {
   cfg: SignalEventHandlerDeps["cfg"];
   accountId: SignalEventHandlerDeps["accountId"];
@@ -157,7 +142,9 @@ function resolveSignalStatusReactionTimestamp(params: {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-type SignalStatusDispatchResult = Awaited<ReturnType<typeof dispatchInboundMessage>>;
+type SignalStatusDispatchResult = {
+  failedCounts?: Partial<Record<"tool" | "block" | "final", number>>;
+};
 
 function hasSignalStatusReplyDeliveryFailure(result: SignalStatusDispatchResult): boolean {
   const failedCounts = result.failedCounts;
@@ -217,6 +204,7 @@ async function finalizeSignalStatusReaction(params: {
 }
 
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
+  const statusReactionTiming = deps.statusReactionTiming ?? DEFAULT_TIMING;
   const activeEnqueueEntries = new WeakSet<SignalInboundEntry>();
 
   async function handleSignalInboundMessage(entry: SignalInboundEntry) {
@@ -266,9 +254,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             channel: "Signal",
             from: fromLabel,
             timestamp: historyEntry.timestamp,
-            body: `${historyEntry.body}${
-              historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""
-            }`,
+            body: `${[historyEntry.body, formatSignalMediaText(historyEntry.media ?? [])]
+              .filter(Boolean)
+              .join("\n")}${historyEntry.messageId ? ` [id:${historyEntry.messageId}]` : ""}`,
             chatType: "group",
             senderLabel: historyEntry.sender,
             envelope: envelopeOptions,
@@ -295,16 +283,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       replyToMode,
       entry.isBatched === true,
     );
-    const media =
-      entry.mediaPaths && entry.mediaPaths.length > 0
-        ? entry.mediaPaths.map((path, index) => ({
-            path,
-            url: path,
-            contentType: entry.mediaTypes?.[index],
-          }))
-        : entry.mediaPath
-          ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
-          : undefined;
+    const media = toInboundMediaFacts(entry.media);
     const ctxPayload = buildChannelInboundEventContext({
       channel: "signal",
       supplemental: {
@@ -332,6 +311,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
       route: {
         agentId: route.agentId,
+        dmScope: route.dmScope,
         accountId: route.accountId,
         routeSessionKey: route.sessionKey,
       },
@@ -442,7 +422,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             },
             initialEmoji: ackReaction,
             emojis: resolveSignalStatusReactionEmojis(statusReactionsConfig.emojis),
-            timing: statusReactionsConfig.timing,
+            timing: statusReactionTiming,
             onError: (err) => {
               logAckFailure({
                 log: logVerbose,
@@ -453,10 +433,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             },
           })
         : null;
-    const statusReactionTiming = {
-      ...DEFAULT_TIMING,
-      ...statusReactionsConfig?.timing,
-    };
     if (statusReactionController) {
       void statusReactionController.setQueued();
     }
@@ -498,10 +474,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         replyToMode !== "off" && replyThreading?.implicitCurrentMessage !== "deny",
       state: { hasReplied: false },
     };
-    const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+    const dispatcherOptions: NonNullable<ChannelInboundTurnPlan["dispatcherOptions"]> = {
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
+    };
+    const delivery: ChannelInboundTurnPlan["delivery"] = {
       deliver: async (payload, _info) => {
         await deps.deliverReplies({
           cfg: deps.cfg,
@@ -521,7 +499,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
-    });
+    };
     const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
       route,
       sessionKey: route.sessionKey,
@@ -585,52 +563,42 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             historyMap: deps.groupHistories,
             limit: deps.historyLimit,
           },
-          onPreDispatchFailure: () =>
-            settleReplyDispatcher({
-              dispatcher,
-              onSettled: () => markDispatchIdle(),
-            }),
-          runDispatch: async () => {
-            try {
-              if (statusReactionController) {
-                void statusReactionController.setThinking();
-              }
-              return await dispatchInboundMessage({
-                ctx: ctxPayload,
-                cfg: deps.cfg,
-                dispatcher,
-                replyOptions: {
-                  ...replyOptions,
-                  ...(entry.turnAdoptionLifecycle
-                    ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
-                    : {}),
-                  disableBlockStreaming:
-                    typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-                  ...(statusReactionController
-                    ? {
-                        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-                        allowToolLifecycleWhenProgressHidden: true,
-                        onToolStart: async (payload: { name?: string }) => {
-                          const toolName = payload.name?.trim();
-                          if (toolName) {
-                            await statusReactionController.setTool(toolName);
-                          }
-                        },
-                        onCompactionStart: async () => {
-                          await statusReactionController.setCompacting();
-                        },
-                        onCompactionEnd: async () => {
-                          statusReactionController.cancelPending();
-                          await statusReactionController.setThinking();
-                        },
-                      }
-                    : {}),
-                  onModelSelected,
-                },
-              });
-            } finally {
-              markDispatchIdle();
+          afterRecord: () => {
+            if (statusReactionController) {
+              void statusReactionController.setThinking();
             }
+          },
+          dispatcherOptions,
+          delivery,
+          // Signal retries the whole debounced flush below so the keyed lane and durable claims
+          // remain owned during backoff; a nested dispatch retry breaks shutdown cancellation.
+          sessionInitRetry: { delaysMs: [] },
+          replyOptions: {
+            ...(entry.turnAdoptionLifecycle
+              ? bindIngressLifecycleToReplyOptions(entry.turnAdoptionLifecycle)
+              : {}),
+            disableBlockStreaming:
+              typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+            ...(statusReactionController
+              ? {
+                  allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+                  allowToolLifecycleWhenProgressHidden: true,
+                  onToolStart: async (payload: { name?: string }) => {
+                    const toolName = payload.name?.trim();
+                    if (toolName) {
+                      await statusReactionController.setTool(toolName);
+                    }
+                  },
+                  onCompactionStart: async () => {
+                    await statusReactionController.setCompacting();
+                  },
+                  onCompactionEnd: async () => {
+                    statusReactionController.cancelPending();
+                    await statusReactionController.setThinking();
+                  },
+                }
+              : {}),
+            onModelSelected,
           },
         }),
         onFinalize: (result) => {
@@ -697,11 +665,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             lifecycle.onAdoptionFinalizing();
           }
         },
-        onAbandoned: () => {
+        onAbandoned: async () => {
           handedOff = true;
-          for (const lifecycle of lifecycles) {
-            lifecycle.onAbandoned();
-          }
+          await Promise.all(
+            lifecycles.map((lifecycle) => Promise.resolve(lifecycle.onAbandoned())),
+          );
         },
       },
       // Terminal no-dispatch (gated, whitespace-only, deliberate skip) must
@@ -731,11 +699,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const combinedText = entries
       .map((entry) => entry.bodyText)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     const combinedCommandBody = entries
       .map((entry) => entry.commandBody)
       .filter(Boolean)
-      .join("\\n");
+      .join("\n");
     if (!combinedText.trim()) {
       await settle();
       return;
@@ -747,10 +715,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       ...(lifecycle ? { turnAdoptionLifecycle: lifecycle } : {}),
       isBatched: true,
       nativeReplyBody: last.nativeReplyBody ?? last.bodyText,
-      mediaPath: undefined,
-      mediaType: undefined,
-      mediaPaths: undefined,
-      mediaTypes: undefined,
+      media: entries.flatMap((entry) => entry.media ?? []),
     });
     await settle();
   }
@@ -810,14 +775,16 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
       // Keep the current keyed debounce task reserved through backoff so a
       // newer same-conversation flush cannot overtake this failed batch.
-      const retryTask = retrySignalInboundFlush(entries, err).catch((terminalError: unknown) => {
-        // Exhausted retries: release the drain claims so queue retry policy
-        // owns redelivery instead of the stall watchdog dead-lettering them.
-        for (const entry of entries) {
-          entry.turnAdoptionLifecycle?.onAbandoned();
-        }
-        throw terminalError;
-      });
+      const retryTask = retrySignalInboundFlush(entries, err).catch(
+        async (terminalError: unknown) => {
+          // Exhausted retries: release the drain claims so queue retry policy
+          // owns redelivery instead of the stall watchdog dead-lettering them.
+          await Promise.all(
+            entries.map((entry) => Promise.resolve(entry.turnAdoptionLifecycle?.onAbandoned())),
+          );
+          throw terminalError;
+        },
+      );
       deps.runTrackedTask?.(() => retryTask.catch(() => undefined));
       await retryTask;
     }
@@ -838,7 +805,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       shouldDebounceTextInbound({
         text: entry.commandBody,
         cfg: deps.cfg,
-        hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
+        hasMedia: entry.media?.some((media) => Boolean(media.path || media.url)) === true,
       }),
     onFlush: flushNormalSignalInboundEntries,
     onError: reportSignalInboundFlushError,
@@ -901,6 +868,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
       );
+      return true;
+    }
+    if (
+      conversationKey &&
+      (await maybeResolveSignalQuestionReaction({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        conversationKey,
+        messageId,
+        reactionKey: emojiLabel,
+        isRemove: Boolean(params.reaction.isRemove),
+        actorId: formatSignalSenderId(params.sender),
+        targetAuthor: params.reaction.targetAuthor,
+        targetAuthorUuid: params.reaction.targetAuthorUuid,
+        logDebug: logVerbose,
+      }))
+    ) {
       return true;
     }
     const targets = deps.resolveSignalReactionTargets(params.reaction);
@@ -1180,33 +1164,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         reason: "no mention",
         target: senderDisplay,
       });
-      const pendingPlaceholder = (() => {
-        if (!dataMessage.attachments?.length) {
-          return "";
-        }
-        // When we're skipping a message we intentionally avoid downloading attachments.
-        // Still record a useful placeholder for pending-history context.
-        if (deps.ignoreAttachments) {
-          return "<media:attachment>";
-        }
-        const attachmentTypes = (dataMessage.attachments ?? []).map((attachment) =>
-          typeof attachment?.contentType === "string" ? attachment.contentType : undefined,
-        );
-        if (attachmentTypes.length > 1) {
-          return formatAttachmentSummaryPlaceholder(attachmentTypes);
-        }
-        const firstContentType = dataMessage.attachments?.[0]?.contentType;
-        const pendingKind = kindFromMime(firstContentType ?? undefined);
-        return pendingKind ? `<media:${pendingKind}>` : "<media:attachment>";
-      })();
-      const pendingBodyText = messageText || pendingPlaceholder || visibleQuoteText;
+      const pendingMedia: ChannelInboundMediaInput[] = (dataMessage.attachments ?? []).map(
+        (attachment) => {
+          const contentType = attachment?.contentType ?? undefined;
+          return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+        },
+      );
+      // Skipped messages intentionally avoid downloads; facts stay type-only.
+      const pendingMediaText = formatSignalMediaText(pendingMedia);
+      const pendingBodyText = messageText || pendingMediaText || visibleQuoteText;
       const historyKey = groupId ?? "unknown";
       createChannelHistoryWindow({ historyMap: deps.groupHistories }).record({
         historyKey,
         limit: deps.historyLimit,
         entry: {
           sender: envelope.sourceName ?? senderDisplay,
-          body: pendingBodyText,
+          body: messageText || visibleQuoteText,
+          media: toHistoryMediaEntries(pendingMedia),
           timestamp: envelope.timestamp ?? undefined,
           messageId:
             typeof envelope.timestamp === "number" ? String(envelope.timestamp) : undefined,
@@ -1217,7 +1191,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         to: signalTo,
         replyToId,
         author: senderRecipient,
-        body: pendingBodyText,
+        body: messageText || visibleQuoteText,
+        media: pendingMedia,
         sourceTimestamp: inboundTimestamp,
       });
       const signalGroupPolicy = resolveChannelGroupPolicy({
@@ -1264,15 +1239,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    let mediaPath: string | undefined;
-    let mediaType: string | undefined;
-    const mediaPaths: string[] = [];
-    const mediaTypes: string[] = [];
-    let placeholder = "";
     const attachments = dataMessage.attachments ?? [];
+    const mediaFacts: ChannelInboundMediaInput[] = attachments.map((attachment) => {
+      const contentType = attachment?.contentType ?? undefined;
+      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+    });
     let unavailableAttachmentCount = deps.ignoreAttachments ? attachments.length : 0;
     if (!deps.ignoreAttachments) {
-      for (const attachment of attachments) {
+      for (const [index, attachment] of attachments.entries()) {
         if (!attachment?.id) {
           unavailableAttachmentCount += 1;
           continue;
@@ -1287,14 +1261,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
             maxBytes: deps.mediaMaxBytes,
           });
           if (fetched) {
-            mediaPaths.push(fetched.path);
-            mediaTypes.push(
-              fetched.contentType ?? attachment.contentType ?? "application/octet-stream",
-            );
-            if (!mediaPath) {
-              mediaPath = fetched.path;
-              mediaType = fetched.contentType ?? attachment.contentType ?? undefined;
-            }
+            const contentType =
+              fetched.contentType ?? attachment.contentType ?? "application/octet-stream";
+            mediaFacts[index] = {
+              path: fetched.path,
+              url: fetched.path,
+              contentType,
+              kind: kindFromMime(contentType) ?? "unknown",
+            };
           } else {
             unavailableAttachmentCount += 1;
           }
@@ -1305,18 +1279,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       }
     }
 
-    if (mediaPaths.length > 1) {
-      placeholder = formatAttachmentSummaryPlaceholder(mediaTypes);
-    } else {
-      const kind = kindFromMime(mediaType ?? undefined);
-      if (kind) {
-        placeholder = `<media:${kind}>`;
-      } else if (mediaPaths.length > 0) {
-        placeholder = "<media:attachment>";
-      }
-    }
-
-    let bodyText = messageText || placeholder || visibleQuoteText || "";
+    let bodyText = messageText;
     if (unavailableAttachmentCount > 0) {
       const attachmentLabel = unavailableAttachmentCount === 1 ? "attachment" : "attachments";
       bodyText = formatInboundMediaUnavailableText({
@@ -1324,7 +1287,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         notice: `[signal ${unavailableAttachmentCount > 1 ? `${unavailableAttachmentCount} ` : ""}${attachmentLabel} unavailable]`,
       });
     }
-    if (!bodyText) {
+    if (!bodyText && mediaFacts.length === 0 && !visibleQuoteText) {
       return;
     }
 
@@ -1354,7 +1317,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       to: signalTo,
       replyToId,
       author: senderRecipient,
-      body: bodyText,
+      body: messageText,
+      media: mediaFacts,
       sourceTimestamp: inboundTimestamp,
     });
     const entry: SignalInboundEntry = {
@@ -1366,14 +1330,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       groupName,
       isGroup,
       bodyText,
+      nativeReplyBody: [messageText, formatSignalMediaText(mediaFacts)].filter(Boolean).join("\n"),
       commandBody: messageText,
       timestamp: inboundTimestamp,
       messageId,
       replyToId,
-      mediaPath,
-      mediaType,
-      mediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-      mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+      media: mediaFacts,
       commandAuthorized,
       canDetectMention,
       requireMention,

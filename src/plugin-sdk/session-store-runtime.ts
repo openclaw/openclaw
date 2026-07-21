@@ -16,10 +16,13 @@ import {
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntry,
+  patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
   readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
+  updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -27,6 +30,7 @@ import {
   parseSqliteSessionFileMarker,
 } from "../config/sessions/sqlite-marker.js";
 import { resolveSessionStoreEntry as resolveSessionStoreEntryFromStore } from "../config/sessions/store-entry.js";
+import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type {
   AmbientTranscriptWatermark,
@@ -36,17 +40,15 @@ import type {
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
+  activeRecoveryFieldsForSameSession,
+  clearRecoveryStateForRotatedSessionPatch,
   projectPluginSessionEntry,
+  projectPluginSessionEntryPatch,
   projectPluginSessionStore,
   reconcilePluginSessionStore,
   type SessionStoreReadParams,
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
-import {
-  patchPluginSessionEntry,
-  updatePluginSessionStoreEntry,
-  upsertPluginSessionEntry,
-} from "./session-store-runtime-mutations.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -112,6 +114,8 @@ type ReadAmbientTranscriptWatermarkParams = SessionStoreReadParams & {
 
 type DeleteSessionEntryParams = SessionStoreReadParams & {
   archiveTranscript?: boolean;
+  expectedSessionId?: string | null;
+  expectedUpdatedAt?: number;
 };
 
 type SessionLifecycleArtifactsCleanupParams = {
@@ -130,6 +134,19 @@ type SessionLifecycleArtifactsCleanupResult = {
   archivedTranscriptArtifacts: number;
   removedEntries: number;
 };
+
+function preserveCoreRecoveryState(
+  persistedEntry: InternalSessionEntry,
+  publicPatch: Partial<SessionEntry>,
+): Partial<InternalSessionEntry> {
+  const nextSessionId = Object.hasOwn(publicPatch, "sessionId")
+    ? publicPatch.sessionId
+    : persistedEntry.sessionId;
+  const recoveryState = activeRecoveryFieldsForSameSession(persistedEntry, nextSessionId);
+  return recoveryState
+    ? { ...publicPatch, ...recoveryState }
+    : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
+}
 
 function resolveLegacySessionStoreTarget(storePath: string): {
   agentId?: string;
@@ -344,11 +361,17 @@ export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | 
   return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
-/** Lists session entries for one agent. */
+/**
+ * Lists session entries for one agent. `readOnly` reads without joining the
+ * agent database writable lifecycle (no create/register/migrate) — required
+ * for detection/introspection paths that may run across the whole fleet.
+ * One flagged entry instead of a second export keeps the SDK surface budget flat.
+ */
 export function listSessionEntries(
-  params: SessionStoreListParams = {},
+  params: SessionStoreListParams & { readOnly?: boolean } = {},
 ): SessionStoreEntrySummary[] {
-  return listAccessorSessionEntries({
+  const list = params.readOnly ? listAccessorSessionEntriesReadOnly : listAccessorSessionEntries;
+  return list({
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     ...(params.hydrateSkillPromptRefs !== undefined
@@ -397,7 +420,35 @@ export function resolveTranscriptSessionKeyBySessionId(params: {
 export async function patchSessionEntry(
   params: PatchSessionEntryParams,
 ): Promise<SessionEntry | null> {
-  return await patchPluginSessionEntry(params);
+  const entry = await patchAccessorSessionEntry(
+    toSessionAccessScope(params),
+    async (internalEntry, context) => {
+      const persistedEntry = internalEntry as InternalSessionEntry;
+      const patch = await params.update(projectPluginSessionEntry(internalEntry), {
+        existingEntry: context.existingEntry
+          ? projectPluginSessionEntry(context.existingEntry)
+          : undefined,
+      });
+      if (!patch) {
+        return null;
+      }
+      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+    },
+    {
+      fallbackEntry: params.fallbackEntry
+        ? projectPluginSessionEntry(params.fallbackEntry)
+        : undefined,
+      maintenanceConfig:
+        params.maintenanceConfig !== undefined
+          ? normalizeResolvedMaintenanceConfigInput(params.maintenanceConfig)
+          : undefined,
+      preserveActivity: params.preserveActivity,
+      requireWriteSuccess: params.requireWriteSuccess,
+      replaceEntry: params.replaceEntry,
+      skipMaintenance: params.skipMaintenance,
+    },
+  );
+  return entry ? projectPluginSessionEntry(entry) : null;
 }
 
 /** Reads the last activity timestamp for one session entry. */
@@ -418,25 +469,56 @@ export function readAmbientTranscriptWatermark(
 export async function updateSessionStoreEntry(
   params: UpdateSessionStoreEntryParams,
 ): Promise<SessionEntry | null> {
-  return await updatePluginSessionStoreEntry(params);
+  const entry = await updateSessionEntry(
+    { sessionKey: params.sessionKey, storePath: params.storePath },
+    async (internalEntry) => {
+      const patch = await params.update(projectPluginSessionEntry(internalEntry));
+      if (!patch) {
+        return null;
+      }
+      const persistedEntry = internalEntry as InternalSessionEntry;
+      return preserveCoreRecoveryState(persistedEntry, projectPluginSessionEntryPatch(patch));
+    },
+    {
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership,
+      requireWriteSuccess: params.requireWriteSuccess,
+    },
+  );
+  return entry ? projectPluginSessionEntry(entry) : null;
 }
 
 /** Replaces or creates one session entry by agent/session identity. */
 export async function upsertSessionEntry(params: UpsertSessionEntryParams): Promise<void> {
-  await upsertPluginSessionEntry(params);
+  const publicEntry = projectPluginSessionEntry(params.entry);
+  await patchAccessorSessionEntry(
+    toSessionAccessScope(params),
+    (internalEntry) => {
+      const persistedEntry = internalEntry as InternalSessionEntry;
+      return preserveCoreRecoveryState(persistedEntry, publicEntry);
+    },
+    { fallbackEntry: publicEntry, replaceEntry: true },
+  );
 }
 
 /** Deletes one session entry by agent/session identity. */
 export async function deleteSessionEntry(params: DeleteSessionEntryParams): Promise<boolean> {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath =
     params.storePath ??
     resolveSessionStorePath(undefined, {
-      agentId: params.agentId,
+      agentId,
       env: params.env,
     });
   const result = await deleteAccessorSessionEntryLifecycle({
-    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
     archiveTranscript: params.archiveTranscript ?? false,
+    ...(params.expectedSessionId !== undefined
+      ? { expectedSessionId: params.expectedSessionId }
+      : {}),
+    ...(params.expectedUpdatedAt !== undefined
+      ? { expectedUpdatedAt: params.expectedUpdatedAt }
+      : {}),
     storePath,
     target: {
       canonicalKey: params.sessionKey,

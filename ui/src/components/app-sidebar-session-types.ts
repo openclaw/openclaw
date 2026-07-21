@@ -1,3 +1,4 @@
+import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -14,6 +15,37 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type { SessionPlacementState } from "./session-row-badges.ts";
 
+export type SidebarSessionAttention =
+  | { kind: "none" }
+  | { kind: "question" }
+  | { kind: "approval" }
+  | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
+  | { kind: "error"; reason: string };
+
+/** Client-owned attention that can name a session before its row is loaded. */
+export type SidebarKnownSessionAttention = {
+  sessionKey: string;
+  attention: Extract<SidebarSessionAttention, { kind: "question" } | { kind: "approval" }>;
+};
+
+export const SIDEBAR_SESSION_NO_ATTENTION: SidebarSessionAttention = { kind: "none" };
+
+export function sidebarSessionAttentionPriority(attention: SidebarSessionAttention): number {
+  switch (attention.kind) {
+    case "question":
+    case "approval":
+      return 3;
+    case "agent":
+      return 2;
+    case "error":
+      return 1;
+    case "none":
+      return 0;
+    default:
+      return attention satisfies never;
+  }
+}
+
 export type SidebarRecentSession = {
   key: string;
   label: string;
@@ -27,18 +59,25 @@ export type SidebarRecentSession = {
   modelSelectionLocked: boolean;
   kind?: string;
   pinned: boolean;
+  icon?: string;
   category?: string;
   channel?: string;
   channelSession?: boolean;
   workSession?: boolean;
+  /** ACP-backed harness session; lands in the Coding zone with work sessions. */
+  acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
+  hasOpenPullRequest: boolean;
   unread: boolean;
+  attention: SidebarSessionAttention;
+  agentStatusNote?: string;
   spawnedBy?: string;
   status?: SessionRunStatus;
   startedAt?: number;
+  updatedAt?: number | null;
   endedAt?: number;
   runtimeMs?: number;
   runtimeSampledAt?: number;
@@ -87,6 +126,7 @@ export type SidebarSessionPatch = {
   unread?: boolean;
   label?: string | null;
   category?: string | null;
+  icon?: string | null;
 };
 
 export const SIDEBAR_AGENT_SESSION_LIST_LIMIT = 60;
@@ -139,14 +179,19 @@ export function loadStoredSidebarSessionsShowCron(): boolean {
 export function loadStoredCollapsedSessionSections(): ReadonlySet<string> {
   try {
     const raw = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_COLLAPSED_SECTIONS_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    if (raw == null) {
+      // First run: the Coding zone starts collapsed so dev sessions stay muted
+      // until the user opts in; expanding persists an empty entry for "work".
+      return new Set(["work"]);
+    }
+    const parsed: unknown = JSON.parse(raw);
     return new Set(
       Array.isArray(parsed)
         ? parsed.flatMap((value) => (typeof value === "string" && value ? [value] : []))
         : [],
     );
   } catch {
-    return new Set();
+    return new Set(["work"]);
   }
 }
 

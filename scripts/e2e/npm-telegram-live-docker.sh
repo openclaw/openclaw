@@ -213,7 +213,14 @@ docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
 mkdir -p "$OUTPUT_DIR_HOST"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
-trap 'rm -rf "$npm_prefix_host"' EXIT
+cleanup() {
+  local rc=$?
+  trap - EXIT
+  printf 'schema=1\nexit_code=%s\nlive_output=job_log\n' "$rc" > "$OUTPUT_DIR_HOST/run-metadata.txt"
+  rm -rf "$npm_prefix_host"
+  exit "$rc"
+}
+trap cleanup EXIT
 
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0

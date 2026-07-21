@@ -116,6 +116,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   const defaultAccount: ResolvedSlackAccount = {
     accountId: "default",
     enabled: true,
+    identity: "bot",
     botTokenSource: "config",
     appTokenSource: "config",
     userTokenSource: "none",
@@ -276,8 +277,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
             enabled: true,
             accounts: {
               soltea: {
+                dm: { enabled: true },
                 dmPolicy: "open",
-                dm: { enabled: true, policy: "open" },
               },
             },
           },
@@ -292,8 +293,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareSlackMessage({
       ctx,
       account: createSlackAccount({
+        dm: { enabled: true },
         dmPolicy: "open",
-        dm: { enabled: true, policy: "open" },
       }),
       message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
       opts: { source: "message" },
@@ -825,6 +826,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     return {
       accountId: "default",
       enabled: true,
+      identity: "bot",
       botTokenSource: "config",
       appTokenSource: "config",
       userTokenSource: "none",
@@ -2316,18 +2318,6 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
   });
 
-  it("respects dm.replyToMode legacy override for DMs", async () => {
-    const prepared = await prepareMessageWith(
-      createReplyToAllSlackCtx(),
-      createSlackAccount({ replyToMode: "all", dm: { replyToMode: "off" } }),
-      createSlackMessage({}), // DM
-    );
-
-    assertPrepared(prepared);
-    expect(prepared.replyToMode).toBe("off");
-    expect(prepared.ctxPayload.MessageThreadId).toBeUndefined();
-  });
-
   it("marks first thread turn and injects thread history for a new thread session", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const replies = vi
@@ -2688,7 +2678,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     const { storePath } = storeFixture.makeTmpStorePath();
     const now = Date.now();
     const cfg = {
-      session: { store: storePath },
+      session: {
+        store: storePath,
+        resetByType: { thread: { mode: "idle", idleMinutes: 60 } },
+      },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
     } as OpenClawConfig;
     const route = resolveAgentRoute({
@@ -2824,7 +2817,10 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     const { storePath } = storeFixture.makeTmpStorePath();
     const now = Date.now();
     const cfg = {
-      session: { store: storePath },
+      session: {
+        store: storePath,
+        resetByType: { thread: { mode: "idle", idleMinutes: 60 } },
+      },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
     } as OpenClawConfig;
     const route = resolveAgentRoute({
@@ -4638,7 +4634,7 @@ describe("prepareSlackMessage sender prefix", () => {
 
   it("detects /new as control command when prefixed with Slack mention", async () => {
     const ctx = createSenderPrefixCtx({
-      channels: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
+      channels: { dm: { enabled: true }, dmPolicy: "open", allowFrom: ["*"] },
       allowFrom: ["U1"],
       useAccessGroups: true,
       slashCommand: {

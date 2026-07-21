@@ -1216,6 +1216,8 @@ export async function executePreparedCliRun(
         };
         beginGatewayCapture(initialGatewayCaptureKey);
         let observedCliActivity = false;
+        let signaledToolExecutionStarted = false;
+        let signaledAssistantOutputStarted = false;
         const emitLiveEvents = params.executionMode !== "side-question";
         const activeParsedTools = new Map<
           string,
@@ -1223,6 +1225,15 @@ export async function executePreparedCliRun(
         >();
         const emitCliToolUseStart = (event: CliToolUseStartDelta) => {
           observedCliActivity = true;
+          if (!signaledToolExecutionStarted) {
+            signaledToolExecutionStarted = true;
+            params.onExecutionPhase?.({
+              phase: "tool_execution_started",
+              provider: params.provider,
+              model: context.modelId,
+              backend: context.backendResolved.id,
+            });
+          }
           // Server-native calls have their own result stream and must never inherit MCP outcomes.
           if (event.kind !== "server_tool_use") {
             const activeTool = {
@@ -1484,6 +1495,15 @@ export async function executePreparedCliRun(
         const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
           if (text || delta) {
             observedCliActivity = true;
+            if (!signaledAssistantOutputStarted) {
+              signaledAssistantOutputStarted = true;
+              params.onExecutionPhase?.({
+                phase: "assistant_output_started",
+                provider: params.provider,
+                model: context.modelId,
+                backend: context.backendResolved.id,
+              });
+            }
           }
           if (!emitLiveEvents) {
             return;
@@ -1644,8 +1664,9 @@ export async function executePreparedCliRun(
           const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
           const consumeStdout = (chunk: string) => {
-            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stdout");
-            stdoutBytes += Buffer.byteLength(chunk);
+            const chunkBytes = Buffer.byteLength(chunk);
+            claudeModelCallDiagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
+            stdoutBytes += chunkBytes;
             stdoutHash.update(chunk);
             stdoutTail = appendCliOutputTail(stdoutTail, chunk);
             if (!stdoutParseExceeded) {
@@ -1908,6 +1929,13 @@ export async function executePreparedCliRun(
                 lane: params.lane,
                 status: resolveFailoverStatus("timeout"),
                 code: retryableNoOutputTimeout ? "cli_no_output_timeout" : undefined,
+                cliTimeout: {
+                  mode: "no-output",
+                  timeoutSeconds: Math.round(noOutputTimeoutMs / 1000),
+                  observedActivity: observedCliActivity,
+                  activeToolCount: activeParsedTools.size,
+                  backgroundTaskCount: 0,
+                },
               });
             }
             if (result.reason === "overall-timeout") {
@@ -1920,6 +1948,13 @@ export async function executePreparedCliRun(
                 lane: params.lane,
                 status: resolveFailoverStatus("timeout"),
                 code: "cli_overall_timeout",
+                cliTimeout: {
+                  mode: "overall",
+                  timeoutSeconds: Math.round(params.timeoutMs / 1000),
+                  observedActivity: observedCliActivity,
+                  activeToolCount: activeParsedTools.size,
+                  backgroundTaskCount: 0,
+                },
               });
             }
             const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(

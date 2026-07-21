@@ -10,6 +10,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { searchForSession } from "../../lib/sessions/index.ts";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
@@ -19,6 +20,7 @@ import "../../styles/chat.css";
 import "../../styles/new-session.css";
 import { buildChatApiAttachments, restoreChatApiAttachments } from "../chat/attachment-api.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { prepareInitialUserMessageHandoff } from "../chat/initial-turn-handoff.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
@@ -358,7 +360,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   };
 
   private agents() {
-    return this.context?.agents.state.agentsList?.agents ?? [];
+    return listSelectableAgents(this.context?.agents.state.agentsList?.agents ?? []);
   }
 
   private selectedAgent() {
@@ -387,7 +389,10 @@ class NewSessionPage extends OpenClawLightDomElement {
     options: { preserveSelectedAgent?: boolean; preserveSelectedFolder?: boolean } = {},
   ) {
     const agents = this.agents();
-    const fallback = this.context?.agents.state.agentsList?.defaultId ?? agents[0]?.id ?? "main";
+    const configuredDefault = this.context?.agents.state.agentsList?.defaultId;
+    const fallback = agents.some((agent) => agent.id === configuredDefault)
+      ? (configuredDefault ?? "main")
+      : (agents[0]?.id ?? "main");
     const keepSelectedAgent =
       options.preserveSelectedAgent && this.agentSelectedByUser && Boolean(this.selectedAgent());
     if (!keepSelectedAgent) {
@@ -589,6 +594,16 @@ class NewSessionPage extends OpenClawLightDomElement {
     return this.pendingCloud.sessionKey ? this.pendingCloud.profileId : this.cloudProfileId;
   }
 
+  private cloudRuntimeUnsupportedReason(): string | undefined {
+    const runtime = this.modelControl.resolveAgentRuntimeId({
+      agent: this.selectedAgent(),
+      context: this.context,
+    });
+    return runtime && runtime !== "openclaw"
+      ? t("newSession.cloudRequiresOpenClawRuntime", { runtime })
+      : undefined;
+  }
+
   private canSubmit(): boolean {
     const pendingCloud = Boolean(this.pendingCloud.sessionKey);
     const cloudProfileId = this.cloudProfileForSubmission();
@@ -639,7 +654,8 @@ class NewSessionPage extends OpenClawLightDomElement {
         !gateway.snapshot.client.recoveryScopeReady ||
         !this.cloudProfilesHydrated ||
         !this.worktree ||
-        !this.cloudProfiles.some((profile) => profile.id === cloudProfileId))
+        !this.cloudProfiles.some((profile) => profile.id === cloudProfileId) ||
+        Boolean(this.cloudRuntimeUnsupportedReason()))
     ) {
       return false;
     }
@@ -676,13 +692,15 @@ class NewSessionPage extends OpenClawLightDomElement {
       ? this.pendingCloud.gatewayUrl
       : context.gateway.connection.gatewayUrl;
     const submissionClient = context.gateway.snapshot.client;
-    if (!submissionClient) {
+    const submissionConnection = context.gateway.snapshot.hello;
+    if (!submissionClient || !submissionConnection) {
       return;
     }
     const submissionRecoveryScope = pendingCloud
       ? this.pendingCloud.recoveryScope
       : submissionClient.recoveryScope;
     const requestId = ++this.submitRequestToken;
+    const submittedAt = Date.now();
     this.submitting = true;
     this.error = null;
     // Retire hidden pickers before their late requests can mutate this submitted draft.
@@ -750,7 +768,9 @@ class NewSessionPage extends OpenClawLightDomElement {
       const result =
         pendingCloud && this.pendingCloud.phase !== "creating"
           ? { key: this.pendingCloud.sessionKey, initialRun: { status: "idle" as const } }
-          : await context.sessions.createResult(cloudCreateParams ?? createParams);
+          : await context.sessions.createResult(cloudCreateParams ?? createParams, {
+              reconciliation: "background",
+            });
       if (requestId !== this.submitRequestToken && !cloudProfileId) {
         return;
       }
@@ -848,8 +868,24 @@ class NewSessionPage extends OpenClawLightDomElement {
           this.error = cloudStart.error || t("newSession.createFailed");
           return;
         }
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
+        prepareInitialUserMessageHandoff(
+          context.initialUserMessage,
+          result.key,
+          {
+            text: submissionCloudRecovery.message,
+            attachments,
+            createdAt: submittedAt,
+          },
+          submissionConnection,
+        );
         this.attachmentDraft.clearAfterSubmit(true);
       } else {
+        if (requestId !== this.submitRequestToken) {
+          return;
+        }
         const handedOffAttachments =
           result.initialRun.status === "rejected" &&
           retainRejectedInitialTurn({
@@ -860,6 +896,18 @@ class NewSessionPage extends OpenClawLightDomElement {
             message,
             sessionKey: result.key,
           });
+        if (result.initialRun.status === "started") {
+          prepareInitialUserMessageHandoff(
+            context.initialUserMessage,
+            result.key,
+            {
+              text: message,
+              attachments,
+              createdAt: submittedAt,
+            },
+            submissionConnection,
+          );
+        }
         this.attachmentDraft.clearAfterSubmit(!handedOffAttachments);
       }
       if (requestId !== this.submitRequestToken) {
@@ -1186,6 +1234,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       syncFolder: this.folder.trim() || this.workspacePath(),
       worktree: this.worktree,
       worktreeAvailable: this.worktreeAvailable(),
+      cloudDisabledReason: this.cloudRuntimeUnsupportedReason(),
       customFolder: this.usesCustomFolder(),
       branches: this.branches,
       branchesLoading: this.branchesLoading,
