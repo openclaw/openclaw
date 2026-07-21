@@ -75,12 +75,12 @@ export function normalizeMediaFacts<TInput extends MediaFactInput>(
 // Empty slots exist only to keep legacy parallel-array positions aligned;
 // presence/counting sites must ignore them or blank projections ({MediaPaths: [""]})
 // route media-less messages into inbound-media handling.
-export function isMeaningfulMediaFact(fact: MediaFact): boolean {
+function isMeaningfulMediaFact(fact: MediaFact): boolean {
   return Boolean(
     fact.path?.trim() ||
-      fact.url?.trim() ||
-      fact.contentType ||
-      (fact.kind && fact.kind !== "unknown"),
+    fact.url?.trim() ||
+    fact.contentType ||
+    (fact.kind && fact.kind !== "unknown"),
   );
 }
 
