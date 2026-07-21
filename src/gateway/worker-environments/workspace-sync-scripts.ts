@@ -406,7 +406,7 @@ if (validationMode === "final") {
         !row.state.startsWith("Z") &&
         !row.state.startsWith("X"),
     );
-    quietScans = unknownProcess ? 0 : quietScans + 1;
+    quietScans = candidates.length > 0 || unknownProcess ? 0 : quietScans + 1;
   }
   if (quietScans < 3) {
     throw new Error("worker processes did not return to a quiescent state");
