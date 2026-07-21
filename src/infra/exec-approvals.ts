@@ -421,6 +421,41 @@ export function resolveExecApprovalsTranscriptPath(): string {
     : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
 }
 
+let lastGoodExecApprovals: ExecApprovalsFile | null = null;
+let execApprovalsTransientWarnedAtMs = 0;
+
+function rememberGoodExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
+  lastGoodExecApprovals = file;
+  return file;
+}
+
+/**
+ * Serves the last successfully-read approvals policy when a read fails at the
+ * IO/lock layer (contended lock, transient fs error). Concurrent execs race on
+ * the approvals file lock with a bounded wait; treating a lost race as a policy
+ * failure turns into sporadic fail-closed denials while the store is valid.
+ * Content-level failures never reach here — malformed stores still fail closed
+ * via createFailClosedExecApprovalsFallback.
+ */
+function resolveTransientExecApprovalsFallback(cause: unknown): ExecApprovalsFile {
+  if (lastGoodExecApprovals) {
+    const nowMs = Date.now();
+    if (nowMs - execApprovalsTransientWarnedAtMs >= 60_000) {
+      execApprovalsTransientWarnedAtMs = nowMs;
+      const reason = cause instanceof Error ? cause.message : "unknown cause";
+      try {
+        console.error(
+          `[exec-approvals] transient approvals read failure; serving last-known-good policy (likely lock contention): ${reason}`,
+        );
+      } catch {
+        // Console failures must not affect policy resolution.
+      }
+    }
+    return lastGoodExecApprovals;
+  }
+  return createFailClosedExecApprovalsFallback(cause);
+}
+
 let execApprovalsFailClosedWarnedAtMs = 0;
 
 function warnExecApprovalsFailClosed(cause: unknown): void {
@@ -539,7 +574,7 @@ function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isValidPersistedExecApprovals(parsed)) {
-      return normalizeExecApprovals(parsed);
+      return rememberGoodExecApprovals(normalizeExecApprovals(parsed));
     }
   } catch (err) {
     // A partial Windows fallback write is existing state, not a missing policy.
@@ -747,7 +782,7 @@ function readExecApprovalsSnapshotFromPath(filePath: string): ExecApprovalsSnaps
       path: filePath,
       exists: false,
       raw: null,
-      file: normalizeExecApprovals({ version: 1, agents: {} }),
+      file: rememberGoodExecApprovals(normalizeExecApprovals({ version: 1, agents: {} })),
       hash: hashExecApprovalsRaw(null),
     };
   }
@@ -1100,7 +1135,7 @@ function loadExecApprovalsUnlocked(): ExecApprovalsFile {
   try {
     return readExecApprovalsSnapshotFromPath(filePath).file;
   } catch (err) {
-    return createFailClosedExecApprovalsFallback(err);
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
@@ -1109,8 +1144,9 @@ export function loadExecApprovals(): ExecApprovalsFile {
     return withExecApprovalsReadLockSync(resolveExecApprovalsPath(), loadExecApprovalsUnlocked);
   } catch (err) {
     // A busy, malformed, or unreadable approvals store must never restore the
-    // permissive defaults while another process is revoking access.
-    return createFailClosedExecApprovalsFallback(err);
+    // permissive defaults while another process is revoking access; a
+    // last-known-good policy (never the permissive defaults) may stand in.
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
@@ -1122,7 +1158,7 @@ export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
   } catch (err) {
     // Match the synchronous reader's fail-closed contract while allowing
     // same-process async writers to finish instead of rejecting valid state.
-    return createFailClosedExecApprovalsFallback(err);
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
@@ -1557,7 +1593,7 @@ function readExecApprovalsForNoPersistenceUnlocked(filePath: string): ExecApprov
     if (err instanceof UnsafeExecApprovalsPathError) {
       throw err;
     }
-    return createFailClosedExecApprovalsFallback(err);
+    return resolveTransientExecApprovalsFallback(err);
   }
 }
 
