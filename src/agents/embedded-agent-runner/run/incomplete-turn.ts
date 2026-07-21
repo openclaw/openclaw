@@ -376,8 +376,9 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
-/** Fields needed to determine whether a yielded turn has future continuation. */
+/** Fields needed to determine whether a yielded turn already delivered or can continue. */
 interface YieldContinuationAttempt {
+  clientToolCalls?: readonly unknown[];
   didSendDeterministicApprovalPrompt?: boolean;
   successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly { runId: string; childSessionKey: string }[];
@@ -390,7 +391,8 @@ interface YieldContinuationAttempt {
 /** Continuation evidence for a yielded turn — sources that will produce future output. */
 export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
   return (
-    attempt.didSendDeterministicApprovalPrompt ||
+    (attempt.clientToolCalls?.length ?? 0) > 0 ||
+    attempt.didSendDeterministicApprovalPrompt === true ||
     hasCommittedMessagingToolDeliveryEvidence({
       messagingToolSentTexts: attempt.messagingToolSentTexts ?? [],
       messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls ?? [],

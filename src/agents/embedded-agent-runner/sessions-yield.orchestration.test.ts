@@ -85,6 +85,7 @@ describe("sessions_yield orchestration", () => {
     expect(result.meta.pendingToolCalls).toHaveLength(1);
     const hostedToolCall = expectDefined(result.meta.pendingToolCalls![0], "hosted tool call");
     expect(hostedToolCall.name).toBe("hosted_tool");
+    expect(result.payloads).toBeUndefined();
   });
 
   it("preserves order across multiple client tool calls in one attempt (#52288)", async () => {
@@ -122,8 +123,6 @@ describe("sessions_yield orchestration", () => {
 
   describe("yield with continuation evidence", () => {
     it("yield with accepted spawn — diagnostic suppressed", async () => {
-      // Pure test: runs in the outer harness where countActiveDescendantRuns
-      // returns 0, so suppression must come from the accepted spawn alone.
       // Regression: a yielded turn with an accepted spawn must NOT emit the
       // diagnostic — the spawned subagent will produce results.
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -131,7 +130,6 @@ describe("sessions_yield orchestration", () => {
           promptError: null,
           yieldDetected: true,
           assistantTexts: [],
-          clientToolCalls: undefined,
           acceptedSessionSpawns: [{ runId: "child-run", childSessionKey: "child-key" }],
         }),
       );
@@ -148,14 +146,11 @@ describe("sessions_yield orchestration", () => {
     });
 
     it("yield with async started tool — diagnostic suppressed", async () => {
-      // Pure test: runs in the outer harness where countActiveDescendantRuns
-      // returns 0, so suppression must come from the async tool alone.
       mockedRunEmbeddedAttempt.mockResolvedValueOnce(
         makeAttemptResult({
           promptError: null,
           yieldDetected: true,
           assistantTexts: [],
-          clientToolCalls: undefined,
           toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }],
         }),
       );
@@ -191,7 +186,6 @@ describe("sessions_yield orchestration", () => {
         promptError: null,
         yieldDetected: true,
         assistantTexts: [],
-        clientToolCalls: undefined,
       }),
     );
 
@@ -219,7 +213,6 @@ describe("sessions_yield orchestration", () => {
         promptError: null,
         yieldDetected: true,
         assistantTexts: [],
-        clientToolCalls: undefined,
         didSendViaMessagingTool: true,
         messagingToolSentTexts: ["   "],
       }),
@@ -245,7 +238,6 @@ describe("sessions_yield orchestration", () => {
         promptError: null,
         yieldDetected: true,
         assistantTexts: [],
-        clientToolCalls: undefined,
         acceptedSessionSpawns: [],
       }),
     );
