@@ -1,6 +1,9 @@
 import type { ChildProcess, spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { signalCodexResumeProcessTree } from "./node-cli-process-tree.js";
+import {
+  resolveCodexWindowsTaskkillPath,
+  signalCodexResumeProcessTree,
+} from "./node-cli-process-tree.js";
 
 type CodexResumeProcessTreeRuntime = NonNullable<
   Parameters<typeof signalCodexResumeProcessTree>[2]
@@ -36,6 +39,24 @@ function createRuntime(platform: NodeJS.Platform = "win32") {
 }
 
 describe("signalCodexResumeProcessTree", () => {
+  it("resolves taskkill from a trusted Windows system root", () => {
+    expect(resolveCodexWindowsTaskkillPath({ SystemRoot: "D:\\Windows\\" })).toBe(
+      "D:\\Windows\\System32\\taskkill.exe",
+    );
+    expect(resolveCodexWindowsTaskkillPath({ windir: "E:\\WinNT" })).toBe(
+      "E:\\WinNT\\System32\\taskkill.exe",
+    );
+  });
+
+  it.each(["C:\\tmp;C:\\bad", "\\\\server\\Windows", "C:\\", "relative"])(
+    "falls back for an unsafe Windows system root: %s",
+    (SystemRoot) => {
+      expect(resolveCodexWindowsTaskkillPath({ SystemRoot })).toBe(
+        "C:\\Windows\\System32\\taskkill.exe",
+      );
+    },
+  );
+
   it.each([
     ["SIGTERM", ["/F", "/T", "/PID", "4321"]],
     ["SIGKILL", ["/F", "/T", "/PID", "4321"]],
