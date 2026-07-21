@@ -12,10 +12,7 @@ import {
   finalizeInboundContext as finalizeCoreInboundContext,
   type FinalizeInboundContextOptions,
 } from "../../auto-reply/reply/inbound-context.js";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import type { FinalizedMsgContext, MentionSource } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-channel-context.types.js";
@@ -431,7 +428,7 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
@@ -447,7 +444,7 @@ function resolveUntrustedStructuredContext(params: {
   entries.push(...(params.supplemental?.untrustedContext ?? []));
 
   // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
-  // Keeping it with untrusted context prevents spoofed system markers from gaining prompt authority.
+  // Keeping it with untrusted context preserves its user-role boundary.
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,
   );

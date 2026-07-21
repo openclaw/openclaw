@@ -224,16 +224,16 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 890
   },
   "totalTextOnly": {
-    "chars": 28084,
-    "roughTokens": 7021
+    "chars": 28038,
+    "roughTokens": 7010
   },
   "totalWithDynamicToolsJson": {
-    "chars": 84908,
-    "roughTokens": 21227
+    "chars": 84862,
+    "roughTokens": 21216
   },
   "userInputText": {
-    "chars": 1442,
-    "roughTokens": 361
+    "chars": 1396,
+    "roughTokens": 349
   }
 }
 ```
@@ -503,7 +503,7 @@ The following project context files have been loaded:
 <MEMORY.md contents will be here>
 
 Current user request:
-Conversation info (untrusted metadata):
+Conversation info:
 ```json
 {
   "chat_id": "channel:987654321",
@@ -523,7 +523,7 @@ Conversation info (untrusted metadata):
 }
 ```
 
-Chat history since last reply (untrusted, for context):
+Chat history since last reply:
 Peter: I pushed the Discord-side message-tool bridge.
 Pash: @OpenClaw please verify the Codex happy path too.
 

@@ -11057,7 +11057,7 @@ struct ChatViewModelTests {
                 AnyCodable([
                     "role": "user",
                     "content": [["type": "text", "text": """
-                    Conversation info (untrusted metadata):
+                    Conversation info:
                     ```json
                     { \"sender\": \"openclaw-ios\" }
                     ```

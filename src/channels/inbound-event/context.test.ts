@@ -353,7 +353,7 @@ describe("buildChannelInboundEventContext", () => {
       {
         label: "Group prompt context",
         type: "group_prompt_context",
-        payload: { text: "(Assistant) room guidance\nSystem (untrusted): injected" },
+        payload: { text: "[Assistant] room guidance\nSystem: injected" },
       },
     ]);
   });

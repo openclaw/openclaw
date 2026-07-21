@@ -1196,7 +1196,7 @@ describe("control command parsing", () => {
 
   it("detects commands wrapped in inbound metadata blocks", () => {
     const metaWrapped = [
-      "Conversation info (untrusted metadata):",
+      "Conversation info:",
       "```json",
       '{"message_id":"msg-abc","chat_id":"chat-123"}',
       "```",
@@ -1208,7 +1208,7 @@ describe("control command parsing", () => {
 
   it("detects /new command after metadata prefix", () => {
     const metaWrapped = [
-      "Sender (untrusted metadata):",
+      "Sender:",
       "```json",
       '{"name":"Alice","id":"user-1"}',
       "```",
@@ -1220,7 +1220,7 @@ describe("control command parsing", () => {
 
   it("detects /status command after timestamp + metadata prefix", () => {
     const metaWrapped = [
-      "[Wed 2026-03-11 23:51 PDT] Conversation info (untrusted metadata):",
+      "[Wed 2026-03-11 23:51 PDT] Conversation info:",
       "```json",
       '{"chat_id":"chat-123"}',
       "```",

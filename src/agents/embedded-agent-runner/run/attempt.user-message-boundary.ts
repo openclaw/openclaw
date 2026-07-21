@@ -22,7 +22,7 @@ export type CurrentUserTimestampMatch = {
 // Mirrors LEADING_TIMESTAMP_PREFIX_RE in strip-inbound-meta.ts so sender
 // projection never displaces or duplicates a cache-stable timestamp envelope.
 const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
-const CONVERSATION_INFO_LABEL = "Conversation info (untrusted metadata):";
+const CONVERSATION_INFO_LABEL = "Conversation info:";
 
 export function splitLeadingTimestampEnvelope(text: string): {
   body: string;

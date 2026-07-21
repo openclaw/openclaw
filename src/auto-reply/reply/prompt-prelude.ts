@@ -15,8 +15,8 @@ const REPLY_MEDIA_HINT =
   "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
-  "Conversation context (untrusted, chronological, selected for current message):",
-  "Chat history since last reply (untrusted, for context):",
+  "Conversation context (chronological, selected for current message):",
+  "Chat history since last reply:",
 ];
 
 /** Builds command/transcript/queued prompt bodies from inbound context. */

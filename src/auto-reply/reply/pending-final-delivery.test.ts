@@ -20,7 +20,7 @@ describe("sanitizePendingFinalDeliveryText", () => {
       "internal detail",
       INTERNAL_RUNTIME_CONTEXT_END,
       "",
-      "Conversation info (untrusted metadata):",
+      "Conversation info:",
       "```json",
       '{"message_id":"msg-1"}',
       "```",

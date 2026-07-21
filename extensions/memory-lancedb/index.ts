@@ -708,27 +708,33 @@ function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{
  * NOTE: `looksLikeEnvelopeSludge` deliberately uses the broader
  * `INBOUND_META_LABEL_RE` below instead of this list, because
  * `buildInboundUserContextPrefix` in core also injects label variants such as
- * `Location (untrusted metadata):`, `Structured object (untrusted metadata):`,
- * and arbitrary `<custom-label> (untrusted metadata):` blocks (from
- * `UntrustedStructuredContext`). Detection must stay forward-compatible with
- * those without bloating this explicit list every time core adds a new label.
+ * `Location:`, `Structured object:`, and arbitrary `<custom-label>:` blocks
+ * (from `UntrustedStructuredContext`). Detection must stay forward-compatible
+ * with those without bloating this explicit list every time core adds a new
+ * label.
  */
 const INBOUND_META_SENTINELS = [
-  "Conversation info (untrusted metadata):",
-  "Sender (untrusted metadata):",
-  "Thread starter (untrusted, for context):",
-  "Reply target of current user message (untrusted, for context):",
-  "Replied message (untrusted, for context):",
-  "Forwarded message context (untrusted metadata):",
-  "Conversation context (untrusted, chronological, selected for current message):",
-  "Current local chat window (untrusted, chronological, before current message):",
-  "Nearby reply target window (untrusted, chronological, around replied-to message):",
-  "Chat history since last reply (untrusted, for context):",
+  "Conversation info:",
+  "Sender:",
+  "Thread starter:",
+  "Reply target of current user message:",
+  "Replied message:",
+  "Forwarded message context:",
+  "Conversation context (chronological, selected for current message):",
+  "Current local chat window (chronological, before current message):",
+  "Nearby reply target window (chronological, around replied-to message):",
+  "Chat history since last reply:",
 ] as const;
 const INBOUND_META_SENTINEL_LINE_RE = new RegExp(
   `^(?:${INBOUND_META_SENTINELS.map((sentinel) =>
     sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
   ).join("|")})[^\\n]*$`,
+  "m",
+);
+const INBOUND_META_SENTINEL_EXACT_LINE_RE = new RegExp(
+  `^(?:${INBOUND_META_SENTINELS.map((sentinel) =>
+    sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  ).join("|")})[ \\t]*$`,
   "m",
 );
 
@@ -755,32 +761,28 @@ const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
 
 /**
  * Line-anchored pattern matching any inbound-meta block header injected by
- * `buildInboundUserContextPrefix`. Covers both `(untrusted metadata):` labels
- * (Conversation info, Sender, Forwarded, Location, Structured object, plus any
- * future `<label> (untrusted metadata):` produced from `UntrustedStructuredContext`)
- * and `(untrusted, for context):` / `(untrusted, nearest first):` blocks
- * (Thread starter, Replied message, Reply chain, Chat history). Anchored to line start AND end of line so a user message
- * that quotes the phrase mid-sentence is not flagged. The canonical injection
- * always puts the sentinel alone on its own line followed by a ```json fence,
- * so requiring `):` to terminate the line catches every real injection while
- * sidestepping the false-positive risk.
+ * `buildInboundUserContextPrefix`. Labels are now plain (`Conversation info:`,
+ * `Location:`, plus any future `<label>:` produced from
+ * `UntrustedStructuredContext`), so real injections are distinguished from
+ * user content by the required ```json fence on the following line. Anchoring
+ * the label and fence to their own lines avoids flagging a user message that
+ * quotes a label phrase mid-sentence.
  *
  * The producer does not truncate custom structured-context labels, so the
  * label segment is newline-bound rather than length-bound. The expression uses
  * only linear character classes; avoid nested wildcards here.
  */
-const INBOUND_META_LABEL_RE =
-  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*$/m;
+const INBOUND_META_LABEL_RE = /^[^\n]+:[ \t]*(?=\n[ \t]*```json[ \t]*$)/m;
 const INBOUND_META_LABEL_JSON_BLOCK_RE =
-  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
+  /^[^\n]+:[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
 const LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE =
-  /^\s*[^\n]{1,100}\(untrusted, chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
+  /^\s*[^\n]{1,100}\(chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
 const BRACKETED_PREFIX_RE = /\[[^\]\n]{1,500}\]\s/g;
 const LEADING_CURRENT_MESSAGE_CONTEXT_RE = /^\s*Current message:[ \t]*(?:\n|$)/;
 const LEADING_CURRENT_MESSAGE_REPLY_LINE_RE = /^\s*\[Replying to:[^\n]{0,1000}\]\s*\n/;
 const LEADING_CURRENT_MESSAGE_ID_SENDER_RE = /^#\d+\s+[^\n:]{1,100}:\s*/;
 
-const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
+const UNTRUSTED_CONTEXT_HEADER_RE = /^Context:[ \t]*$/m;
 
 /**
  * Matches JSON blobs that look like OpenClaw transport envelope metadata.
@@ -913,7 +915,7 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
-  // Check for "Untrusted context (metadata..." header at the start of a line
+  // Check for the "Context:" header alone at the start of a line
   // to avoid false-positives on user messages that quote the phrase mid-line.
   if (UNTRUSTED_CONTEXT_HEADER_RE.test(text)) {
     return true;
@@ -1242,10 +1244,21 @@ export function sanitizeForMemoryCapture(text: string): string {
   for (let pass = 0; pass < INBOUND_META_SENTINELS.length + 1; pass += 1) {
     let earliestMetaIndex = -1;
     let earliestMetaRe: RegExp | null = null;
+    let stripPlainTextBody = false;
     const labelMatch = cleaned.match(INBOUND_META_LABEL_RE);
     if (labelMatch?.index !== undefined) {
       earliestMetaIndex = labelMatch.index;
       earliestMetaRe = INBOUND_META_LABEL_RE;
+      stripPlainTextBody = true;
+    }
+    const exactLineMatch = cleaned.match(INBOUND_META_SENTINEL_EXACT_LINE_RE);
+    if (
+      exactLineMatch?.index !== undefined &&
+      (earliestMetaIndex === -1 || exactLineMatch.index < earliestMetaIndex)
+    ) {
+      earliestMetaIndex = exactLineMatch.index;
+      earliestMetaRe = INBOUND_META_SENTINEL_EXACT_LINE_RE;
+      stripPlainTextBody = true;
     }
     for (const sentinel of INBOUND_META_SENTINELS) {
       const escapedSentinel = sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1257,6 +1270,7 @@ export function sanitizeForMemoryCapture(text: string): string {
       ) {
         earliestMetaIndex = trailerMatch.index;
         earliestMetaRe = new RegExp(`^${escapedSentinel}.*$`, "gm");
+        stripPlainTextBody = false;
       }
     }
     if (earliestMetaRe === null) {
@@ -1272,9 +1286,9 @@ export function sanitizeForMemoryCapture(text: string): string {
       break;
     }
     // Metadata header is at the very beginning. Fenced metadata was already
-    // removed above; malformed plain-text bodies are untrusted context unless a
+    // removed above; malformed plain-text bodies are context sludge unless a
     // current-message boundary names the real user body.
-    if (earliestMetaRe === INBOUND_META_LABEL_RE) {
+    if (stripPlainTextBody) {
       const lineEnd = cleaned.indexOf("\n");
       const afterHeader = lineEnd === -1 ? "" : cleaned.slice(lineEnd + 1);
       if (!afterHeader.trimStart().startsWith("```json")) {
@@ -1290,18 +1304,18 @@ export function sanitizeForMemoryCapture(text: string): string {
   }
 
   // Active-memory context can be prepended before the real user prompt; strip
-  // that known block before the generic untrusted-context truncation below.
+  // that known block before the generic context-header truncation below.
   const afterActiveMemoryContext = cleaned.replace(
-    /^Untrusted context \(metadata[^\n]*\n<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>\s*/gm,
+    /^Context:[ \t]*\n<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>\s*/gm,
     "",
   );
   strippedInjectedContext ||= afterActiveMemoryContext !== cleaned;
   cleaned = afterActiveMemoryContext;
 
-  // Strip the "Untrusted context (metadata..." header and everything after it,
-  // but only when it appears at the start of a line to avoid false positives
-  // on user content that happens to quote the phrase mid-line.
-  const untrustedLineMatch = /^Untrusted context \(metadata/m.exec(cleaned);
+  // Strip the "Context:" header and everything after it, but only when it
+  // appears alone at the start of a line to avoid false positives on user
+  // content that happens to quote the phrase mid-line.
+  const untrustedLineMatch = /^Context:[ \t]*$/m.exec(cleaned);
   if (untrustedLineMatch) {
     strippedInjectedContext = true;
     cleaned = cleaned.slice(0, untrustedLineMatch.index);

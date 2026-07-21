@@ -8,7 +8,7 @@ import {
 } from "./message-normalizer.ts";
 
 const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+  'Sender:\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
 
 describe("message-normalizer", () => {
   // Regression: gateway/transcript events can carry a null/undefined or

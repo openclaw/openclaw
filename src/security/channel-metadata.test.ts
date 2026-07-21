@@ -27,12 +27,12 @@ describe("buildUntrustedChannelMetadata", () => {
     });
 
     expect(normalizeMarkerIds(result ?? "")).toBe(
-      wrapExpected(`UNTRUSTED channel metadata (test)\nTest channel:\n${entryPrefix}...`),
+      wrapExpected(`Channel metadata (test)\nTest channel:\n${entryPrefix}...`),
     );
   });
 
   it("keeps the combined metadata limit UTF-16 safe", () => {
-    const header = "UNTRUSTED channel metadata (test)\nTest channel:\n";
+    const header = "Channel metadata (test)\nTest channel:\n";
     const entryPrefix = "short";
     const result = buildUntrustedChannelMetadata({
       source: "test",

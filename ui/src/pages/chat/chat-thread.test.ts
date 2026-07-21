@@ -34,7 +34,7 @@ type WorkGroupItem = Extract<
 >;
 
 const SENDER_METADATA_BLOCK =
-  'Sender (untrusted metadata):\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
+  'Sender:\n```json\n{"label":"openclaw-control-ui","id":"openclaw-control-ui"}\n```';
 
 function createProps(overrides: Partial<CachedChatItemsProps> = {}): CachedChatItemsProps {
   return {
