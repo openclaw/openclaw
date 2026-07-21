@@ -126,7 +126,7 @@ function readStringArray(record: Record<string, unknown> | undefined, key: strin
 function readTokenPrice(record: Record<string, unknown> | undefined, key: string): number {
   const value = record?.[key];
   const parsed =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
   return Number.isFinite(parsed) && parsed >= 0 ? parsed * 1_000_000 : 0;
 }
 
