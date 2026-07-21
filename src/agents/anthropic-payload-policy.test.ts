@@ -1,5 +1,5 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
-import "../llm/ai-transport-host.js";
+import "./ai-transport-runtime-host.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,

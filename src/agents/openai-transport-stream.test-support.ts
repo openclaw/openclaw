@@ -1,4 +1,4 @@
-import "../llm/ai-transport-host.js";
+import "./ai-transport-runtime-host.js";
 import "@openclaw/ai/transports";
 
 const completionsTesting = globalThis.openclawOpenAICompletionsTransportTestApi;

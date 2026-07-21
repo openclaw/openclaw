@@ -39,37 +39,50 @@ export interface AiProviderStreamHookContext {
 
 /** Narrow plugin-runtime port used by package-owned transports. */
 export interface AiTransportPluginHost {
-  resolveProviderStream(params: {
-    provider: string;
-    config?: unknown;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    allowRuntimePluginLoad?: boolean;
-    context: AiProviderStreamHookContext;
-  }): StreamFn | undefined;
-  resolveTransportTurnState(params: {
-    provider: string;
-    modelId?: string | null;
-    config?: unknown;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    allowRuntimePluginLoad?: boolean;
-    context: {
+  resolveProviderStream(
+    this: void,
+    params: {
       provider: string;
-      modelId: string;
-      model?: Model;
-      sessionId?: string;
-      turnId: string;
-      attempt: number;
-      transport: "stream" | "websocket";
-    };
-  }): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
-  wrapSimpleCompletionStream(params: {
-    provider: string;
-    config?: unknown;
-    context: AiProviderStreamHookContext & { streamFn: StreamFn };
-  }): StreamFn | undefined;
-  createAnthropicVertexStream(model: Pick<Model, "baseUrl">, env?: NodeJS.ProcessEnv): StreamFn;
+      config?: unknown;
+      workspaceDir?: string;
+      env?: NodeJS.ProcessEnv;
+      allowRuntimePluginLoad?: boolean;
+      context: AiProviderStreamHookContext;
+    },
+  ): StreamFn | undefined;
+  resolveTransportTurnState(
+    this: void,
+    params: {
+      provider: string;
+      modelId?: string | null;
+      config?: unknown;
+      workspaceDir?: string;
+      env?: NodeJS.ProcessEnv;
+      allowRuntimePluginLoad?: boolean;
+      context: {
+        provider: string;
+        modelId: string;
+        model?: Model;
+        sessionId?: string;
+        turnId: string;
+        attempt: number;
+        transport: "stream" | "websocket";
+      };
+    },
+  ): { headers?: Record<string, string>; metadata?: Record<string, string> } | undefined;
+  wrapSimpleCompletionStream(
+    this: void,
+    params: {
+      provider: string;
+      config?: unknown;
+      context: AiProviderStreamHookContext & { streamFn: StreamFn };
+    },
+  ): StreamFn | undefined;
+  createAnthropicVertexStream(
+    this: void,
+    model: Pick<Model, "baseUrl">,
+    env?: NodeJS.ProcessEnv,
+  ): StreamFn;
 }
 
 /** Host-owned transcript normalization contract used immediately before provider projection. */

@@ -3,9 +3,9 @@
  */
 import type { LlmRuntime } from "@openclaw/ai";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-import "../../llm/ai-transport-host.js";
 import { createBoundaryAwareStreamFnForModel } from "@openclaw/ai/transports";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
+import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";

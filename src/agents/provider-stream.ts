@@ -4,7 +4,7 @@
  * model API once a concrete stream implementation exists.
  */
 import type { ApiRegistry } from "@openclaw/ai";
-import "../llm/ai-transport-host.js";
+import "./ai-transport-runtime-host.js";
 import { createTransportAwareStreamFnForModel } from "@openclaw/ai/transports";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getModelLlmRuntime } from "../llm/model-runtime-binding.js";

@@ -1,5 +1,5 @@
 import { buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl } from "@openclaw/ai/transports";
-import "../llm/ai-transport-host.js";
+import "./ai-transport-runtime-host.js";
 import type { OpenAICompletionsOptions, OpenAIModeModel } from "@openclaw/ai/transports";
 /**
  * Public OpenAI transport surface.
