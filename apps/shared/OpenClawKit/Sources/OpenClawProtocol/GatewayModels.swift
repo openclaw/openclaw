@@ -3483,24 +3483,6 @@ public struct NodePresenceAlivePayload: Codable, Sendable {
     }
 }
 
-public struct NodePresenceActivityPayload: Codable, Sendable {
-    public let idleseconds: Int
-    public let saturated: Bool?
-
-    public init(
-        idleseconds: Int,
-        saturated: Bool? = nil)
-    {
-        self.idleseconds = idleseconds
-        self.saturated = saturated
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case idleseconds = "idleSeconds"
-        case saturated
-    }
-}
-
 public struct NodePendingDrainParams: Codable, Sendable {
     public let maxitems: Int?
 
@@ -5728,6 +5710,92 @@ public struct SessionsForkResult: Codable, Sendable {
         case editortext = "editorText"
     }
 }
+
+public struct SessionBranch: Codable, Sendable {
+    public let leafentryid: String
+    public let headline: String
+    public let messagecount: Int
+    public let updatedat: String?
+    public let active: Bool
+
+    public init(
+        leafentryid: String,
+        headline: String,
+        messagecount: Int,
+        updatedat: String? = nil,
+        active: Bool)
+    {
+        self.leafentryid = leafentryid
+        self.headline = headline
+        self.messagecount = messagecount
+        self.updatedat = updatedat
+        self.active = active
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case leafentryid = "leafEntryId"
+        case headline
+        case messagecount = "messageCount"
+        case updatedat = "updatedAt"
+        case active
+    }
+}
+
+public struct SessionsBranchesListParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+    }
+}
+
+public struct SessionsBranchesListResult: Codable, Sendable {
+    public let branches: [SessionBranch]
+
+    public init(
+        branches: [SessionBranch])
+    {
+        self.branches = branches
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case branches
+    }
+}
+
+public struct SessionsBranchesSwitchParams: Codable, Sendable {
+    public let sessionkey: String
+    public let agentid: String?
+    public let leafentryid: String
+
+    public init(
+        sessionkey: String,
+        agentid: String? = nil,
+        leafentryid: String)
+    {
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.leafentryid = leafentryid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case leafentryid = "leafEntryId"
+    }
+}
+
+public struct SessionsBranchesSwitchResult: Codable, Sendable {}
 
 public struct SessionFileBrowserEntry: Codable, Sendable {
     public let path: String
