@@ -373,6 +373,7 @@ async function handleDiscordReactionEvent(
     action: "added" | "removed";
     cfg: LoadedConfig;
     logger: DiscordListenerLogger;
+    onAcceptedEvent?: () => void;
   } & DiscordReactionRoutingParams,
 ) {
   try {

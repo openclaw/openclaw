@@ -48,6 +48,7 @@ const { voiceAutoJoinMock } = vi.hoisted(() => ({
 }));
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
+let recordDiscordTransportEventStatus: typeof import("./provider.js").recordDiscordTransportEventStatus;
 let providerTesting: typeof import("./provider.test-support.js").discordProviderTestSupport;
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
@@ -235,7 +236,7 @@ describe("monitorDiscordProvider", () => {
     vi.doMock("../token.js", () => ({
       normalizeDiscordToken: (value?: string) => value,
     }));
-    ({ monitorDiscordProvider } = await import("./provider.js"));
+    ({ monitorDiscordProvider, recordDiscordTransportEventStatus } = await import("./provider.js"));
     ({ discordProviderTestSupport: providerTesting } = await import("./provider.test-support.js"));
   });
 
@@ -1175,6 +1176,21 @@ describe("monitorDiscordProvider", () => {
     const statuses = setStatus.mock.calls.map((call) => call[0] as { connected?: boolean });
     expect(statuses.some((status) => status.connected === true)).toBe(true);
     expect(statuses.some((status) => status.connected === false)).toBe(true);
+  });
+
+  it("does not report raw gateway message events as inbound human activity", async () => {
+    const setStatus = vi.fn();
+
+    recordDiscordTransportEventStatus(setStatus);
+
+    expect(setStatus).toHaveBeenCalledWith({
+      lastEventAt: expect.any(Number),
+    });
+    expect(
+      setStatus.mock.calls.some(
+        ([status]) => typeof (status as { lastInboundAt?: unknown }).lastInboundAt === "number",
+      ),
+    ).toBe(false);
   });
 
   it("logs Discord startup phases and early gateway debug events", async () => {

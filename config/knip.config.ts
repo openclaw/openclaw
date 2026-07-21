@@ -364,6 +364,10 @@ const config = {
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
+    // recordDiscordTransportEventStatus is a pure transport-status helper
+    // asserted directly by the focused provider unit test, not by another
+    // prod module (it's already called in-file by monitorDiscordProvider).
+    "extensions/discord/src/monitor/provider.ts": ["exports"],
   },
   workspaces: {
     ".": {

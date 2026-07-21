@@ -199,6 +199,28 @@ function scheduleFollowupDrainAfterReplyOperationClear(params: {
   });
 }
 
+const ACTIVE_TURN_ACK_CHANNELS = new Set(["discord", "telegram"]);
+
+function buildActiveTurnAck(
+  sessionCtx: TemplateContext,
+  isHeartbeat: boolean,
+  mode: "queued" | "steered",
+): ReplyPayload | undefined {
+  if (isHeartbeat) {
+    return undefined;
+  }
+  const channel = (sessionCtx.Provider ?? sessionCtx.Surface ?? "").trim().toLowerCase();
+  if (!ACTIVE_TURN_ACK_CHANNELS.has(channel)) {
+    return undefined;
+  }
+  return {
+    text:
+      mode === "steered"
+        ? "I'm still working on the current request and added this message to that run."
+        : "I'm still working on the previous request, so I queued this follow-up.",
+  };
+}
+
 function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPayload[] {
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
@@ -1458,7 +1480,7 @@ export async function runReplyAgent(params: {
       }
       await touchActiveSessionEntry();
       typing.cleanup();
-      return undefined;
+      return buildActiveTurnAck(sessionCtx, isHeartbeat, "steered");
     }
     // The active runtime still owns the turn but cannot prove transcript adoption.
     // Keep the inbound message queued so ingress can finalize after a later run.
@@ -1540,7 +1562,7 @@ export async function runReplyAgent(params: {
     } else {
       typing.cleanup();
     }
-    return undefined;
+    return buildActiveTurnAck(sessionCtx, isHeartbeat, "queued");
   }
 
   followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {

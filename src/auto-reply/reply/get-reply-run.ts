@@ -1274,7 +1274,7 @@ export async function runPreparedReply(
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+      return { activeSessionId: undefined, isActive: laneSize > 0, isStreaming: false };
     }
     if (isOwnPreDispatchOperationSession(activeSessionId)) {
       return { activeSessionId, isActive: false, isStreaming: false };
@@ -1287,7 +1287,8 @@ export async function runPreparedReply(
       isActive:
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
-        replyOperationActive,
+        replyOperationActive ||
+        laneSize > 0,
       isStreaming:
         (embeddedActiveSessionId != null &&
           (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||

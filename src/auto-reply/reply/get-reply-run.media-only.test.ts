@@ -1923,6 +1923,23 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.originatingThreadId).toBe(43);
   });
 
+  it("treats queued session-lane work as active even without an active embedded run", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
+    const commandQueue = await import("../../process/command-queue.js");
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "collect" });
+    vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(1);
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(undefined);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(false);
+
+    const result = await runPreparedReply(baseParams());
+
+    expect(result).toEqual({ text: "ok" });
+    const call = requireRunReplyAgentCall();
+    expect(call.isActive).toBe(true);
+    expect(call.shouldFollowup).toBe(true);
+  });
+
   it("rechecks same-session ownership after async prep before registering a new reply operation", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
