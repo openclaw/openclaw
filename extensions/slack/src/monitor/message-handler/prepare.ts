@@ -1494,7 +1494,9 @@ export async function prepareSlackMessage(params: {
           agentId: route.agentId,
           sessionKey,
           storePath,
-          limit: 10,
+          // Read the configured window plus a bounded cushion because duplicate
+          // persisted rows are collapsed before the final historyLimit cap.
+          limit: ctx.historyLimit + 10,
           ...(sessionTranscriptBeforeTimestampMs !== undefined
             ? { beforeTimestampMs: sessionTranscriptBeforeTimestampMs }
             : {}),
