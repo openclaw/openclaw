@@ -6,10 +6,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
 import {
-  classifyProbeErrorKind,
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
@@ -177,7 +178,21 @@ const DEFAULT_RESTARTS = 5;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POST_READY_DELAY_MS = 250;
 const DEFAULT_ENTRY = "dist/entry.js";
-const RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
+const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--entry",
+  "--output",
+  "--post-ready-delay-ms",
+  "--restarts",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -233,9 +248,31 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
 function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
+    throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;
+}
+
+function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseFlagValue(argv: string[], flag: string): string | undefined {
@@ -306,10 +343,15 @@ function resolveOutputPath(raw: string | undefined): string | undefined {
 
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
-    return [GATEWAY_CASES[0]];
+    return [expectDefined(GATEWAY_CASES[0], "default gateway restart benchmark case")];
   }
+  const seenIds = new Set<string>();
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
     const benchCase = byId.get(id);
     if (!benchCase) {
       throw new Error(`Unknown --case "${id}"`);
@@ -319,6 +361,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 }
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
     allowFailures: hasFlag(argv, "--allow-failures"),
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
@@ -370,7 +413,11 @@ function median(values: number[]): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
+    return (
+      (expectDefined(sorted[middle - 1], "lower middle gateway restart sample") +
+        expectDefined(sorted[middle], "upper middle gateway restart sample")) /
+      2
+    );
   }
   return sorted[middle] ?? 0;
 }
@@ -468,8 +515,8 @@ function slope(values: Array<number | null>): number | null {
   if (points.length < 2) {
     return null;
   }
-  const first = points[0];
-  const last = points[points.length - 1];
+  const first = expectDefined(points[0], "first gateway restart slope point");
+  const last = expectDefined(points[points.length - 1], "last gateway restart slope point");
   const denominator = Math.max(1, last.index - first.index);
   return (last.value - first.value) / denominator;
 }
@@ -802,27 +849,7 @@ function sanitizedEnv(
 }
 
 function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: string): boolean {
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    return false;
-  }
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    const intentPath = path.join(stateDir, RESTART_INTENT_FILENAME);
-    writeFileSync(
-      intentPath,
-      `${JSON.stringify({
-        kind: "gateway-restart",
-        pid: targetPid,
-        createdAt: Date.now(),
-        reason,
-      })}\n`,
-      { mode: 0o600 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
+  return writeGatewayRestartIntentSync({ env, reason, targetPid });
 }
 
 function readProcessFdCount(pid: number | undefined): number | null {
@@ -888,10 +915,11 @@ function collectTraceLine(
     "u",
   ).exec(line);
   if (phaseMatch) {
-    trace[phaseMatch[1]] = Number(phaseMatch[2]);
-    trace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
+    const phase = expectDefined(phaseMatch[1], `${prefix} phase name`);
+    trace[phase] = Number(expectDefined(phaseMatch[2], `${prefix} phase duration`));
+    trace[`${phase}.total`] = Number(expectDefined(phaseMatch[3], `${prefix} total duration`));
     for (const metric of parseTraceMetrics(phaseMatch[4] ?? "")) {
-      trace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
+      trace[`${phase}.${metric.key}`] = metric.value;
     }
     return true;
   }
@@ -899,8 +927,10 @@ function collectTraceLine(
   if (!detailMatch) {
     return false;
   }
-  for (const metric of parseTraceMetrics(detailMatch[2])) {
-    trace[`${detailMatch[1]}.${metric.key}`] = metric.value;
+  const phase = expectDefined(detailMatch[1], `${prefix} detail phase name`);
+  const metrics = expectDefined(detailMatch[2], `${prefix} detail metrics`);
+  for (const metric of parseTraceMetrics(metrics)) {
+    trace[`${phase}.${metric.key}`] = metric.value;
   }
   return true;
 }
@@ -912,8 +942,8 @@ function parseTraceMetrics(raw: string): Array<{ key: string; value: number }> {
     if (!metricMatch) {
       continue;
     }
-    const key = metricMatch[1];
-    const value = Number(metricMatch[2]);
+    const key = expectDefined(metricMatch[1], "gateway restart trace metric key");
+    const value = Number(expectDefined(metricMatch[2], `gateway restart ${key} metric value`));
     if (!Number.isFinite(value)) {
       continue;
     }
@@ -1572,8 +1602,8 @@ async function main() {
     return;
   }
 
-  ensureSupportedRestartPlatform();
   const options = parseOptions(argv);
+  ensureSupportedRestartPlatform();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
@@ -1624,7 +1654,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,
@@ -1649,6 +1678,7 @@ export const testing = {
   shouldFailBenchmark,
   stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForRestartProbe,
   writeConfig,
   writeRestartIntent,
@@ -1656,8 +1686,12 @@ export const testing = {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });
 }
-export { testing as __testing };

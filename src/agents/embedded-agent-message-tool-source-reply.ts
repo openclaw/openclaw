@@ -1,6 +1,8 @@
 /**
  * Detects message-tool sends that delivered a visible reply to the current source.
  */
+import { safeParseJson } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
   isMessageToolConversationCreateActionName,
@@ -35,6 +37,10 @@ function asRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
+  return asRecord(asRecord(value).details).sourceReplyRoute === "current-source";
+}
+
 function hasStringValue(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
@@ -50,6 +56,13 @@ function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
   return Array.isArray(args.targets) && args.targets.some((value) => hasStringValue(value));
 }
 
+function isMessageToolSourceReplyActionName(action: unknown): boolean {
+  if (isMessageToolSendActionName(action)) {
+    return true;
+  }
+  return typeof action === "string" && action.trim().toLowerCase() === "reply";
+}
+
 function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
@@ -63,14 +76,7 @@ function isBareSentDeliveryStatus(value: unknown): boolean {
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return asOptionalRecord(safeParseJson(value));
 }
 
 function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
@@ -78,7 +84,12 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
     const normalized = normalizeStatus(value);
     return Boolean(normalized && !NON_DELIVERY_MESSAGE_IDS.has(normalized));
   };
-  if (hasDeliveredId(record.messageId) || hasDeliveredId(record.pollId)) {
+  const message = asRecord(record.message);
+  if (
+    hasDeliveredId(record.messageId) ||
+    hasDeliveredId(record.pollId) ||
+    hasDeliveredId(message.id)
+  ) {
     return true;
   }
   const receipt = record.receipt;
@@ -342,31 +353,37 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
   );
 }
 
-function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean {
-  if (isBareSentDeliveryStatus(value)) {
+function deliveryEnvelopeIndicatesDelivered(
+  value: unknown,
+  depth = 0,
+  requireReceipt = false,
+): boolean {
+  if (!requireReceipt && isBareSentDeliveryStatus(value)) {
     return true;
   }
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
   }
   if (Array.isArray(value)) {
-    return value.some((item) => deliveryEnvelopeIndicatesDelivered(item, depth + 1));
+    return value.some((item) =>
+      deliveryEnvelopeIndicatesDelivered(item, depth + 1, requireReceipt),
+    );
   }
 
   const record = value as Record<string, unknown>;
   if (
-    normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS ||
-    normalizeStatus(record.status) === SENT_DELIVERY_STATUS ||
+    (!requireReceipt && normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS) ||
+    (!requireReceipt && normalizeStatus(record.status) === SENT_DELIVERY_STATUS) ||
     recordHasDeliveredMessageId(record)
   ) {
     return true;
   }
   if (typeof record.text === "string") {
     const parsed = parseJsonRecord(record.text);
-    if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
+    if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
       return true;
     }
-    if (isBareSentDeliveryStatus(record.text)) {
+    if (!requireReceipt && isBareSentDeliveryStatus(record.text)) {
       return true;
     }
   }
@@ -374,14 +391,14 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   const content = record.content;
   if (Array.isArray(content)) {
     for (const item of content) {
-      if (deliveryEnvelopeIndicatesDelivered(item, depth + 1)) {
+      if (deliveryEnvelopeIndicatesDelivered(item, depth + 1, requireReceipt)) {
         return true;
       }
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const text = (item as Record<string, unknown>).text;
         if (typeof text === "string") {
           const parsed = parseJsonRecord(text);
-          if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
+          if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
             return true;
           }
         }
@@ -390,8 +407,13 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   }
 
   return RESULT_ENVELOPE_KEYS.some((key) =>
-    deliveryEnvelopeIndicatesDelivered(record[key], depth + 1),
+    deliveryEnvelopeIndicatesDelivered(record[key], depth + 1, requireReceipt),
   );
+}
+
+/** Return true when a result envelope carries a provider message identifier. */
+export function hasMessagingDeliveryReceipt(value: unknown): boolean {
+  return deliveryEnvelopeIndicatesDelivered(value, 0, true);
 }
 
 function deliveryEnvelopeIndicatesSessionsSendAccepted(value: unknown, depth = 0): boolean {
@@ -536,6 +558,7 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   result?: unknown;
   hookResult?: unknown;
   isError?: boolean;
+  allowExplicitSourceRoute?: boolean;
 }): boolean {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return false;
@@ -544,7 +567,14 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
     return false;
   }
   const args = asRecord(params.args);
-  if (!isMessageToolSendActionName(args.action) || hasExplicitMessageRoute(args)) {
+  const sourceRouteReplyAction =
+    params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action);
+  if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
+    return false;
+  }
+  const hasConfirmedExplicitSourceRoute =
+    params.allowExplicitSourceRoute === true || resultConfirmsCurrentSourceRoute(params.result);
+  if (hasExplicitMessageRoute(args) && !hasConfirmedExplicitSourceRoute) {
     return false;
   }
   return isDeliveredMessagingToolResult(params);

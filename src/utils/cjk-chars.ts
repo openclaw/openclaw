@@ -20,9 +20,10 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 /**
  * Matches CJK Unified Ideographs, CJK Extension A/B, CJK Compatibility
  * Ideographs, Hangul Syllables, Hiragana, Katakana, and other non-Latin
- * scripts that typically use ~1 token per character.
+ * scripts and East Asian fullwidth forms that typically use ~1 token per character.
  */
-const NON_LATIN_RE = /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\u{20000}-\u{2FA1F}]/gu;
+const NON_LATIN_RE =
+  /[\u2E80-\u9FFF\uA000-\uA4FF\uAC00-\uD7AF\uF900-\uFAFF\uFF01-\uFF60\uFFE0-\uFFE6\u{20000}-\u{2FA1F}]/gu;
 
 /**
  * Return an adjusted character length that accounts for non-Latin (CJK, etc.)

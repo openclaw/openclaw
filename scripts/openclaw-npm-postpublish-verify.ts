@@ -24,10 +24,12 @@ import {
   win32 as pathWin32,
 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { verify as verifySigstoreBundle } from "sigstore";
-import { formatErrorMessage } from "../src/infra/errors.ts";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { formatErrorMessage } from "./lib/error-format.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
@@ -35,7 +37,7 @@ import {
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -93,11 +95,46 @@ type DistJavaScriptFileListResult =
   | { files: string[]; limitExceeded: false }
   | { files: string[]; limit: number; limitExceeded: true };
 
-export type PublishedInstallScenario = {
+type PublishedInstallScenario = {
   name: string;
   installSpecs: string[];
   expectedVersion: string;
 };
+
+type OpenClawNpmPostpublishVerifyArgs =
+  | {
+      help: false;
+      version: string;
+    }
+  | {
+      help: true;
+      version: "";
+    };
+
+export function openClawNpmPostpublishVerifyUsage(): string {
+  return "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>";
+}
+
+export function parseOpenClawNpmPostpublishVerifyArgs(
+  argv: readonly string[],
+): OpenClawNpmPostpublishVerifyArgs {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const version = args[0]?.trim() ?? "";
+  if (version === "--help" || version === "-h") {
+    return { help: true, version: "" };
+  }
+  if (!version) {
+    throw new Error(openClawNpmPostpublishVerifyUsage());
+  }
+  if (version.startsWith("-")) {
+    throw new Error(`Unknown openclaw npm postpublish verifier option: ${version}`);
+  }
+  const extraArg = args[1]?.trim();
+  if (extraArg) {
+    throw new Error(`Unexpected openclaw npm postpublish verifier argument: ${extraArg}`);
+  }
+  return { help: false, version };
+}
 
 export function buildPublishedInstallScenarios(version: string): PublishedInstallScenario[] {
   const parsed = parseReleaseVersion(version);
@@ -164,6 +201,12 @@ type NpmProvenanceStatement = {
           repository?: string;
         };
       };
+      resolvedDependencies?: Array<{
+        digest?: {
+          gitCommit?: string;
+        };
+        uri?: string;
+      }>;
     };
     runDetails?: {
       builder?: {
@@ -183,8 +226,15 @@ const NPM_PROVENANCE_WORKFLOW_PATH = ".github/workflows/openclaw-npm-release.yml
 const NPM_PROVENANCE_CERTIFICATE_ISSUER = "https://token.actions.githubusercontent.com";
 const NPM_PROVENANCE_BUILDER_ID = "https://github.com/actions/runner/github-hosted";
 const NPM_REGISTRY_REQUEST_TIMEOUT_MS = 30_000;
+const NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 const NPM_REGISTRY_PROVENANCE_ATTEMPTS = 30;
 const NPM_REGISTRY_PROVENANCE_RETRY_MAX_DELAY_MS = 10_000;
+
+type FetchRegistryJsonOptions = {
+  fetchImpl?: typeof fetch;
+  maxBodyBytes?: number;
+  timeoutMs?: number;
+};
 
 export function verifyNpmRegistrySignatures(params: {
   integrity: string;
@@ -233,6 +283,10 @@ export function verifyNpmRegistrySignatures(params: {
 function resolveNpmProvenanceVerificationPolicy(
   statement: NpmProvenanceStatement,
   version: string,
+  expectedWorkflow?: {
+    ref?: string;
+    sha?: string;
+  },
 ): NpmProvenanceVerificationPolicy {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
@@ -241,9 +295,37 @@ function resolveNpmProvenanceVerificationPolicy(
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const workflowRef = workflow?.ref;
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  const protectedReleasePublishMatch =
+    /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");
+  let protectedReleasePublishTrusted = false;
+  if (protectedReleasePublishMatch) {
+    const expectedRef = expectedWorkflow?.ref;
+    const expectedSha = expectedWorkflow?.sha;
+    if (
+      expectedRef !== workflowRef ||
+      !/^[a-f0-9]{40}$/u.test(expectedSha ?? "") ||
+      expectedSha?.slice(0, 12) !== protectedReleasePublishMatch[1]
+    ) {
+      throw new Error(
+        "npm provenance SHA-pinned release-publish ref does not match the approved workflow ref and SHA.",
+      );
+    }
+    const expectedDependencyUri = `git+${NPM_PROVENANCE_REPOSITORY}@${workflowRef}`;
+    protectedReleasePublishTrusted =
+      statement.predicate?.buildDefinition?.resolvedDependencies?.some(
+        (dependency) =>
+          dependency.uri === expectedDependencyUri && dependency.digest?.gitCommit === expectedSha,
+      ) === true;
+    if (!protectedReleasePublishTrusted) {
+      throw new Error(
+        "npm provenance does not bind the approved SHA-pinned release-publish ref to its workflow revision.",
+      );
+    }
+  }
   const isTrustedRef =
     workflowRef === "refs/heads/main" ||
     workflowRef === expectedReleaseRef ||
+    protectedReleasePublishTrusted ||
     (parsedVersion.channel === "alpha" &&
       /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
         workflowRef ?? "",
@@ -270,11 +352,14 @@ async function verifySigstoreNpmProvenanceBundle(
   bundle: unknown,
   policy: NpmProvenanceVerificationPolicy,
 ): Promise<void> {
-  await verifySigstoreBundle(bundle as Parameters<typeof verifySigstoreBundle>[0], policy);
+  const sigstore = require("sigstore") as { verify: VerifyNpmProvenanceBundle };
+  await sigstore.verify(bundle, policy);
 }
 
 export async function verifyNpmProvenanceAttestation(params: {
   attestations: NpmRegistryAttestation[];
+  expectedWorkflowRef?: string;
+  expectedWorkflowSha?: string;
   integrity: string;
   packageName: string;
   verifyBundle?: VerifyNpmProvenanceBundle;
@@ -308,7 +393,10 @@ export async function verifyNpmProvenanceAttestation(params: {
       ) {
         let policy: NpmProvenanceVerificationPolicy;
         try {
-          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version);
+          policy = resolveNpmProvenanceVerificationPolicy(statement, params.version, {
+            ref: params.expectedWorkflowRef,
+            sha: params.expectedWorkflowSha,
+          });
         } catch (error) {
           policyError = error;
           continue;
@@ -365,11 +453,32 @@ export function collectInstalledPackageErrors(params: {
     }
   }
 
+  errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
 
+  return errors;
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  const activationRuntimePath = "dist/facade-activation-check.runtime.js";
+  if (!existsSync(join(packageRoot, activationRuntimePath))) {
+    errors.push(
+      `installed package is missing required facade activation runtime: ${activationRuntimePath}`,
+    );
+  }
+  for (const dirName of ALWAYS_ALLOWED_RUNTIME_DIR_NAMES) {
+    const relativePath = `dist/extensions/${dirName}/runtime-api.js`;
+    if (!existsSync(join(packageRoot, relativePath))) {
+      errors.push(
+        `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${relativePath}.`,
+      );
+    }
+  }
   return errors;
 }
 
@@ -394,8 +503,15 @@ export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string):
   const installedExtensionIds = collectInstalledBundledExtensionIds(packageRoot);
   return PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) => {
     const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
-    return match !== null && installedExtensionIds.has(match[1]);
+    return (
+      match !== null &&
+      installedExtensionIds.has(expectDefined(match[1], "bundled runtime extension id"))
+    );
   });
+}
+
+export function collectInstalledBundledExtensionManifestErrors(packageRoot: string): string[] {
+  return readBundledExtensionPackageJsons(packageRoot).errors;
 }
 
 export function normalizeInstalledBinaryVersion(output: string): string {
@@ -575,7 +691,7 @@ export function collectInstalledPluginSdkZodArtifactErrors(packageRoot: string):
   return [];
 }
 
-export function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
+function collectInstalledPluginSdkDeclarationErrors(packageRoot: string): string[] {
   const pluginSdkDistRoot = join(packageRoot, "dist", "plugin-sdk");
   const errors: string[] = [];
   const forbiddenPrivateWorkspaceSpecifiers = ["@openclaw/llm-core"];
@@ -810,7 +926,7 @@ export function resolveInstalledBinaryCommandInvocation(
   const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
   if (platform === "win32") {
     return {
-      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: params.comSpec ?? resolveWindowsCmdExePath(),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
       windowsVerbatimArguments: true,
     };
@@ -827,7 +943,7 @@ function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
   for (const relativePath of listBundledPluginPackArtifacts()) {
     const match = /^dist\/extensions\/([^/]+)\/package\.json$/u.exec(relativePath);
     if (match) {
-      ids.add(match[1]);
+      ids.add(expectDefined(match[1], "bundled package extension id"));
     }
   }
   return ids;
@@ -920,18 +1036,48 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
   npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), cwd);
 }
 
-async function fetchRegistryJson(url: string): Promise<unknown> {
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(NPM_REGISTRY_REQUEST_TIMEOUT_MS),
+export async function fetchRegistryJson(
+  url: string,
+  options: FetchRegistryJsonOptions = {},
+): Promise<unknown> {
+  const timeoutMs = options.timeoutMs ?? NPM_REGISTRY_REQUEST_TIMEOUT_MS;
+  const maxBodyBytes = options.maxBodyBytes ?? NPM_REGISTRY_RESPONSE_BODY_MAX_BYTES;
+  const controller = new AbortController();
+  const timeoutError = Object.assign(
+    new Error(`npm registry request timed out after ${timeoutMs}ms: ${url}`),
+    { code: "ETIMEDOUT" },
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
   });
-  if (!response.ok) {
-    throw new Error(`npm registry request failed (${response.status}): ${url}`);
+  try {
+    const response = await Promise.race([
+      (options.fetchImpl ?? fetch)(url, {
+        headers: {
+          Accept: "application/json",
+        },
+        redirect: "error",
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    if (!response.ok) {
+      throw new Error(`npm registry request failed (${response.status}): ${url}`);
+    }
+    return JSON.parse(
+      await readBoundedResponseText(response, `npm registry ${url}`, maxBodyBytes, {
+        signal: controller.signal,
+        timeoutPromise,
+      }),
+    );
+  } finally {
+    clearTimeout(timeout);
   }
-  return response.json();
 }
 
 function isRetryableRegistryProvenanceError(error: unknown): boolean {
@@ -940,6 +1086,7 @@ function isRetryableRegistryProvenanceError(error: unknown): boolean {
     /npm registry request failed \((?:404|408|425|429|5\d\d)\)/u.test(message) ||
     message.includes("npm registry metadata is incomplete") ||
     message.includes("npm registry provenance metadata is incomplete") ||
+    message.includes("npm provenance attestation does not bind") ||
     /aborted|fetch failed|network|timeout|timed out/u.test(message)
   );
 }
@@ -1053,6 +1200,8 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
     version,
     integrity,
     attestations,
+    expectedWorkflowRef: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_REF,
+    expectedWorkflowSha: process.env.OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA,
   });
   console.log(
     `openclaw-npm-postpublish-verify: registry signature and provenance attestation verified (${version})`,
@@ -1109,14 +1258,14 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
   }
 }
 
-async function main(): Promise<void> {
-  const version = process.argv[2]?.trim();
-  if (!version) {
-    throw new Error(
-      "Usage: node --import tsx scripts/openclaw-npm-postpublish-verify.ts <version>",
-    );
+async function main(argv = process.argv.slice(2)): Promise<void> {
+  const args = parseOpenClawNpmPostpublishVerifyArgs(argv);
+  if (args.help) {
+    console.log(openClawNpmPostpublishVerifyUsage());
+    return;
   }
 
+  const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
   await verifyPublishedRegistryProvenance(version);
   for (const scenario of scenarios) {

@@ -3,18 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type {
-  ModelCatalog,
-  ModelCatalogAlias,
-  ModelCatalogCost,
-  ModelCatalogDiscovery,
-  ModelCatalogInput,
-  ModelCatalogModel,
-  ModelCatalogProvider,
-  ModelCatalogStatus,
-  ModelCatalogSuppression,
-  ModelCatalogTieredCost,
-} from "@openclaw/model-catalog-core/model-catalog-types";
+import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
@@ -32,11 +21,12 @@ import {
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 /** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
-export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
-export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
+const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
+const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
 const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
 const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
@@ -44,6 +34,11 @@ const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
 const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
 const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
 const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
+const CORE_RESERVED_PLUGIN_IDS = new Set(["node-mcp"]);
+
+export function isCoreReservedPluginId(id: string): boolean {
+  return CORE_RESERVED_PLUGIN_IDS.has(normalizePluginPolicyId(id));
+}
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -55,12 +50,6 @@ type PluginManifestLoadCacheEntry = {
 const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
   MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
 );
-
-/** Clears process-local manifest parse cache for tests and explicit refresh flows. */
-export function clearPluginManifestLoadCache(): void {
-  pluginManifestLoadCache.clear();
-}
-
 export type PluginManifestChannelConfig = {
   schema: JsonSchemaObject;
   uiHints?: Record<string, PluginConfigUiHint>;
@@ -89,15 +78,6 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalogInput = ModelCatalogInput;
-export type PluginManifestModelCatalogDiscovery = ModelCatalogDiscovery;
-export type PluginManifestModelCatalogStatus = ModelCatalogStatus;
-export type PluginManifestModelCatalogTieredCost = ModelCatalogTieredCost;
-export type PluginManifestModelCatalogCost = ModelCatalogCost;
-export type PluginManifestModelCatalogModel = ModelCatalogModel;
-export type PluginManifestModelCatalogProvider = ModelCatalogProvider;
-export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
-export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
 export type PluginManifestModelCatalog = ModelCatalog;
 
 export type PluginManifestModelPricingModelIdTransform = "version-dots";
@@ -118,7 +98,7 @@ export type PluginManifestModelPricing = {
   providers?: Record<string, PluginManifestModelPricingProvider>;
 };
 
-export type PluginManifestModelIdPrefixRule = {
+type PluginManifestModelIdPrefixRule = {
   modelPrefix: string;
   prefix: string;
 };
@@ -152,7 +132,7 @@ export type PluginManifestProviderEndpoint = {
   googleVertexRegionHostSuffix?: string;
 };
 
-export type PluginManifestProviderRequestProvider = {
+type PluginManifestProviderRequestProvider = {
   family?: string;
   compatibilityFamily?: "moonshot";
   openAICompletions?: {
@@ -208,9 +188,9 @@ export type PluginManifestActivation = {
   onCapabilities?: PluginManifestActivationCapability[];
 };
 
-export type PluginManifestDefaultPlatform = NodeJS.Platform;
+type PluginManifestDefaultPlatform = NodeJS.Platform;
 
-export type PluginManifestSetupProvider = {
+type PluginManifestSetupProvider = {
   /** Provider id surfaced during setup/onboarding. */
   id: string;
   /** Setup/auth methods that this provider supports. */
@@ -225,7 +205,7 @@ export type PluginManifestSetupProvider = {
   authEvidence?: PluginManifestSetupProviderAuthEvidence[];
 };
 
-export type PluginManifestSetupProviderAuthEvidence = {
+type PluginManifestSetupProviderAuthEvidence = {
   /** Generic local file evidence gated by required environment metadata. */
   type: "local-file-with-env";
   /** Optional env var containing an explicit credential file path. */
@@ -263,9 +243,32 @@ export type PluginManifestQaRunner = {
   description?: string;
 };
 
-export type PluginManifestConfigLiteral = string | number | boolean | null;
+export type PluginManifestDashboardDataBinding = {
+  /** Plugin-local id. Widget grants receive the plugin-id prefix. */
+  id: string;
+  /** Read-scoped Gateway method registered by this plugin. */
+  method: string;
+  description: string;
+};
 
-export type PluginManifestDangerousConfigFlag = {
+export type PluginManifestDashboardActionVerb = {
+  /** Plugin-local id. Widget grants receive the plugin-id prefix. */
+  id: string;
+  /** Write-scoped Gateway method registered by this plugin. */
+  method: string;
+  description: string;
+  /** Optional JSON Schema for the action params object. */
+  paramShape?: JsonSchemaObject;
+};
+
+export type PluginManifestDashboard = {
+  dataBindings?: PluginManifestDashboardDataBinding[];
+  actionVerbs?: PluginManifestDashboardActionVerb[];
+};
+
+type PluginManifestConfigLiteral = string | number | boolean | null;
+
+type PluginManifestDangerousConfigFlag = {
   /**
    * Dot-separated config path relative to `plugins.entries.<id>.config`.
    * Supports `*` wildcards for map/array segments.
@@ -275,7 +278,7 @@ export type PluginManifestDangerousConfigFlag = {
   equals: PluginManifestConfigLiteral;
 };
 
-export type PluginManifestSecretInputPath = {
+type PluginManifestSecretInputPath = {
   /**
    * Dot-separated config path relative to `plugins.entries.<id>.config`.
    * Supports `*` wildcards for map/array segments.
@@ -283,9 +286,11 @@ export type PluginManifestSecretInputPath = {
   path: string;
   /** Expected resolved type for SecretRef materialization. */
   expected?: "string";
+  /** Runtime owner kind used to isolate this surface when resolution fails. */
+  ownerKind?: "route";
 };
 
-export type PluginManifestSecretInputContracts = {
+type PluginManifestSecretInputContracts = {
   /**
    * Override bundled-plugin default enablement when deciding whether this
    * SecretRef surface is active. Use this when the plugin is bundled but the
@@ -312,6 +317,11 @@ export type PluginManifestConfigContracts = {
   compatibilityRuntimePaths?: string[];
   dangerousFlags?: PluginManifestDangerousConfigFlag[];
   secretInputs?: PluginManifestSecretInputContracts;
+};
+
+export type PluginManifestCatalog = {
+  featured?: boolean;
+  order?: number;
 };
 
 export type PluginManifest = {
@@ -370,18 +380,10 @@ export type PluginManifest = {
    * config diagnostics before runtime loads.
    */
   commandAliases?: PluginManifestCommandAlias[];
-  /**
-   * Cheap provider-auth env lookup without booting plugin runtime.
-   *
-   * @deprecated Prefer setup.providers[].envVars for generic setup/status env
-   * metadata. This field remains supported through the provider env-var
-   * compatibility adapter during the deprecation window.
-   */
-  providerAuthEnvVars?: Record<string, string[]>;
+  /** Usage/billing credentials excluded from inference auth but included in secret scrubbing. */
+  providerUsageAuthEnvVars?: Record<string, string[]>;
   /** Provider ids that should reuse another provider id for auth lookup. */
   providerAuthAliases?: Record<string, string>;
-  /** Cheap channel env lookup without booting plugin runtime. */
-  channelEnvVars?: Record<string, string[]>;
   /**
    * Cheap onboarding/auth-choice metadata used by config validation, CLI help,
    * and non-runtime auth-choice routing before provider runtime loads.
@@ -393,9 +395,15 @@ export type PluginManifest = {
   setup?: PluginManifestSetup;
   /** Cheap QA runner metadata exposed before plugin runtime loads. */
   qaRunners?: PluginManifestQaRunner[];
+  /** Widget data and action capabilities validated against runtime registrations. */
+  dashboard?: PluginManifestDashboard;
   skills?: string[];
   name?: string;
   description?: string;
+  /** Optional presentation hints for plugin catalog surfaces. */
+  catalog?: PluginManifestCatalog;
+  /** Optional HTTPS URL for marketplace/catalog card artwork. */
+  icon?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**
@@ -445,12 +453,15 @@ export type PluginManifestContracts = {
   webContentExtractors?: string[];
   webFetchProviders?: string[];
   webSearchProviders?: string[];
+  workerProviders?: string[];
+  /** Provider ids whose plugin owns usage auth and snapshot hooks. */
+  usageProviders?: string[];
   migrationProviders?: string[];
   gatewayMethodDispatch?: string[];
   tools?: string[];
 };
 
-export type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
+type PluginManifestMediaUnderstandingCapability = "image" | "audio" | "video";
 
 export type PluginManifestMediaUnderstandingProviderMetadata = {
   capabilities?: PluginManifestMediaUnderstandingCapability[];
@@ -468,7 +479,7 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   >;
 };
 
-export type PluginManifestProviderBaseUrlGuard = {
+type PluginManifestProviderBaseUrlGuard = {
   provider: string;
   defaultBaseUrl?: string;
   allowedBaseUrls: string[];
@@ -479,7 +490,7 @@ export type PluginManifestCapabilityProviderAuthSignal = {
   providerBaseUrl?: PluginManifestProviderBaseUrlGuard;
 };
 
-export type PluginManifestCapabilityProviderModeConfigSignal = {
+type PluginManifestCapabilityProviderModeConfigSignal = {
   path?: string;
   default?: string;
   allowed?: string[];
@@ -509,7 +520,7 @@ export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadat
   replaySafe?: boolean;
 };
 
-export type PluginManifestProviderAuthChoice = {
+type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */
   provider: string;
   /** Provider auth method id that this choice should dispatch to. */
@@ -519,6 +530,10 @@ export type PluginManifestProviderAuthChoice = {
   /** Optional user-facing choice label/hint for grouped onboarding UI. */
   choiceLabel?: string;
   choiceHint?: string;
+  /** Optional HTTPS artwork URL for native and web onboarding surfaces. */
+  icon?: string;
+  /** Optional HTTPS product or installation URL for onboarding surfaces. */
+  website?: string;
   /** Lower values sort earlier in interactive assistant pickers. */
   assistantPriority?: number;
   /** Keep the choice out of interactive assistant pickers while preserving manual CLI support. */
@@ -539,19 +554,22 @@ export type PluginManifestProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
+  /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
+  appGuidedSecret?: boolean;
+  /** Provider-owned interactive login that native setup clients can render generically. */
+  appGuidedAuth?: "oauth" | "device-code";
   /**
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
    */
   onboardingScopes?: PluginManifestOnboardingScope[];
+  /** Provider runtime can discover and prepare an already-installed local model. */
+  appGuidedDiscovery?: boolean;
 };
 
-export type PluginManifestOnboardingScope =
-  | "text-inference"
-  | "image-generation"
-  | "music-generation";
+type PluginManifestOnboardingScope = "text-inference" | "image-generation" | "music-generation";
 
-export type PluginManifestLoadResult =
+type PluginManifestLoadResult =
   | { ok: true; manifest: PluginManifest; manifestPath: string }
   | { ok: false; error: string; manifestPath: string };
 
@@ -859,6 +877,22 @@ function normalizePluginToolMetadata(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+function normalizeManifestCatalog(value: unknown): PluginManifestCatalog | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const featured = typeof value.featured === "boolean" ? value.featured : undefined;
+  const order =
+    typeof value.order === "number" && Number.isFinite(value.order) ? value.order : undefined;
+  if (featured === undefined && order === undefined) {
+    return undefined;
+  }
+  return {
+    ...(featured !== undefined ? { featured } : {}),
+    ...(order !== undefined ? { order } : {}),
+  };
+}
+
 function normalizeManifestContracts(value: unknown): PluginManifestContracts | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -884,6 +918,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const webContentExtractors = normalizeTrimmedStringList(value.webContentExtractors);
   const webFetchProviders = normalizeTrimmedStringList(value.webFetchProviders);
   const webSearchProviders = normalizeTrimmedStringList(value.webSearchProviders);
+  const workerProviders = normalizeTrimmedStringList(value.workerProviders);
+  const usageProviders = normalizeTrimmedStringList(value.usageProviders);
   const migrationProviders = normalizeTrimmedStringList(value.migrationProviders);
   const gatewayMethodDispatch = normalizeTrimmedStringList(value.gatewayMethodDispatch);
   const tools = normalizeTrimmedStringList(value.tools);
@@ -906,6 +942,8 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(webContentExtractors.length > 0 ? { webContentExtractors } : {}),
     ...(webFetchProviders.length > 0 ? { webFetchProviders } : {}),
     ...(webSearchProviders.length > 0 ? { webSearchProviders } : {}),
+    ...(workerProviders.length > 0 ? { workerProviders } : {}),
+    ...(usageProviders.length > 0 ? { usageProviders } : {}),
     ...(migrationProviders.length > 0 ? { migrationProviders } : {}),
     ...(gatewayMethodDispatch.length > 0 ? { gatewayMethodDispatch } : {}),
     ...(tools.length > 0 ? { tools } : {}),
@@ -959,9 +997,11 @@ function normalizeManifestSecretInputPaths(
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
+    const ownerKind = entry.ownerKind === "route" ? entry.ownerKind : undefined;
     normalized.push({
       path: pathLocal,
       ...(expected ? { expected } : {}),
+      ...(ownerKind ? { ownerKind } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;
@@ -1512,6 +1552,107 @@ function normalizeManifestQaRunners(value: unknown): PluginManifestQaRunner[] | 
   return normalized.length > 0 ? normalized : undefined;
 }
 
+type DashboardManifestResult =
+  | { ok: true; dashboard?: PluginManifestDashboard }
+  | { ok: false; error: string };
+
+function normalizeDashboardCapabilityBase(
+  value: unknown,
+  field: string,
+  index: number,
+): { id: string; method: string; description: string } | string {
+  if (!isRecord(value)) {
+    return `${field}[${index}] must be an object`;
+  }
+  const id = normalizeOptionalString(value.id);
+  const method = normalizeOptionalString(value.method);
+  const description = normalizeOptionalString(value.description);
+  if (!id || !/^[a-z0-9][a-z0-9._-]*$/u.test(id)) {
+    return `${field}[${index}].id must be a lowercase capability id`;
+  }
+  if (!method) {
+    return `${field}[${index}].method must be a non-empty string`;
+  }
+  if (!description) {
+    return `${field}[${index}].description must be a non-empty string`;
+  }
+  return { id, method, description };
+}
+
+function normalizeManifestDashboard(value: unknown): DashboardManifestResult {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (!isRecord(value)) {
+    return { ok: false, error: "dashboard must be an object" };
+  }
+  if (value.dataBindings !== undefined && !Array.isArray(value.dataBindings)) {
+    return { ok: false, error: "dashboard.dataBindings must be an array" };
+  }
+  if (value.actionVerbs !== undefined && !Array.isArray(value.actionVerbs)) {
+    return { ok: false, error: "dashboard.actionVerbs must be an array" };
+  }
+
+  const dataBindings: PluginManifestDashboardDataBinding[] = [];
+  for (const [index, entry] of (value.dataBindings ?? []).entries()) {
+    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.dataBindings", index);
+    if (typeof normalized === "string") {
+      return { ok: false, error: normalized };
+    }
+    dataBindings.push(normalized);
+  }
+
+  const actionVerbs: PluginManifestDashboardActionVerb[] = [];
+  for (const [index, entry] of (value.actionVerbs ?? []).entries()) {
+    const normalized = normalizeDashboardCapabilityBase(entry, "dashboard.actionVerbs", index);
+    if (typeof normalized === "string") {
+      return { ok: false, error: normalized };
+    }
+    const rawParamShape = isRecord(entry) ? entry.paramShape : undefined;
+    if (rawParamShape !== undefined && !isRecord(rawParamShape)) {
+      return {
+        ok: false,
+        error: `dashboard.actionVerbs[${index}].paramShape must be a JSON Schema object`,
+      };
+    }
+    actionVerbs.push({
+      ...normalized,
+      ...(rawParamShape ? { paramShape: rawParamShape as JsonSchemaObject } : {}),
+    });
+  }
+
+  if (dataBindings.length === 0 && actionVerbs.length === 0) {
+    return { ok: true };
+  }
+  return {
+    ok: true,
+    dashboard: {
+      ...(dataBindings.length > 0 ? { dataBindings } : {}),
+      ...(actionVerbs.length > 0 ? { actionVerbs } : {}),
+    },
+  };
+}
+
+function normalizeManifestHttpsUrl(value: unknown): string | undefined {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  try {
+    const url = new URL(normalized);
+    const canonical = url.toString();
+    return url.protocol === "https:" &&
+      url.hostname &&
+      !url.username &&
+      !url.password &&
+      canonical.length <= 2048
+      ? canonical
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -1531,6 +1672,8 @@ function normalizeProviderAuthChoices(
     }
     const choiceLabel = normalizeOptionalString(entry.choiceLabel) ?? "";
     const choiceHint = normalizeOptionalString(entry.choiceHint) ?? "";
+    const icon = normalizeManifestHttpsUrl(entry.icon);
+    const website = normalizeManifestHttpsUrl(entry.website);
     const assistantPriority =
       typeof entry.assistantPriority === "number" && Number.isFinite(entry.assistantPriority)
         ? entry.assistantPriority
@@ -1548,16 +1691,24 @@ function normalizeProviderAuthChoices(
     const cliFlag = normalizeOptionalString(entry.cliFlag) ?? "";
     const cliOption = normalizeOptionalString(entry.cliOption) ?? "";
     const cliDescription = normalizeOptionalString(entry.cliDescription) ?? "";
+    const appGuidedSecret = entry.appGuidedSecret === true;
+    const appGuidedAuth =
+      entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
+        ? entry.appGuidedAuth
+        : undefined;
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
     );
+    const appGuidedDiscovery = entry.appGuidedDiscovery === true;
     normalized.push({
       provider,
       method,
       choiceId,
       ...(choiceLabel ? { choiceLabel } : {}),
       ...(choiceHint ? { choiceHint } : {}),
+      ...(icon ? { icon } : {}),
+      ...(website ? { website } : {}),
       ...(assistantPriority !== undefined ? { assistantPriority } : {}),
       ...(assistantVisibility ? { assistantVisibility } : {}),
       ...(deprecatedChoiceIds.length > 0 ? { deprecatedChoiceIds } : {}),
@@ -1565,10 +1716,13 @@ function normalizeProviderAuthChoices(
       ...(groupLabel ? { groupLabel } : {}),
       ...(groupHint ? { groupHint } : {}),
       ...(onboardingFeatured ? { onboardingFeatured: true } : {}),
+      ...(appGuidedDiscovery ? { appGuidedDiscovery: true } : {}),
       ...(optionKey ? { optionKey } : {}),
       ...(cliFlag ? { cliFlag } : {}),
       ...(cliOption ? { cliOption } : {}),
       ...(cliDescription ? { cliDescription } : {}),
+      ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
+      ...(appGuidedAuth ? { appGuidedAuth } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }
@@ -1615,7 +1769,7 @@ function normalizeChannelConfigs(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeManifestChannelCommandDefaults(
+export function normalizeManifestChannelCommandDefaults(
   value: unknown,
 ): PluginManifestChannelCommandDefaults | undefined {
   if (!isRecord(value)) {
@@ -1635,7 +1789,7 @@ function normalizeManifestChannelCommandDefaults(
     : undefined;
 }
 
-export function resolvePluginManifestPath(rootDir: string): string {
+function resolvePluginManifestPath(rootDir: string): string {
   for (const filename of PLUGIN_MANIFEST_FILENAMES) {
     const candidate = path.join(rootDir, filename);
     if (fs.existsSync(candidate)) {
@@ -1767,6 +1921,13 @@ export function loadPluginManifest(
   if (!id) {
     return cacheResult({ ok: false, error: "plugin manifest requires id", manifestPath });
   }
+  if (isCoreReservedPluginId(id)) {
+    return cacheResult({
+      ok: false,
+      error: `plugin manifest id "${id}" is reserved by OpenClaw core`,
+      manifestPath,
+    });
+  }
   const configSchema = isRecord(raw.configSchema) ? raw.configSchema : null;
   if (!configSchema) {
     return cacheResult({ ok: false, error: "plugin manifest requires configSchema", manifestPath });
@@ -1784,6 +1945,8 @@ export function loadPluginManifest(
   );
   const name = normalizeOptionalString(raw.name);
   const description = normalizeOptionalString(raw.description);
+  const catalog = normalizeManifestCatalog(raw.catalog);
+  const icon = normalizeOptionalString(raw.icon);
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
@@ -1809,13 +1972,21 @@ export function loadPluginManifest(
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
-  const providerAuthEnvVars = normalizeStringListRecord(raw.providerAuthEnvVars);
+  const providerUsageAuthEnvVars = normalizeStringListRecord(raw.providerUsageAuthEnvVars);
   const providerAuthAliases = normalizeStringRecord(raw.providerAuthAliases);
-  const channelEnvVars = normalizeStringListRecord(raw.channelEnvVars);
   const providerAuthChoices = normalizeProviderAuthChoices(raw.providerAuthChoices);
   const activation = normalizeManifestActivation(raw.activation);
   const setup = normalizeManifestSetup(raw.setup);
   const qaRunners = normalizeManifestQaRunners(raw.qaRunners);
+  const dashboardResult = normalizeManifestDashboard(raw.dashboard);
+  if (!dashboardResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest dashboard: ${dashboardResult.error}`,
+      manifestPath,
+    });
+  }
+  const dashboard = dashboardResult.dashboard;
   const skills = normalizeTrimmedStringList(raw.skills);
   const contracts = normalizeManifestContracts(raw.contracts);
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
@@ -1866,16 +2037,18 @@ export function loadPluginManifest(
       syntheticAuthRefs,
       nonSecretAuthMarkers,
       commandAliases,
-      providerAuthEnvVars,
+      providerUsageAuthEnvVars,
       providerAuthAliases,
-      channelEnvVars,
       providerAuthChoices,
       activation,
       setup,
       qaRunners,
+      dashboard,
       skills,
       name,
       description,
+      catalog,
+      icon,
       version,
       uiHints,
       contracts,
@@ -1892,6 +2065,8 @@ export function loadPluginManifest(
 }
 
 // package.json "openclaw" metadata (used for setup/catalog)
+type PluginPackageChannelApprovalFlag = "native";
+
 export type PluginPackageChannel = {
   id?: string;
   label?: string;
@@ -1908,13 +2083,13 @@ export type PluginPackageChannel = {
   selectionDocsOmitLabel?: boolean;
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
+  /** Closed manifest flags for approval behavior available before the channel runtime loads. */
+  approvalFlags?: readonly PluginPackageChannelApprovalFlag[];
   exposure?: {
     configured?: boolean;
     setup?: boolean;
     docs?: boolean;
   };
-  showConfigured?: boolean;
-  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
@@ -1942,7 +2117,7 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-export type PluginPackageChannelCliOption = {
+type PluginPackageChannelCliOption = {
   flags: string;
   description: string;
   defaultValue?: boolean | string;
@@ -1959,7 +2134,7 @@ export type PluginPackageInstall = {
   requiredPlatformPackages?: string[];
 };
 
-export type OpenClawPackageStartup = {
+type OpenClawPackageStartup = {
   /**
    * Opt-in for channel plugins whose `setupEntry` fully covers the gateway
    * startup surface needed before the server starts listening.
@@ -1967,14 +2142,18 @@ export type OpenClawPackageStartup = {
   deferConfiguredChannelFullLoadUntilAfterListen?: boolean;
 };
 
-export type OpenClawPackageSetupFeatures = {
+type OpenClawPackageSetupFeatures = {
   configPromotion?: boolean;
   legacyStateMigrations?: boolean;
   legacySessionSurfaces?: boolean;
 };
 
-export type OpenClawPackageCompat = {
+type OpenClawPackageCompat = {
   pluginApi?: string;
+};
+
+export type OpenClawPackageBuild = {
+  bundledDist?: boolean;
 };
 
 export type OpenClawPackageManifest = {
@@ -1991,6 +2170,7 @@ export type OpenClawPackageManifest = {
   compat?: OpenClawPackageCompat;
   install?: PluginPackageInstall;
   startup?: OpenClawPackageStartup;
+  build?: OpenClawPackageBuild;
 };
 
 export const DEFAULT_PLUGIN_ENTRY_CANDIDATES = [
@@ -2006,7 +2186,7 @@ export type PackageExtensionResolution =
   | { status: "empty"; entries: [] }
   | { status: "invalid"; entries: []; error: string };
 
-export type ManifestKey = typeof MANIFEST_KEY;
+type ManifestKey = typeof MANIFEST_KEY;
 
 export type PackageManifest = {
   name?: string;
@@ -2067,3 +2247,4 @@ export function resolvePackageExtensionEntries(
   }
   return { status: "ok", entries };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

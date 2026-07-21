@@ -5,12 +5,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -23,13 +26,11 @@ import {
   DEFAULT_BOOTSTRAP_FILENAME,
   filterBootstrapFilesForSession,
   isWorkspaceSetupCompleted,
-  isWorkspaceBootstrapPending,
   loadWorkspaceBootstrapFiles,
   type WorkspaceBootstrapFile,
 } from "./workspace.js";
 
 export type BootstrapContextMode = "full" | "lightweight";
-type BootstrapContextRunKind = "default" | "heartbeat" | "cron";
 
 const CONTINUATION_SCAN_MAX_TAIL_BYTES = 256 * 1024;
 const CONTINUATION_SCAN_MAX_RECORDS = 500;
@@ -55,12 +56,6 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
-/** Clears the per-process bootstrap warning dedupe cache for isolated tests. */
-export function resetBootstrapWarningCacheForTest(): void {
-  seenBootstrapWarnings.clear();
-  bootstrapWarningOrder.length = 0;
-}
-
 /** Resolves the effective bootstrap injection mode for a session agent. */
 export function resolveContextInjectionMode(
   config?: OpenClawConfig,
@@ -76,6 +71,9 @@ export function resolveContextInjectionMode(
 
 /** Checks whether the session transcript still has a valid full-bootstrap marker. */
 export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<boolean> {
+  if (parseSqliteSessionFileMarker(sessionFile)) {
+    return false;
+  }
   try {
     const stat = await fs.lstat(sessionFile);
     if (stat.isSymbolicLink()) {
@@ -90,7 +88,7 @@ export async function hasCompletedBootstrapTurn(sessionFile: string): Promise<bo
       }
       const start = stat.size - bytesToRead;
       const buffer = Buffer.allocUnsafe(bytesToRead);
-      const { bytesRead } = await fh.read(buffer, 0, bytesToRead, start);
+      const bytesRead = await readFileWindowFully(fh, buffer, start);
       let text = buffer.toString("utf-8", 0, bytesRead);
       if (start > 0) {
         const firstNewline = text.indexOf("\n");
@@ -223,6 +221,9 @@ function shouldExcludeHeartbeatBootstrapFile(params: {
   agentId?: string;
   runKind?: BootstrapContextRunKind;
 }): boolean {
+  if (params.runKind === "commitment-only") {
+    return true;
+  }
   if (!params.config || params.runKind === "heartbeat") {
     return false;
   }
@@ -371,5 +372,3 @@ export function buildBootstrapContextForFiles(
   });
   return contextFiles;
 }
-
-export { isWorkspaceBootstrapPending };

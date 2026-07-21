@@ -2,19 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 
-const originalEnv = {
-  HOME: process.env.HOME,
-  OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-};
+const envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME"]);
 
 const tempHomes: string[] = [];
 
 function useTempHome(): string {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-runtime-"));
   tempHomes.push(home);
-  process.env.HOME = home;
-  process.env.OPENCLAW_HOME = home;
+  setTestEnvValue("HOME", home);
+  setTestEnvValue("OPENCLAW_HOME", home);
   return home;
 }
 
@@ -50,16 +48,7 @@ async function importRuntimeTokenModule(): Promise<
 
 afterEach(() => {
   vi.resetModules();
-  if (originalEnv.HOME === undefined) {
-    delete process.env.HOME;
-  } else {
-    process.env.HOME = originalEnv.HOME;
-  }
-  if (originalEnv.OPENCLAW_HOME === undefined) {
-    delete process.env.OPENCLAW_HOME;
-  } else {
-    process.env.OPENCLAW_HOME = originalEnv.OPENCLAW_HOME;
-  }
+  envSnapshot.restore();
   for (const home of tempHomes.splice(0)) {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -76,6 +65,7 @@ describe("operator approval runtime token", () => {
     expect(sharedToken).toEqual(expect.any(String));
     expect(sharedToken).not.toBe("shared-runtime-token");
     expect(runtimeToken.isOperatorApprovalRuntimeToken(` ${sharedToken} `)).toBe(true);
+    expect(runtimeToken.isOperatorApprovalRuntimeToken(sharedToken.slice(0, -1))).toBe(false);
     expect(runtimeToken.isOperatorApprovalRuntimeToken("shared-runtime-token")).toBe(false);
     expect(runtimeToken.isOperatorApprovalRuntimeToken("different-token")).toBe(false);
   });

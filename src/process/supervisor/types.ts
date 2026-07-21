@@ -46,8 +46,6 @@ export type ManagedRun = {
   cancel: (reason?: TerminationReason) => void;
 };
 
-export type SpawnMode = "child" | "pty";
-
 export type ManagedRunStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
@@ -110,6 +108,5 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  reconcileOrphans(): Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

@@ -6,7 +6,7 @@ export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Heartbeat check failed before it could produce an update. The main chat session remains available.";
 
 /** True when text is exactly the generic external run failure copy. */
-export function isGenericExternalRunFailureText(text: string | undefined): boolean {
+function isGenericExternalRunFailureText(text: string | undefined): boolean {
   return text?.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
 }
 

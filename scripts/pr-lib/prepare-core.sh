@@ -49,6 +49,7 @@ verify_prep_branch_matches_prepared_head() {
 
 prepare_init() {
   local pr="$1"
+  mark_pr_operation_side_effects_started
   enter_worktree "$pr" true
 
   require_artifact .local/pr-meta.env
@@ -105,6 +106,7 @@ prepare_validate_commit() {
   enter_worktree "$pr" false
   require_artifact .local/pr-meta.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091
@@ -135,6 +137,7 @@ prepare_push() {
   require_artifact .local/prep-context.env
   require_artifact .local/gates.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091
@@ -156,6 +159,10 @@ prepare_push() {
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" true "${DOCS_ONLY:-false}" "$push_result_env"
   # shellcheck disable=SC1090
   source "$push_result_env"
+  # A lease retry reruns gates for the rebased head and rewrites gates.env;
+  # re-source so prep.md/prep.env carry the stamp for the head actually pushed.
+  # shellcheck disable=SC1091
+  source .local/gates.env
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
@@ -163,18 +170,6 @@ prepare_push() {
     echo "Unable to resolve the prepared mainline base."
     exit 1
   }
-  if [ -s .local/prep-sync.env ]; then
-    # shellcheck disable=SC1091
-    source .local/prep-sync.env
-    local current_prep_tree
-    current_prep_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
-    if [ "${PREP_SYNC_TREE:-}" != "$current_prep_tree" ] || [ -z "${PREP_SYNC_MAINLINE_BASE_SHA:-}" ]; then
-      echo "Prepared PR head no longer matches the verified sync tree."
-      exit 1
-    fi
-    mainline_base_sha="$PREP_SYNC_MAINLINE_BASE_SHA"
-    rm -f .local/prep-sync.env
-  fi
   local pushed_from_sha="$PUSHED_FROM_SHA"
   local pr_head_sha_after="$PR_HEAD_SHA_AFTER_PUSH"
 
@@ -194,6 +189,11 @@ prepare_push() {
 - Gate mode: ${GATES_MODE:-unknown}.
 - Verified the remote PR head tree matches the local prep head.
 EOF_PREP
+  if [ -n "${REMOTE_GATES_LEASE_ID:-}" ]; then
+    cat >> .local/prep.md <<EOF_PREP
+- Remote testbox gate stamp: ${REMOTE_GATES_LEASE_ID}${REMOTE_GATES_RUN_URL:+ (${REMOTE_GATES_RUN_URL})}.
+EOF_PREP
+  fi
 
   # Security: shell-escape values to prevent command injection via propagated PR_HEAD.
   printf '%s=%q\n' \
@@ -225,6 +225,7 @@ prepare_sync_head() {
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
 
+  mark_pr_operation_side_effects_started
   checkout_prep_branch "$pr"
 
   # shellcheck disable=SC1091
@@ -232,19 +233,9 @@ prepare_sync_head() {
   # shellcheck disable=SC1091
   source .local/prep-context.env
 
-  local rebased=false
+  # merge-verify owns relevance-aware mainline drift. Keep the hosted PR head
+  # as the publication parent so fork updates contain only reviewed fixups.
   git fetch origin main
-  if ! git merge-base --is-ancestor origin/main HEAD; then
-    git rebase origin/main
-    rebased=true
-    if [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-      rm -f .local/gates.env .local/prep.env
-      echo "Rebased head requires fresh exact-head hosted CI/Testbox evidence after push."
-    else
-      prepare_gates "$pr"
-      checkout_prep_branch "$pr"
-    fi
-  fi
 
   local prep_head_sha
   prep_head_sha=$(git rev-parse HEAD)
@@ -252,6 +243,7 @@ prepare_sync_head() {
 
   local lease_sha
   lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
+  verify_prep_head_extends_hosted_head "$lease_sha" || exit 1
   local push_result_env=".local/prepare-sync-result.env"
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
@@ -281,30 +273,8 @@ prepare_sync_head() {
 
   cat >> .local/prep.md <<EOF_PREP
 - Prep head sync completed to branch $PR_HEAD.
-- Rebased onto origin/main: $rebased.
+- Preserved hosted PR ancestry; merge verification owns mainline drift.
 - Verified the remote PR head tree matches the local prep head.
-EOF_PREP
-
-  if [ "$rebased" = "true" ] && [ "${OPENCLAW_TESTBOX:-}" = "1" ]; then
-    local prep_sync_tree
-    prep_sync_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
-    # Preserve the verified local lineage because GraphQL creates a remote
-    # commit with the same tree but the old branch parent.
-    printf '%s=%q\n' \
-      PREP_SYNC_MAINLINE_BASE_SHA "$mainline_base_sha" \
-      PREP_SYNC_TREE "$prep_sync_tree" \
-      > .local/prep-sync.env
-    cat >> .local/prep.md <<EOF_PREP
-- Cleared stale prepare artifacts. Wait for hosted CI/Testbox on $prep_head_sha, then run prepare-run again.
-EOF_PREP
-    echo "prepare-sync-head complete"
-    echo "prep_head_sha=$prep_head_sha"
-    echo "Hosted CI/Testbox must pass for this exact head before prepare-run can continue."
-    return
-  fi
-
-  cat >> .local/prep.md <<EOF_PREP
-- Prepare gates reran automatically when the sync rebase changed the prep head.
 EOF_PREP
 
   # Security: shell-escape values to prevent command injection via propagated PR_HEAD.

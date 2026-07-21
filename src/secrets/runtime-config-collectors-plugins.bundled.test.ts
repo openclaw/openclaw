@@ -13,6 +13,130 @@ function envRef(id: string) {
 }
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
+  it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
+    expect(
+      findBundledPluginMetadataById("webhooks", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
+    const config = {
+      plugins: {
+        entries: {
+          webhooks: {
+            enabled: true,
+            config: {
+              routes: {
+                zapier: {
+                  sessionKey: "agent:main:main",
+                  secret: envRef("WEBHOOK_SECRET"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const context = createResolverContext({ sourceConfig: config, env: {} });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["webhooks", "bundled"]]),
+    });
+
+    expect(context.assignments).toMatchObject([
+      {
+        path: "plugins.entries.webhooks.config.routes.zapier.secret",
+        ownerKind: "route",
+        ownerId: "plugins.entries.webhooks.config.routes.zapier.secret",
+        requiredForGateway: false,
+        disposition: "isolate",
+      },
+    ]);
+  });
+
+  it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
+    expect(
+      findBundledPluginMetadataById("codex", {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      })?.manifest.configContracts?.secretInputs?.paths,
+    ).toEqual([
+      { path: "appServer.authToken", expected: "string" },
+      { path: "appServer.headers.*", expected: "string" },
+    ]);
+    const config = {
+      plugins: {
+        entries: {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                transport: "websocket",
+                url: "wss://codex-app-server.example.internal/ws",
+                authToken: "$CODEX_APP_SERVER_TOKEN",
+                headers: {
+                  Authorization: "Bearer literal-token",
+                  "x-codex-client-session-token": envRef("CODEX_CLIENT_SESSION_TOKEN"),
+                },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expect(
+      resolvePluginConfigContractsById({
+        config,
+        workspaceDir: resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config)),
+        env: {},
+        fallbackToBundledMetadata: true,
+        fallbackToBundledMetadataForResolvedBundled: true,
+        pluginIds: ["codex"],
+        fallbackBundledPluginIds: ["codex"],
+      }).get("codex")?.configContracts.secretInputs?.paths,
+    ).toEqual([
+      { path: "appServer.authToken", expected: "string" },
+      { path: "appServer.headers.*", expected: "string" },
+    ]);
+    const context = createResolverContext({
+      sourceConfig: config,
+      env: {},
+    });
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: new Map([["codex", "bundled"]]),
+    });
+
+    expect({
+      assignments: context.assignments.map((assignment) => assignment.path).toSorted(),
+      warnings: context.warnings,
+    }).toEqual({
+      assignments: [
+        "plugins.entries.codex.config.appServer.authToken",
+        "plugins.entries.codex.config.appServer.headers.x-codex-client-session-token",
+      ],
+      warnings: [],
+    });
+
+    context.assignments[0]?.apply("resolved-app-server-token");
+    context.assignments[1]?.apply("resolved-session-token");
+    expect(config.plugins?.entries?.codex?.config).toMatchObject({
+      appServer: {
+        authToken: "resolved-app-server-token",
+        headers: {
+          Authorization: "Bearer literal-token",
+          "x-codex-client-session-token": "resolved-session-token",
+        },
+      },
+    });
+  });
+
   it("collects voice-call SecretRef assignments from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("voice-call", {

@@ -13,6 +13,7 @@ import { callGateway } from "../../gateway/call.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
+  createSessionVisibilityChecker,
   listSpawnedSessionKeys,
   sessionVisibilityGatewayTesting,
 } from "../../plugin-sdk/session-visibility.js";
@@ -88,7 +89,7 @@ export function resolveCurrentSessionClientAlias(params: {
   return requesterKey;
 }
 
-export async function isRequesterSpawnedSessionVisible(params: {
+async function isRequesterSpawnedSessionVisible(params: {
   requesterSessionKey: string;
   targetSessionKey: string;
   limit?: number;
@@ -117,46 +118,7 @@ export async function isRequesterSpawnedSessionVisible(params: {
   return keys.has(params.targetSessionKey);
 }
 
-export function shouldVerifyRequesterSpawnedSessionVisibility(params: {
-  requesterSessionKey: string;
-  targetSessionKey: string;
-  restrictToSpawned: boolean;
-  resolvedViaSessionId: boolean;
-}): boolean {
-  return (
-    params.restrictToSpawned &&
-    !params.resolvedViaSessionId &&
-    params.requesterSessionKey !== params.targetSessionKey
-  );
-}
-
-export async function isResolvedSessionVisibleToRequester(params: {
-  requesterSessionKey: string;
-  targetSessionKey: string;
-  restrictToSpawned: boolean;
-  resolvedViaSessionId: boolean;
-  limit?: number;
-}): Promise<boolean> {
-  if (
-    !shouldVerifyRequesterSpawnedSessionVisibility({
-      requesterSessionKey: params.requesterSessionKey,
-      targetSessionKey: params.targetSessionKey,
-      restrictToSpawned: params.restrictToSpawned,
-      resolvedViaSessionId: params.resolvedViaSessionId,
-    })
-  ) {
-    return true;
-  }
-  return await isRequesterSpawnedSessionVisible({
-    requesterSessionKey: params.requesterSessionKey,
-    targetSessionKey: params.targetSessionKey,
-    limit: params.limit,
-  });
-}
-
-export { looksLikeSessionId };
-
-export function looksLikeSessionKey(value: string): boolean {
+function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
   if (!raw) {
     return false;
@@ -482,6 +444,7 @@ export async function resolveSessionReference(params: {
 }
 
 export async function resolveVisibleSessionReference(params: {
+  action: "history" | "send" | "status" | "list";
   resolvedSession: Extract<SessionReferenceResolution, { ok: true }>;
   requesterSessionKey: string;
   restrictToSpawned: boolean;
@@ -489,12 +452,25 @@ export async function resolveVisibleSessionReference(params: {
 }): Promise<VisibleSessionReferenceResolution> {
   const resolvedKey = params.resolvedSession.key;
   const displayKey = params.resolvedSession.displayKey;
-  const visible = await isResolvedSessionVisibleToRequester({
-    requesterSessionKey: params.requesterSessionKey,
-    targetSessionKey: resolvedKey,
-    restrictToSpawned: params.restrictToSpawned,
-    resolvedViaSessionId: params.resolvedSession.resolvedViaSessionId,
-  });
+  const shouldVerifySpawnedVisibility =
+    params.restrictToSpawned &&
+    !params.resolvedSession.resolvedViaSessionId &&
+    params.requesterSessionKey !== resolvedKey;
+  const scopedAccess =
+    params.action === "list"
+      ? undefined
+      : createSessionVisibilityChecker.resolveScopedAccess({
+          action: params.action,
+          requesterSessionKey: params.requesterSessionKey,
+          targetSessionKey: resolvedKey,
+        });
+  const visible =
+    Boolean(scopedAccess) ||
+    !shouldVerifySpawnedVisibility ||
+    (await isRequesterSpawnedSessionVisible({
+      requesterSessionKey: params.requesterSessionKey,
+      targetSessionKey: resolvedKey,
+    }));
   if (!visible) {
     return {
       ok: false,
@@ -506,7 +482,7 @@ export async function resolveVisibleSessionReference(params: {
   return { ok: true, key: resolvedKey, displayKey };
 }
 
-export const testing = {
+const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsResolutionDeps = overrides
       ? {
@@ -519,4 +495,9 @@ export const testing = {
     );
   },
 };
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.sessionsResolutionTestApi")] = {
+    testing,
+  };
+}

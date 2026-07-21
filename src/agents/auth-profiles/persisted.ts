@@ -31,6 +31,7 @@ import type {
   AuthProfileCredential,
   AuthProfileSecretsStore,
   AuthProfileStore,
+  RuntimeAuthProfileStore,
   OAuthCredential,
   OAuthCredentials,
 } from "./types.js";
@@ -212,7 +213,7 @@ function parseCredentialEntry(
   if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
     return { ok: false, reason: "invalid_type" };
   }
-  const provider = typed.provider ?? fallbackProvider;
+  const provider = typed.provider || fallbackProvider;
   const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
   if (!normalizedProvider) {
     return { ok: false, reason: "missing_provider" };
@@ -246,7 +247,7 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
   });
 }
 
-function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
+export function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
   if (!isRecord(raw)) {
     return null;
   }
@@ -583,16 +584,18 @@ function reconcileMainStoreOAuthProfileDrift(params: {
 
 /** Merges two auth profile stores, preserving valid runtime external profile metadata. */
 export function mergeAuthProfileStores(
-  base: AuthProfileStore,
-  override: AuthProfileStore,
+  base: RuntimeAuthProfileStore,
+  override: RuntimeAuthProfileStore,
   options?: { preserveBaseRuntimeExternalProfiles?: boolean },
-): AuthProfileStore {
+): RuntimeAuthProfileStore {
   if (
     Object.keys(override.profiles).length === 0 &&
     !override.order &&
     !override.lastGood &&
     !override.usageStats &&
     override.runtimePersistedProfileIds === undefined &&
+    override.runtimeLocalProfileIds === undefined &&
+    override.runtimeInheritsMainState === undefined &&
     override.runtimeExternalProfileIds === undefined &&
     override.runtimeExternalProfileIdsAuthoritative !== true
   ) {
@@ -630,7 +633,7 @@ export function mergeAuthProfileStores(
                 profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
             ),
           ])
-          .filter(([, profileIds]) => profileIds.length > 0),
+          .filter(([, profileIds]) => Array.isArray(profileIds) && profileIds.length > 0),
       )
     : undefined;
   const mergedLastGood = mergeRecord(base.lastGood, override.lastGood);
@@ -659,6 +662,9 @@ export function mergeAuthProfileStores(
     ...(override.runtimePersistedProfileIds ?? []),
   ]
     .filter((profileId) => merged.profiles[profileId])
+    .toSorted();
+  const runtimeLocalProfileIds = override.runtimeLocalProfileIds
+    ?.filter((profileId) => merged.profiles[profileId])
     .toSorted();
   const baseRuntimeExternalProfileIds =
     override.runtimeExternalProfileIdsAuthoritative === true &&
@@ -693,9 +699,13 @@ export function mergeAuthProfileStores(
       ...(runtimePersistedProfileIds.length > 0
         ? { runtimePersistedProfileIds: [...new Set(runtimePersistedProfileIds)] }
         : {}),
+      ...(runtimeLocalProfileIds ? { runtimeLocalProfileIds } : {}),
+      ...(override.runtimeInheritsMainState !== undefined
+        ? { runtimeInheritsMainState: override.runtimeInheritsMainState }
+        : {}),
       ...runtimeExternalProfileMetadata,
     },
-  });
+  }) as RuntimeAuthProfileStore;
 }
 
 /** Builds the persisted secrets store, stripping resolved literals when refs exist. */
@@ -820,3 +830,4 @@ export function loadPersistedAuthProfileStore(
 export function loadLegacyAuthProfileStore(agentDir?: string): LegacyAuthStore | null {
   return coerceLegacyAuthStore(loadJsonFile(resolveLegacyAuthStorePath(agentDir)));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

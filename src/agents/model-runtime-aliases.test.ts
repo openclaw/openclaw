@@ -1,7 +1,7 @@
 // Verifies CLI runtime alias resolution and runtime model-ref equivalence.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing as cliBackendsTesting } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import {
   createModelPickerVisibleProviderPredicate,
   isRetiredModelPickerProvider,
@@ -130,6 +130,26 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         }),
         provider: "",
         modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
+  it("matches provider runtime policy from a provider-qualified model when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                baseUrl: "https://api.anthropic.example/v1",
+                agentRuntime: { id: "claude-cli" },
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "",
+        modelId: "anthropic/opus-4.7",
       }),
     ).toBe("claude-cli");
   });

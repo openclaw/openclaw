@@ -19,6 +19,7 @@ vi.mock("./auth-profiles/store.js", () => ({
 vi.mock("./auth-profiles/usage.js", () => ({
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
+  maybeReprobeWhamBlockedProfiles: vi.fn(),
   resolveProfilesUnavailableReason: vi.fn(),
 }));
 
@@ -131,7 +132,7 @@ let mockedResolveAuthProfileOrder: ReturnType<
   typeof vi.mocked<AuthProfilesOrderModule["resolveAuthProfileOrder"]>
 >;
 let runWithModelFallback: ModelFallbackModule["runWithModelFallback"];
-let modelFallbackTesting: ModelFallbackModule["testing"];
+let resolveCooldownDecision: (typeof import("./model-fallback.test-support.js"))["resolveCooldownDecision"];
 let probeThrottleInternals: ModelFallbackModule["probeThrottleInternals"];
 let resetLogger: LoggerModule["resetLogger"];
 let setLoggerOverride: LoggerModule["setLoggerOverride"];
@@ -147,6 +148,7 @@ async function loadModelFallbackProbeModules() {
   const authProfilesOrderModule = await import("./auth-profiles/order.js");
   const loggerModule = await import("../logging/logger.js");
   const modelFallbackModule = await import("./model-fallback.js");
+  const modelFallbackTestSupport = await import("./model-fallback.test-support.js");
   mockedEnsureAuthProfileStore = vi.mocked(authProfilesStoreModule.ensureAuthProfileStore);
   mockedHasAnyAuthProfileStoreSource = vi.mocked(
     authProfilesSourceCheckModule.hasAnyAuthProfileStoreSource,
@@ -158,7 +160,7 @@ async function loadModelFallbackProbeModules() {
   );
   mockedResolveAuthProfileOrder = vi.mocked(authProfilesOrderModule.resolveAuthProfileOrder);
   runWithModelFallback = modelFallbackModule.runWithModelFallback;
-  modelFallbackTesting = modelFallbackModule.testing;
+  resolveCooldownDecision = modelFallbackTestSupport.resolveCooldownDecision;
   probeThrottleInternals = modelFallbackModule.probeThrottleInternals;
   resetLogger = loggerModule.resetLogger;
   setLoggerOverride = loggerModule.setLoggerOverride;
@@ -176,7 +178,9 @@ function expectPrimarySkippedForReason(
 ) {
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5", {
+    isFinalFallbackAttempt: true,
+  });
   expect(result.attempts[0]?.reason).toBe(reason);
 }
 
@@ -192,6 +196,7 @@ function expectPrimaryProbeSuccess(
   expect(run).toHaveBeenCalledTimes(1);
   expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
     allowTransientCooldownProbe: true,
+    isFinalFallbackAttempt: false,
   });
 }
 
@@ -251,9 +256,11 @@ async function expectProbeFailureFallsBack({
   expect(run).toHaveBeenCalledTimes(2);
   expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
     allowTransientCooldownProbe: true,
+    isFinalFallbackAttempt: false,
   });
   expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
     allowTransientCooldownProbe: true,
+    isFinalFallbackAttempt: false,
   });
 }
 
@@ -287,7 +294,7 @@ describe("runWithModelFallback – probe logic", () => {
     if (params.usageStats) {
       authStore.usageStats = params.usageStats;
     }
-    return modelFallbackTesting.resolveCooldownDecision({
+    return resolveCooldownDecision({
       candidate: OPENAI_PROBE_CANDIDATE,
       isPrimary: params.isPrimary ?? true,
       requestedModel: params.requestedModel ?? true,
@@ -297,16 +304,14 @@ describe("runWithModelFallback – probe logic", () => {
       authRuntime: {
         getSoonestCooldownExpiry: mockedGetSoonestCooldownExpiry,
         resolveProfilesUnavailableReason: mockedResolveProfilesUnavailableReason,
-      } as unknown as Parameters<
-        typeof modelFallbackTesting.resolveCooldownDecision
-      >[0]["authRuntime"],
+      } as unknown as Parameters<typeof resolveCooldownDecision>[0]["authRuntime"],
       authStore,
       profileIds: ["openai-profile-1"],
     });
   }
 
   function expectOpenAiProbeSuspension(
-    decision: ReturnType<ModelFallbackModule["testing"]["resolveCooldownDecision"]>,
+    decision: ReturnType<typeof resolveCooldownDecision>,
     reason: "rate_limit" | "billing",
   ) {
     expect(decision).toEqual({
@@ -529,8 +534,11 @@ describe("runWithModelFallback – probe logic", () => {
     expect(fallbackResult.result).toBe("fallback-ok");
     expect(fallbackRun).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: false,
     });
-    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      isFinalFallbackAttempt: false,
+    });
 
     const decisionPayloads = logCapture.records
       .filter((record) => record.message === "model fallback decision")
@@ -690,9 +698,14 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-3-flash-preview", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: false,
     });
-    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
-    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat");
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      isFinalFallbackAttempt: false,
+    });
+    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat", {
+      isFinalFallbackAttempt: true,
+    });
   });
 
   it("prunes stale probe throttle entries before checking eligibility", () => {
@@ -774,6 +787,7 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: true,
     });
   });
 

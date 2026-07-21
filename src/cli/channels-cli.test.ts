@@ -8,15 +8,41 @@ import { registerChannelsCli } from "./channels-cli.js";
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
   vi.fn<() => readonly PluginPackageChannel[]>(() => []),
 );
+const channelsAddCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
+const runtimeMock = vi.hoisted(() => ({
+  log: vi.fn(),
+  error: vi.fn(),
+  exit: vi.fn(),
+}));
 
 vi.mock("../plugins/bundled-package-channel-metadata.js", () => ({
   listBundledPackageChannelMetadata: listBundledPackageChannelMetadataMock,
+}));
+
+vi.mock("../commands/channels.js", () => ({
+  channelsAddCommand: channelsAddCommandMock,
+}));
+
+vi.mock("../runtime.js", () => ({
+  defaultRuntime: runtimeMock,
 }));
 
 function getChannelAddOptionFlags(program: Command): string[] {
   const channels = program.commands.find((command) => command.name() === "channels");
   const add = channels?.commands.find((command) => command.name() === "add");
   return add?.options.map((option) => option.flags) ?? [];
+}
+
+function getChannelSubcommandNames(program: Command, parentName: string): string[] {
+  const channels = program.commands.find((command) => command.name() === "channels");
+  const parent = channels?.commands.find((command) => command.name() === parentName);
+  return parent?.commands.map((command) => command.name()) ?? [];
+}
+
+async function runChannelsAddCli(args: string[]) {
+  const program = new Command().name("openclaw");
+  await registerChannelsCli(program, ["node", "openclaw", ...args]);
+  await program.parseAsync(args, { from: "user" });
 }
 
 describe("registerChannelsCli", () => {
@@ -38,6 +64,39 @@ describe("registerChannelsCli", () => {
     await registerChannelsCli(new Command().name("openclaw"));
 
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("registers dead-letter inspection and resubmission commands", async () => {
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelSubcommandNames(program, "dead-letters")).toEqual(["list", "resubmit"]);
+  });
+
+  it("registers ClickClack setup options before an external channel plugin is installed", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "clickclack",
+        cliAddOptions: [
+          {
+            flags: "--code <code>",
+            description: "ClickClack one-time setup code or setup URL",
+          },
+          {
+            flags: "--workspace <workspace>",
+            description: "ClickClack workspace id, slug, or name",
+          },
+        ],
+      },
+    ]);
+    process.argv = ["node", "openclaw", "channels", "add", "--help"];
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program);
+
+    expect(getChannelAddOptionFlags(program)).toContain("--code <code>");
+    expect(getChannelAddOptionFlags(program)).toContain("--workspace <workspace>");
   });
 
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {
@@ -95,5 +154,57 @@ describe("registerChannelsCli", () => {
 
     expect(listBundledPackageChannelMetadataMock).toHaveBeenCalledTimes(1);
     expect(getChannelAddOptionFlags(program)).toContain("--homeserver <url>");
+  });
+
+  it.each([
+    ["positional", ["channels", "add", "telegram"]],
+    ["--channel", ["channels", "add", "--channel", "telegram"]],
+  ])("keeps selection-only %s channel adds on the guided path", async (_label, args) => {
+    await runChannelsAddCli(args);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram" }),
+      runtimeMock,
+      { hasFlags: false },
+    );
+  });
+
+  it.each([
+    ["token", ["--token", "test-token"]],
+    ["token file", ["--token-file", "/tmp/test-token"]],
+    ["environment", ["--use-env"]],
+    ["account", ["--account", "work"]],
+  ])("keeps explicit %s inputs on the direct path", async (_label, extraArgs) => {
+    await runChannelsAddCli(["channels", "add", "--channel", "telegram", ...extraArgs]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
+  it("treats plugin-provided config flags as direct automation inputs", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "matrix",
+        cliAddOptions: [{ flags: "--homeserver <url>", description: "Matrix homeserver URL" }],
+      },
+    ]);
+
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "--channel",
+      "matrix",
+      "--homeserver",
+      "https://matrix.example.org",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "matrix", homeserver: "https://matrix.example.org" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
   });
 });

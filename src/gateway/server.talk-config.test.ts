@@ -62,9 +62,12 @@ afterAll(async () => {
 });
 
 async function createFreshOperatorDevice(scopes: string[], nonce: string) {
-  const identity = loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}`),
-  );
+  const identity = loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}.sqlite`,
+    ),
+  });
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -287,7 +290,15 @@ describe("gateway talk.config", () => {
     await withTalkConfigConnection(["operator.read"], async (ws) => {
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toContain("missing scope: operator.talk.secrets");
+      expect(res.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.talk.secrets",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.talk.secrets",
+          requiredScopes: ["operator.read", "operator.talk.secrets"],
+        },
+      });
     });
   });
 
@@ -302,7 +313,8 @@ describe("gateway talk.config", () => {
       expect(res.ok).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {
         provider: GENERIC_TALK_PROVIDER_ID,
-        apiKey: "secret-key-abc",
+        providerApiKey: "__OPENCLAW_REDACTED__",
+        resolvedApiKey: "secret-key-abc",
       });
     });
   });
@@ -313,7 +325,10 @@ describe("gateway talk.config", () => {
     });
 
     await withEnvAsync({ [GENERIC_TALK_API_ENV]: "env-acme-key" }, async () => {
-      await expectTalkSecretsConfig({ apiKey: talkApiSecretRef() });
+      await expectTalkSecretsConfig({
+        providerApiKey: talkApiSecretRef(),
+        resolvedApiKey: "env-acme-key",
+      });
     });
   });
 
@@ -402,7 +417,8 @@ describe("gateway talk.config", () => {
 
           await expectTalkSecretsConfig({
             voiceId: "voice-secretref",
-            apiKey: talkApiSecretRef(),
+            providerApiKey: talkApiSecretRef(),
+            resolvedApiKey: "env-acme-key",
           });
         },
       );

@@ -7,7 +7,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "./lib/bundled-plugin-paths.mjs";
-import { TSDOWN_PACKAGE_OUTPUT_ROOTS } from "./lib/tsdown-output-roots.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import {
+  TSDOWN_PACKAGE_CONFIG_GROUP,
+  TSDOWN_UNIFIED_CONFIG_GROUP,
+} from "./lib/tsdown-config-groups.mjs";
+import {
+  TSDOWN_PACKAGE_OUTPUT_ROOTS,
+  tsdownPackageOutputRoot,
+} from "./lib/tsdown-output-roots.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 import {
   isSourceCheckoutRoot,
@@ -24,6 +33,7 @@ const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 12288;
 const DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const TSDOWN_MAX_OLD_SPACE_MB_ENV = "OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB";
 const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
 const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
 const CGROUP_MEMORY_LIMIT_PATHS = [
@@ -31,9 +41,10 @@ const CGROUP_MEMORY_LIMIT_PATHS = [
   "/sys/fs/cgroup/memory/memory.limit_in_bytes",
 ];
 const PROC_MEMINFO_PATH = "/proc/meminfo";
-const TERMINATION_GRACE_MS = 5_000;
+// Build descendants get a short cleanup window; a timed-out build must not hold CI for seconds.
+const TERMINATION_GRACE_MS = 250;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
-const POST_FORCE_KILL_WAIT_MS = 1_000;
+const POST_FORCE_KILL_WAIT_MS = 250;
 const ROOT_TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const PRESERVED_TSDOWN_OUTPUT_FILES = ["dist/cli-startup-metadata.json"];
 const PRESERVE_CLI_STARTUP_METADATA_ENV = "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA";
@@ -79,7 +90,7 @@ export function cleanTsdownOutputRoots(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
   const env = params.env ?? process.env;
-  const roots = listTsdownOutputRoots();
+  const roots = params.roots ?? listTsdownOutputRoots();
   const protectedDeclarationPaths =
     env[RUN_NODE_SKIP_DTS_BUILD_ENV] === "1"
       ? listExistingDeclarationOutputPaths({
@@ -219,6 +230,52 @@ export function listTsdownOutputRoots() {
   return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...TSDOWN_PACKAGE_OUTPUT_ROOTS];
 }
 
+function readForwardedOption(args, names) {
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    for (const name of names) {
+      if (arg === name) {
+        return args[index + 1];
+      }
+      if (arg.startsWith(`${name}=`)) {
+        return arg.slice(name.length + 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Limits cleanup to the output roots owned by an explicitly filtered build. */
+export function resolveTsdownCleanOutputRoots(args = []) {
+  const config = readForwardedOption(args, ["--config", "-c"]);
+  const filter = readForwardedOption(args, ["--filter", "-F"]);
+  const configPath = config ? path.resolve(config) : undefined;
+  const aiConfigPath = path.resolve("tsdown.ai.config.ts");
+  const mainConfigPath = path.resolve("tsdown.config.ts");
+  const aiRoot = tsdownPackageOutputRoot("ai");
+  const packageRoots = TSDOWN_PACKAGE_OUTPUT_ROOTS.filter((root) => root !== aiRoot);
+
+  if (configPath === aiConfigPath) {
+    return [aiRoot];
+  }
+  if (configPath === mainConfigPath) {
+    if (filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
+      return packageRoots;
+    }
+    if (filter === TSDOWN_UNIFIED_CONFIG_GROUP) {
+      return [...ROOT_TSDOWN_OUTPUT_ROOTS];
+    }
+    return [...ROOT_TSDOWN_OUTPUT_ROOTS, ...packageRoots];
+  }
+  if (!config && filter === TSDOWN_PACKAGE_CONFIG_GROUP) {
+    return [aiRoot, ...packageRoots];
+  }
+  if (!config && filter === TSDOWN_UNIFIED_CONFIG_GROUP) {
+    return [aiRoot, ...ROOT_TSDOWN_OUTPUT_ROOTS];
+  }
+  return listTsdownOutputRoots();
+}
+
 export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const fsImpl = params.fs ?? fs;
@@ -305,15 +362,7 @@ function parsePositiveIntegerEnv(value, name) {
   if (typeof value !== "string" || value.trim() === "") {
     return null;
   }
-  const text = value.trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${name} must be a positive safe integer`);
-  }
-  return parsed;
+  return parsePositiveInt(value, name);
 }
 
 function parseNonNegativeIntegerEnv(value, name) {
@@ -402,6 +451,14 @@ function resolveTsdownMaxOldSpaceMb(params = {}) {
     (params.platform ?? process.platform) === "win32"
       ? DEFAULT_WINDOWS_TSDOWN_MAX_OLD_SPACE_MB
       : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  const envOverride = parsePositiveIntegerEnv(
+    (params.env ?? process.env)[TSDOWN_MAX_OLD_SPACE_MB_ENV],
+    TSDOWN_MAX_OLD_SPACE_MB_ENV,
+  );
+  if (envOverride !== null) {
+    return envOverride;
+  }
+
   const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
   if (limitBytes === null) {
     return defaultMaxOldSpaceMb;
@@ -482,7 +539,7 @@ function resolveTsdownEnv(env, params = {}) {
   };
 }
 
-export function tsdownBuildUsage() {
+function tsdownBuildUsage() {
   return [
     "Usage: node scripts/tsdown-build.mjs [tsdown args...]",
     "",
@@ -578,7 +635,7 @@ export function resolveTsdownBuildInvocation(params = {}) {
     pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
-    comSpec: params.comSpec ?? env.ComSpec,
+    comSpec: params.comSpec,
     platform: params.platform ?? process.platform,
   });
   return {
@@ -591,6 +648,107 @@ export function resolveTsdownBuildInvocation(params = {}) {
       env,
     },
   };
+}
+
+/** Builds declarations in dependency order without overlapping the largest graphs. */
+export function resolveTsdownBuildInvocations(params = {}) {
+  const forwardedArgs = params.args ?? [];
+  const env = params.env ?? process.env;
+  let declarationsEnabled = env[RUN_NODE_SKIP_DTS_BUILD_ENV] !== "1";
+  let hasForwardedFilter = false;
+  let hasForwardedConfig = false;
+  const aiArgs = [];
+  for (let index = 0; index < forwardedArgs.length; index += 1) {
+    const arg = forwardedArgs[index];
+    if (arg === "--filter" || arg === "-F") {
+      hasForwardedFilter = true;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--filter=") || arg.startsWith("-F=")) {
+      hasForwardedFilter = true;
+      continue;
+    }
+    if (arg === "--dts") {
+      declarationsEnabled = true;
+    } else if (arg === "--no-dts") {
+      declarationsEnabled = false;
+    }
+    hasForwardedConfig ||=
+      arg === "--config" ||
+      arg.startsWith("--config=") ||
+      arg === "-c" ||
+      arg.startsWith("-c=") ||
+      arg === "--no-config";
+    aiArgs.push(arg);
+  }
+
+  if (hasForwardedConfig) {
+    return [resolveTsdownBuildInvocation(params)];
+  }
+
+  const invocations = [
+    resolveTsdownBuildInvocation({
+      ...params,
+      args: ["--config", "tsdown.ai.config.ts", ...aiArgs],
+    }),
+  ];
+
+  if (!declarationsEnabled || hasForwardedFilter) {
+    invocations.push(resolveTsdownBuildInvocation(params));
+    return invocations;
+  }
+
+  for (const group of [TSDOWN_PACKAGE_CONFIG_GROUP, TSDOWN_UNIFIED_CONFIG_GROUP]) {
+    invocations.push(
+      resolveTsdownBuildInvocation({
+        ...params,
+        args: ["--filter", group, ...forwardedArgs],
+      }),
+    );
+  }
+  return invocations;
+}
+
+function signalWindowsProcessTree(pid, signal, runTaskkill = spawnSync) {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalTsdownBuildProcessTree(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The group may already be gone; fall back to the direct child handle.
+    }
+  }
+  if (platform === "win32" && child.pid) {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
+  }
+  child.kill(signal);
 }
 
 export async function runTsdownBuildInvocation(invocation, params = {}) {
@@ -608,8 +766,11 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   let timedOut = false;
   let settled = false;
   let lastOutputAt = Date.now();
+  let forceKillAt = null;
 
-  const useProcessGroup = timeoutMs !== null && process.platform !== "win32";
+  const platform = params.platform ?? process.platform;
+  const runTaskkill = params.runTaskkill ?? spawnSync;
+  const useProcessGroup = platform !== "win32";
   const child = spawn(invocation.command, invocation.args, {
     ...invocation.options,
     detached: useProcessGroup,
@@ -621,15 +782,36 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   }
 
   function signalChild(signal) {
-    if (useProcessGroup && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch {
-        // The group may already be gone; fall back to the direct child handle.
-      }
+    signalTsdownBuildProcessTree(child, signal, {
+      platform,
+      runTaskkill,
+      useProcessGroup,
+    });
+  }
+
+  const parentSignalHandlers = [];
+  function cleanupParentSignalHandlers() {
+    for (const { signal, handler } of parentSignalHandlers) {
+      process.off(signal, handler);
     }
-    child.kill(signal);
+    parentSignalHandlers.length = 0;
+  }
+
+  function relayParentSignal(signal) {
+    const handler = () => {
+      signalChild(signal);
+      signalChild("SIGKILL");
+      cleanupParentSignalHandlers();
+      process.kill(process.pid, signal);
+    };
+    parentSignalHandlers.push({ signal, handler });
+    process.once(signal, handler);
+  }
+
+  if (useProcessGroup) {
+    relayParentSignal("SIGINT");
+    relayParentSignal("SIGTERM");
+    relayParentSignal("SIGHUP");
   }
 
   function processTreeAlive() {
@@ -661,11 +843,15 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   }
 
   async function finishTimedOutProcessTree() {
-    if (!processTreeAlive()) {
-      return;
+    const graceRemainingMs =
+      forceKillAt === null ? TERMINATION_GRACE_MS : Math.max(0, forceKillAt - Date.now());
+    if (graceRemainingMs > 0) {
+      await waitForProcessTreeExit(graceRemainingMs);
     }
-    signalChild("SIGKILL");
-    await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    if (processTreeAlive()) {
+      signalChild("SIGKILL");
+      await waitForProcessTreeExit(POST_FORCE_KILL_WAIT_MS);
+    }
   }
 
   child.stdout?.on("data", (chunk) => {
@@ -704,6 +890,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
           timedOut = true;
           stderr.write(`[tsdown-build] timeout after ${timeoutMs}ms${pidText}; sending SIGTERM\n`);
           signalChild("SIGTERM");
+          forceKillAt = Date.now() + TERMINATION_GRACE_MS;
           setTimeout(() => {
             if (!settled) {
               stderr.write(`[tsdown-build] forcing SIGKILL${pidText}\n`);
@@ -716,6 +903,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
   return new Promise((resolve) => {
     child.once("error", (error) => {
       settled = true;
+      cleanupParentSignalHandlers();
       clearInterval(heartbeat);
       clearTimeout(timeout);
       stderr.write(`[tsdown-build] failed to start: ${String(error)}\n`);
@@ -730,6 +918,7 @@ export async function runTsdownBuildInvocation(invocation, params = {}) {
     child.once("close", (status, signal) => {
       function finish() {
         settled = true;
+        cleanupParentSignalHandlers();
         clearInterval(heartbeat);
         clearTimeout(timeout);
         resolve({
@@ -768,9 +957,21 @@ if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
   pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
-  cleanTsdownOutputRoots();
-  const invocation = resolveTsdownBuildInvocation({ args: args.forwardedArgs });
-  const result = await runTsdownBuildInvocation(invocation);
+  cleanTsdownOutputRoots({ roots: resolveTsdownCleanOutputRoots(args.forwardedArgs) });
+  const invocations = resolveTsdownBuildInvocations({ args: args.forwardedArgs });
+  let result;
+  for (const [index, invocation] of invocations.entries()) {
+    const startedAt = performance.now();
+    result = await runTsdownBuildInvocation(invocation);
+    // Per-invocation timing separates the AI-declarations pass from the main
+    // graph in CI logs; the combined step is otherwise a single opaque cost.
+    console.log(
+      `[tsdown-build] invocation ${index + 1}/${invocations.length} finished in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
+    );
+    if (result.status !== 0 || result.hasIneffectiveDynamicImport || result.fatalUnresolvedImport) {
+      break;
+    }
+  }
 
   if (result.status === 0 && result.hasIneffectiveDynamicImport) {
     console.error(

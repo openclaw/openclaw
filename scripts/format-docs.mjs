@@ -6,13 +6,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRepoToolBinPath } from "./lib/local-heavy-check-runtime.mjs";
 import { repairMintlifyAccordionIndentation } from "./lib/mintlify-accordion.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const CHECK = process.argv.includes("--check");
 const DOCS_FORMAT_MAX_BUFFER_BYTES = 1024 * 1024 * 16;
-export const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
+const DOCS_FORMAT_MAX_COMMAND_LINE_BYTES = 24 * 1024;
 const FAILURE_OUTPUT_TAIL_BYTES = 16 * 1024;
 
 function outputText(value) {
@@ -124,11 +125,11 @@ export function resolveOxfmtInvocation(args, params = {}) {
   const platform = params.platform ?? process.platform;
   const existsSync = params.existsSync ?? fs.existsSync;
   const shimName = platform === "win32" ? "oxfmt.cmd" : "oxfmt";
-  const shimPath = path.join(repoRoot, "node_modules", ".bin", shimName);
+  const shimPath = resolveRepoToolBinPath(shimName, { cwd: repoRoot, fileExists: existsSync });
 
   if (existsSync(shimPath)) {
     if (platform === "win32") {
-      const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+      const comSpec = params.comSpec ?? resolveWindowsCmdExePath(params.env ?? process.env);
       return {
         command: comSpec,
         args: ["/d", "/s", "/c", buildCmdExeCommandLine(shimPath, args)],
@@ -183,7 +184,7 @@ export function runOxfmt(files, params = {}, deps = {}) {
   }
 }
 
-export function repairFiles(root, files) {
+function repairFiles(root, files) {
   const changed = [];
   for (const relativePath of files) {
     const absolutePath = path.join(root, relativePath);

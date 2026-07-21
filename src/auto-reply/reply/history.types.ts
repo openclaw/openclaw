@@ -12,6 +12,6 @@ export type HistoryMediaEntry = {
   path?: string;
   url?: string;
   contentType?: string;
-  kind?: "image" | "video" | "audio" | "document" | "unknown";
+  kind?: import("@openclaw/media-core/constants").MediaKind;
   messageId?: string;
 };

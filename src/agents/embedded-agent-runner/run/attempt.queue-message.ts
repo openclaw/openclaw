@@ -1,16 +1,28 @@
 /**
  * Steers active embedded sessions and waits for transcript commits when needed.
  */
+import { toErrorObject } from "../../../infra/errors.js";
+import type { ImageContent } from "../../../llm/types.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
+import {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+} from "../../harness/gateway-question.js";
 import { log } from "../logger.js";
+import type { EmbeddedAgentQueueMessageOptions } from "../run-state.js";
 
 /**
  * Minimal active-session surface needed to steer a running attempt and observe
  * whether the queued user message reached the transcript.
  */
-export type EmbeddedAgentActiveSessionSteerTarget = {
+type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
-  steer(text: string): Promise<void>;
+  steer(
+    text: string,
+    images?: ImageContent[],
+    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  ): Promise<void>;
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
@@ -89,7 +101,7 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
  * steering list. This targets the exact text so unrelated queued messages keep
  * their payloads and ordering.
  */
-export async function cancelQueuedSteeringMessage(
+async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
 ): Promise<boolean> {
@@ -121,10 +133,12 @@ export async function cancelQueuedSteeringMessage(
  * `message_end` event appears. If the run ends or times out first, the pending
  * queue entry is removed so an abandoned steer does not leak into a later turn.
  */
-export async function steerAndWaitForTranscriptCommit(
+async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
   timeoutMs: number,
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
+  images?: ImageContent[],
 ): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     let settled = false;
@@ -142,7 +156,7 @@ export async function steerAndWaitForTranscriptCommit(
       }
       unsubscribe?.();
       if (err) {
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -205,7 +219,10 @@ export async function steerAndWaitForTranscriptCommit(
         scheduleTerminalCancellation();
       }
     });
-    activeSession.steer(text).catch((err: unknown) => {
+    const steer = userTurnTranscriptRecorder
+      ? activeSession.steer(text, images, userTurnTranscriptRecorder)
+      : activeSession.steer(text, images);
+    steer.catch((err: unknown) => {
       finish(err);
     });
   });
@@ -218,29 +235,46 @@ export async function steerAndWaitForTranscriptCommit(
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  options: { deliveryTimeoutMs?: number; waitForTranscriptCommit?: boolean } | undefined,
+  options: EmbeddedAgentQueueMessageOptions | undefined,
+  sessionKey?: string,
 ): Promise<void> {
+  const isInboundUserMessage = options?.isInboundUserMessage === true;
+  const isPlainTextAnswer = !options?.images?.length;
+  if (isInboundUserMessage && !isPlainTextAnswer) {
+    try {
+      await cancelPendingAgentQuestionForSession({ sessionKey, resolvedBy: "image-reply" });
+    } catch (error) {
+      log.warn(`failed to cancel ask_user before image steering: ${String(error)}`);
+    }
+  }
+  if (
+    isInboundUserMessage &&
+    isPlainTextAnswer &&
+    (await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text,
+      persist: options.userTurnTranscriptRecorder
+        ? async () => {
+            await options.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    }))
+  ) {
+    return;
+  }
   if (options?.waitForTranscriptCommit !== true) {
-    await activeSession.steer(text);
+    if (options?.userTurnTranscriptRecorder) {
+      await activeSession.steer(text, options.images, options.userTurnTranscriptRecorder);
+    } else {
+      await activeSession.steer(text, options?.images);
+    }
     return;
   }
   await steerAndWaitForTranscriptCommit(
     activeSession,
     text,
     options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
+    options.userTurnTranscriptRecorder,
+    options.images,
   );
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -36,11 +36,11 @@ type LoopDetectionResult =
       warningKey?: string;
     };
 
-export const TOOL_CALL_HISTORY_SIZE = 30;
-export const WARNING_THRESHOLD = 10;
+const TOOL_CALL_HISTORY_SIZE = 30;
+const WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
-export const CRITICAL_THRESHOLD = 20;
-export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+const CRITICAL_THRESHOLD = 20;
+const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
@@ -81,52 +81,15 @@ function selectHistoryForScope(
   return history.filter((record) => normalizeRunId(record.runId) === runId);
 }
 
-function asPositiveInt(value: number | undefined, fallback: number): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
-    return fallback;
-  }
-  return value;
-}
-
 function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedLoopDetectionConfig {
-  const warningThreshold = asPositiveInt(
-    config?.warningThreshold,
-    DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
-  );
-  let criticalThreshold = asPositiveInt(
-    config?.criticalThreshold,
-    DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
-  );
-  let globalCircuitBreakerThreshold = asPositiveInt(
-    config?.globalCircuitBreakerThreshold,
-    DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
-  );
-
-  if (criticalThreshold <= warningThreshold) {
-    criticalThreshold = warningThreshold + 1;
-  }
-  if (globalCircuitBreakerThreshold <= criticalThreshold) {
-    globalCircuitBreakerThreshold = criticalThreshold + 1;
-  }
-
   return {
     enabled: config?.enabled ?? DEFAULT_LOOP_DETECTION_CONFIG.enabled,
-    historySize: asPositiveInt(config?.historySize, DEFAULT_LOOP_DETECTION_CONFIG.historySize),
-    warningThreshold,
-    unknownToolThreshold: asPositiveInt(
-      config?.unknownToolThreshold,
-      DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
-    ),
-    criticalThreshold,
-    globalCircuitBreakerThreshold,
-    detectors: {
-      genericRepeat:
-        config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
-      knownPollNoProgress:
-        config?.detectors?.knownPollNoProgress ??
-        DEFAULT_LOOP_DETECTION_CONFIG.detectors.knownPollNoProgress,
-      pingPong: config?.detectors?.pingPong ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.pingPong,
-    },
+    historySize: DEFAULT_LOOP_DETECTION_CONFIG.historySize,
+    warningThreshold: DEFAULT_LOOP_DETECTION_CONFIG.warningThreshold,
+    unknownToolThreshold: DEFAULT_LOOP_DETECTION_CONFIG.unknownToolThreshold,
+    criticalThreshold: DEFAULT_LOOP_DETECTION_CONFIG.criticalThreshold,
+    globalCircuitBreakerThreshold: DEFAULT_LOOP_DETECTION_CONFIG.globalCircuitBreakerThreshold,
+    detectors: DEFAULT_LOOP_DETECTION_CONFIG.detectors,
   };
 }
 
@@ -134,7 +97,7 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
  * Hash a tool call for pattern matching.
  * Uses tool name + deterministic JSON serialization digest of params.
  */
-export function hashToolCall(toolName: string, params: unknown): string {
+function hashToolCall(toolName: string, params: unknown): string {
   return `${toolName}:${digestStable(params)}`;
 }
 
@@ -817,39 +780,4 @@ export function recordToolCallOutcome(
     state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
   return recordedOutcome;
-}
-
-/**
- * Get current tool call statistics for a session (for debugging/monitoring).
- */
-export function getToolCallStats(state: SessionState): {
-  totalCalls: number;
-  uniquePatterns: number;
-  mostFrequent: { toolName: string; count: number } | null;
-} {
-  const history = state.toolCallHistory ?? [];
-  const patterns = new Map<string, { toolName: string; count: number }>();
-
-  for (const call of history) {
-    const key = call.argsHash;
-    const existing = patterns.get(key);
-    if (existing) {
-      existing.count += 1;
-    } else {
-      patterns.set(key, { toolName: call.toolName, count: 1 });
-    }
-  }
-
-  let mostFrequent: { toolName: string; count: number } | null = null;
-  for (const pattern of patterns.values()) {
-    if (!mostFrequent || pattern.count > mostFrequent.count) {
-      mostFrequent = pattern;
-    }
-  }
-
-  return {
-    totalCalls: history.length,
-    uniquePatterns: patterns.size,
-    mostFrequent,
-  };
 }

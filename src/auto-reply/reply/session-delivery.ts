@@ -19,7 +19,7 @@ import {
 } from "../../utils/message-channel.js";
 import type { MsgContext } from "../templating.js";
 
-export type LegacyMainDeliveryRetirement = {
+type LegacyMainDeliveryRetirement = {
   key: string;
   entry: SessionEntry;
 };
@@ -184,7 +184,7 @@ export function resolveLastToRaw(params: {
 export function maybeRetireLegacyMainDeliveryRoute(params: {
   sessionCfg: { dmScope?: string } | undefined;
   sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
+  legacyMain?: SessionEntry;
   agentId: string;
   mainKey: string;
   isGroup: boolean;
@@ -201,7 +201,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
   if (params.sessionKey === canonicalMainSessionKey) {
     return undefined;
   }
-  const legacyMain = params.sessionStore[canonicalMainSessionKey];
+  const legacyMain = params.legacyMain;
   if (!legacyMain) {
     return undefined;
   }

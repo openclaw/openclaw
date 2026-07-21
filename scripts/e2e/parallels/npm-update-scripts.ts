@@ -18,9 +18,10 @@ import {
 } from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
-export interface NpmUpdateScriptInput {
+interface NpmUpdateScriptInput {
   auth: ProviderAuth;
   expectedNeedle: string;
+  npmRegistry?: string;
   updateTarget: string;
 }
 
@@ -28,6 +29,14 @@ const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\
 const macosGuestPath =
   "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
 const macosOpenClawCommand = '"$OPENCLAW_BIN"';
+
+function posixNpmRegistryEnv(registry: string | undefined): string {
+  if (!registry) {
+    return "";
+  }
+  const quoted = shellQuote(registry);
+  return `NPM_CONFIG_REGISTRY=${quoted} npm_config_registry=${quoted} `;
+}
 
 function posixModelProviderConfigCommands(
   command: string,
@@ -71,7 +80,12 @@ function posixPrintLogTailFunction(): string {
 }`;
 }
 
-function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
+function posixAssertAgentOkScript(
+  command: string,
+  input: NpmUpdateScriptInput,
+  platform: Extract<Platform, "linux" | "macos">,
+  sessionId: string,
+) {
   return `${posixProviderOnlyPluginIsolationScript({
     fallbackPluginId: input.auth.modelId.split("/", 1)[0] || "openai",
     modelId: input.auth.modelId,
@@ -84,7 +98,7 @@ for attempt in 1 2; do
   rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
   output_file="$(mktemp)"
   set +e
-  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --json >"$output_file" 2>&1
+  OPENCLAW_ALLOW_ROOT="\${OPENCLAW_ALLOW_ROOT:-}" ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking off --timeout ${resolveParallelsModelTimeoutSeconds(platform)} --json >"$output_file" 2>&1
   rc=$?
   set -e
   print_log_tail "$output_file"
@@ -115,8 +129,11 @@ fi`;
 }
 
 function windowsUpdateWithBundledPluginsDisabled(input: NpmUpdateScriptInput): string {
+  const registryEntry = input.npmRegistry
+    ? `; NPM_CONFIG_REGISTRY = ${psSingleQuote(input.npmRegistry)}`
+    : "";
   return `$script:OpenClawUpdateExit = 0
-$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'; OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1' } {
+$updateOutput = Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'; OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'${registryEntry} } {
   Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
   $script:OpenClawUpdateExit = $LASTEXITCODE
 }
@@ -250,7 +267,7 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck(macosOpenClawCommand, input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
@@ -259,7 +276,7 @@ ${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "ma
 "$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
 "$OPENCLAW_BIN" config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript(macosOpenClawCommand, input, "parallels-npm-update-macos")}`;
+${posixAssertAgentOkScript(macosOpenClawCommand, input, "macos", "parallels-npm-update-macos")}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -270,51 +287,47 @@ ${windowsScopedEnvFunction}
 function Remove-FuturePluginEntries {
   $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
   if (-not (Test-Path $configPath)) { return }
-  try { $config = Get-Content $configPath -Raw | ConvertFrom-Json } catch { return }
-  $plugins = Get-OpenClawJsonProperty $config 'plugins'
-  if ($null -eq $plugins) { return }
-  $entries = Get-OpenClawJsonProperty $plugins 'entries'
-  if ($null -ne $entries) {
-    foreach ($pluginId in @('feishu', 'whatsapp', 'openai')) {
-      Remove-OpenClawJsonProperty $entries $pluginId
+  $nodeScript = @'
+const fs = require("node:fs");
+const configPath = process.argv[2];
+let config;
+try {
+  config = JSON.parse(fs.readFileSync(configPath, "utf8").replace(/^\\uFEFF/u, ""));
+} catch {
+  process.exit(0);
+}
+const plugins = config.plugins;
+if (!plugins || typeof plugins !== "object") {
+  process.exit(0);
+}
+const futurePluginIds = new Set(["feishu", "whatsapp", "openai"]);
+let changed = false;
+if (plugins.entries && typeof plugins.entries === "object") {
+  for (const pluginId of futurePluginIds) {
+    if (Object.hasOwn(plugins.entries, pluginId)) {
+      delete plugins.entries[pluginId];
+      changed = true;
     }
   }
-  $allow = Get-OpenClawJsonProperty $plugins 'allow'
-  if ($allow -is [array]) {
-    Set-OpenClawJsonProperty $plugins 'allow' @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
-  }
-  $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
 }
-function Get-OpenClawJsonProperty {
-  param([object]$Object, [string]$Name)
-  if ($null -eq $Object) { return $null }
-  if ($Object -is [System.Collections.IDictionary]) { return $Object[$Name] }
-  $property = $Object.PSObject.Properties[$Name]
-  if ($null -eq $property) { return $null }
-  return $property.Value
+if (Array.isArray(plugins.allow)) {
+  const allow = plugins.allow.filter((pluginId) => !futurePluginIds.has(pluginId));
+  if (allow.length !== plugins.allow.length) {
+    plugins.allow = allow;
+    changed = true;
+  }
 }
-function Set-OpenClawJsonProperty {
-  param([object]$Object, [string]$Name, [object]$Value)
-  if ($Object -is [System.Collections.IDictionary]) {
-    $Object[$Name] = $Value
-    return
-  }
-  $property = $Object.PSObject.Properties[$Name]
-  if ($null -ne $property) {
-    $property.Value = $Value
-    return
-  }
-  $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+if (changed) {
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
 }
-function Remove-OpenClawJsonProperty {
-  param([object]$Object, [string]$Name)
-  if ($null -eq $Object) { return }
-  if ($Object -is [System.Collections.IDictionary]) {
-    if ($Object.Contains($Name)) { $Object.Remove($Name) }
-    return
-  }
-  if ($null -ne $Object.PSObject.Properties[$Name]) {
-    $Object.PSObject.Properties.Remove($Name)
+'@
+  $nodeScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ('openclaw-future-plugin-scrub-' + [guid]::NewGuid().ToString('N') + '.cjs')
+  try {
+    $nodeScript | Set-Content -Path $nodeScriptPath -Encoding UTF8
+    & node.exe $nodeScriptPath $configPath
+    if ($LASTEXITCODE -ne 0) { throw "failed to scrub future plugin entries" }
+  } finally {
+    Remove-Item $nodeScriptPath -Force -ErrorAction SilentlyContinue
   }
 }
 function Stop-OpenClawGatewayProcesses {
@@ -394,7 +407,7 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixNpmRegistryEnv(input.npmRegistry)}OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
@@ -403,7 +416,7 @@ ${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("openclaw", input, "parallels-npm-update-linux")}`;
+${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-linux")}`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {

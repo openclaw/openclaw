@@ -11,6 +11,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 
 type WatchIgnoredFn = (watchPath: string, stats?: { isDirectory?: () => boolean }) => boolean;
 
+const BUILT_IN_WATCH_DEBOUNCE_MS = 1_500;
+
 const {
   createdChokidarWatchers,
   createdNativeWatchers,
@@ -121,6 +123,19 @@ const {
 
 const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const NATIVE_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+const originalWatcherStateDir = process.env.OPENCLAW_STATE_DIR;
+
+function setWatcherStateDir(stateDir: string): void {
+  Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+}
+
+function restoreWatcherStateDir(): void {
+  if (originalWatcherStateDir === undefined) {
+    Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
+  } else {
+    Reflect.set(process.env, "OPENCLAW_STATE_DIR", originalWatcherStateDir);
+  }
+}
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
   const actual =
@@ -154,16 +169,12 @@ vi.mock("./embeddings.js", () => ({
   }),
 }));
 
-import {
-  clearMemoryEmbeddingProviders as clearRegistry,
-  registerMemoryEmbeddingProvider as registerAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   closeAllMemorySearchManagers,
   getMemorySearchManager,
   type MemoryIndexManager,
 } from "./index.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 describe("memory watcher config", () => {
   let manager: MemoryIndexManager | null = null;
@@ -176,7 +187,6 @@ describe("memory watcher config", () => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
     vi.clearAllMocks();
     clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     nativeWatchMockFailingDir.current = null;
   });
 
@@ -199,6 +209,7 @@ describe("memory watcher config", () => {
     }
     await closeAllMemorySearchManagers();
     clearRegistry();
+    restoreWatcherStateDir();
     if (workspaceDir) {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       workspaceDir = "";
@@ -208,6 +219,7 @@ describe("memory watcher config", () => {
 
   async function setupWatcherWorkspace(seedFile: { name: string; contents: string }) {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    setWatcherStateDir(path.join(workspaceDir, "state"));
     extraDir = path.join(workspaceDir, "extra");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
@@ -220,8 +232,8 @@ describe("memory watcher config", () => {
       memorySearch: {
         provider: "openai",
         model: "mock-embed",
-        store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
-        sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+        store: { vector: { enabled: false } },
+        sync: { watch: true, onSessionStart: false, onSearch: false },
         query: { minScore: 0, hybrid: { enabled: false } },
         extraPaths: [extraDir],
         ...overrides,
@@ -370,7 +382,7 @@ describe("memory watcher config", () => {
         .mockResolvedValue(undefined);
 
       createdChokidarWatchers[0]?.emit(event);
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
@@ -397,7 +409,7 @@ describe("memory watcher config", () => {
         (w) => w.dir === path.join(workspaceDir, "memory"),
       );
       memoryWatcher?.emit(eventType, "notes.md");
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     },
@@ -424,7 +436,7 @@ describe("memory watcher config", () => {
     // Node docs warn that filename may be null on some platforms; conservative
     // dirty must still be scheduled.
     memoryWatcher?.emit("rename", null as unknown as string);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
@@ -485,7 +497,7 @@ describe("memory watcher config", () => {
     );
 
     memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
     expect(memoryLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining("memory native watcher error"),
@@ -501,7 +513,7 @@ describe("memory watcher config", () => {
     // continues to schedule sync.
     syncSpy.mockClear();
     existingChokidar?.emit("change");
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
   });
 
@@ -601,7 +613,7 @@ describe("memory watcher config", () => {
       await fs.mkdir(newDir);
       const memoryWatcher = createdNativeWatchers.find((w) => w.dir === memoryDir);
       memoryWatcher?.emit("rename", "new-topic");
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
       expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
       expect(
@@ -995,10 +1007,10 @@ describe("memory watcher config", () => {
     extraWatcher?.emit("change", "notes.md");
     await fs.writeFile(notesPath, "hello updated");
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(syncSpy).not.toHaveBeenCalled();
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(syncSpy).toHaveBeenCalledWith({ reason: "watch" });
     // Recorded path should match the resolved absolute path under extraDir.
     const recordedStats = (initialStats as unknown as { isDirectory: () => boolean }).isDirectory();

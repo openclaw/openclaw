@@ -1,6 +1,7 @@
 // Configure wizard tests cover guided setup routing across gateway, auth, channels, skills, and search.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => {
   const writeConfigFile = vi.fn();
@@ -33,7 +34,10 @@ const mocks = vi.hoisted(() => {
     printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(),
+    resolveAdvertisedControlUiLinks: vi.fn(),
     resolveControlUiLinks: vi.fn(),
+    resolveLocalControlUiProbeLinks: vi.fn(),
+    inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -45,6 +49,7 @@ const mocks = vi.hoisted(() => {
       Boolean(config.auth?.profiles?.["openai:default"]),
     ),
     setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
+    guardCancel: vi.fn((value: unknown, _runtime: RuntimeEnv, _exitCode?: number) => value),
   };
 });
 
@@ -89,6 +94,16 @@ vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
 }));
 
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: mocks.inspectWindowsGatewayFirewall,
+  formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
+    params.bind === "lan"
+      ? [
+          "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
+        ]
+      : [],
+}));
+
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: mocks.createClackPrompter,
 }));
@@ -101,10 +116,12 @@ vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "~/.openclaw/workspace",
   applyWizardMetadata: (cfg: OpenClawConfig) => cfg,
   ensureWorkspaceAndSessions: vi.fn(),
-  guardCancel: <T>(value: T) => value,
+  guardCancel: mocks.guardCancel,
   printWizardHeader: mocks.printWizardHeader,
   probeGatewayReachable: mocks.probeGatewayReachable,
+  resolveAdvertisedControlUiLinks: mocks.resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: mocks.resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks: mocks.resolveLocalControlUiProbeLinks,
   summarizeExistingConfig: mocks.summarizeExistingConfig,
   waitForGatewayReachable: mocks.waitForGatewayReachable,
 }));
@@ -220,6 +237,21 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   mocks.resolveGatewayPort.mockReturnValue(18789);
   mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
   mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+  mocks.resolveLocalControlUiProbeLinks.mockReturnValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
+  mocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
+  mocks.inspectWindowsGatewayFirewall.mockResolvedValue({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
+  });
   mocks.summarizeExistingConfig.mockReturnValue("");
   mocks.createClackPrompter.mockReturnValue({
     intro: vi.fn(async () => {}),
@@ -316,6 +348,8 @@ describe("runConfigureWizard", () => {
       config: cfg,
       port: 18789,
     }));
+    mocks.guardCancel.mockReset();
+    mocks.guardCancel.mockImplementation((value: unknown) => value);
   });
 
   it("persists gateway.mode=local when only the run mode is selected", async () => {
@@ -349,12 +383,7 @@ describe("runConfigureWizard", () => {
         },
       },
     });
-    queueWizardPrompts({
-      select: ["local", "__continue"],
-      confirm: [],
-    });
-
-    await runConfigureWizard({ command: "configure" }, createRuntime());
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
 
     const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
       requireRecord(request, "probe request"),
@@ -368,6 +397,89 @@ describe("runConfigureWizard", () => {
     expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
+  it("uses the resolved configured port for the local gateway startup hint", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        port: 18991,
+      },
+    });
+    mocks.resolveGatewayPort.mockReturnValue(18991);
+    mocks.probeGatewayReachable
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValue({ ok: false });
+    mocks.clackSelect.mockResolvedValue("local");
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18991", timeoutMs: 300 }),
+    );
+    expect(mocks.clackSelect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Where will the Gateway run?",
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            value: "local",
+            hint: "Gateway reachable (ws://127.0.0.1:18991)",
+          }),
+        ]),
+      }),
+    );
+  });
+
+  it("advertises LAN Control UI links while probing the local gateway", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "token" },
+      },
+    });
+    mocks.resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
+      httpUrl: "http://10.211.55.3:18789/",
+      wsUrl: "ws://10.211.55.3:18789",
+    });
+    mocks.resolveLocalControlUiProbeLinks.mockReturnValueOnce({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Web UI: http://10.211.55.3:18789/"),
+      "Control UI",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway WS: ws://10.211.55.3:18789"),
+      "Control UI",
+    );
+  });
+
+  it("shows static Windows Firewall guidance for LAN Gateway links without inspection", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "token" },
+      },
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Windows firewall: if another device cannot connect to the LAN URL"),
+      "Control UI",
+    );
+  });
+
   it("exits with code 1 when configure wizard is cancelled", async () => {
     const runtime = createRuntime();
     setupBaseWizardState();
@@ -376,6 +488,24 @@ describe("runConfigureWizard", () => {
     await runConfigureWizard({ command: "configure" }, runtime);
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("uses nonzero exit semantics for cancellation at the first direct Clack prompt", async () => {
+    const runtime = createRuntime();
+    setupBaseWizardState();
+    mocks.guardCancel.mockImplementationOnce(
+      (_value: unknown, promptRuntime: RuntimeEnv, exitCode?: number) => {
+        promptRuntime.exit(exitCode ?? 0);
+        throw new Error("direct prompt cancelled");
+      },
+    );
+
+    await expect(runConfigureWizard({ command: "configure" }, runtime)).rejects.toThrow(
+      "direct prompt cancelled",
+    );
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not gate model-only configure behind Gateway run-mode selection", async () => {
@@ -420,15 +550,25 @@ describe("runConfigureWizard", () => {
 
   it("persists provider-owned web search config changes returned by setupSearch", async () => {
     setupBaseWizardState();
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
-      createEnabledWebSearchConfig("firecrawl", {
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => {
+      const configured = createEnabledWebSearchConfig("firecrawl", {
         enabled: true,
         config: { webSearch: { apiKey: "fc-entered-key" } },
-      })(cfg),
-    );
+      })(cfg);
+      return {
+        ...configured,
+        tools: {
+          ...configured.tools,
+          web: {
+            ...configured.tools?.web,
+            fetch: { provider: "firecrawl" },
+          },
+        },
+      };
+    });
     queueWizardPrompts({
       select: [],
-      confirm: [true, false],
+      confirm: [true, true],
     });
 
     await runWebConfigureWizard();
@@ -442,6 +582,12 @@ describe("runConfigureWizard", () => {
     const search = getWebSearch(written);
     expect(search.provider).toBe("firecrawl");
     expect(search.enabled).toBe(true);
+    const tools = requireRecord(written.tools, "tools config");
+    const web = requireRecord(tools.web, "web config");
+    expect(requireRecord(web.fetch, "web fetch config")).toEqual({
+      enabled: true,
+      provider: "firecrawl",
+    });
     const firecrawl = getPluginEntry(written, "firecrawl");
     expect(firecrawl.enabled).toBe(true);
     const firecrawlConfig = requireRecord(firecrawl.config, "firecrawl config");
@@ -449,6 +595,45 @@ describe("runConfigureWizard", () => {
       "fc-entered-key",
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
+    expect(mocks.setupSearch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      { preserveDisabledSearchState: false },
+    );
+  });
+
+  it("keeps web_search disabled when provider setup has no credential", async () => {
+    setupBaseWizardState();
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      tools: {
+        ...cfg.tools,
+        web: {
+          ...cfg.tools?.web,
+          fetch: { provider: "firecrawl" },
+          search: { enabled: false, provider: "firecrawl" },
+        },
+      },
+    }));
+    queueWizardPrompts({
+      select: [],
+      confirm: [true, true],
+    });
+
+    await runWebConfigureWizard();
+
+    const written = requireWriteConfig();
+    expect(getWebSearch(written)).toMatchObject({
+      enabled: false,
+      provider: "firecrawl",
+    });
+    const tools = requireRecord(written.tools, "tools config");
+    const web = requireRecord(tools.web, "web config");
+    expect(requireRecord(web.fetch, "web fetch config")).toEqual({
+      enabled: true,
+      provider: "firecrawl",
+    });
   });
 
   it("notes unavailable web search providers under plugin policy", async () => {

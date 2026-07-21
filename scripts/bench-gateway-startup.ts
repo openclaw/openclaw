@@ -5,16 +5,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 import { delay, stopChild } from "./lib/gateway-bench-child.ts";
 import {
-  classifyProbeErrorKind,
   getFreePort,
   parseProcessRssKb,
   readProcessRssMb,
   readProcessTreeCpuMs,
   requestProbeStatus,
 } from "./lib/gateway-bench-probes.ts";
+import { selectSlowStartupTraceDurations } from "./lib/gateway-startup-trace-ranking.js";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -108,6 +109,20 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const BOOLEAN_FLAGS = new Set(["--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--cpu-prof-dir",
+  "--entry",
+  "--output",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -187,9 +202,31 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
 function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
   const value = argv[index + 1];
   if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
+    throw new CliArgumentError(`${flag} requires a value`);
   }
   return value;
+}
+
+function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseFlagValue(argv: string[], flag: string): string | undefined {
@@ -254,6 +291,13 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [...GATEWAY_CASES];
   }
+  const seenIds = new Set<string>();
+  for (const id of caseIds) {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
+  }
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
     const benchCase = byId.get(id);
@@ -265,6 +309,7 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
 }
 
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
     cases: resolveCases(parseRepeatableFlag(argv, "--case")),
     cpuProfDir: parseFlagValue(argv, "--cpu-prof-dir"),
@@ -308,7 +353,11 @@ function median(values: number[]): number {
   const sorted = [...values].toSorted((a, b) => a - b);
   const middle = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
-    return (sorted[middle - 1] + sorted[middle]) / 2;
+    return (
+      (expectDefined(sorted[middle - 1], "lower middle gateway startup sample") +
+        expectDefined(sorted[middle], "upper middle gateway startup sample")) /
+      2
+    );
   }
   return sorted[middle] ?? 0;
 }
@@ -492,7 +541,7 @@ function formatStats(stats: SummaryStats | null): string {
   return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
 }
 
-function formatMemoryStats(stats: SummaryStats | null): string {
+function formatMemoryStats(stats: SummaryStats | null | undefined): string {
   if (!stats) {
     return "n/a";
   }
@@ -504,13 +553,6 @@ function formatRatioStats(stats: SummaryStats | null): string {
     return "n/a";
   }
   return `p50=${formatRatio(stats.p50)} avg=${formatRatio(stats.avg)} min=${formatRatio(stats.min)} max=${formatRatio(stats.max)}`;
-}
-
-function getStartupTraceStat(
-  startupTrace: Record<string, SummaryStats>,
-  key: string,
-): SummaryStats | null {
-  return startupTrace[key] ?? null;
 }
 
 async function waitForProbe(params: {
@@ -651,10 +693,13 @@ function sanitizedEnv(
 function collectStartupTrace(line: string, startupTrace: Record<string, number>): void {
   const phaseMatch = /startup trace: ([^ ]+) ([0-9.]+)ms total=([0-9.]+)ms(?: (.*))?/u.exec(line);
   if (phaseMatch) {
-    startupTrace[phaseMatch[1]] = Number(phaseMatch[2]);
-    startupTrace[`${phaseMatch[1]}.total`] = Number(phaseMatch[3]);
+    const phase = expectDefined(phaseMatch[1], "gateway startup trace phase name");
+    startupTrace[phase] = Number(expectDefined(phaseMatch[2], `${phase} startup duration`));
+    startupTrace[`${phase}.total`] = Number(
+      expectDefined(phaseMatch[3], `${phase} total startup duration`),
+    );
     for (const metric of parseStartupTraceMetrics(phaseMatch[4] ?? "")) {
-      startupTrace[`${phaseMatch[1]}.${metric.key}`] = metric.value;
+      startupTrace[`${phase}.${metric.key}`] = metric.value;
     }
     return;
   }
@@ -662,8 +707,10 @@ function collectStartupTrace(line: string, startupTrace: Record<string, number>)
   if (!detailMatch) {
     return;
   }
-  for (const metric of parseStartupTraceMetrics(detailMatch[2])) {
-    startupTrace[`${detailMatch[1]}.${metric.key}`] = metric.value;
+  const phase = expectDefined(detailMatch[1], "gateway startup detail phase name");
+  const detail = expectDefined(detailMatch[2], `${phase} startup detail metrics`);
+  for (const metric of parseStartupTraceMetrics(detail)) {
+    startupTrace[`${phase}.${metric.key}`] = metric.value;
   }
 }
 
@@ -684,8 +731,8 @@ function parseStartupTraceMetrics(raw: string): Array<{ key: string; value: numb
     if (!metricMatch) {
       continue;
     }
-    const key = metricMatch[1];
-    const value = Number(metricMatch[2]);
+    const key = expectDefined(metricMatch[1], "gateway startup trace metric key");
+    const value = Number(expectDefined(metricMatch[2], `${key} startup trace metric value`));
     if (
       !Number.isFinite(value) ||
       (key !== "eventLoopMax" &&
@@ -886,15 +933,12 @@ function printResult(result: CaseResult): void {
   console.log(`  /readyz:      ${formatStats(result.summary.readyzMs)}`);
   console.log(`  max RSS:      ${formatMemoryStats(result.summary.maxRssMb)}`);
   console.log(
-    `  ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.ready.externalMb"))}`,
+    `  ready memory: rss=${formatMemoryStats(result.summary.startupTrace["memory.ready.rssMb"])} heap=${formatMemoryStats(result.summary.startupTrace["memory.ready.heapUsedMb"])} external=${formatMemoryStats(result.summary.startupTrace["memory.ready.externalMb"])}`,
   );
   console.log(
-    `  post-ready memory: rss=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.rssMb"))} heap=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.heapUsedMb"))} external=${formatMemoryStats(getStartupTraceStat(result.summary.startupTrace, "memory.post-ready.externalMb"))}`,
+    `  post-ready memory: rss=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.rssMb"])} heap=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.heapUsedMb"])} external=${formatMemoryStats(result.summary.startupTrace["memory.post-ready.externalMb"])}`,
   );
-  const trace = Object.entries(result.summary.startupTrace)
-    .filter(([name]) => !name.endsWith(".total") && !name.startsWith("memory."))
-    .toSorted((a, b) => (b[1].avg ?? 0) - (a[1].avg ?? 0))
-    .slice(0, 8);
+  const trace = selectSlowStartupTraceDurations(result.summary.startupTrace, 8);
   if (trace.length > 0) {
     console.log("  trace top:");
     for (const [name, stats] of trace) {
@@ -954,7 +998,6 @@ async function main() {
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectResultFailures,
   collectStartupTrace,
   parseOptions,
@@ -965,14 +1008,19 @@ export const testing = {
   sanitizedEnv,
   stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForProbe,
   writeConfig,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });
 }
-export { testing as __testing };

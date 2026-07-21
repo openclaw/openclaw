@@ -1,6 +1,8 @@
 // Whatsapp tests cover quoted message plugin behavior.
+import { generateWAMessageFromContent } from "baileys";
 import { describe, expect, it } from "vitest";
 import {
+  buildQuotedMessageOptions,
   cacheInboundMessageMeta,
   lookupInboundMessageMeta,
   lookupInboundMessageMetaForTarget,
@@ -69,6 +71,56 @@ describe("quoted message metadata cache", () => {
       body: "hello from e164 participant",
       fromMe: undefined,
     });
+  });
+
+  it("lets Baileys encode the self participant for a cached outbound quote (#91445)", () => {
+    const remoteJid = "120363400000000000@g.us";
+    const userJid = "15551112222@s.whatsapp.net";
+    cacheInboundMessageMeta("account-self", remoteJid, "bot-msg-1", {
+      fromMe: true,
+      body: "bot reply text",
+    });
+    const cached = lookupInboundMessageMeta("account-self", remoteJid, "bot-msg-1");
+    const quoteOptions = buildQuotedMessageOptions({
+      messageId: "bot-msg-1",
+      remoteJid,
+      fromMe: cached?.fromMe,
+      participant: cached?.participant,
+      messageText: cached?.body,
+    });
+    if (!quoteOptions) {
+      throw new Error("expected quote options");
+    }
+
+    const encoded = generateWAMessageFromContent(
+      remoteJid,
+      { extendedTextMessage: { text: "user reply" } },
+      { ...quoteOptions, userJid },
+    );
+
+    expect(quoteOptions.quoted?.key.participant).toBeUndefined();
+    expect(encoded.message?.extendedTextMessage?.contextInfo).toMatchObject({
+      participant: userJid,
+      stanzaId: "bot-msg-1",
+      quotedMessage: { conversation: "bot reply text" },
+    });
+  });
+
+  it("renders a cached structured media fact into the quote preview", () => {
+    const remoteJid = "15551112222@s.whatsapp.net";
+    cacheInboundMessageMeta("account-media", remoteJid, "media-msg-1", {
+      body: "",
+      media: { contentType: "image/webp", kind: "sticker" },
+    });
+    const cached = lookupInboundMessageMeta("account-media", remoteJid, "media-msg-1");
+    const quoteOptions = buildQuotedMessageOptions({
+      messageId: "media-msg-1",
+      remoteJid,
+      messageText: cached?.body,
+      media: cached?.media,
+    });
+
+    expect(quoteOptions?.quoted?.message).toEqual({ conversation: "<media:sticker>" });
   });
 
   it("does not recover metadata from another chat when the target conversation differs", () => {

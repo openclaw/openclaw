@@ -2,12 +2,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNestedAgentLaneForSession } from "../agents/lanes.js";
 import { resolveReplyOperationRunState } from "../auto-reply/reply/reply-operation-run-state.js";
-import {
-  __testing as replyRunRegistryTesting,
-  createReplyOperation,
-} from "../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
+import { testing as replyRunRegistryTesting } from "../auto-reply/reply/reply-run-registry.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { markCronJobActive, resetCronActiveJobsForTests } from "../cron/active-jobs.js";
+import { markCronJobActive, resetCronActiveJobs } from "../cron/active-jobs.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { CommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -48,7 +46,7 @@ afterAll(() => {
 
 beforeEach(() => {
   resetSystemEventsForTest();
-  resetCronActiveJobsForTests();
+  resetCronActiveJobs();
   replyRunRegistryTesting.resetReplyRunRegistry();
 });
 
