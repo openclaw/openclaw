@@ -309,6 +309,9 @@ describe("cross-OS release checks workflow", () => {
     expect(binding.run).toContain("actions/runs/${tuple.runId}/attempts/${tuple.runAttempt}");
     expect(binding.run).toContain("String(attempt.run_attempt) !== tuple.runAttempt");
 
+    expect(binding.run).toContain("const ARTIFACT_API_TIMEOUT_MS = 30_000;");
+    expect(binding.run).toContain("signal: AbortSignal.timeout(ARTIFACT_API_TIMEOUT_MS)");
+
     for (const name of ["Download candidate artifact", "Retry candidate artifact download"]) {
       const download = step(consumer, name);
       expect(download.with?.["artifact-ids"], name).toBe(

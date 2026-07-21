@@ -805,8 +805,11 @@ jobs:
             });
           }
 
+          const ARTIFACT_API_TIMEOUT_MS = 30_000;
+
           const request = async (path) => {
             const response = await fetch(`${apiUrl}/repos/${repository}/${path}`, {
+              signal: AbortSignal.timeout(ARTIFACT_API_TIMEOUT_MS),
               headers: {
                 Accept: "application/vnd.github+json",
                 Authorization: `Bearer ${token}`,
