@@ -217,8 +217,8 @@ vi.mock("../../agents/session-write-lock.js", async () => {
   };
 });
 
-vi.mock("../../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(async () => [
+vi.mock("../../agents/prepared-model-catalog.js", () => ({
+  loadPreparedModelCatalog: vi.fn(async () => [
     { provider: "minimax", id: "m2.7", name: "M2.7" },
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
@@ -2078,6 +2078,54 @@ describe("initSessionState RawBody", () => {
     });
 
     expect(result.sessionKey).toBe(boundSessionKey);
+  });
+
+  it("does not apply a source admission id to a bound conversation target", async () => {
+    setMinimalCurrentConversationBindingRegistryForTests();
+    registerCurrentConversationBindingAdapterForTest({
+      channel: "slack",
+      accountId: "default",
+    });
+    const storePath = await createStorePath("openclaw-bound-admission-id-");
+    const sourceSessionKey = "agent:main:slack:source";
+    const sourceSessionId = "source-admission-session";
+    const boundSessionKey = "plugin-binding:codex:bound-target";
+    const boundSessionId = "bound-target-session";
+    await writeSessionStoreFast(storePath, {
+      [sourceSessionKey]: { sessionId: sourceSessionId, updatedAt: Date.now() },
+      [boundSessionKey]: { sessionId: boundSessionId, updatedAt: Date.now() },
+    });
+    await getSessionBindingService().bind({
+      targetSessionKey: boundSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello",
+        SessionKey: sourceSessionKey,
+        Provider: "slack",
+        Surface: "slack",
+        From: "slack:user:U123",
+        To: "user:U123",
+        OriginatingTo: "user:U123",
+        SenderId: "U123",
+        ChatType: "direct",
+      },
+      cfg: { session: { store: storePath } } as OpenClawConfig,
+      commandAuthorized: true,
+      expectedExistingSessionId: sourceSessionId,
+      pinExpectedExistingSession: true,
+    });
+
+    expect(result.sessionKey).toBe(boundSessionKey);
+    expect(result.sessionId).toBe(boundSessionId);
+    expect(result.isNewSession).toBe(false);
   });
 });
 

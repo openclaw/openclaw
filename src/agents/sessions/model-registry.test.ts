@@ -3,12 +3,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  defaultApiRegistry,
-  getApiProvider,
-  registerApiProvider,
-  unregisterApiProviders,
-} from "@openclaw/ai/internal/runtime";
+import { getApiProvider } from "@openclaw/ai/internal/runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "../plugin-model-catalog.js";
 import { AuthStorage } from "./auth-storage.js";
@@ -179,6 +174,119 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getError()).toBeUndefined();
     expect(registry.getAvailable()).toEqual([model]);
     await expect(registry.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
+  });
+
+  it("forks a catalog with request-isolated auth and provider mutations", async () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        custom: {
+          baseUrl: "https://models.example/v1",
+          api: "openai-responses",
+          models: [{ id: "example-model" }],
+        },
+      },
+    });
+    const template = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    const firstAuth = AuthStorage.inMemory();
+    const secondAuth = AuthStorage.inMemory();
+    const first = template.fork(firstAuth);
+    const second = template.fork(secondAuth);
+
+    firstAuth.setRuntimeApiKey("custom", "first-runtime-key");
+    secondAuth.setRuntimeApiKey("custom", "second-runtime-key");
+    first.registerProvider("first-only", oauthProviderConfig("First only", "first"));
+
+    await expect(first.getApiKeyForProvider("custom")).resolves.toBe("first-runtime-key");
+    await expect(second.getApiKeyForProvider("custom")).resolves.toBe("second-runtime-key");
+    expect(secondAuth.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+      "first-only",
+    );
+    expect(template.authStorage.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+      "first-only",
+    );
+
+    const firstModel = first.find("custom", "example-model");
+    const secondModel = second.find("custom", "example-model");
+    expect(firstModel).toBeDefined();
+    expect(secondModel).toBeDefined();
+    firstModel!.input.push("image");
+    firstModel!.cost.input = 42;
+    expect(secondModel!.input).toEqual(["text"]);
+    expect(secondModel!.cost.input).toBe(0);
+    expect(template.find("custom", "example-model")!.input).toEqual(["text"]);
+    expect(template.find("custom", "example-model")!.cost.input).toBe(0);
+
+    first.unregisterProvider("first-only");
+    expect(first.find("custom", "example-model")).toBeDefined();
+  });
+
+  it("preserves models.json provider auth in a catalog fork", async () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        custom: {
+          baseUrl: "https://models.example/v1",
+          api: "openai-responses",
+          apiKey: "test-token-placeholder",
+          models: [{ id: "example-model" }],
+        },
+      },
+    });
+    const template = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    const fork = template.fork(AuthStorage.inMemory());
+    const model = fork.find("custom", "example-model");
+
+    expect(model).toBeDefined();
+    await expect(fork.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
+    await expect(fork.getApiKeyAndHeaders(model!)).resolves.toEqual({
+      ok: true,
+      apiKey: "test-token-placeholder",
+      headers: undefined,
+    });
+  });
+
+  it("does not restore a source provider after unregistering it from a fork", () => {
+    const template = ModelRegistry.inMemory(AuthStorage.inMemory());
+    template.registerProvider("template-only", oauthProviderConfig("Template only", "template"));
+    const forkAuth = AuthStorage.inMemory();
+    const fork = template.fork(forkAuth);
+
+    expect(forkAuth.getOAuthProviders().map((provider) => provider.id)).toContain("template-only");
+    fork.unregisterProvider("template-only");
+    expect(forkAuth.getOAuthProviders().map((provider) => provider.id)).not.toContain(
+      "template-only",
+    );
+  });
+
+  it("forks the latest base catalog after the source reloads", () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        custom: {
+          baseUrl: "https://models.example/v1",
+          api: "openai-responses",
+          models: [{ id: "before-reload" }],
+        },
+      },
+    });
+    const source = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+    writeFileSync(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-responses",
+            models: [{ id: "after-reload" }],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    source.refresh();
+    const fork = source.fork(AuthStorage.inMemory());
+
+    expect(fork.find("custom", "before-reload")).toBeUndefined();
+    expect(fork.find("custom", "after-reload")).toBeDefined();
   });
 
   it("uses stored auth for dynamically registered provider models", () => {
@@ -604,7 +712,7 @@ describe("ModelRegistry OAuth provider ownership", () => {
 });
 
 describe("ModelRegistry API provider ownership", () => {
-  it("keeps stream registrations isolated across registry refreshes", () => {
+  it("rebuilds built-ins and lifecycle stream registrations on registry refresh", () => {
     const sessionA = ModelRegistry.inMemory(AuthStorage.inMemory());
     const sessionB = ModelRegistry.inMemory(AuthStorage.inMemory());
     const streamA = vi.fn(() => ({}) as never);
@@ -621,6 +729,9 @@ describe("ModelRegistry API provider ownership", () => {
     const runtimeA = getModelRegistryRuntime(sessionA);
     const runtimeB = getModelRegistryRuntime(sessionB);
 
+    sessionB.refresh();
+
+    expect(runtimeB.apiRegistry.getApiProvider("openai-responses")).toBeDefined();
     expect(runtimeA.apiRegistry.getApiProvider("test-session-api")?.streamSimple).not.toBe(
       runtimeB.apiRegistry.getApiProvider("test-session-api")?.streamSimple,
     );
@@ -630,30 +741,5 @@ describe("ModelRegistry API provider ownership", () => {
 
     expect(runtimeA.apiRegistry.getApiProvider("test-session-api")).toBeDefined();
     expect(runtimeB.apiRegistry.getApiProvider("test-session-api")).toBeUndefined();
-  });
-
-  it("imports published SDK providers without copying request-generated aliases", () => {
-    const publishedSource = "plugin:test-published-api";
-    const requestSource = "custom-api:test-request-api";
-    const stream = vi.fn(() => ({}) as never);
-    registerApiProvider(
-      { api: "test-published-api", stream, streamSimple: stream },
-      publishedSource,
-    );
-    defaultApiRegistry.registerApiProvider(
-      { api: "test-request-api", stream, streamSimple: stream },
-      requestSource,
-    );
-
-    try {
-      const session = ModelRegistry.inMemory(AuthStorage.inMemory());
-      const runtime = getModelRegistryRuntime(session);
-
-      expect(runtime.apiRegistry.getApiProvider("test-published-api")).toBeDefined();
-      expect(runtime.apiRegistry.getApiProvider("test-request-api")).toBeUndefined();
-    } finally {
-      unregisterApiProviders(publishedSource);
-      defaultApiRegistry.unregisterApiProviders(requestSource);
-    }
   });
 });

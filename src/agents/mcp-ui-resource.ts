@@ -26,10 +26,12 @@ export type McpAppViewLease = {
   serverName: string;
   toolName: string;
   uiResourceUri: string;
+  toolCallId?: string;
   html: string;
   csp?: McpAppCsp;
   permissions?: McpAppPermissions;
   allowedAppToolNames?: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   toolInput: unknown;
   toolResult: CallToolResult;
@@ -42,6 +44,24 @@ export type McpAppViewLease = {
   expiryTimer?: ReturnType<typeof setTimeout>;
   releaseRuntimeLease?: () => void;
 };
+
+export type McpAppChannelView = {
+  viewId: string;
+};
+
+/** Retain only the bounded view identity needed for late channel materialization. */
+export function readMcpAppChannelView(result: unknown): McpAppChannelView | undefined {
+  const details = asRecord(asRecord(result)?.details);
+  const preview = asRecord(details?.mcpAppPreview);
+  const view = asRecord(preview?.view);
+  const descriptor = asRecord(preview?.mcpApp);
+  const viewId = typeof descriptor?.viewId === "string" ? descriptor.viewId.trim() : "";
+  const projectedViewId = typeof view?.id === "string" ? view.id.trim() : "";
+  if (!viewId || projectedViewId !== viewId) {
+    return undefined;
+  }
+  return { viewId };
+}
 
 type McpAppViewStore = Map<string, McpAppViewLease>;
 
@@ -204,6 +224,7 @@ export async function fetchMcpAppView(params: {
   toolInput: unknown;
   toolResult: CallToolResult;
   allowedAppToolNames?: ReadonlySet<string>;
+  authorizeAppInteraction?: () => boolean | Promise<boolean>;
   readOnly?: true;
   viewId?: string;
 }): Promise<
@@ -258,11 +279,15 @@ export async function fetchMcpAppView(params: {
       serverName: params.serverName,
       toolName: params.toolName,
       uiResourceUri: params.uiResourceUri,
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
       html,
       ...(csp ? { csp } : {}),
       ...(permissions ? { permissions } : {}),
       ...(params.allowedAppToolNames
         ? { allowedAppToolNames: new Set(params.allowedAppToolNames) }
+        : {}),
+      ...(params.authorizeAppInteraction
+        ? { authorizeAppInteraction: params.authorizeAppInteraction }
         : {}),
       ...(params.readOnly ? { readOnly: true as const } : {}),
       toolInput: params.toolInput,
@@ -344,6 +369,7 @@ export function buildMcpAppCanvasPayload(view: {
   toolName: string;
   uiResourceUri: string;
   toolCallId?: string;
+  originSessionKey?: string;
   resultMetaState?: "unavailable";
 }) {
   assertBoundedViewDescriptor(view);
@@ -362,6 +388,7 @@ export function buildMcpAppCanvasPayload(view: {
       toolName: view.toolName,
       uiResourceUri: view.uiResourceUri,
       ...(view.toolCallId ? { toolCallId: view.toolCallId } : {}),
+      ...(view.originSessionKey ? { originSessionKey: view.originSessionKey } : {}),
       ...(view.resultMetaState ? { resultMetaState: view.resultMetaState } : {}),
     },
   };

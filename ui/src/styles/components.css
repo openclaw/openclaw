@@ -1400,9 +1400,10 @@
   position: relative;
 }
 
-.callout--dismissible {
+.callout--dismissible,
+.callout--action {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
@@ -2670,6 +2671,24 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+/* Reconnect rows mirror the connection pill's amber status dot so the queue
+   reads as quiet auto-retry status, not a failure needing action. */
+.chat-queue__dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin: 0 3.5px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  animation: pulse-subtle 2s ease-in-out infinite;
+}
+
+.chat-queue__item--reconnect .chat-queue__badge {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  color: color-mix(in srgb, var(--warn) 78%, var(--text-strong));
+}
+
 .chat-queue__badge {
   flex-shrink: 0;
   padding: 1px 7px;
@@ -2895,6 +2914,21 @@ td.data-table-key-col {
   animation: scale-in 0.2s var(--ease-out);
 }
 
+.exec-approval-modal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+
+.exec-approval-card--inline {
+  padding: 14px 16px;
+  border-color: color-mix(in srgb, var(--warning) 45%, var(--border));
+  background: color-mix(in srgb, var(--warning) 5%, var(--card));
+  animation: none;
+}
+
 .exec-approval-header {
   display: flex;
   align-items: center;
@@ -2958,8 +2992,11 @@ td.data-table-key-col {
 }
 
 .exec-approval-meta-row span:last-child {
+  min-width: 0;
   color: var(--text);
   font-family: var(--mono);
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .exec-approval-error {
@@ -2979,6 +3016,78 @@ td.data-table-key-col {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.exec-approval-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.exec-approval-list {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+}
+
+.exec-approval-list__heading {
+  padding: 2px 4px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.exec-approval-list__item {
+  display: grid;
+  grid-template-columns: minmax(64px, 0.25fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.exec-approval-list__item:hover,
+.exec-approval-list__item:focus-visible {
+  border-color: var(--border);
+  background: var(--secondary);
+}
+
+.exec-approval-list__item:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 1px;
+}
+
+.exec-approval-list__agent,
+.exec-approval-list__command {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exec-approval-list__agent {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.exec-approval-list__command {
+  font-size: 12px;
+}
+
+.exec-approval-list__expiry {
+  color: var(--warning);
+  font: 11px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ===========================================
@@ -3513,11 +3622,6 @@ td.data-table-key-col {
 
 .field textarea.agent-file-textarea {
   min-height: clamp(320px, 56vh, 720px);
-  transition: filter var(--duration-fast) ease;
-}
-
-.field textarea.agent-file-textarea:not(:focus) {
-  filter: blur(6px);
 }
 
 .agent-file-header {
@@ -5097,7 +5201,7 @@ td.data-table-key-col {
   pointer-events: none;
 }
 
-/* Attribute badges (worktree fork, attached automation, cloud placement):
+/* Attribute badges (attached automation, approval, cloud placement):
    muted metadata that sits after the title inside the row link, outside the
    trail/action overlap cell, so touch devices (which hide the trail) and
    hovered rows keep them. */
@@ -5114,8 +5218,27 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
+.session-row-badge--pull-request[data-pull-request-state="open"],
 .session-row-badge--cloud[data-placement-state="active"] {
   color: var(--ok);
+}
+
+.session-row-badge--pull-request[data-pull-request-state="merged"] {
+  color: var(--accent);
+}
+
+.session-row-badge--approval,
+.session-approval-badge {
+  display: inline-flex;
+  align-items: center;
+  color: var(--warning);
+}
+
+.session-approval-badge svg {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
 }
 
 .session-row-badge--cloud[data-placement-state="failed"] {
@@ -5131,6 +5254,10 @@ td.data-table-key-col {
   [data-placement-state="reconciling"]
 ) {
   color: var(--accent);
+}
+
+.session-row-badge--cloud[data-workspace-conflicts] {
+  color: var(--warn);
 }
 
 .session-row-badge svg {

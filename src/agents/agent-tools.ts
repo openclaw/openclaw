@@ -17,10 +17,14 @@ import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.j
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { logWarn } from "../logger.js";
-import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type {
+  PluginHookChannelContext,
+  PluginHookToolRequesterContext,
+} from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../security/dangerous-tools.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
@@ -77,6 +81,7 @@ import {
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, filterToolsByClientCaps } from "./openclaw-tools.js";
+import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./sandbox/workspace-mounts.js";
@@ -325,6 +330,7 @@ type OpenClawCodingToolsOptions = {
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Task working directory for coding tools. Defaults to workspaceDir. */
   cwd?: string;
   workspaceDir?: string;
@@ -401,6 +407,8 @@ type OpenClawCodingToolsOptions = {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
+  inheritRuntimeToolAllowlist?: boolean;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
@@ -458,6 +466,9 @@ type OpenClawCodingToolsOptions = {
   skillUsagePaths?: SkillUsagePath[];
   /** Prepared conversation-scoped facts for callers that already resolved this run context. */
   conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
+  inputProvenance?: InputProvenance;
+  /** Trusted in-process completion handoff; never derived from model-facing input. */
+  trustedInternalHandoff?: boolean;
 };
 
 function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions): AnyAgentTool[] {
@@ -515,6 +526,9 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
+      inputProvenance: options?.inputProvenance,
+      trustedInternalHandoff: options?.trustedInternalHandoff,
     });
   const {
     agentId,
@@ -533,6 +547,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     subagentPolicy,
     inheritedToolPolicy,
     runtimePluginToolGrant,
+    runtimeToolPolicyForInheritance,
   } = capabilityProfile.policy;
 
   const enableHeartbeatTool =
@@ -964,6 +979,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             agentGroupSpace: options?.groupSpace ?? null,
             agentMemberRoleIds: options?.memberRoleIds,
             agentDir: options?.agentDir,
+            preparedModelRuntime: options?.preparedModelRuntime,
             sandboxRoot,
             sandboxContainerWorkdir: sandbox?.containerWorkdir,
             sandboxFsBridge,
@@ -1115,6 +1131,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         label: "subagent tools.allow",
         unavailableCoreToolReason,
       },
+      {
+        policy: runtimeToolPolicyForInheritance,
+        label: "runtime tools.allow",
+        unavailableCoreToolReason,
+      },
       { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
     ],
     auditLogLevel: options?.toolPolicyAuditLogLevel,
@@ -1167,6 +1188,14 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
   options?.recordToolPrepStage?.("schema-normalization");
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
   const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
+  const requester = {
+    ...(turnSourceChannel ? { channel: turnSourceChannel } : {}),
+    ...(options?.agentAccountId ? { accountId: options.agentAccountId } : {}),
+    ...(options?.senderId ? { senderId: options.senderId } : {}),
+    ...(options?.senderIsOwner !== undefined ? { senderIsOwner: options.senderIsOwner } : {}),
+    ...(options?.memberRoleIds?.length ? { roleIds: [...options.memberRoleIds] } : {}),
+  } satisfies PluginHookToolRequesterContext;
+  const hasRequester = Object.keys(requester).length > 0;
   const hookContext = {
     agentId,
     ...(options?.config ? { config: options.config } : {}),
@@ -1182,6 +1211,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     runId: options?.runId,
     approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
+    ...(hasRequester ? { requester } : {}),
     ...(turnSourceChannel ? { turnSourceChannel } : {}),
     ...(turnSourceTo ? { turnSourceTo } : {}),
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),

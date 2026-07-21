@@ -27,6 +27,14 @@ export const icons = {
       <line x1="6" x2="6" y1="20" y2="16" />
     </svg>
   `,
+  layoutDashboard: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="7" height="9" x="3" y="3" rx="1" />
+      <rect width="7" height="5" x="14" y="3" rx="1" />
+      <rect width="7" height="9" x="14" y="12" rx="1" />
+      <rect width="7" height="5" x="3" y="16" rx="1" />
+    </svg>
+  `,
   coins: html`
     <svg viewBox="0 0 24 24">
       <circle cx="8" cy="8" r="6" />
@@ -256,6 +264,26 @@ export const icons = {
       <circle cx="7.5" cy="15.5" r="5.5" />
       <path d="m21 2-9.6 9.6" />
       <path d="m15.5 7.5 3 3L22 7l-3-3" />
+    </svg>
+  `,
+  flag: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 22V4" />
+      <path d="M5 4c5-4 9 4 14 0v11c-5 4-9-4-14 0" />
+    </svg>
+  `,
+  lock: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="18" height="11" x="3" y="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  `,
+  hourglass: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M5 22h14" />
+      <path d="M5 2h14" />
+      <path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22" />
+      <path d="M7 2v4.2A4 4 0 0 0 8.2 9l3.8 4 3.8-4A4 4 0 0 0 17 6.2V2" />
     </svg>
   `,
   layoutComfortable: html`

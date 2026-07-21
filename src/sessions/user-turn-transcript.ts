@@ -38,10 +38,6 @@ type PersistedUserTurnMediaFields = {
   MediaTypes?: string[];
 };
 
-type ResolvePersistedUserTurnTextOptions = {
-  hasMedia?: boolean;
-};
-
 type PersistedUserTurnMediaFieldSource = {
   MediaPath?: string | null;
   MediaPaths?: readonly (string | null | undefined)[] | null;
@@ -61,19 +57,10 @@ function normalizeTranscriptText(value: string | null | undefined): string {
   return value ?? "";
 }
 
-const CHANNEL_MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
-
-// Select text for persisted user turns. Channel-generated media placeholders
-// are dropped only when structured media is present, keeping plain text intact.
-export function resolvePersistedUserTurnText(
-  value: string | null | undefined,
-  options: ResolvePersistedUserTurnTextOptions = {},
-): string | undefined {
+// Select normalized text for persisted user turns.
+export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
-    return undefined;
-  }
-  if (options.hasMedia === true && CHANNEL_MEDIA_PLACEHOLDER_PATTERN.test(normalized)) {
     return undefined;
   }
   return normalized;
@@ -169,6 +156,17 @@ export function buildPersistedUserTurnMediaInputsFromFields(
   }
 
   return media;
+}
+
+export function buildLateMediaAttachedText(message: AgentMessage): string | undefined {
+  const text = (
+    readOpenClawMessageMeta(message)?.lateMedia === true
+      ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
+      : []
+  )
+    .map((entry) => `[media attached: ${entry.path ?? entry.url}]`)
+    .join("\n");
+  return text || undefined;
 }
 
 function buildPersistedUserTurnMediaFields(
@@ -271,36 +269,25 @@ function buildLateResolvedMediaMessage(params: {
   const resolved = params.resolvedMessage as unknown as Record<string, unknown>;
   const admittedContent = params.admittedMessage?.content;
   const resolvedContent = params.resolvedMessage.content;
-  const mediaOnlyText = resolvedMedia
-    .map((media) => media.path ?? media.url)
-    .filter((value): value is string => Boolean(value))
-    .map((value) => `[media attached: ${value}]`)
-    .join("\n");
-  const content =
-    typeof resolvedContent === "string" && resolvedContent === admittedContent
-      ? mediaOnlyText
-      : Array.isArray(resolvedContent) && typeof admittedContent === "string"
-        ? (() => {
-            const mediaContent = resolvedContent.filter(
-              (block) =>
-                !block ||
-                typeof block !== "object" ||
-                (block as { type?: unknown; text?: unknown }).type !== "text" ||
-                (block as { text?: unknown }).text !== admittedContent,
-            );
-            return mediaContent.length > 0
-              ? mediaContent
-              : [{ type: "text" as const, text: mediaOnlyText }];
-          })()
-        : resolvedContent;
+  let content = resolvedContent;
+  if (resolvedContent === admittedContent) {
+    content = "";
+  } else if (Array.isArray(resolvedContent) && typeof admittedContent === "string") {
+    content = resolvedContent.filter((block) => {
+      const textBlock = block as { type?: unknown; text?: unknown } | null;
+      return textBlock?.type !== "text" || textBlock.text !== admittedContent;
+    });
+  }
   const idempotencyKey =
     typeof resolved.idempotencyKey === "string" && resolved.idempotencyKey.length > 0
       ? `${resolved.idempotencyKey}:late-media`
       : `late-media:${typeof resolved.timestamp === "number" ? resolved.timestamp : Date.now()}`;
+  // Like #111204, mark late-media scaffolding as wire-only so UIs never render it.
   return {
     ...resolved,
     content,
     idempotencyKey,
+    __openclaw: { ...readOpenClawMessageMeta(params.resolvedMessage), lateMedia: true },
   } as unknown as PersistedUserTurnMessage;
 }
 
@@ -385,6 +372,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   );
   const senderIsOwner = readOpenClawMessageMeta(message)?.senderIsOwner;
   const originalTransport = readOpenClawMessageMeta(message)?.transport;
+  const lateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
   // Hooks receive the original message object and may mutate nested metadata in
   // place. Snapshot transport correlation before handing them that reference.
   const transport =
@@ -402,13 +390,14 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport) {
+  if (!idempotencyKey && typeof senderIsOwner !== "boolean" && !transport && !lateMedia) {
     return nextUserMessage;
   }
   const protectedMeta = {
     ...readOpenClawMessageMeta(nextUserMessage),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(transport ? { transport } : {}),
+    ...(lateMedia ? { lateMedia: true } : {}),
   };
   return {
     ...(nextUserMessage as unknown as Record<string, unknown>),
@@ -578,6 +567,7 @@ export function createUserTurnTranscriptRecorder(
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
     sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
+    retryIfUnpersisted?: boolean;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -589,9 +579,19 @@ export function createUserTurnTranscriptRecorder(
       await waitForRuntimePersistence();
     }
     if (selfPersistencePromise) {
-      return await selfPersistencePromise;
+      const existingPromise = selfPersistencePromise;
+      const existingResult = await existingPromise;
+      if (existingResult || !options.retryIfUnpersisted) {
+        return existingResult;
+      }
+      // A guarded store write can lose a session-generation race without appending.
+      // Explicit retry callers may re-resolve the target, but concurrent ownership stays shared.
+      if (selfPersistencePromise !== existingPromise) {
+        return await selfPersistencePromise;
+      }
+      selfPersistencePromise = undefined;
     }
-    selfPersistencePromise = (async () => {
+    const persistencePromise = (async () => {
       const resolvedMessage = options.message ?? (await resolveMessageForPersistence());
       if (!resolvedMessage) {
         return undefined;
@@ -663,8 +663,13 @@ export function createUserTurnTranscriptRecorder(
       }
       return result;
     })();
+    selfPersistencePromise = persistencePromise;
     try {
-      return await selfPersistencePromise;
+      const result = await persistencePromise;
+      if (!result && options.retryIfUnpersisted && selfPersistencePromise === persistencePromise) {
+        selfPersistencePromise = undefined;
+      }
+      return result;
     } catch (error) {
       handlePersistenceError(error);
       throw error;
@@ -708,6 +713,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
+        retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;

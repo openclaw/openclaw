@@ -56,7 +56,7 @@ function questionPrompt(id: string, question: string): QuestionPrompt {
     id,
     questions: [
       {
-        id: "choice",
+        questionId: "choice",
         header: "Choice",
         question,
         options: [{ label: "Yes" }, { label: "No" }],
@@ -545,6 +545,48 @@ describe("renderChatComposer controls", () => {
     steer[0]?.click();
     steer[1]?.click();
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
+  });
+
+  it("renders the queued author's avatar before the turn is submitted", async () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+          sender: { id: "profile_123", name: "Alice Example" },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-queue__item .chat-author-avatar__initials")?.textContent,
+      ).toContain("AE");
+    });
+  });
+
+  it("renders reconnect waits as quiet status without the raw transport error", () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "reconnect-1",
+          text: "send me once the gateway is back",
+          createdAt: 1,
+          sendError: "chat.send unavailable during gateway restart",
+          sendState: "waiting-reconnect",
+        },
+      ],
+    });
+    const item = container.querySelector(".chat-queue__item");
+    expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
+    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(item?.querySelector(".chat-queue__error")).toBeNull();
+    const badge = item?.querySelector(".chat-queue__badge");
+    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
   it("renders failed sends as retryable and running commands as inert", () => {

@@ -19,7 +19,6 @@ extensions/browser/src/browser/chrome-mcp.ts
 extensions/browser/src/browser/chrome.executables.ts
 extensions/browser/src/browser/chrome.internal.test.ts
 extensions/browser/src/browser/chrome.ts
-extensions/browser/src/browser/config.test.ts
 extensions/browser/src/browser/extension-relay/relay-bridge.ts
 extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts
 extensions/browser/src/browser/pw-session.ts
@@ -92,7 +91,6 @@ extensions/discord/src/channel.ts
 extensions/discord/src/monitor.test.ts
 extensions/discord/src/monitor/message-handler.preflight.test.ts
 extensions/discord/src/monitor/message-handler.preflight.ts
-extensions/discord/src/monitor/message-utils.test.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command-model-picker-interaction.ts
@@ -297,7 +295,6 @@ extensions/telegram/src/bot-native-commands.ts
 extensions/telegram/src/bot.create-telegram-bot.test.ts
 extensions/telegram/src/bot.test.ts
 extensions/telegram/src/bot/delivery.replies.ts
-extensions/telegram/src/bot/delivery.resolve-media-retry.test.ts
 extensions/telegram/src/bot/delivery.test.ts
 extensions/telegram/src/channel.ts
 extensions/telegram/src/draft-stream.test.ts
@@ -306,7 +303,6 @@ extensions/telegram/src/fetch.test.ts
 extensions/telegram/src/fetch.ts
 extensions/telegram/src/format.ts
 extensions/telegram/src/lane-delivery.test.ts
-extensions/telegram/src/message-cache.test.ts
 extensions/telegram/src/message-cache.ts
 extensions/telegram/src/polling-session.test.ts
 extensions/telegram/src/polling-session.ts
@@ -354,6 +350,10 @@ packages/ai/src/providers/openai-completions.test.ts
 packages/ai/src/providers/openai-completions.ts
 packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/providers/openai-responses-shared.ts
+packages/ai/src/transports/anthropic-transport-stream.test.ts
+packages/ai/src/transports/anthropic-transport-stream.ts
+packages/ai/src/transports/openai-completions-transport.ts
+packages/ai/src/transports/openai-responses-transport.ts
 packages/gateway-client/src/client.ts
 packages/gateway-protocol/src/index.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
@@ -388,8 +388,6 @@ src/agents/agent-tools.create-openclaw-coding-tools.test.ts
 src/agents/agent-tools.read.ts
 src/agents/agent-tools.schema.test.ts
 src/agents/agent-tools.ts
-src/agents/anthropic-transport-stream.test.ts
-src/agents/anthropic-transport-stream.ts
 src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/oauth.openai-codex-refresh-fallback.test.ts
 src/agents/auth-profiles/persisted.ts
@@ -490,15 +488,11 @@ src/agents/model-auth-availability.ts
 src/agents/model-auth.profiles.test.ts
 src/agents/model-auth.test.ts
 src/agents/model-auth.ts
-src/agents/model-catalog.test.ts
-src/agents/model-catalog.ts
 src/agents/model-fallback.test.ts
 src/agents/model-fallback.ts
 src/agents/model-selection-shared.ts
 src/agents/model-selection.test.ts
 src/agents/models.profiles.live.test.ts
-src/agents/openai-completions-transport.ts
-src/agents/openai-responses-transport.ts
 src/agents/openai-transport-stream.base.test.ts
 src/agents/openai-transport-stream.deepseek-and-shaping.test.ts
 src/agents/openai-transport-stream.inline-reasoning-and-tool-calls.test.ts
@@ -547,7 +541,6 @@ src/agents/system-prompt.test.ts
 src/agents/system-prompt.ts
 src/agents/tool-display-common.ts
 src/agents/tool-loop-detection.test.ts
-src/agents/tool-loop-detection.ts
 src/agents/tool-search.test.ts
 src/agents/tool-search.ts
 src/agents/tools/computer-tool.ts
@@ -635,7 +628,6 @@ src/channels/turn/kernel.test.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
 src/cli/command-secret-gateway.ts
-src/cli/command-secret-targets.test.ts
 src/cli/command-secret-targets.ts
 src/cli/config-cli.test.ts
 src/cli/config-cli.ts
@@ -953,7 +945,6 @@ src/logging/logger.ts
 src/logging/redact.test.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
-src/media-understanding/image.test.ts
 src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media-understanding/runner.vision-skip.test.ts
@@ -969,7 +960,6 @@ src/plugin-sdk/approval-native-helpers.ts
 src/plugin-sdk/core.ts
 src/plugin-sdk/provider-auth.test.ts
 src/plugin-sdk/provider-stream-shared.test.ts
-src/plugin-sdk/provider-stream-shared.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
@@ -1012,7 +1002,6 @@ src/plugins/marketplace.test.ts
 src/plugins/marketplace.ts
 src/plugins/official-external-plugin-catalog.test.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-registry-snapshot.test.ts
 src/plugins/provider-runtime.test.ts
 src/plugins/provider-runtime.ts

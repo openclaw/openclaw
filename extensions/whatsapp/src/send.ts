@@ -8,6 +8,7 @@ import {
   convertMarkdownTables,
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -25,16 +26,15 @@ import {
   prepareWhatsAppOutboundMedia,
   resolveAdditiveWhatsAppMediaUrls,
 } from "./outbound-media-contract.js";
-import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
 
-function supportsForcedDocumentDelivery(kind: "image" | "audio" | "video" | "document"): boolean {
+type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
+
+function supportsForcedDocumentDelivery(kind: PreparedWhatsAppOutboundMedia["kind"]): boolean {
   return kind === "image" || kind === "video";
 }
-
-type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
 
 type WhatsAppMediaSendState = {
   mediaBuffer: Buffer;
@@ -135,7 +135,7 @@ export async function sendMessageWhatsApp(
     mediaPayload?: {
       buffer: Buffer;
       contentType?: string;
-      kind?: "image" | "audio" | "video" | "document";
+      kind?: PreparedWhatsAppOutboundMedia["kind"];
       fileName?: string;
     };
     gifPlayback?: boolean;
@@ -148,6 +148,7 @@ export async function sendMessageWhatsApp(
       fromMe: boolean;
       participant?: string;
       messageText?: string;
+      media?: import("openclaw/plugin-sdk/channel-inbound").MediaPlaceholderTextFact;
     };
     preserveLeadingWhitespace?: boolean;
     /** Report each accepted internal platform send before the next fallible send. */
@@ -198,6 +199,8 @@ export async function sendMessageWhatsApp(
     if (mediaPayload) {
       media = await prepareWhatsAppOutboundMedia(mediaPayload, primaryMediaUrl);
     } else if (primaryMediaUrl) {
+      // Injected readers must carry an explicit local-root boundary. The shared loader enforces
+      // that contract; never restore the former implicit `localRoots: "any"` widening here.
       media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),

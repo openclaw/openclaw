@@ -2530,10 +2530,33 @@ export function listSwarmRunsForGroup(
   );
 }
 
-export function countActiveRunsForSession(requesterSessionKey: string): number {
+/** Resolve a collector reserved by a replay-safe host bridge request. */
+export function getSwarmRunByLaunchReplayKey(
+  replayKey: string,
+  requesterSessionKey?: string,
+): SubagentRunRecord | undefined {
+  const key = replayKey.trim();
+  const requesterKey = requesterSessionKey?.trim();
+  if (!key) {
+    return undefined;
+  }
+  return [...subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns).values()].find(
+    (entry) =>
+      entry.collect === true &&
+      entry.swarmLaunchReplayKey === key &&
+      (!requesterKey ||
+        (entry.swarmRequesterSessionKey ?? entry.requesterSessionKey) === requesterKey),
+  );
+}
+
+export function countActiveRunsForSession(
+  requesterSessionKey: string,
+  options?: { collect?: boolean },
+): number {
   return countActiveRunsForSessionFromRuns(
     subagentRegistryDeps.getSubagentRunsSnapshotForRead(subagentRuns),
     requesterSessionKey,
+    options,
   );
 }
 

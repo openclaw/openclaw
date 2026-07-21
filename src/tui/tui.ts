@@ -16,6 +16,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.shared.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
@@ -47,7 +48,6 @@ import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   formatGoalFooter,
   formatModelFooter,
-  formatRemoteConnectionHostFooter,
   sanitizeRenderableText,
   formatTokens,
 } from "./tui-formatters.js";
@@ -220,16 +220,6 @@ export function resolveTuiSessionKey(params: {
     return normalizeLowercaseStringOrEmpty(trimmed);
   }
   return `agent:${params.currentAgentId}:${normalizeLowercaseStringOrEmpty(trimmed)}`;
-}
-
-export function resolveTuiFooterHostLabel(params: {
-  config: OpenClawConfig;
-  connectionUrl: string;
-}): string | null {
-  if (params.config.tui?.footer?.showRemoteHost !== true) {
-    return null;
-  }
-  return formatRemoteConnectionHostFooter(params.connectionUrl);
 }
 
 export function resolveInitialTuiAgentId(params: {
@@ -626,6 +616,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
 
   const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
+  const thinkingLevelOverride = normalizeThinkLevel(opts.thinking);
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = { ...emptySessionInfoDefaults };
   let dynamicSlashCommands: CommandEntry[] = [];
@@ -1292,7 +1283,10 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = formatModelFooter(sessionInfo);
+    const modelLabel = formatModelFooter({
+      model: sessionInfo.model,
+      thinkingLevel: thinkingLevelOverride ?? sessionInfo.thinkingLevel,
+    });
     const tokens = formatTokens(sessionInfo.totalTokens ?? null, sessionInfo.contextTokens ?? null);
     const fastLabel =
       sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
@@ -1300,9 +1294,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     const reasoning = sessionInfo.reasoningLevel ?? "off";
     const reasoningLabel =
       reasoning === "on" ? "reasoning" : reasoning === "stream" ? "reasoning:stream" : null;
-    const hostLabel = resolveTuiFooterHostLabel({ config, connectionUrl: client.connection.url });
     const footerParts = [
-      hostLabel,
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,

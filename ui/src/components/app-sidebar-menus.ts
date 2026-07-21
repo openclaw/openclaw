@@ -16,6 +16,7 @@ import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import {
   canArchiveSessionRow,
+  normalizeAgentId,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
@@ -28,7 +29,6 @@ import {
   renderSidebarMoreRow,
   renderSidebarNavRoute,
   sidebarMoreMenuHoldsActiveRoute,
-  sidebarPluginTabs,
 } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
@@ -361,6 +361,8 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       gatewayVersion: this.gatewayVersion,
       themeMode: this.themeMode,
       agentUnreadCount: (agentId) => this.agentUnreadCount(agentId),
+      agentApprovalCount: (agentId) =>
+        this.approvalBadgeSnapshot().agentCounts.get(normalizeAgentId(agentId)) ?? 0,
       onFilterChange: (next) => {
         this.agentMenuFilter = next;
       },
@@ -589,9 +591,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       position,
       basePath: this.basePath,
       activeRouteId: this.activeRouteId,
-      activePluginTabId: this.activePluginTabId,
       sidebarEntries: this.sidebarEntries,
-      pluginTabs: sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs),
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
@@ -603,10 +603,6 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       onNavigateRoute: (routeId) => {
         this.closeMoreMenu({ restoreFocus: true });
         this.onNavigate?.(routeId);
-      },
-      onNavigatePluginTab: (search) => {
-        this.closeMoreMenu({ restoreFocus: true });
-        this.onNavigate?.("plugin", { search });
       },
       onPreloadRoute: (routeId, event) => this.preloadRoute(routeId, event),
       onCancelPreload: this.cancelPreload,
