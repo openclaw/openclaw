@@ -289,6 +289,44 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
+  it("does not match a retained prefix when its continuation was dropped before exit", async () => {
+    vi.useFakeTimers();
+    const fake = fakeSupervisor();
+    const fireBatch = vi.fn(async (_job: CronJob, _batch: string) => "fired" as const);
+    const watchers = createWatchers({
+      getProcessSupervisor: () => fake.supervisor,
+      minIntervalMs: 1,
+      updateState: vi.fn(async () => {}),
+      recordFailure: vi.fn(async () => {}),
+      fireBatch,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    await watchers.start(
+      job({
+        schedule: {
+          kind: "stream",
+          command: ["stream-source"],
+          mode: "match",
+          match: "^keep$",
+          batchMs: 50,
+          maxBatchBytes: 1_024,
+        },
+      }),
+    );
+
+    // The retained prefix looks like a complete match, but the dropped chunk
+    // continued that source line. EOF cannot prove where the real line ended.
+    fake.inputs[0]?.onStdout?.("keep");
+    fake.inputs[0]?.onStderr?.("Z".repeat(4_092));
+    fake.inputs[0]?.onStdout?.("-not-the-end");
+    await settle();
+    fake.exits[0]?.(exitResult());
+    await settle();
+
+    expect(fireBatch).not.toHaveBeenCalled();
+    await watchers.stopAll("shutdown");
+  });
+
   it("does not discard the first clean line after a drop that ended at a newline", async () => {
     vi.useFakeTimers();
     const fake = fakeSupervisor();

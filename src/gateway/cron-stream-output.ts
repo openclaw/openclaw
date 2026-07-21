@@ -244,7 +244,9 @@ export class CronStreamOutput {
   async flushSourceOutput(generation: number): Promise<void> {
     for (const channel of ["stdout", "stderr"] as const) {
       const partialLine = this.partialLines[channel];
-      if (!this.discardUntilNewline[channel] && partialLine) {
+      // A dropped continuation makes the retained EOF prefix indeterminate;
+      // child exit must not turn that prefix into a complete matchable line.
+      if (!this.discardUntilNewline[channel] && !this.droppedChunkTail[channel] && partialLine) {
         await this.acceptLine(
           partialLine.endsWith("\r") ? partialLine.slice(0, -1) : partialLine,
           generation,
@@ -253,6 +255,7 @@ export class CronStreamOutput {
       }
       this.partialLines[channel] = "";
       this.discardUntilNewline[channel] = false;
+      this.droppedChunkTail[channel] = false;
     }
     clearTimer(this.quietTimer);
     this.quietTimer = undefined;
