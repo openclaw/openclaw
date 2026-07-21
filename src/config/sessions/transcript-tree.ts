@@ -1,7 +1,7 @@
 // Transcript tree helpers keep append-only leaf controls consistent across readers.
 type TranscriptRecord = Record<string, unknown>;
 
-export type SessionTranscriptTreeEntry = {
+type SessionTranscriptTreeEntry = {
   id: string;
   parentId: string | null;
   leafId: string | null | undefined;
@@ -9,7 +9,7 @@ export type SessionTranscriptTreeEntry = {
   appendMode?: "side";
 };
 
-export type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
+type SessionTranscriptTreeNode<T> = SessionTranscriptTreeEntry & {
   entry: T;
   index: number;
 };
@@ -208,13 +208,20 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     let treeEntry: SessionTranscriptTreeEntry | undefined =
       explicitTreeEntry ?? parseParentlessCanonicalEntry(entry, leafId);
     if (treeEntry && isCanonicalSessionTranscriptEntry(entry)) {
-      const logicalParentId =
+      const canonicalParentIsStale =
         explicitTreeEntry &&
-        treeEntry.appendMode !== "side" &&
-        treeEntry.parentId === appendParentId &&
-        leafId !== appendParentId
+        treeEntry.parentId !== null &&
+        !byId.has(treeEntry.parentId) &&
+        leafId !== null;
+      const logicalParentId =
+        treeEntry.appendMode !== "side" && canonicalParentIsStale
           ? leafId
-          : treeEntry.parentId;
+          : explicitTreeEntry &&
+              treeEntry.appendMode !== "side" &&
+              treeEntry.parentId === appendParentId &&
+              leafId !== appendParentId
+            ? leafId
+            : treeEntry.parentId;
       const normalizedParentId = resolveCanonicalParentId(logicalParentId, byId);
       if (normalizedParentId !== treeEntry.parentId) {
         // The raw cursor can belong to plugin metadata, an inactive branch, or
@@ -252,6 +259,41 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
     hasExplicitLeafUpdate,
     hasInvalidLeafControl,
   };
+}
+
+export function selectSessionTranscriptActiveEntries<T, R>(params: {
+  entries: readonly T[];
+  recordOf: (entry: T) => R;
+  tree?: SessionTranscriptTree<R>;
+  failClosedOnInvalidLeafControl?: boolean;
+}): T[] {
+  const records = params.entries.map(params.recordOf);
+  const tree = params.tree ?? scanSessionTranscriptTree(records);
+  if (params.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
+    return [];
+  }
+  if (!tree.hasExplicitLeafUpdate) {
+    return [...params.entries];
+  }
+  const activePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const activeEntries = activePath.flatMap((node) => {
+    const entry = params.entries[node.index];
+    return entry === undefined ? [] : [entry];
+  });
+  const firstActiveNode = activePath[0];
+  for (let index = (firstActiveNode?.index ?? 0) - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (
+      typeof record === "object" &&
+      record !== null &&
+      !Array.isArray(record) &&
+      (record as TranscriptRecord).type === "compaction"
+    ) {
+      const entry = params.entries[index];
+      return entry === undefined ? activeEntries : [entry, ...activeEntries];
+    }
+  }
+  return activeEntries;
 }
 
 /** Select one normalized path, retaining a reachable suffix after missing ancestors. */

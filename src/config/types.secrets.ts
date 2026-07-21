@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Defines secret reference and resolution configuration types.
 import { isRecord } from "../utils.js";
 
@@ -97,7 +98,7 @@ export function parseEnvTemplateSecretRef(
   return {
     source: "env",
     provider: provider.trim() || DEFAULT_SECRET_PROVIDER_ALIAS,
-    id: match[1],
+    id: expectDefined(match[1], "types.secrets regex capture 1"),
   };
 }
 
@@ -351,10 +352,5 @@ export type SecretsConfig = {
     env?: string;
     file?: string;
     exec?: string;
-  };
-  resolution?: {
-    maxProviderConcurrency?: number;
-    maxRefsPerProvider?: number;
-    maxBatchBytes?: number;
   };
 };

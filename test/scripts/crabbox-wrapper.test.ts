@@ -20,6 +20,7 @@ import {
   isProviderAdvertised,
   parseProvidersFromHelp,
 } from "../../scripts/crabbox-wrapper-providers.mjs";
+import { makeTempDir } from "../helpers/temp-dir.js";
 
 const tempDirs: string[] = [];
 const repoRoot = process.cwd();
@@ -31,6 +32,8 @@ const GIT_CONFIG_SPARSE_KEY = "config\u0000--bool\u0000core.sparseCheckout";
 const GIT_SPARSE_LIST_KEY = "sparse-checkout\u0000list";
 const GIT_STATUS_PORCELAIN_KEY = "status\u0000--porcelain=v1";
 const GIT_MERGE_BASE_MAIN_HEAD_KEY = "merge-base\u0000origin/main\u0000HEAD";
+const GIT_MERGE_BASE_RELEASE_HEAD_KEY = "merge-base\u0000origin/release/2026.7.2\u0000HEAD";
+const GIT_CHECK_RELEASE_REF_KEY = "check-ref-format\u0000refs/remotes/origin/release/2026.7.2";
 const defaultGitResponses: Record<string, { status?: number; stdout?: string; stderr?: string }> = {
   [GIT_CONFIG_SPARSE_KEY]: { stdout: "false\n" },
   [GIT_SPARSE_LIST_KEY]: { status: 1 },
@@ -52,12 +55,30 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
   mkdirSync(binDir, { recursive: true });
   const crabboxPath = path.join(binDir, "crabbox");
   const helperPath = path.join(binDir, "fake-crabbox-json.cjs");
+  const stampClaimScript = [
+    "const fs = require('node:fs');",
+    "const claimPaths = [process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_PATH, process.env.OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH].filter(Boolean);",
+    "for (const claimPath of claimPaths) {",
+    "  const claim = fs.existsSync(claimPath) ? JSON.parse(fs.readFileSync(claimPath, 'utf8')) : { leaseID: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID };",
+    "  claim.repoRoot = process.env.OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT || process.cwd();",
+    "  fs.mkdirSync(require('node:path').dirname(claimPath), { recursive: true });",
+    "  fs.writeFileSync(claimPath, JSON.stringify(claim) + '\\n', 'utf8');",
+    "}",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID) {",
+    "  process.stderr.write(JSON.stringify({ provider: 'blacksmith-testbox', leaseId: process.env.OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID, exitCode: 0 }) + '\\n');",
+    "}",
+  ].join("\n");
 
   if (process.platform !== "win32") {
     const signalIgnoringDescendantScript = [
+      "import fs from 'node:fs';",
       "process.on('SIGHUP', () => {});",
       "process.on('SIGINT', () => {});",
       "process.on('SIGTERM', () => {});",
+      "const pidPath = process.env.OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH;",
+      "const pidTmpPath = `${pidPath}.tmp.${process.pid}`;",
+      "fs.writeFileSync(pidTmpPath, String(process.pid));",
+      "fs.renameSync(pidTmpPath, pidPath);",
       "setInterval(() => {}, 1000);",
     ].join("");
     const script = [
@@ -69,6 +90,13 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       'if [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
       `  printf "%s" ${shellSingleQuote(helpText)}`,
       "  exit 0",
+      "fi",
+      'if { [ "$1" = "run" ] || [ "$1" = "warmup" ]; } && { [ -n "${OPENCLAW_FAKE_CRABBOX_CLAIM_PATH:-}" ] || [ -n "${OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID:-}" ]; }; then',
+      `  ${shellSingleQuote(process.execPath)} --eval ${shellSingleQuote(stampClaimScript)}`,
+      "fi",
+      'if [ "$1" = "run" ] && [ -n "${OPENCLAW_FAKE_CRABBOX_RUN_STATUS:-}" ] && [ "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS" != "0" ]; then',
+      '  printf "%s\\n" "fake run failure" >&2',
+      '  exit "$OPENCLAW_FAKE_CRABBOX_RUN_STATUS"',
       "fi",
       'if [ "$1" = "config" ] && [ "$2" = "show" ]; then',
       '  for arg in "$@"; do',
@@ -140,10 +168,32 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       '  cd "$deleted_cwd" || exit 1',
       "fi",
       'if [ -n "${OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH:-}" ]; then',
+      // The descendant publishes its own PID only after its signal handlers exist.
+      // Atomic rename makes path existence a complete readiness handshake.
       `  ${shellSingleQuote(process.execPath)} --input-type=module --eval ${shellSingleQuote(signalIgnoringDescendantScript)} &`,
-      '  printf "%s" "$!" > "$OPENCLAW_FAKE_CRABBOX_DESCENDANT_PID_PATH"',
       '  trap "exit 0" INT TERM HUP',
       "  while :; do sleep 1; done",
+      "fi",
+      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE+x}" ]; then',
+      '  expected_bundle="$(mktemp)" || exit 67',
+      '  printf "%s" "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE" > "$expected_bundle"',
+      '  if [ ! -f .openclaw-crabbox-changed-gate.bundle ] || ! cmp -s .openclaw-crabbox-changed-gate.bundle "$expected_bundle"; then',
+      '    rm -f "$expected_bundle"',
+      '    printf "%s\\n" "changed-gate bundle mismatch" >&2',
+      "    exit 67",
+      "  fi",
+      '  rm -f "$expected_bundle"',
+      "fi",
+      'if [ -n "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES:-}" ]; then',
+      '  actual_bundle_bytes="$(wc -c < .openclaw-crabbox-changed-gate.bundle 2>/dev/null | tr -d " ")"',
+      '  if [ "$actual_bundle_bytes" != "$OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES" ]; then',
+      '    printf "%s\\n" "changed-gate bundle size mismatch" >&2',
+      "    exit 67",
+      "  fi",
+      "fi",
+      'if [ "${OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD:-}" = "1" ] && [ ! -f "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
+      '  printf "%s\\n" "changed-gate bundle was not force-added" >&2',
+      "  exit 67",
       "fi",
       'printf "%s\\0" "__OPENCLAW_FAKE_CRABBOX_V1__"',
       'printf "%s\\0" "$PWD"',
@@ -187,6 +237,17 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "  require('node:fs').mkdirSync('.crabbox/runs/run_fake', { recursive: true });",
     "  require('node:fs').writeFileSync('.crabbox/runs/run_fake/fake-artifacts.tgz', 'fake artifact\\n');",
     "}",
+    "if (Object.hasOwn(process.env, 'OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE')) {",
+    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
+    "  const bundle = require('node:fs').existsSync(bundlePath) ? require('node:fs').readFileSync(bundlePath, 'utf8') : null;",
+    "  if (bundle !== process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE) { process.stderr.write('changed-gate bundle mismatch\\n'); process.exit(67); }",
+    "}",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES) {",
+    "  const bundlePath = '.openclaw-crabbox-changed-gate.bundle';",
+    "  const size = require('node:fs').existsSync(bundlePath) ? require('node:fs').statSync(bundlePath).size : -1;",
+    "  if (size !== Number(process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES)) { process.stderr.write('changed-gate bundle size mismatch\\n'); process.exit(67); }",
+    "}",
+    "if (process.env.OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD === '1' && !require('node:fs').existsSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER || '')) { process.stderr.write('changed-gate bundle was not force-added\\n'); process.exit(67); }",
     "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
   ].join("\n");
   writeFileSync(helperPath, `${helperScript}\n`, "utf8");
@@ -201,6 +262,11 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     'if (args[0] === "run" && args[1] === "--help") {',
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
+    "}",
+    `if (args[0] === "run" || args[0] === "warmup") { ${stampClaimScript} }`,
+    'if (args[0] === "run" && Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS || "0", 10) !== 0) {',
+    "  process.stderr.write('fake run failure\\n');",
+    "  process.exit(Number.parseInt(process.env.OPENCLAW_FAKE_CRABBOX_RUN_STATUS, 10));",
     "}",
     `require(${JSON.stringify(helperPath)});`,
   ].join("\n");
@@ -328,9 +394,57 @@ function makeFakeGit(
       "#!/bin/sh",
       'if [ "$1" = "worktree" ] && [ "$2" = "add" ]; then',
       '  mkdir -p "$4"',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET:-}" ]; then',
+      '    ln -s "$OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET" "$4/.openclaw-crabbox-changed-gate.bundle"',
+      "  fi",
       "  exit 0",
       "fi",
       'if [ "$1" = "-C" ] && [ "$3" = "sparse-checkout" ] && [ "$4" = "disable" ]; then',
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "rev-parse" ]; then',
+      '  if [ "$4" = "HEAD" ]; then',
+      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_SHA:-def456}"',
+      '  elif [ "$4" = "HEAD^{tree}" ]; then',
+      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_HEAD_TREE_SHA:-tree456}"',
+      "  else",
+      '    printf "%s\\n" "${OPENCLAW_FAKE_GIT_BASE_SHA:-abc123}"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "-c" ] && [ "$7" = "commit-tree" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER:-}" ]; then',
+      '    for arg in "$@"; do [ "$arg" != "-p" ] || exit 68; done',
+      '    : > "$OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER"',
+      "  fi",
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER:-}" ]; then',
+      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER"',
+      "  fi",
+      '  printf "%s\\n" "${OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA:-synthetic789}"',
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "update-ref" ] && [ "$4" = "HEAD" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER:-}" ]; then',
+      '    : > "$OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "bundle" ] && [ "$4" = "create" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER:-}" ]; then',
+      '    [ "$#" = "6" ] && [ "$6" = "HEAD" ] || exit 68',
+      '    : > "$OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER"',
+      "  fi",
+      '  if [ -n "${OPENCLAW_FAKE_GIT_BUNDLE_BYTES:-}" ]; then',
+      '    head -c "$OPENCLAW_FAKE_GIT_BUNDLE_BYTES" /dev/zero | tr "\\000" x > "$5"',
+      "  else",
+      '    printf "%s" "${OPENCLAW_FAKE_GIT_BUNDLE:-fake-bundle}" > "$5"',
+      "  fi",
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "-C" ] && [ "$3" = "add" ] && [ "$4" = "-f" ]; then',
+      '  if [ -n "${OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER:-}" ]; then',
+      '    : > "$OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER"',
+      "  fi",
       "  exit 0",
       "fi",
       'if [ "$1" = "-C" ] && [ "$3" = "reset" ] && [ "$4" = "--mixed" ]; then',
@@ -340,8 +454,8 @@ function makeFakeGit(
       '  rm -rf "$4"',
       "  exit 0",
       "fi",
-      ...Object.entries(responses).flatMap(([key, response]) => {
-        const args = key.split("\u0000");
+      ...Object.entries(responses).flatMap(([responseKey, response]) => {
+        const args = responseKey.split("\u0000");
         return [
           `if ${shellArgListCondition(args)}; then`,
           response.stdout ? `  printf "%s" ${shellSingleQuote(response.stdout)}` : "",
@@ -363,8 +477,13 @@ function makeFakeGit(
     "const fs = require('node:fs');",
     "const responses = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || '{}')));",
     "const args = process.argv.slice(2);",
-    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); process.exit(0); }",
+    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); if (process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET) fs.symlinkSync(process.env.OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET, require('node:path').join(args[3], '.openclaw-crabbox-changed-gate.bundle')); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'rev-parse') { const value = args[3] === 'HEAD' ? process.env.OPENCLAW_FAKE_GIT_HEAD_SHA || 'def456' : args[3] === 'HEAD^{tree}' ? process.env.OPENCLAW_FAKE_GIT_HEAD_TREE_SHA || 'tree456' : process.env.OPENCLAW_FAKE_GIT_BASE_SHA || 'abc123'; process.stdout.write(`${value}\\n`); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === '-c' && args[6] === 'commit-tree') { if (process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER) { if (args.includes('-p')) process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER, ''); } if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER, ''); process.stdout.write(`${process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_SHA || 'synthetic789'}\\n`); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'update-ref' && args[3] === 'HEAD') { if (process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER, ''); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'bundle' && args[3] === 'create') { if (process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER) { if (args.length !== 6 || args[5] !== 'HEAD') process.exit(68); fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER, ''); } const bytes = Number(process.env.OPENCLAW_FAKE_GIT_BUNDLE_BYTES || 0); fs.writeFileSync(args[4], bytes ? 'x'.repeat(bytes) : process.env.OPENCLAW_FAKE_GIT_BUNDLE || 'fake-bundle'); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'add' && args[3] === '-f') { if (process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER) fs.writeFileSync(process.env.OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER, ''); process.exit(0); }",
     "if (args[0] === '-C' && args[2] === 'reset' && args[3] === '--mixed') { process.exit(0); }",
     "if (args[0] === 'worktree' && args[1] === 'remove') { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }",
     "const key = args.join('\\u0000');",
@@ -491,7 +610,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 8_000): Pr
     if (predicate()) {
       return;
     }
-    await delay(50);
+    await delay(10);
   }
   throw new Error("timed out waiting for condition");
 }
@@ -505,7 +624,7 @@ async function waitForProcessExit(
       child.once("error", reject);
       child.once("exit", (status, signal) => resolve({ status, signal }));
     }),
-    delay(timeoutMs).then(() => {
+    delay(timeoutMs, undefined, { ref: false }).then(() => {
       throw new Error("timed out waiting for wrapper process exit");
     }),
   ]);
@@ -546,7 +665,9 @@ async function runSignalCleanupProof(sendSignals: (pid: number) => Promise<void>
     const runnerExit = waitForProcessExit(runner);
     await sendSignals(runner.pid!);
     await expect(runnerExit).resolves.toEqual({ status: 143, signal: null });
-    await waitForCondition(() => !isProcessAlive(descendantPid));
+    // The wrapper waits for the detached process group to disappear before exit.
+    // A live PID here would expose the cleanup-ordering regression this proves.
+    expect(isProcessAlive(descendantPid)).toBe(false);
   } finally {
     if (runner.pid && isProcessAlive(runner.pid)) {
       runner.kill("SIGKILL");
@@ -587,21 +708,35 @@ const remoteChangedGateEnvPrefix =
   "OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1";
 const remoteChangedGateExport = `export ${remoteChangedGateEnvPrefix};`;
 const remoteChangedGateFetch =
-  'git fetch -q --depth=1 origin "$openclaw_changed_gate_base:refs/remotes/origin/main"';
+  'git fetch -q --depth=2 origin "$openclaw_changed_gate_base:refs/remotes/origin/main"';
 
 function expectChangedGateGitBootstrap(remoteCommand: string): void {
   expect(remoteCommand).toContain("command -v git");
+  expect(remoteCommand).toContain("openclaw_changed_gate_base=abc123");
   expect(remoteCommand).toContain(
-    "openclaw_changed_gate_base=${OPENCLAW_CHANGED_GATE_BASE:-abc123}",
+    "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
+  );
+  expect(remoteCommand).toContain("mktemp /tmp/openclaw-changed-gate.XXXXXX");
+  expect(remoteCommand).toContain('cp "$openclaw_changed_gate_bundle"');
+  expect(remoteCommand).toContain("git init -q || exit 2");
+  expect(remoteCommand).toContain(`${remoteChangedGateFetch} || exit 2`);
+  expect(remoteCommand).toContain(
+    'git fetch -q "$openclaw_changed_gate_bundle_tmp" HEAD:refs/heads/openclaw-changed-gate-tree',
+  );
+  expect(remoteCommand).toContain("git rev-parse refs/heads/openclaw-changed-gate-tree^{tree}");
+  expect(remoteCommand).toContain(
+    'commit-tree "$openclaw_changed_gate_tree" -p refs/remotes/origin/main',
   );
   expect(remoteCommand).toContain(
-    'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"',
+    'git update-ref refs/heads/openclaw-changed-gate-head "$openclaw_changed_gate_head"',
   );
   expect(remoteCommand).toContain(
-    '[ "$openclaw_changed_gate_remote_base" != "$openclaw_changed_gate_base" ]',
+    'git reset --hard --quiet "$openclaw_changed_gate_target" || exit 2',
   );
-  expect(remoteCommand).toContain("git init -q");
-  expect(remoteCommand).toContain(remoteChangedGateFetch);
+  expect(remoteCommand).toContain("git clean -fd -q || exit 2");
+  expect(remoteCommand).toContain("changed-gate bundle disappeared before import");
+  expect(remoteCommand).not.toContain("git apply");
+  expect(remoteCommand).not.toContain("; &&");
 }
 
 afterAll(() => {
@@ -650,6 +785,30 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toContain("local-container");
+  });
+
+  it("hints at lease expiry when a reused-lease run fails fast", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--id", "tbx_expired_fixture", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "1" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "run --id tbx_expired_fixture failed fast; reusable leases expire after their idle timeout",
+    );
+  });
+
+  it("keeps failed runs without a reused lease free of the expiry hint", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "local-container", "--", "echo ok"],
+      { env: { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "1" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("failed fast; reusable leases expire");
   });
 
   it("requires a current Crabbox binary for Blacksmith Testbox runs", () => {
@@ -760,8 +919,242 @@ describe("scripts/crabbox-wrapper", () => {
       "--id",
       "tbx_owned",
       "--",
+      "env",
+      "CI=true",
       "echo ok",
     ]);
+  });
+
+  it("fails before reuse when a Blacksmith Testbox is claimed by another repo", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = "tbx_claimed";
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    writeFileSync(
+      claimPath,
+      `${JSON.stringify({ leaseID: id, repoRoot: "/tmp/other-repo" })}\n`,
+      "utf8",
+    );
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(`lease ${id} is claimed by repo /tmp/other-repo`);
+    expect(result.stderr).toContain(`use --reclaim to claim it for ${repoRoot}`);
+
+    const reclaimed = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--reclaim", "--", "echo ok"],
+      { env: { ...testHomeEnv(home), XDG_STATE_HOME: stateRoot } },
+    );
+    expect(reclaimed.status).toBe(0);
+    expect(parseFakeCrabboxOutput(reclaimed).args).toContain("--reclaim");
+  });
+
+  it.each([
+    { label: "successful", status: 0 },
+    { label: "failed", status: 7 },
+  ])("restores delegated Blacksmith claims after $label runs", ({ status }) => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = `tbx_restore_${status}`;
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    const originalClaim = {
+      leaseID: id,
+      repoRoot,
+      owner: "preserved-owner",
+      metadata: { keep: true },
+    };
+    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          ...(status > 0 ? { OPENCLAW_FAKE_CRABBOX_RUN_STATUS: String(status) } : {}),
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(status);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+  });
+
+  it("restores a created delegated Blacksmith claim by captured timing lease id", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const stateRoot = path.join(home, ".local", "state");
+    const claimsDir = path.join(stateRoot, "crabbox", "claims");
+    const id = "tbx_created_timing";
+    const claimPath = path.join(claimsDir, `${id}.json`);
+    const decoyPath = path.join(claimsDir, "tbx_created_decoy.json");
+    const originalClaim = { leaseID: id, repoRoot, metadata: { keep: true } };
+    const decoyClaim = { leaseID: "tbx_created_decoy", repoRoot };
+    mkdirSync(claimsDir, { recursive: true });
+    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+    writeFileSync(decoyPath, `${JSON.stringify(decoyClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--keep", "--timing-json", "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: decoyPath,
+          OPENCLAW_FAKE_CRABBOX_TIMING_LEASE_ID: id,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+    expect(JSON.parse(readFileSync(decoyPath, "utf8"))).toEqual({
+      ...decoyClaim,
+      repoRoot: parseFakeCrabboxOutput(result).cwd,
+    });
+  });
+
+  it("restores created delegated Blacksmith claims from the temporary checkout fallback", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const stateRoot = path.join(home, ".local", "state");
+    const claimsDir = path.join(stateRoot, "crabbox", "claims");
+    const claimPath = path.join(claimsDir, "tbx_created_fallback.json");
+    const siblingPath = path.join(claimsDir, "tbx_created_sibling.json");
+    const foreignPath = path.join(claimsDir, "tbx_foreign_fallback.json");
+    const createdClaim = { leaseID: "tbx_created_fallback", repoRoot, owner: "created" };
+    const siblingClaim = { leaseID: "tbx_created_sibling", repoRoot, owner: "sibling" };
+    const foreignClaim = {
+      leaseID: "tbx_foreign_fallback",
+      repoRoot: "/tmp/genuinely-foreign-repo",
+    };
+    mkdirSync(claimsDir, { recursive: true });
+    writeFileSync(claimPath, `${JSON.stringify(createdClaim)}\n`, "utf8");
+    writeFileSync(siblingPath, `${JSON.stringify(siblingClaim)}\n`, "utf8");
+    writeFileSync(foreignPath, `${JSON.stringify(foreignClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--keep", "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_EXTRA_CLAIM_PATH: siblingPath,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(createdClaim);
+    expect(JSON.parse(readFileSync(siblingPath, "utf8"))).toEqual(siblingClaim);
+    expect(JSON.parse(readFileSync(foreignPath, "utf8"))).toEqual(foreignClaim);
+  });
+
+  it("restores a failed delegated Blacksmith claim kept on failure", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", "tbx_created_failure.json");
+    const originalClaim = {
+      leaseID: "tbx_created_failure",
+      repoRoot,
+      metadata: { keepOnFailure: true },
+    };
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    writeFileSync(claimPath, `${JSON.stringify(originalClaim)}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--keep-on-failure", "--", "false"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_RUN_STATUS: "7",
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(7);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(originalClaim);
+  });
+
+  it("leaves genuinely foreign delegated Blacksmith claims untouched", () => {
+    const home = mkdtempSync(path.join(tmpdir(), "openclaw-crabbox-home-"));
+    tempDirs.push(home);
+    const id = "tbx_foreign_claim";
+    const keyPath = path.join(testCrabboxConfigDir(home), "testboxes", id, "id_ed25519");
+    mkdirSync(path.dirname(keyPath), { recursive: true });
+    writeFileSync(keyPath, "fake test key\n", "utf8");
+    const stateRoot = path.join(home, ".local", "state");
+    const claimPath = path.join(stateRoot, "crabbox", "claims", `${id}.json`);
+    mkdirSync(path.dirname(claimPath), { recursive: true });
+    const foreignClaim = {
+      leaseID: id,
+      repoRoot: "/tmp/genuinely-foreign-repo",
+      owner: "foreign-owner",
+    };
+    writeFileSync(claimPath, `${JSON.stringify({ ...foreignClaim, repoRoot })}\n`, "utf8");
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--id", id, "--", "echo ok"],
+      {
+        env: {
+          ...testHomeEnv(home),
+          XDG_STATE_HOME: stateRoot,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_PATH: claimPath,
+          OPENCLAW_FAKE_CRABBOX_CLAIM_REPO_ROOT: foreignClaim.repoRoot,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(JSON.parse(readFileSync(claimPath, "utf8"))).toEqual(foreignClaim);
   });
 
   it("lets Crabbox resolve reusable Testbox slugs", () => {
@@ -782,7 +1175,33 @@ describe("scripts/crabbox-wrapper", () => {
       "--id",
       "blue-hermit",
       "--",
+      "env",
+      "CI=true",
       "echo ok",
+    ]);
+  });
+
+  it("exports CI for complete Blacksmith Testbox shell snippets", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--shell",
+        "--",
+        "cd packages && pnpm install && pnpm build",
+      ],
+    );
+
+    expect(result.status).toBe(0);
+    expect(parseFakeCrabboxOutput(result).args).toEqual([
+      "run",
+      "--provider",
+      "blacksmith-testbox",
+      "--shell",
+      "--",
+      "export CI=true; cd packages && pnpm install && pnpm build",
     ]);
   });
 
@@ -836,7 +1255,7 @@ describe("scripts/crabbox-wrapper", () => {
     ]);
 
     const output = parseFakeCrabboxOutput(result);
-    const remoteCommand = normalizeShellLineEndings(output.scriptContent);
+    const remoteCommand = normalizeShellLineEndings(output.scriptContent!);
     expect(result.status).toBe(0);
     expect(output.args.slice(0, 7)).toEqual([
       "run",
@@ -1502,7 +1921,7 @@ describe("scripts/crabbox-wrapper", () => {
         "env -i bash scripts/package-mac-app.sh >out.log 2>&1",
         "openclaw_crabbox_env -i bash scripts/package-mac-app.sh >out.log 2>&1",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1558,7 +1977,7 @@ describe("scripts/crabbox-wrapper", () => {
         "time env -i bash scripts/package-mac-app.sh",
         "time openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1585,7 +2004,7 @@ describe("scripts/crabbox-wrapper", () => {
         "{ env -i bash scripts/package-mac-app.sh; }",
         "{ openclaw_crabbox_env -i bash scripts/package-mac-app.sh; }",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -1677,7 +2096,7 @@ describe("scripts/crabbox-wrapper", () => {
         "PATH=/usr/bin:/bin env -i bash scripts/package-mac-app.sh",
         "PATH=/usr/bin:/bin openclaw_crabbox_env -i bash scripts/package-mac-app.sh",
       ],
-    ]) {
+    ] as const) {
       const result = runWrapper(
         "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
         ["run", "--provider", "aws", "--target", "macos", "--shell", "--", shellCommand],
@@ -3156,17 +3575,19 @@ describe("scripts/crabbox-wrapper", () => {
 
   it("retries a cold Crabbox whose run --help is slower than the default probe timeout", () => {
     const helpText = "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n";
-    // First probe is SIGKILLed at 150ms; the retry gets the full generous timeout
-    // and reads the (600ms) stderr help, so the wrapper must not hard-fail.
+    // First probe is SIGKILLed at 25ms; the retry gets the full generous timeout
+    // and reads the (80ms) stderr help, so the wrapper must not hard-fail.
     const result = runWrapper(helpText, ["--version"], {
-      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "150" },
-      extraPathEntries: [makeSlowHelpCrabbox(helpText, 600)],
+      env: { OPENCLAW_TEST_CRABBOX_METADATA_PROBE_TIMEOUT_MS: "25" },
+      extraPathEntries: [makeSlowHelpCrabbox(helpText, 80)],
     });
 
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stderr).not.toContain("could not parse provider list");
-    expect(result.stderr).not.toContain("selected binary failed basic --version/--help sanity checks");
+    expect(result.stderr).not.toContain(
+      "selected binary failed basic --version/--help sanity checks",
+    );
     expect(result.stderr).toContain(
       "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
     );
@@ -3227,9 +3648,9 @@ describe("scripts/crabbox-wrapper", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain("syncing from temporary full checkout");
-    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from origin/main");
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from abc123");
     expect(parseFakeCrabboxOutput(result).args.join(" ")).toContain(
-      'openclaw_changed_gate_remote_base="$(git rev-parse --verify refs/remotes/origin/main 2>/dev/null || true)"',
+      "openclaw_changed_gate_bundle=.openclaw-crabbox-changed-gate.bundle",
     );
     expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
@@ -3281,14 +3702,200 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.status).toBe(0);
     expect(output.args).toContain("--shell");
     expectChangedGateGitBootstrap(remoteCommand);
-    expect(remoteCommand).toContain("git reset --mixed --quiet refs/remotes/origin/main");
-    expect(remoteCommand).toContain("git add -A");
-    expect(remoteCommand).toContain("git diff --cached --quiet");
-    expect(remoteCommand).toContain("commit -q --no-gpg-sign -m remote-changed-gate-tree");
+    expect(remoteCommand).toContain("refs/heads/openclaw-changed-gate-head");
     expect(remoteCommand).toMatch(
       /&& env OPENCLAW_CHECK_CHANGED_REMOTE_CHILD=1 OPENCLAW_CHANGED_LANES_RAW_SYNC=1 CI=1 corepack pnpm check:changed$/u,
     );
   });
+
+  it("uses an explicit release base for changed-gate sync and remote Git metadata", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+        "--base",
+        "origin/release/2026.7.2",
+        "--head",
+        "HEAD",
+      ],
+      {
+        env: { OPENCLAW_FAKE_GIT_BASE_SHA: "release123" },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_CHECK_RELEASE_REF_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_RELEASE_HEAD_KEY]: { stdout: "release123\n" },
+        },
+      },
+    );
+
+    const remoteCommand = normalizeShellLineEndings(
+      parseFakeCrabboxOutput(result).args.at(-1) ?? "",
+    );
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("overlaying local HEAD as worktree changes from release123");
+    expect(remoteCommand).toContain("openclaw_changed_gate_base=release123");
+    expect(remoteCommand).toContain(
+      "openclaw_changed_gate_alias=refs/remotes/origin/release/2026.7.2",
+    );
+    expect(remoteCommand).toContain(
+      'git update-ref "$openclaw_changed_gate_alias" refs/remotes/origin/main',
+    );
+    expect(remoteCommand).toContain(
+      "corepack pnpm check:changed --base origin/release/2026.7.2 --head HEAD",
+    );
+  });
+
+  it("rejects changed-gate revision expressions that cannot be recreated remotely", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+        "--base",
+        "origin/main~1",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "remote changed-gate sync requires an exact origin/<branch> base; received: origin/main~1",
+    );
+  });
+
+  it("rejects compound changed gates with incompatible bases", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "aws",
+        "--shell",
+        "--",
+        "pnpm check:changed --base origin/release/2026.7.2 && pnpm check:changed --base origin/hotfix",
+      ],
+      {
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "remote changed-gate sync requires one base; received: origin/release/2026.7.2, origin/hotfix",
+    );
+  });
+
+  it("materializes the changed-gate bundle in the temporary sync checkout", () => {
+    const bundle = "synthetic-bundle";
+    const markerDir = makeTempDir(tempDirs, "openclaw-changed-gate-force-add-");
+    const forceAddMarker = path.join(markerDir, "force-added");
+    const syntheticCommitMarker = path.join(markerDir, "synthetic-commit");
+    const syntheticHeadMarker = path.join(markerDir, "synthetic-head");
+    const rootCommitMarker = path.join(markerDir, "root-commit");
+    const selfContainedBundleMarker = path.join(markerDir, "self-contained-bundle");
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE: bundle,
+          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_FORCE_ADD: "1",
+          OPENCLAW_FAKE_GIT_BUNDLE: bundle,
+          OPENCLAW_FAKE_GIT_FORCE_ADD_MARKER: forceAddMarker,
+          OPENCLAW_FAKE_GIT_SYNTHETIC_COMMIT_MARKER: syntheticCommitMarker,
+          OPENCLAW_FAKE_GIT_SYNTHETIC_HEAD_MARKER: syntheticHeadMarker,
+          OPENCLAW_FAKE_GIT_ROOT_COMMIT_MARKER: rootCommitMarker,
+          OPENCLAW_FAKE_GIT_SELF_CONTAINED_BUNDLE_MARKER: selfContainedBundleMarker,
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("changed-gate bundle mismatch");
+    expect(existsSync(forceAddMarker)).toBe(true);
+    expect(existsSync(syntheticCommitMarker)).toBe(true);
+    expect(existsSync(syntheticHeadMarker)).toBe(true);
+    expect(existsSync(rootCommitMarker)).toBe(true);
+    expect(existsSync(selfContainedBundleMarker)).toBe(true);
+  });
+
+  it("transports changed-gate bundles larger than the child-process buffer", () => {
+    const bundleBytes = 2 * 1024 * 1024;
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+      {
+        env: {
+          OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE_BYTES: String(bundleBytes),
+          OPENCLAW_FAKE_GIT_BUNDLE_BYTES: String(bundleBytes),
+        },
+        gitResponses: {
+          [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+          [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+          [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("changed-gate bundle size mismatch");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "does not follow a checkout-controlled changed-gate bundle symlink",
+    () => {
+      const fixtureDir = makeTempDir(tempDirs, "openclaw-changed-gate-symlink-");
+      const victimPath = path.join(fixtureDir, "victim");
+      const victimContents = "preserve-me\n";
+      const bundle = "synthetic-bundle";
+      writeFileSync(victimPath, victimContents, "utf8");
+
+      const result = runWrapper(
+        "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+        ["run", "--provider", "aws", "--", "corepack", "pnpm", "check:changed"],
+        {
+          env: {
+            OPENCLAW_FAKE_CRABBOX_EXPECT_CHANGED_GATE_BUNDLE: bundle,
+            OPENCLAW_FAKE_GIT_BUNDLE: bundle,
+            OPENCLAW_FAKE_GIT_CHANGED_GATE_BUNDLE_SYMLINK_TARGET: victimPath,
+          },
+          gitResponses: {
+            [GIT_CONFIG_SPARSE_KEY]: { stdout: "true\n" },
+            [GIT_STATUS_PORCELAIN_KEY]: { stdout: "" },
+            [GIT_MERGE_BASE_MAIN_HEAD_KEY]: { stdout: "abc123\n" },
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(readFileSync(victimPath, "utf8")).toBe(victimContents);
+    },
+  );
 
   it("bootstraps Git metadata for non-sparse changed gates on remote raw syncs", () => {
     const result = runWrapper(
@@ -4183,7 +4790,7 @@ describe("scripts/crabbox-wrapper", () => {
     async () => {
       await runSignalCleanupProof(async (runnerPid) => {
         process.kill(runnerPid, "SIGTERM");
-        await delay(50);
+        await delay(20);
         process.kill(runnerPid, "SIGTERM");
       });
     },

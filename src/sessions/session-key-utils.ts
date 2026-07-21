@@ -15,12 +15,17 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
-export type ParsedSessionDeliveryRoute = {
+type ParsedSessionDeliveryRoute = {
   accountId?: string;
   channel: string;
   peerId: string;
   peerKind: "channel" | "direct" | "dm" | "group";
   threadId?: string;
+};
+
+type ParsedCronRunScopeSuffix = {
+  baseSessionKey: string | undefined;
+  runId: string | undefined;
 };
 
 export type RawSessionConversationRef = {
@@ -60,7 +65,7 @@ const CASE_PRESERVING_PEERS: readonly CasePreservingPeerDescriptor[] = [
 ];
 
 /** True when (channel, peerKind) owns a case-sensitive opaque peer ID. */
-export function isCasePreservingPeer(
+function isCasePreservingPeer(
   channel: string | undefined | null,
   peerKind: string | undefined | null,
 ): boolean {
@@ -287,6 +292,32 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
     return false;
   }
   return /^cron:[^:]+:run:[^:]+(?::|$)/.test(parsed.rest);
+}
+
+/**
+ * Splits the terminal per-run `:run:<id>` scope off an isolated cron session key
+ * (`agent:<id>:cron:<job>:run:<runId>`), yielding the cache-stable base key.
+ * The run scope is only ever appended to cron keys, so this is gated to that exact
+ * shape: any other key (including channel ids that embed a `:run:` segment) is returned
+ * unchanged with `runId` undefined, never truncating an unrelated session identity.
+ */
+export function parseCronRunScopeSuffix(
+  sessionKey: string | undefined | null,
+): ParsedCronRunScopeSuffix {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return { baseSessionKey: undefined, runId: undefined };
+  }
+  const parsed = parseAgentSessionKey(raw);
+  if (!parsed || !/^cron:[^:]+:run:[^:]+$/.test(parsed.rest)) {
+    return { baseSessionKey: raw, runId: undefined };
+  }
+  const runMarker = ":run:";
+  const markerIndex = raw.toLowerCase().lastIndexOf(runMarker);
+  return {
+    baseSessionKey: raw.slice(0, markerIndex),
+    runId: raw.slice(markerIndex + runMarker.length),
+  };
 }
 
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {

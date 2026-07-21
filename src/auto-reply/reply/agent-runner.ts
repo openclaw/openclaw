@@ -1,6 +1,6 @@
 // Orchestrates reply agent execution, payload building, and delivery callbacks.
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasSessionAutoModelFallbackProvenance,
@@ -12,6 +12,8 @@ import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { isLikelyContextOverflowError } from "../../agents/embedded-agent-helpers/errors.js";
 import {
+  hasCompletedSourceReplyDeliveryEvidence,
+  hasCompletedTerminalDeliveryEvidence,
   hasCommittedSourceReplyDeliveryEvidence,
   hasVisibleCommittedMessagingToolDeliveryEvidence,
   hasVisibleOutboundDeliveryEvidence,
@@ -22,9 +24,11 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
+import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
+import { deriveContextPromptTokens, hasNonzeroUsage } from "../../agents/usage.js";
+import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -32,10 +36,15 @@ import {
   resolveSessionPluginTraceLines,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  formatSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+} from "../../config/sessions/sqlite-marker.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { TypingMode } from "../../config/types.js";
-import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -45,6 +54,15 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import {
+  buildHandledBeforeAgentReplyPayloads,
+  runBeforeAgentReplyForTurn,
+  withBeforeAgentReplyObserver,
+} from "../../plugins/before-agent-reply.js";
+import {
+  buildAgentHookContextChannelFields,
+  buildAgentHookContextIdentityFields,
+} from "../../plugins/hook-agent-context.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -72,11 +90,11 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   buildEmptyInteractiveReplyPayload,
   buildKnownAgentRunFailureReplyPayload,
-  runAgentTurnWithFallback,
-} from "./agent-runner-execution.js";
+} from "./agent-runner-failure-reply.js";
 import {
   createShouldEmitToolOutput,
   createShouldEmitToolResult,
@@ -92,7 +110,10 @@ import {
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
+import {
+  buildThreadingToolContext,
+  resolveQueuedReplyExecutionConfig,
+} from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
@@ -103,9 +124,16 @@ import {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { attachMcpAppChannelAction } from "./mcp-app-channel-action.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
-import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
+import {
+  buildRecoverablePendingFinalDeliveryText,
+  buildPendingFinalDeliveryText,
+  normalizePendingFinalDeliveryPayloads,
+  sanitizePendingFinalDeliveryText,
+} from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
 import {
@@ -120,6 +148,7 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { normalizeReplyPayloadDirectives } from "./reply-delivery.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import {
@@ -130,9 +159,19 @@ import {
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
+import {
+  createReplyRestartRecoveryClaimController,
+  isDuplicateRestartRecoverySource,
+  retireTerminalRestartRecoverySourceClaim,
+} from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
+import { buildChannelSourceTurnId, readChannelSourceTurnId } from "./source-turn-id.js";
+import {
+  buildStrandedReplyDeliveryFailurePayload,
+  buildStrandedReplyRetryFollowupRun,
+} from "./stranded-reply-recovery.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -164,6 +203,18 @@ function markBeforeAgentRunBlockedPayloads(payloads: ReplyPayload[]): ReplyPaylo
   return payloads.map((payload) =>
     setReplyPayloadMetadata(payload, { beforeAgentRunBlocked: true }),
   );
+}
+
+function resolvePendingFinalDeliveryRetryText(params: {
+  isHeartbeat: boolean;
+  payload: ReplyPayload;
+}): string {
+  const pendingText = buildPendingFinalDeliveryText([params.payload]);
+  if (!params.isHeartbeat) {
+    return pendingText;
+  }
+  const stripped = stripHeartbeatToken(pendingText, { mode: "message" });
+  return stripped.shouldSkip ? "" : stripped.text || pendingText;
 }
 
 function buildSilentFallbackFailurePayload(params: {
@@ -227,7 +278,13 @@ function resolveReplyRunDeliveryContext(params: {
   runtimePolicySessionKey?: string;
   opts?: GetReplyOptions;
 }): DeliveryContext | undefined {
-  if (resolveSourceReplyPolicy(params).suppressDelivery) {
+  const sourceReplyPolicy = resolveSourceReplyPolicy(params);
+  if (
+    params.sessionCtx.InboundEventKind === "room_event" ||
+    sourceReplyPolicy.sendPolicyDenied ||
+    (sourceReplyPolicy.suppressDelivery &&
+      sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only")
+  ) {
     return undefined;
   }
   const threadId =
@@ -620,7 +677,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
           end += 1;
         }
         if (end < lines.length) {
-          addChars(tagMatch[1], lines.slice(index, end + 1).join("\n").length);
+          addChars(
+            expectDefined(tagMatch[1], "tag match capture group 1"),
+            lines.slice(index, end + 1).join("\n").length,
+          );
           index = end + 1;
           while ((lines[index] ?? "") === "") {
             index += 1;
@@ -739,63 +799,20 @@ async function accumulateSessionUsageFromTranscript(params: {
     return undefined;
   }
   try {
-    const candidates = resolveSessionTranscriptCandidates(
+    const usage = await readLatestSessionUsageFromTranscriptAsync({
       sessionId,
-      params.storePath,
-      params.sessionFile,
-    );
-    let transcriptText: string | undefined;
-    for (const candidate of candidates) {
-      try {
-        transcriptText = await fs.readFile(candidate, "utf-8");
-        break;
-      } catch {
-        continue;
-      }
-    }
-    if (!transcriptText) {
+      storePath: params.storePath,
+      sessionFile: params.sessionFile,
+    });
+    if (!usage) {
       return undefined;
     }
-
-    let input = 0;
-    let output = 0;
-    let cacheRead = 0;
-    let cacheWrite = 0;
-    let sawUsage = false;
-    for (const line of transcriptText.split(/\r?\n/)) {
-      if (!line.trim()) {
-        continue;
-      }
-      let parsed: { message?: { usage?: unknown } } | undefined;
-      try {
-        parsed = JSON.parse(line) as { message?: { usage?: unknown } };
-      } catch {
-        continue;
-      }
-      const message = parsed?.message;
-      if (!message) {
-        continue;
-      }
-      const usage = normalizeUsage(message?.usage as Parameters<typeof normalizeUsage>[0]);
-      if (!hasNonzeroUsage(usage)) {
-        continue;
-      }
-      sawUsage = true;
-      input += usage.input ?? 0;
-      output += usage.output ?? 0;
-      cacheRead += usage.cacheRead ?? 0;
-      cacheWrite += usage.cacheWrite ?? 0;
-    }
-    if (!sawUsage) {
-      return undefined;
-    }
-    const total = input + output + cacheRead + cacheWrite;
     return {
-      input: input || undefined,
-      output: output || undefined,
-      cacheRead: cacheRead || undefined,
-      cacheWrite: cacheWrite || undefined,
-      total: total || undefined,
+      input: usage.inputTokens,
+      output: usage.outputTokens,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      total: usage.totalTokens,
     };
   } catch {
     return undefined;
@@ -1035,13 +1052,13 @@ function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
     .trim();
 }
 
-function buildPendingFinalDeliveryText(payloads: ReplyPayload[]): string {
-  const text = payloads
-    .filter((payload) => payload.isReasoning !== true)
-    .map((payload) => payload.text)
-    .filter((textLocal): textLocal is string => Boolean(textLocal))
-    .join("\n\n");
-  return sanitizePendingFinalDeliveryText(text);
+function normalizeAssistantFinalDeliveryText(text: string): string {
+  const parsed = normalizeReplyPayloadDirectives({
+    payload: { text },
+    trimLeadingWhitespace: true,
+    parseMode: "auto",
+  });
+  return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
 function enqueueCommitmentExtractionForTurn(params: {
@@ -1127,6 +1144,28 @@ function refreshSessionEntryFromStore(params: {
   }
 }
 
+function resolveAdmittedRunSessionFile(params: {
+  agentId: string;
+  sessionId: string;
+  sessionFile?: string;
+  storePath?: string;
+}): string | undefined {
+  if (
+    params.sessionFile &&
+    sqliteSessionFileMarkerMatchesSession(params.sessionFile, params.sessionId)
+  ) {
+    return params.sessionFile;
+  }
+  if (params.storePath) {
+    return formatSqliteSessionFileMarker({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      storePath: params.storePath,
+    });
+  }
+  return params.sessionFile;
+}
+
 export async function runReplyAgent(params: {
   commandBody: string;
   transcriptCommandBody?: string;
@@ -1138,7 +1177,7 @@ export async function runReplyAgent(params: {
   isActive: boolean;
   isRunActive?: () => boolean;
   isStreaming: boolean;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   typing: TypingController;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -1197,7 +1236,8 @@ export async function runReplyAgent(params: {
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
   } = params;
-
+  // One lifecycle for all adoption sites in this run.
+  const turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
   let activeSessionEntry = sessionEntry;
   const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
@@ -1227,6 +1267,44 @@ export async function runReplyAgent(params: {
     mode: typingMode,
     isHeartbeat,
   });
+  const restartRecoverySourceTurnId = readChannelSourceTurnId(sessionCtx);
+  const restartRecoveryEntry =
+    sessionKey && storePath
+      ? (loadSessionEntry({
+          storePath,
+          sessionKey,
+          clone: false,
+          hydrateSkillPromptRefs: false,
+        }) ?? activeSessionEntry)
+      : activeSessionEntry;
+  if (
+    restartRecoverySourceTurnId &&
+    isDuplicateRestartRecoverySource(restartRecoveryEntry, restartRecoverySourceTurnId)
+  ) {
+    // Durable source ownership identifies provider redelivery even if the run
+    // became terminal before its claim cleanup committed.
+    if (
+      restartRecoveryEntry?.status !== "running" &&
+      sessionKey &&
+      storePath &&
+      hasRestartRecoverySourceClaim(restartRecoveryEntry, restartRecoverySourceTurnId)
+    ) {
+      const retired = await retireTerminalRestartRecoverySourceClaim({
+        sessionId: restartRecoveryEntry.sessionId,
+        sessionKey,
+        sourceTurnId: restartRecoverySourceTurnId,
+        storePath,
+      });
+      if (retired) {
+        activeSessionEntry = retired;
+        if (activeSessionStore) {
+          activeSessionStore[sessionKey] = retired;
+        }
+      }
+    }
+    typing.cleanup();
+    return undefined;
+  }
 
   const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
@@ -1260,22 +1338,121 @@ export async function runReplyAgent(params: {
     }
   };
 
+  let shouldQueueAfterSteerRejection = false;
+  let beforeAgentReplyDispatchedForSteer = false;
   if (effectiveShouldSteer && isActive) {
+    // Steer against the operation that owns THIS session's run slot. A native
+    // command continuation whose slot adoption was skipped (#104844) still
+    // carries a source-keyed reservation; steering by its stale sessionId
+    // would miss the live target run.
+    const registeredReplyOperation = sessionKey ? replyRunRegistry.get(sessionKey) : undefined;
     const activeReplyOperation =
-      providedReplyOperation ?? (sessionKey ? replyRunRegistry.get(sessionKey) : undefined);
+      providedReplyOperation?.key === sessionKey
+        ? providedReplyOperation
+        : (registeredReplyOperation ?? providedReplyOperation);
     const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
+    // Channel dispatch normally stamps the route-scoped source id. Internal
+    // callers can derive the same per-message identity from the prepared turn.
+    const steerRunId = expectDefined(
+      restartRecoverySourceTurnId ??
+        buildChannelSourceTurnId({
+          provider:
+            followupRun.originatingChannel ??
+            followupRun.run.messageProvider ??
+            sessionCtx.Provider,
+          accountId:
+            followupRun.originatingAccountId ??
+            followupRun.run.agentAccountId ??
+            sessionCtx.AccountId,
+          conversationId:
+            followupRun.originatingTo ??
+            followupRun.originatingChatId ??
+            sessionKey ??
+            followupRun.run.sessionKey,
+          messageId: followupRun.messageId ?? sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+        }) ??
+        normalizeOptionalString(opts?.runId),
+      "steered turn id",
+    );
+    const trigger = "user";
+    const hookResult = await runBeforeAgentReplyForTurn({
+      runId: steerRunId,
+      trigger,
+      event: { cleanedBody: followupRun.prompt },
+      context: {
+        runId: steerRunId,
+        agentId: followupRun.run.agentId,
+        sessionKey: sessionKey ?? followupRun.run.sessionKey,
+        sessionId: steerSessionId,
+        workspaceDir: followupRun.run.workspaceDir,
+        modelProviderId: followupRun.run.provider,
+        modelId: followupRun.run.model,
+        trigger,
+        ...buildAgentHookContextChannelFields({
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
+          messageChannel: followupRun.originatingChannel,
+          messageProvider: followupRun.run.messageProvider,
+          currentChannelId: followupRun.originatingChatId,
+          messageTo: followupRun.originatingTo,
+          senderId: followupRun.run.senderId,
+        }),
+        ...buildAgentHookContextIdentityFields({
+          trigger,
+          senderId: followupRun.run.senderId,
+          chatId: followupRun.originatingChatId,
+          channelContext: followupRun.run.channelContext,
+        }),
+      },
+    });
+    beforeAgentReplyDispatchedForSteer = true;
+    if (hookResult?.handled) {
+      typing.cleanup();
+      return buildHandledBeforeAgentReplyPayloads(hookResult.reply);
+    }
     const steerOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       steerSessionId,
       followupRun.prompt,
       {
         steeringMode: "all",
+        isInboundUserMessage: true,
+        ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+        ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
+        ...(followupRun.run.sourceReplyDeliveryMode
+          ? { sourceReplyDeliveryMode: followupRun.run.sourceReplyDeliveryMode }
+          : {}),
+        taskSuggestionDeliveryMode: followupRun.run.taskSuggestionDeliveryMode,
         ...(followupRun.userTurnTranscriptRecorder
           ? { userTurnTranscriptRecorder: followupRun.userTurnTranscriptRecorder }
           : {}),
       },
     );
     if (steerOutcome.queued) {
+      activeReplyOperation?.recordActivity();
+      try {
+        await turnAdoptionLifecycle?.onAdopted();
+      } catch (error) {
+        if (isIngressAdoptionLostError(error)) {
+          // Claim was tombstoned/superseded/guillotined after transcript commit.
+          // Cancel the active run so steered tools do not keep executing; do not
+          // rethrow — replaying ingress would duplicate the injected user turn.
+          const abortKey = sessionKey ?? queueKey;
+          if (abortKey) {
+            replyRunRegistry.abort(abortKey);
+          }
+          logVerbose(
+            `queue: active session ${steerSessionId} adoption lost after transcript commit (${error.code}); aborting steered turn without ingress replay`,
+          );
+          typing.cleanup();
+          return undefined;
+        }
+        // Ordinary callback failures: transcript-backed steering is irrevocable.
+        logVerbose(
+          `queue: active session ${steerSessionId} adoption finalizer failed after transcript commit: ${String(
+            error,
+          )}`,
+        );
+      }
       if (followupRun.currentInboundAudio === true) {
         activeReplyOperation?.markAcceptedSteeredInboundAudio();
       }
@@ -1283,6 +1460,9 @@ export async function runReplyAgent(params: {
       typing.cleanup();
       return undefined;
     }
+    // The active runtime still owns the turn but cannot prove transcript adoption.
+    // Keep the inbound message queued so ingress can finalize after a later run.
+    shouldQueueAfterSteerRejection = steerOutcome.reason === "transcript_commit_wait_unsupported";
     const summary = formatEmbeddedAgentQueueFailureSummary(steerOutcome);
     logVerbose(`queue: active session ${steerSessionId} rejected steering injection: ${summary}`);
   }
@@ -1290,12 +1470,12 @@ export async function runReplyAgent(params: {
   const activeRunQueueAction = resolveActiveRunQueueAction({
     isActive,
     isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup,
+    shouldFollowup: effectiveShouldFollowup || shouldQueueAfterSteerRejection,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
 
-  const queuedRunFollowupTurn = createFollowupRunner({
+  const baseQueuedRunFollowupTurn = createFollowupRunner({
     opts,
     typing,
     typingMode,
@@ -1307,6 +1487,18 @@ export async function runReplyAgent(params: {
     agentCfgContextTokens,
     toolProgressDetail,
   });
+  // A transcript-rejected steer can become this exact queued turn. Preserve its
+  // earlier hook decision without suppressing hooks for other queued messages.
+  const queuedRunFollowupTurn = (queued: FollowupRun) =>
+    beforeAgentReplyDispatchedForSteer && queued === followupRun
+      ? withBeforeAgentReplyObserver(
+          {
+            beforeDispatch: async () => false,
+            afterDispatch: async (result) => result,
+          },
+          () => baseQueuedRunFollowupTurn(queued),
+        )
+      : baseQueuedRunFollowupTurn(queued);
 
   if (activeRunQueueAction === "drop") {
     if (replyOperationRunState) {
@@ -1420,7 +1612,6 @@ export async function runReplyAgent(params: {
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
-
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   const replyRouteThreadId = resolveRoutedDeliveryThreadId({
     ctx: sessionCtx,
@@ -1443,6 +1634,7 @@ export async function runReplyAgent(params: {
       resetTriggered: effectiveResetTriggered,
       routeThreadId: replyRouteThreadId,
       upstreamAbortSignal: opts?.abortSignal,
+      onReplyAdmissionWaitChange: opts?.onReplyAdmissionWaitChange,
     });
     if (replyOperationRunState) {
       replyOperationRunState.admission =
@@ -1473,8 +1665,14 @@ export async function runReplyAgent(params: {
       });
       if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
         activeSessionEntry = admittedSessionEntry;
-        if (admittedSessionEntry.sessionFile) {
-          followupRun.run.sessionFile = admittedSessionEntry.sessionFile;
+        const admittedSessionFile = resolveAdmittedRunSessionFile({
+          agentId: followupRun.run.agentId,
+          sessionId: replyOperation.sessionId,
+          sessionFile: admittedSessionEntry.sessionFile,
+          storePath,
+        });
+        if (admittedSessionFile) {
+          followupRun.run.sessionFile = admittedSessionFile;
         }
       }
     }
@@ -1485,89 +1683,80 @@ export async function runReplyAgent(params: {
     shouldDrainQueuedFollowupsAfterClear = true;
     return value;
   };
-  const restartRecoveryDeliveryRunId = crypto.randomUUID();
-  let trackedRestartRecoveryDeliveryContext = false;
-  const persistRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!sessionKey || !storePath) {
-      return;
-    }
-    const entry = activeSessionStore?.[sessionKey] ?? activeSessionEntry;
-    const deliveryContext = resolveReplyRunDeliveryContext({
-      cfg,
-      sessionCtx,
+  const restartRecoverySameChannelThreadRequired = restartRecoverySourceTurnId
+    ? buildThreadingToolContext({
+        sessionCtx,
+        config: cfg,
+        hasRepliedRef: undefined,
+      }).sameChannelThreadRequired
+    : undefined;
+  const {
+    admitUserTurn,
+    beginBeforeAgentReply,
+    checkpointBeforeAgentReply,
+    clear: clearRestartRecoveryDeliveryClaim,
+    isArmed: isRestartRecoveryArmed,
+  } = createReplyRestartRecoveryClaimController({
+    admissionRunId:
+      normalizeOptionalString(sessionCtx.MessageSid) ??
+      normalizeOptionalString(sessionCtx.MessageSidFull),
+    getEntry: () =>
+      sessionKey ? (activeSessionStore?.[sessionKey] ?? activeSessionEntry) : activeSessionEntry,
+    getSessionId: () => replyOperation.sessionId,
+    beforeAgentReplyState: "admitted",
+    isRestartAbort: () =>
+      replyOperation.result?.kind === "aborted" &&
+      replyOperation.result.code === "aborted_for_restart",
+    resolveDeliveryContext: (entry) =>
+      sessionKey
+        ? resolveReplyRunDeliveryContext({
+            cfg,
+            sessionCtx,
+            sessionEntry: entry,
+            sessionKey,
+            runtimePolicySessionKey,
+            opts,
+          })
+        : undefined,
+    requesterAccountId:
+      followupRun.originatingAccountId ?? sessionCtx.AccountId ?? followupRun.run.agentAccountId,
+    requesterSenderId: sessionCtx.SenderId,
+    resolveUserTurnTarget: ({
+      entry,
+      sessionId,
+      sessionKey: targetSessionKey,
+      storePath: targetStorePath,
+    }) => ({
+      sessionId,
+      sessionKey: targetSessionKey,
       sessionEntry: entry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    });
-    if (!deliveryContext) {
-      return;
-    }
-    const updatedAt = Date.now();
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryRunId,
-      updatedAt,
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId && current.abortedLastRun !== true
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
+      ...(activeSessionStore ? { sessionStore: activeSessionStore } : {}),
+      storePath: targetStorePath,
+      agentId: followupRun.run.agentId,
+      cwd: followupRun.run.workspaceDir,
+      config: cfg,
+    }),
+    ...(sessionKey ? { sessionKey } : {}),
+    setEntry: (entry) => {
+      activeSessionEntry = entry;
+      if (activeSessionStore && sessionKey) {
+        activeSessionStore[sessionKey] = entry;
       }
-      trackedRestartRecoveryDeliveryContext =
-        persisted.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId;
-    }
-  };
-  const clearRestartRecoveryDeliveryContext = async (): Promise<void> => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return;
-    }
-    const patch: Partial<SessionEntry> = {
-      restartRecoveryDeliveryContext: undefined,
-      restartRecoveryDeliveryRunId: undefined,
-      updatedAt: Date.now(),
-    };
-    const persisted = await updateSessionEntry(
-      {
-        storePath,
-        sessionKey,
-      },
-      async (current) =>
-        current.sessionId === replyOperation.sessionId &&
-        current.abortedLastRun !== true &&
-        current.restartRecoveryDeliveryRunId === restartRecoveryDeliveryRunId
-          ? patch
-          : null,
-    );
-    if (persisted) {
-      activeSessionEntry = persisted;
-      if (activeSessionStore) {
-        activeSessionStore[sessionKey] = persisted;
-      }
-    }
-  };
-  const isRestartRecoveryArmed = (): boolean => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
-      return false;
-    }
-    const persisted = loadSessionEntry({
-      sessionKey,
-      storePath,
-      clone: false,
-      hydrateSkillPromptRefs: false,
-    });
-    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
-  };
+    },
+    sameChannelThreadRequired: restartRecoverySameChannelThreadRequired,
+    sourceTurnId: restartRecoverySourceTurnId,
+    sourceReplyDeliveryMode: sessionKey
+      ? resolveSourceReplyPolicy({
+          cfg,
+          sessionCtx,
+          sessionEntry: activeSessionEntry,
+          sessionKey,
+          runtimePolicySessionKey,
+          opts,
+        }).sourceReplyDeliveryMode
+      : opts?.sourceReplyDeliveryMode,
+    ...(storePath ? { storePath } : {}),
+  });
   type SessionResetOptions = {
     failureLabel: string;
     buildLogMessage: (nextSessionId: string) => string;
@@ -1708,37 +1897,109 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
-    await persistRestartRecoveryDeliveryContext();
-    const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
-      runAgentTurnWithFallback({
-        commandBody,
-        transcriptCommandBody,
-        followupRun,
-        sessionCtx,
-        replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
-        replyOperation,
-        opts,
-        typingSignals,
-        blockReplyPipeline,
-        blockStreamingEnabled,
-        blockReplyChunking,
-        resolvedBlockStreamingBreak,
-        applyReplyToMode,
-        shouldEmitToolResult,
-        shouldEmitToolOutput,
-        pendingToolTasks,
-        resetSessionAfterRoleOrderingConflict,
-        isHeartbeat,
-        sessionKey,
-        runtimePolicySessionKey,
-        getActiveSessionEntry: () => activeSessionEntry,
-        activeSessionStore,
-        storePath,
-        resolvedVerboseLevel,
-        toolProgressDetail,
-        replyMediaContext,
-        isRestartRecoveryArmed,
-      }),
+    const userTurnAdmission = await admitUserTurn(followupRun.userTurnTranscriptRecorder);
+    if (userTurnAdmission === "duplicate-source") {
+      return returnWithQueuedFollowupDrain(undefined);
+    }
+    // Adoption marks run start and must never be spool-replayed (would re-run tools).
+    // Suppressed delivery persists only the user transcript; crashed suppressed runs die
+    // silently. Deliverable turns atomically persist transcript plus recovery ownership.
+    await turnAdoptionLifecycle?.onAdopted();
+    const runOutcome = await withBeforeAgentReplyObserver(
+      {
+        beforeDispatch: async () => {
+          const shouldDispatch = await beginBeforeAgentReply();
+          if (!shouldDispatch || !beforeAgentReplyDispatchedForSteer) {
+            return shouldDispatch;
+          }
+          // The same source fell through from steering. Advance recovery while
+          // preserving the hook decision made before the attempted injection.
+          await checkpointBeforeAgentReply({ state: "continue" });
+          return false;
+        },
+        afterDispatch: async (hookResult) => {
+          if (!hookResult?.handled) {
+            await checkpointBeforeAgentReply({ state: "continue" });
+            return hookResult;
+          }
+          const hookReply = hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+          const hookFinalDeliveryText = buildRecoverablePendingFinalDeliveryText([hookReply]);
+          const normalizedHookReplies = normalizePendingFinalDeliveryPayloads([hookReply]);
+          let hookCheckpoint: Parameters<typeof checkpointBeforeAgentReply>[0] = {
+            state: normalizedHookReplies.length === 0 ? "handled-silent" : "handled-unrecoverable",
+          };
+          if (sessionKey && storePath && normalizedHookReplies.length > 0) {
+            const sourceReplyPolicy = resolveSourceReplyPolicy({
+              cfg,
+              sessionCtx,
+              sessionEntry: activeSessionEntry,
+              sessionKey,
+              runtimePolicySessionKey,
+              opts,
+            });
+            if (!sourceReplyPolicy.suppressDelivery) {
+              const pendingFinalDeliveryIntentId = crypto.randomUUID();
+              setReplyPayloadMetadata(hookReply, {
+                pendingFinalDeliveryIntentId,
+                pendingFinalDeliveryRetryText: hookFinalDeliveryText,
+              });
+              hookCheckpoint = {
+                state: hookFinalDeliveryText ? "handled-reply" : "handled-unrecoverable",
+                pendingFinalDelivery: {
+                  text: hookFinalDeliveryText ?? "",
+                  intentId: pendingFinalDeliveryIntentId,
+                  context: resolveReplyRunDeliveryContext({
+                    cfg,
+                    sessionCtx,
+                    sessionEntry: activeSessionEntry,
+                    sessionKey,
+                    runtimePolicySessionKey,
+                    opts,
+                  }),
+                },
+              };
+            } else {
+              // dispatch-from-config owns source visibility for every returned payload.
+              // This checkpoint records that recovery owes no delivery; the outer gate drops the reply.
+              hookCheckpoint = { state: "handled-silent" };
+            }
+          }
+          await checkpointBeforeAgentReply(hookCheckpoint);
+          return { ...hookResult, reply: hookReply };
+        },
+      },
+      () =>
+        traceAgentPhase("reply.run_agent_turn", () =>
+          runAgentTurnWithFallback({
+            commandBody,
+            transcriptCommandBody,
+            followupRun,
+            sessionCtx,
+            replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
+            replyOperation,
+            opts,
+            typingSignals,
+            blockReplyPipeline,
+            blockStreamingEnabled,
+            blockReplyChunking,
+            resolvedBlockStreamingBreak,
+            applyReplyToMode,
+            shouldEmitToolResult,
+            shouldEmitToolOutput,
+            pendingToolTasks,
+            resetSessionAfterRoleOrderingConflict,
+            isHeartbeat,
+            sessionKey,
+            runtimePolicySessionKey,
+            getActiveSessionEntry: () => activeSessionEntry,
+            activeSessionStore,
+            storePath,
+            resolvedVerboseLevel,
+            toolProgressDetail,
+            replyMediaContext,
+            isRestartRecoveryArmed,
+          }),
+        ),
     );
 
     if (runOutcome.kind === "final") {
@@ -1954,6 +2215,18 @@ export async function runReplyAgent(params: {
       clearCliSessionBinding,
       preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
+    if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
+      // A completed run that executed the persisted selection consumes the
+      // pending live-switch flag; CLI harness runs never hit the embedded
+      // attempt-recovery clear, so /status would report the switch forever.
+      await consolidateLiveModelSwitchAfterRun({
+        cfg,
+        sessionKey,
+        agentId: followupRun.run.agentId,
+        providerUsed,
+        modelUsed,
+      });
+    }
 
     const successfulSourceReplyDelivery = hasSuccessfulSourceReplyDelivery({
       blockReplyPipeline,
@@ -1964,19 +2237,18 @@ export async function runReplyAgent(params: {
     });
     const committedMessagingToolSourceReplyDelivery =
       hasCommittedSourceReplyDeliveryEvidence(runResult);
+    const completedSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
+    const visibleOutboundDelivery = hasVisibleOutboundDeliveryEvidence(runResult);
     const successfulSideEffectDelivery =
       successfulSourceReplyDelivery ||
       committedMessagingToolSourceReplyDelivery ||
-      hasVisibleOutboundDeliveryEvidence(runResult) ||
+      visibleOutboundDelivery ||
       runResult.didSendDeterministicApprovalPrompt === true;
     const successfulTerminalDelivery =
       hasSuccessfulTerminalSourceReplyDelivery({
         blockReplyPipeline,
         directlySentBlockPayloads,
-      }) ||
-      committedMessagingToolSourceReplyDelivery ||
-      hasVisibleOutboundDeliveryEvidence(runResult) ||
-      runResult.didSendDeterministicApprovalPrompt === true;
+      }) || hasCompletedTerminalDeliveryEvidence(runResult);
     // Compaction notices are progress, not a terminal reply. Dispatcher-backed
     // delivery settles after this run returns, so it cannot prove turn completion here.
     const shouldDeliverTerminalFailure = Boolean(
@@ -2005,10 +2277,30 @@ export async function runReplyAgent(params: {
           sessionCtx,
           cfg,
         });
-    if (
-      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
-      committedMessagingToolSourceReplyDelivery
-    ) {
+    const buildStrandedRetryMissingDeliveryDiagnostic = (): ReplyPayload | undefined => {
+      if (!sessionKey || !storePath || followupRun.strandedReplyRetry !== true) {
+        return undefined;
+      }
+      if (sessionCtx.InboundEventKind === "room_event" || completedSourceReplyDelivery) {
+        return undefined;
+      }
+      const sourceReplyPolicy = resolveSourceReplyPolicy({
+        cfg,
+        sessionCtx,
+        sessionEntry: activeSessionEntry,
+        sessionKey,
+        runtimePolicySessionKey,
+        opts,
+      });
+      if (
+        sourceReplyPolicy.sourceReplyDeliveryMode !== "message_tool_only" ||
+        sourceReplyPolicy.sendPolicyDenied
+      ) {
+        return undefined;
+      }
+      return buildStrandedReplyDeliveryFailurePayload();
+    };
+    if (opts?.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyDelivery) {
       await opts.onObservedReplyDelivery?.();
     }
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
@@ -2173,6 +2465,10 @@ export async function runReplyAgent(params: {
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
       }
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return returnWithQueuedFollowupDrain(strandedRetryDiagnostic);
+      }
       return returnWithQueuedFollowupDrain(undefined);
     }
 
@@ -2217,6 +2513,13 @@ export async function runReplyAgent(params: {
       }
     }
 
+    replyPayloads = attachMcpAppChannelAction({
+      payloads: replyPayloads,
+      channel: replyToChannel,
+      sessionKey,
+      view: runResult.latestMcpAppChannelView,
+    });
+
     const hasVisibleReplyPayload = replyPayloads.some(
       (payload) =>
         !isReplyPayloadStatusNotice(payload) &&
@@ -2236,6 +2539,10 @@ export async function runReplyAgent(params: {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
+      }
+      const strandedRetryDiagnostic = buildStrandedRetryMissingDeliveryDiagnostic();
+      if (strandedRetryDiagnostic) {
+        return returnWithQueuedFollowupDrain(strandedRetryDiagnostic);
       }
       return returnWithQueuedFollowupDrain(undefined);
     }
@@ -2560,7 +2867,8 @@ export async function runReplyAgent(params: {
     // Capture only policy-visible final payloads in session store to support
     // durable delivery retries. Hidden reasoning, message-tool-only replies,
     // and sendPolicy-denied replies must not become heartbeat-replayable text.
-    if (sessionKey && storePath && finalPayloads.length > 0) {
+    const isStrandedReplyRetryRun = followupRun.strandedReplyRetry === true;
+    if (sessionKey && storePath && (finalPayloads.length > 0 || isStrandedReplyRetryRun)) {
       const sourceReplyPolicy = resolveSourceReplyPolicy({
         cfg,
         sessionCtx,
@@ -2573,15 +2881,31 @@ export async function runReplyAgent(params: {
       // #85714: warn only for unusually substantive private final text. In
       // message_tool_only, no tool call can be intentional silence, and
       // finalDeliveryText also includes verbose/status/usage metadata.
-      const assistantFinalText = rawAssistantText ?? "";
-      if (
+      const assistantFinalText = normalizeAssistantFinalDeliveryText(
+        typeof runResult.meta?.finalAssistantVisibleText === "string"
+          ? runResult.meta.finalAssistantVisibleText
+          : (rawAssistantText ?? ""),
+      );
+      const isRoomEvent = sessionCtx.InboundEventKind === "room_event";
+      // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
+      // recovering here would duplicate that message.
+      const isStrandedReply =
+        !isHeartbeat &&
+        !isRoomEvent &&
         shouldWarnAboutPrivateMessageToolFinal({
           sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
           sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
-          successfulSourceReplyDelivery,
+          successfulSourceReplyDelivery: completedSourceReplyDelivery,
           finalText: assistantFinalText,
-        })
-      ) {
+        });
+      const retryMissingSourceDelivery =
+        isStrandedReplyRetryRun &&
+        !isHeartbeat &&
+        !isRoomEvent &&
+        sourceReplyPolicy.sourceReplyDeliveryMode === "message_tool_only" &&
+        !sourceReplyPolicy.sendPolicyDenied &&
+        !completedSourceReplyDelivery;
+      if (isStrandedReply) {
         warnPrivateMessageToolFinal({
           sessionKey,
           channel:
@@ -2591,6 +2915,27 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
+      }
+      if (isStrandedReply || retryMissingSourceDelivery) {
+        if (isStrandedReplyRetryRun) {
+          finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+        } else {
+          const retryEnqueued = enqueueFollowupRun(
+            queueKey,
+            buildStrandedReplyRetryFollowupRun(followupRun, {
+              finalText: assistantFinalText,
+              sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
+            }),
+            resolvedQueue,
+            "none",
+            runFollowupTurn,
+            false,
+            { position: "front" },
+          );
+          if (!retryEnqueued) {
+            finalPayloads = [...finalPayloads, buildStrandedReplyDeliveryFailurePayload()];
+          }
+        }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
@@ -2611,6 +2956,16 @@ export async function runReplyAgent(params: {
           })()
         : pendingText;
       if (resolvedPendingText) {
+        const pendingFinalDeliveryIntentId = crypto.randomUUID();
+        for (const payload of finalPayloads) {
+          setReplyPayloadMetadata(payload, {
+            pendingFinalDeliveryIntentId,
+            pendingFinalDeliveryRetryText: resolvePendingFinalDeliveryRetryText({
+              isHeartbeat,
+              payload,
+            }),
+          });
+        }
         const pendingFinalDeliveryContext = resolveReplyRunDeliveryContext({
           cfg,
           sessionCtx,
@@ -2624,6 +2979,7 @@ export async function runReplyAgent(params: {
           () => ({
             pendingFinalDelivery: true,
             pendingFinalDeliveryText: resolvedPendingText,
+            pendingFinalDeliveryIntentId,
             pendingFinalDeliveryContext,
             pendingFinalDeliveryCreatedAt: Date.now(),
             updatedAt: Date.now(),
@@ -2635,11 +2991,9 @@ export async function runReplyAgent(params: {
         );
       }
     }
-
     const result = returnWithQueuedFollowupDrain(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
     );
-
     return result;
   } catch (error) {
     // Drain/restart aborts stay silent and defer to post-restart main-session
@@ -2700,7 +3054,7 @@ export async function runReplyAgent(params: {
     throw error;
   } finally {
     try {
-      await clearRestartRecoveryDeliveryContext();
+      await clearRestartRecoveryDeliveryClaim();
     } catch (error) {
       logVerbose(
         `failed to clear restart recovery delivery context for ${sessionKey ?? "unknown"}: ${String(
@@ -2731,3 +3085,4 @@ export async function runReplyAgent(params: {
     typing.markDispatchIdle();
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

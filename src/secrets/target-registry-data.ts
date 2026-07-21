@@ -1,6 +1,6 @@
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -49,11 +49,11 @@ function hasWebProviderContract(
   return (plugin.contracts?.[contract]?.length ?? 0) > 0;
 }
 
-function listBundledWebProviderSecretTargetRegistryEntries(
-  bundledPlugins: readonly PluginManifestRecord[],
+function listPluginWebProviderSecretTargetRegistryEntries(
+  plugins: readonly PluginManifestRecord[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
-  for (const record of bundledPlugins) {
+  for (const record of plugins) {
     for (const config of WEB_PROVIDER_SECRET_CONFIGS) {
       if (
         hasWebProviderContract(record, config.contract) &&
@@ -66,12 +66,12 @@ function listBundledWebProviderSecretTargetRegistryEntries(
   return entries.toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function listBundledPluginConfigSecretTargetRegistryEntries(
-  bundledPlugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
+function listPluginConfigSecretTargetRegistryEntries(
+  plugins: readonly Pick<PluginManifestRecord, "id" | "configContracts">[],
 ): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
-  for (const record of bundledPlugins) {
+  for (const record of plugins) {
     const secretInputs = record.configContracts?.secretInputs?.paths ?? [];
     for (const secretInput of secretInputs) {
       const entry = createPluginOpenClawConfigSecretTargetEntry(record.id, secretInput.path);
@@ -458,40 +458,6 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     includeInAudit: true,
     providerIdPathSegmentIndex: 3,
   },
-  {
-    id: "tools.web.search.apiKey",
-    targetType: "tools.web.search.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "tools.web.search.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "tools.web.fetch.firecrawl.apiKey",
-    targetType: "tools.web.fetch.firecrawl.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "tools.web.fetch.firecrawl.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: true,
-    includeInAudit: true,
-  },
-  {
-    id: "tools.web.search.*.apiKey",
-    targetType: "tools.web.search.*.apiKey",
-    configFile: "openclaw.json",
-    pathPattern: "tools.web.search.*.apiKey",
-    secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
-    includeInPlan: true,
-    includeInConfigure: false,
-    includeInAudit: true,
-    providerIdPathSegmentIndex: 3,
-  },
 ];
 
 let cachedSecretTargetRegistry: SecretTargetRegistryEntry[] | null = null;
@@ -505,13 +471,18 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
     env: params.env,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
   }).plugins;
-  const bundledPlugins = plugins.filter((record) => record.origin === "bundled");
   const channelPlugins = plugins.filter((record) => record.channels.length > 0);
+  // Installed/workspace plugins own secret targets exactly like bundled ones
+  // (#104320: the Exa split moved web providers out of bundled origin and their
+  // targets vanished from the gateway's known-target registry). Entries stay
+  // manifest-scoped — web-provider contract + sensitive hint, or declared
+  // secretInput paths — so a non-bundled origin cannot widen target paths
+  // beyond its own declared contracts.
   return [
     ...CORE_SECRET_TARGET_REGISTRY,
-    ...listBundledWebProviderSecretTargetRegistryEntries(bundledPlugins),
-    ...listBundledPluginConfigSecretTargetRegistryEntries([
-      ...bundledPlugins,
+    ...listPluginWebProviderSecretTargetRegistryEntries(plugins),
+    ...listPluginConfigSecretTargetRegistryEntries([
+      ...plugins,
       ...listSourceBundledPluginConfigContractRecords(),
     ]),
     ...listChannelSecretTargetRegistryEntries(channelPlugins),
@@ -526,7 +497,19 @@ export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
 
 /** Returns the process-cached registry including bundled plugin/channel metadata. */
 /** Returns core plus plugin/channel secret target registry entries for the current metadata view. */
-export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
+export function getSecretTargetRegistry(params?: {
+  sourceTree?: boolean;
+}): SecretTargetRegistryEntry[] {
+  if (params?.sourceTree) {
+    // Docs generation needs the source plugin tree, never a process-cached or persisted snapshot.
+    return loadSecretTargetRegistryFromPluginMetadata({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+      },
+      preferPersisted: false,
+    });
+  }
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
   }
@@ -534,15 +517,4 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
     env: process.env,
   });
   return cachedSecretTargetRegistry;
-}
-
-/** Returns an uncached source-tree registry for docs/snapshot generation. */
-export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
-  return loadSecretTargetRegistryFromPluginMetadata({
-    env: {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
-    },
-    preferPersisted: false,
-  });
 }

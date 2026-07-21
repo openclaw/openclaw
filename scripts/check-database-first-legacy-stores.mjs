@@ -4,9 +4,21 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import ts from "typescript";
+import {
+  explicitUndefinedLegacyObjectPropertyValue,
+  mergeConditionalLegacyObjectPropertyValue,
+  mergeConditionalLiteralTexts,
+  mergeExhaustiveLiteralTexts,
+  mergeLegacyObjectPropertyValues,
+  mergeLegacyPathBranchAssignments,
+} from "./lib/legacy-store-path-domain.mjs";
 import { resolveRepoRoot, runAsScript, toLine, unwrapExpression } from "./lib/ts-guard-utils.mjs";
 
 const databaseFirstLegacyStoreSourceRoots = ["src", "extensions", "packages"];
+const databaseFirstNativeSourceRoots = ["apps/macos/Sources/OpenClaw"];
+const nativeLegacyPortGuardianMigrationPath =
+  "apps/macos/Sources/OpenClaw/PortGuardianRecordStore.swift";
+const nativeLegacyPortGuardianFilenamePattern = /\bport-guard\.(?:json|lock)\b/u;
 
 const legacyWriteCallees = new Set([
   "appendFile",
@@ -31,6 +43,7 @@ const legacyWriteCallees = new Set([
 const fsModuleSpecifiers = new Set(["node:fs", "node:fs/promises", "fs", "fs/promises"]);
 
 const helperWriteCallees = new Set([
+  "acquireFileLock",
   "appendRegularFile",
   "appendRegularFileSync",
   "replaceFileAtomic",
@@ -41,6 +54,7 @@ const helperWriteCallees = new Set([
   "writeJsonFileAtomically",
   "writeJsonSync",
   "writeTextAtomic",
+  "withFileLock",
 ]);
 
 const fsSafeStoreFactoryCallees = new Set([
@@ -69,10 +83,30 @@ const fsSafeStoreWriteMethods = new Set([
 const fsSafeJsonStoreWriteMethods = new Set(["update", "updateOr", "write"]);
 
 const helperWriteModulePattern =
-  /(?:^|\/)(?:fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
+  /(?:^|\/)(?:file-lock|fs-safe|json-files|json-store|private-file-store|replace-file)(?:\.[cm]?[jt]s)?$/u;
 const fsSafePackageModulePattern = /^@openclaw\/fs-safe(?:\/(?:root|store))?$/u;
 
 const bridgeMarkerPattern = /\btranscriptLocator\b|sqlite-transcript:\/\//u;
+
+// The restart handoff must survive its one cutover migration without leaving
+// filesystem fallback imports in the steady-state runtime owner.
+const legacyRestartSentinelMigrationPath = "src/infra/state-migrations.restart-sentinel.ts";
+const legacyRestartSentinelPreflightPath = "src/cli/program/config-guard.ts";
+const legacyRestartSentinelRuntimePath = "src/infra/restart-sentinel.ts";
+const legacyRestartSentinelPreflightFilenames = new Set([
+  "restart-sentinel.json",
+  "restart-sentinel.json.doctor-importing",
+]);
+const legacyRestartSentinelFilenamePattern =
+  /(?:^|[/\\])restart-sentinel\.json(?:\.doctor-importing)?$/u;
+const legacyRestartSentinelRuntimeImportSpecifiers = new Set([
+  "fs",
+  "fs/promises",
+  "node:fs",
+  "node:fs/promises",
+  "node:path",
+  "path",
+]);
 
 const legacyStorePatterns = [
   /\bsessions\.json\b/u,
@@ -81,32 +115,59 @@ const legacyStorePatterns = [
   /\bacp\/event-ledger\.json\b/u,
   /\bcache\/[^"'`]*\.json\b/u,
   /\bagents\/[^"'`]+\/agent\/(?:auth|models)\.json\b/u,
-  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|workspace-state)\.json\b/u,
+  /\b(?:credentials\/oauth|github-copilot\.token|openrouter-models|auth-profiles|auth-state|exec-approvals|(?:openclaw-)?workspace-state)\.json\b/u,
+  // Dynamic template spans resolve to `*`, so the start alternative also
+  // catches `${workspaceKey}.attested` and `${workspaceDir}.attested`.
+  /(?:^|[/\\])[^/\\"'`]+\.attested\b/u,
+  /\btui\/last-session\.json\b/u,
+  /\bcommitments\/commitments\.json\b/u,
+  /\bmedia\/outgoing\/records\/[^"'`]*\.json\b/u,
+  /\bpush\/(?:apns-registrations|web-push-subscriptions|vapid-keys)\.json\b/u,
+  /\bmcp-oauth\/[^"'`]*\.json\b/u,
+  /\bnode\.json\b/u,
+  /\bidentity\/device\.json\b/u,
+  /\bsubagents\/runs\.json\b/u,
+  /\btmp\/skill-uploads\b/u,
+  /\b(?:crestodian|openclaw)\/rescue-pending\/[^"'`]*\.json\b/u,
   /\bcron\/(?:runs\/[^"'`]+\.jsonl|jobs\.json|jobs-state\.json)\b/u,
   /\b(?:process-leases|session-toggles|known-users|msteams-conversations|msteams-polls|msteams-sso-tokens|bot-storage|sync-store|thread-bindings|inbound-dedupe|startup-verification|storage-meta|crypto-idb-snapshot|command-deploy-cache|plugin-binding-approvals|plugins\/installs|config-health|port-guard|restart-sentinel|gateway-restart-intent|gateway-supervisor-restart-handoff)\.json\b/u,
-  /\b(?:calls|ref-index|audit\/file-transfer|audit\/crestodian)\.jsonl\b/u,
+  /\b(?:calls|ref-index|config-audit|audit\/(?:file-transfer|openclaw|system-agent|crestodian))\.jsonl\b/u,
   /\b(?:reply-cache|sent-echoes|events|claims)\.jsonl\b/u,
   /\bplugin-state\/state\.sqlite\b/u,
   /\btasks\/(?:runs\.sqlite|flows\/registry\.sqlite)\b/u,
   /\bopenclaw-state\.sqlite\b/u,
+  /\bopenclaw-native-hook-relays\b/u,
+  /(?:^|\/)(?:meta|file-meta)\.json$/u,
+  /(?:^|\/)viewer\.html$/u,
+  /(?:^|\/)qmd\/embed\.lock(?:\.lock)?$/u,
+  /(?:^|\/)qmd-write\.lock(?:\.lock)?$/u,
 ];
 
 const allowedRuntimeMigrationPaths = [
   "src/commands/doctor/",
+  "src/commands/doctor-usage-cost-cache.ts",
   "src/infra/session-state-migration.ts",
   "src/infra/state-migrations.ts",
+  "src/infra/state-migrations.acp-replay.ts",
+  "src/infra/state-migrations.tui-last-session.ts",
+  "src/infra/state-migrations.commitments.ts",
+  "src/infra/state-migrations.managed-outgoing-images.ts",
+  "src/infra/state-migrations.apns.ts",
+  "src/infra/state-migrations.mcp-oauth.ts",
+  legacyRestartSentinelMigrationPath,
+  "src/infra/state-migrations.workspace-setup.ts",
+  "src/infra/state-migrations.web-push.ts",
+  "src/infra/state-migrations.node-host.ts",
+  "src/infra/state-migrations.device-identity.ts",
+  "src/infra/state-migrations.subagent-registry.ts",
+  "src/infra/state-migrations.rescue-pending.ts",
   "src/commands/session-state-migration.ts",
   "src/commands/doctor-state-migrations.test.ts",
 ];
 
-const allowedFixturePaths = new Set([
-  "extensions/qa-lab/src/providers/shared/auth-store.ts",
-  "extensions/qa-matrix/src/runners/contract/scenario-runtime-e2ee-destructive.ts",
-]);
+const allowedFixturePaths = new Set(["extensions/qa-lab/src/providers/shared/auth-store.ts"]);
 
-const allowedCurrentLegacyWriteViolations = [
-  "extensions/memory-wiki/src/compile.ts:legacy store filesystem write:root.write(relativePath, content)",
-];
+const allowedCurrentLegacyWriteViolations = [];
 
 const sourceFileExtensions = new Set([".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".tsx"]);
 
@@ -286,9 +347,128 @@ export async function collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots) {
   return (await Promise.all(sourceRoots.map((root) => collectSourceFiles(root)))).flat();
 }
 
+async function collectNativeSourceFiles(targetPath) {
+  let stat;
+  try {
+    stat = await fs.stat(targetPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+  if (stat.isFile()) {
+    return path.extname(targetPath) === ".swift" ? [targetPath] : [];
+  }
+  const entries = await fs.readdir(targetPath, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(targetPath, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...(await collectNativeSourceFiles(entryPath)));
+    } else if (entry.isFile() && path.extname(entryPath) === ".swift") {
+      files.push(entryPath);
+    }
+  }
+  return files;
+}
+
+export function collectDatabaseFirstNativeLegacyStoreViolations(content, relativePath) {
+  if (relativePath === nativeLegacyPortGuardianMigrationPath) {
+    return [];
+  }
+  return content
+    .split("\n")
+    .flatMap((line, index) =>
+      nativeLegacyPortGuardianFilenamePattern.test(line)
+        ? [{ kind: "legacy PortGuardian file reference", line: index + 1 }]
+        : [],
+    );
+}
+
 function importSource(node) {
   const moduleSpecifier = node.moduleSpecifier;
   return ts.isStringLiteral(moduleSpecifier) ? moduleSpecifier.text : "";
+}
+
+function isLegacyRestartSentinelPreflightDetection(node, relativePath) {
+  if (
+    relativePath !== legacyRestartSentinelPreflightPath ||
+    !legacyRestartSentinelPreflightFilenames.has(node.text)
+  ) {
+    return false;
+  }
+  const joinCall = node.parent;
+  if (
+    !ts.isCallExpression(joinCall) ||
+    joinCall.arguments.length !== 2 ||
+    joinCall.arguments[1] !== node ||
+    !ts.isPropertyAccessExpression(joinCall.expression) ||
+    !ts.isIdentifier(joinCall.expression.expression) ||
+    joinCall.expression.expression.text !== "path" ||
+    joinCall.expression.name.text !== "join" ||
+    !ts.isIdentifier(joinCall.arguments[0]) ||
+    joinCall.arguments[0].text !== "stateDir"
+  ) {
+    return false;
+  }
+  const paths = joinCall.parent;
+  if (!ts.isArrayLiteralExpression(paths)) {
+    return false;
+  }
+  const someAccess = paths.parent;
+  if (
+    !ts.isPropertyAccessExpression(someAccess) ||
+    someAccess.expression !== paths ||
+    someAccess.name.text !== "some"
+  ) {
+    return false;
+  }
+  const someCall = someAccess.parent;
+  return (
+    ts.isCallExpression(someCall) &&
+    someCall.arguments.length === 1 &&
+    ts.isIdentifier(someCall.arguments[0]) &&
+    someCall.arguments[0].text === "fileOrDirExists"
+  );
+}
+
+function collectLegacyRestartSentinelBoundaryViolations(sourceFile, relativePath) {
+  if (relativePath === legacyRestartSentinelMigrationPath) {
+    return [];
+  }
+
+  const violations = [];
+  const seen = new Set();
+  function add(node, kind) {
+    const line = toLine(sourceFile, node);
+    const key = `${line}:${kind}`;
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    violations.push({ kind, line });
+  }
+
+  function visit(node) {
+    if (
+      ts.isStringLiteralLike(node) &&
+      legacyRestartSentinelFilenamePattern.test(node.text) &&
+      !isLegacyRestartSentinelPreflightDetection(node, relativePath)
+    ) {
+      add(node, "legacy restart sentinel reference");
+    }
+    if (
+      relativePath === legacyRestartSentinelRuntimePath &&
+      ts.isImportDeclaration(node) &&
+      legacyRestartSentinelRuntimeImportSpecifiers.has(importSource(node))
+    ) {
+      add(node, "legacy restart sentinel filesystem import");
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(sourceFile);
+  return violations;
 }
 
 function isHelperWriteModuleSource(source) {
@@ -490,21 +670,28 @@ function legacyCandidateTexts(sourceFile, node) {
  */
 export function collectDatabaseFirstLegacyStoreViolations(
   content,
-  relativePath = "source.ts",
+  inputRelativePath = "source.ts",
   scanOptions = {},
 ) {
+  const relativePath = inputRelativePath.replaceAll("\\", "/");
+  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
+  const boundaryViolations = collectLegacyRestartSentinelBoundaryViolations(
+    sourceFile,
+    relativePath,
+  );
   if (isAllowedLegacyOwnerPath(relativePath)) {
-    return [];
+    return boundaryViolations;
   }
 
-  const sourceFile = ts.createSourceFile(relativePath, content, ts.ScriptTarget.Latest, true);
   const currentLegacyWriteAllowances =
     scanOptions.currentLegacyWriteAllowances ?? currentLegacyWriteViolationAllowances(relativePath);
   const createRequireBindings = collectCreateRequireBindings(sourceFile);
   const { fsModuleBindings, fsWriteAliases, fsSafeStoreFactoryAliases } =
     collectFsBindings(sourceFile);
-  const violations = [];
-  const seenViolations = new Set();
+  const violations = [...boundaryViolations];
+  const seenViolations = new Set(
+    boundaryViolations.map((violation) => `${violation.line}:${violation.kind}`),
+  );
   const fsModuleBindingScopes = [new Map([...fsModuleBindings].map((name) => [name, true]))];
   const fsModulePropertyScopes = [new Map()];
   const fsWriteAliasScopes = [fsWriteAliases];
@@ -1049,42 +1236,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
     return element && !ts.isSpreadElement(element) ? element : null;
   }
 
-  function mergeConditionalLiteralTexts(previous, next) {
-    if (next.length === 0) {
-      return previous ?? null;
-    }
-    return [...new Set([...(previous ?? []), ...next])];
-  }
-
-  function mergeExhaustiveLiteralTexts(left, right) {
-    if (left.length === 0 && right.length === 0) {
-      return null;
-    }
-    return [...new Set([...left, ...right])];
-  }
-
-  function mergeLegacyObjectPropertyValues(left, right) {
-    if (left === true || right === true) {
-      return true;
-    }
-    if (
-      left === explicitUndefinedLegacyObjectPropertyValue ||
-      right === explicitUndefinedLegacyObjectPropertyValue ||
-      left === undefined ||
-      right === undefined
-    ) {
-      return explicitUndefinedLegacyObjectPropertyValue;
-    }
-    return false;
-  }
-
-  function mergeConditionalLegacyObjectPropertyValue(previous, next) {
-    if (previous === undefined && next === false) {
-      return null;
-    }
-    return mergeLegacyObjectPropertyValues(previous, next);
-  }
-
   function legacyObjectPropertyRewriteValues(objectName, initializer, existingScope) {
     const values = new Map();
     markLegacyObjectProperties(objectName, initializer, values, null);
@@ -1097,34 +1248,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
     }
     return values;
-  }
-
-  function branchAssignmentPropertyValue(assignment, propertyKey) {
-    if (assignment.objectProperties.has(propertyKey)) {
-      return { known: true, value: assignment.objectProperties.get(propertyKey) };
-    }
-    if (assignment.knownObjectLiteral) {
-      return { known: true, value: explicitUndefinedLegacyObjectPropertyValue };
-    }
-    return { known: false, value: null };
-  }
-
-  function mergeBranchLegacyObjectPropertyValue(leftAssignment, rightAssignment, propertyKey) {
-    const left = branchAssignmentPropertyValue(leftAssignment, propertyKey);
-    const right = branchAssignmentPropertyValue(rightAssignment, propertyKey);
-    if (!left.known && !right.known) {
-      return null;
-    }
-    if (left.value === true || right.value === true) {
-      return true;
-    }
-    if (
-      left.value === explicitUndefinedLegacyObjectPropertyValue ||
-      right.value === explicitUndefinedLegacyObjectPropertyValue
-    ) {
-      return explicitUndefinedLegacyObjectPropertyValue;
-    }
-    return left.known && right.known ? false : null;
   }
 
   function lookupLegacyObjectProperty(
@@ -2236,9 +2359,6 @@ export function collectDatabaseFirstLegacyStoreViolations(
   const unknownObjectLiteralPropertyInitializer = Symbol(
     "unknown object literal property initializer",
   );
-  const explicitUndefinedLegacyObjectPropertyValue = Symbol(
-    "explicit undefined legacy object property value",
-  );
   const explicitUndefinedNestedWrapperValue = Symbol("explicit undefined nested wrapper value");
   const knownObjectLiteralNestedWrapperValue = Symbol("known object literal nested wrapper value");
   const unknownNestedWrapperObjectValue = Symbol("unknown nested wrapper object value");
@@ -2634,37 +2754,7 @@ export function collectDatabaseFirstLegacyStoreViolations(
       }
       const { index, name } = thenAssignment;
       mergedIdentifierNames.add(branchIdentifierAssignmentKey(index, name));
-      const mergedValue = thenAssignment.value === true || elseAssignment.value === true;
-      const propertyKeys = new Set([
-        ...thenAssignment.objectProperties.keys(),
-        ...elseAssignment.objectProperties.keys(),
-      ]);
-      const mergedProperties = new Map();
-      for (const propertyKey of propertyKeys) {
-        const mergedPropertyValue = mergeBranchLegacyObjectPropertyValue(
-          thenAssignment,
-          elseAssignment,
-          propertyKey,
-        );
-        if (mergedPropertyValue !== null) {
-          mergedProperties.set(propertyKey, mergedPropertyValue);
-        }
-      }
-      const mergedKnownObjectLiteral =
-        thenAssignment.knownObjectLiteral && elseAssignment.knownObjectLiteral;
-      const mergedKnownUndefined = thenAssignment.knownUndefined || elseAssignment.knownUndefined;
-      const knownObjectLiteralKeys = new Set([
-        ...thenAssignment.knownObjectLiterals.keys(),
-        ...elseAssignment.knownObjectLiterals.keys(),
-      ]);
-      const mergedKnownObjectLiterals = new Map();
-      for (const knownObjectLiteralKey of knownObjectLiteralKeys) {
-        mergedKnownObjectLiterals.set(
-          knownObjectLiteralKey,
-          thenAssignment.knownObjectLiterals.get(knownObjectLiteralKey) === true &&
-            elseAssignment.knownObjectLiterals.get(knownObjectLiteralKey) === true,
-        );
-      }
+      const merged = mergeLegacyPathBranchAssignments(thenAssignment, elseAssignment);
       if (applyToTargetScopes) {
         const pathScope = legacyPathScopes[index];
         const literalScope = literalTextScopes[index];
@@ -2672,48 +2762,36 @@ export function collectDatabaseFirstLegacyStoreViolations(
         const propertyScope = legacyObjectPropertyScopes[index];
         const knownObjectLiteralScope = legacyKnownObjectLiteralScopes[index];
         clearKnownLegacyObjectLiterals(knownObjectLiteralScope, name);
-        knownObjectLiteralScope.set(name, mergedKnownObjectLiteral);
-        for (const [knownObjectLiteralKey, value] of mergedKnownObjectLiterals) {
+        knownObjectLiteralScope.set(name, merged.knownObjectLiteral);
+        for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
           knownObjectLiteralScope.set(knownObjectLiteralKey, value);
         }
-        pathScope.set(name, mergedValue);
-        knownUndefinedScope.set(name, mergedKnownUndefined);
-        literalScope.set(
-          name,
-          mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts),
-        );
+        pathScope.set(name, merged.value);
+        knownUndefinedScope.set(name, merged.knownUndefined);
+        literalScope.set(name, merged.literalTexts);
         clearLegacyObjectProperties(propertyScope, name);
-        for (const [propertyKey, value] of mergedProperties) {
+        for (const [propertyKey, value] of merged.objectProperties) {
           propertyScope.set(propertyKey, value);
         }
       }
       clearKnownLegacyObjectLiterals(currentLegacyKnownObjectLiteralScope(), name);
-      currentLegacyKnownObjectLiteralScope().set(name, mergedKnownObjectLiteral);
-      for (const [knownObjectLiteralKey, value] of mergedKnownObjectLiterals) {
+      currentLegacyKnownObjectLiteralScope().set(name, merged.knownObjectLiteral);
+      for (const [knownObjectLiteralKey, value] of merged.knownObjectLiterals) {
         currentLegacyKnownObjectLiteralScope().set(knownObjectLiteralKey, value);
       }
-      currentLegacyPathScope().set(name, mergedValue);
-      currentKnownUndefinedScope().set(name, mergedKnownUndefined);
-      currentLiteralTextScope().set(
-        name,
-        mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts),
-      );
+      currentLegacyPathScope().set(name, merged.value);
+      currentKnownUndefinedScope().set(name, merged.knownUndefined);
+      currentLiteralTextScope().set(name, merged.literalTexts);
       clearLegacyObjectProperties(currentLegacyObjectPropertyScope(), name);
-      for (const [propertyKey, value] of mergedProperties) {
+      for (const [propertyKey, value] of merged.objectProperties) {
         currentLegacyObjectPropertyScope().set(propertyKey, value);
       }
       if (parentEffect) {
         parentEffect.identifierAssignments.set(branchIdentifierAssignmentKey(index, name), {
           index,
-          knownUndefined: mergedKnownUndefined,
-          knownObjectLiteral: mergedKnownObjectLiteral,
-          knownObjectLiterals: mergedKnownObjectLiterals,
-          literalTexts:
-            mergeExhaustiveLiteralTexts(thenAssignment.literalTexts, elseAssignment.literalTexts) ??
-            [],
+          ...merged,
+          literalTexts: merged.literalTexts ?? [],
           name,
-          value: mergedValue,
-          objectProperties: mergedProperties,
         });
       }
     }
@@ -9773,6 +9851,8 @@ export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const sourceRoots = databaseFirstLegacyStoreSourceRoots.map((root) => path.join(repoRoot, root));
   const files = await collectDatabaseFirstLegacyStoreSourceFiles(sourceRoots);
+  const nativeSourceRoots = databaseFirstNativeSourceRoots.map((root) => path.join(repoRoot, root));
+  const nativeFiles = (await Promise.all(nativeSourceRoots.map(collectNativeSourceFiles))).flat();
   const violations = [];
   const currentLegacyWriteAllowances = currentLegacyWriteViolationAllowances();
 
@@ -9788,6 +9868,16 @@ export async function main() {
   for (const fingerprint of currentLegacyWriteAllowances.keys()) {
     const relativePath = currentLegacyWriteViolationPath(fingerprint) ?? "<unknown>";
     violations.push(`${relativePath}:1 stale current legacy write allowlist`);
+  }
+  for (const filePath of nativeFiles) {
+    const relativePath = path.relative(repoRoot, filePath).replaceAll(path.sep, "/");
+    const content = await fs.readFile(filePath, "utf8");
+    for (const violation of collectDatabaseFirstNativeLegacyStoreViolations(
+      content,
+      relativePath,
+    )) {
+      violations.push(`${relativePath}:${violation.line} ${violation.kind}`);
+    }
   }
 
   if (violations.length === 0) {

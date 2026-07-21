@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
   "repository": {
     "type": "git",
@@ -22,7 +22,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.11"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -39,6 +39,23 @@
     },
     "channel": {
       "id": "matrix",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "MATRIX_HOMESERVER",
+            "MATRIX_USER_ID",
+            "MATRIX_ACCESS_TOKEN",
+            "MATRIX_PASSWORD",
+            "MATRIX_DEVICE_ID",
+            "MATRIX_DEVICE_NAME",
+            "MATRIX_OPS_HOMESERVER",
+            "MATRIX_OPS_ACCESS_TOKEN",
+            "MATRIX_OPS_DEVICE_ID",
+            "MATRIX_OPS_DEVICE_NAME"
+          ]
+        }
+      },
+      "approvalFlags": ["native"],
       "label": "Matrix",
       "selectionLabel": "Matrix (plugin)",
       "docsPath": "/channels/matrix",
@@ -67,12 +84,17 @@
           "description": "Matrix access token"
         },
         {
+          "flags": "--password <password>",
+          "description": "Channel password or login secret"
+        },
+        {
           "flags": "--device-name <name>",
           "description": "Matrix device name"
         },
         {
           "flags": "--initial-sync-limit <n>",
-          "description": "Matrix initial sync limit"
+          "description": "Matrix initial sync limit",
+          "valueType": "int"
         }
       ],
       "persistedAuthState": {
@@ -88,10 +110,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11"
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "publishToClawHub": true,

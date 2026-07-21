@@ -1,6 +1,9 @@
 // Copilot plugin module implements event bridge behavior.
 import type { MessageOptions, SessionEvent, SessionEventType } from "@github/copilot-sdk";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type {
+  AgentHarnessAttemptResult,
+  AgentMessage,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCopilotAssistantUsage,
   normalizeCopilotUsage,
@@ -56,6 +59,7 @@ interface EventBridgeOptions {
     success: boolean;
   }) => void | Promise<void>;
   onCompactionStart?: () => void | Promise<void>;
+  onContextCompacted?: () => void;
   getSdkSessionId: () => string | undefined;
   isAborted: () => boolean;
 }
@@ -66,7 +70,7 @@ interface EventBridgeSnapshot {
   readonly lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
   readonly startedCount: number;
   readonly streamError: Error | undefined;
-  readonly toolMetas: ReadonlyArray<{ meta?: string; toolName: string }>;
+  readonly toolMetas: ReadonlyArray<AgentHarnessAttemptResult["toolMetas"][number]>;
   readonly usage: AssistantUsageSnapshot | undefined;
 }
 
@@ -106,8 +110,8 @@ export function attachEventBridge(
   let lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
   let usage: AssistantUsageSnapshot | undefined;
   let streamError: Error | undefined;
-  const toolMetas: Array<{ meta?: string; toolName: string }> = [];
-  const toolNamesByCallId = new Map<string, string>();
+  const toolMetas: AgentHarnessAttemptResult["toolMetas"] = [];
+  const toolMetaIndexByCallId = new Map<string, number>();
   let startedCount = 0;
   let completedCount = 0;
   let activeCompactionCount = 0;
@@ -202,7 +206,7 @@ export function attachEventBridge(
     if (isRootSessionEvent(event)) {
       startedCount += 1;
     }
-    toolNamesByCallId.set(event.data.toolCallId, event.data.toolName);
+    toolMetaIndexByCallId.set(event.data.toolCallId, toolMetas.length);
     toolMetas.push({ toolName: event.data.toolName });
   });
 
@@ -210,12 +214,17 @@ export function attachEventBridge(
     if (isRootSessionEvent(event)) {
       completedCount += 1;
     }
-    const toolName = toolNamesByCallId.get(event.data.toolCallId);
+    const toolMetaIndex = toolMetaIndexByCallId.get(event.data.toolCallId);
+    const toolName = toolMetaIndex === undefined ? undefined : toolMetas[toolMetaIndex]?.toolName;
     const meta = event.data.success
       ? (event.data.result?.detailedContent ?? event.data.result?.content)
       : event.data.error?.message;
-    if (toolName) {
-      toolMetas.push({ meta, toolName });
+    if (toolName && toolMetaIndex !== undefined) {
+      toolMetas[toolMetaIndex] = {
+        ...(meta ? { meta } : {}),
+        toolName,
+        ...(event.data.success ? {} : { isError: true }),
+      };
     }
   });
 
@@ -233,7 +242,10 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "exit_plan_mode.requested", (event) => {
-    const steps = splitPlanText(event.data.planContent);
+    const steps = splitPlanText(event.data.planContent).map((step) => ({
+      step,
+      status: "pending" as const,
+    }));
     enqueueAgentEvent({
       stream: "plan",
       data: {
@@ -298,6 +310,15 @@ export function attachEventBridge(
   });
 
   registerListener(session, unsubscribeFns, "session.compaction_complete", (event) => {
+    if (event.data.success) {
+      try {
+        // The SDK shares one tool-handler map and omits agent identity from
+        // tool invocations, so any compacted context invalidates the frame.
+        options.onContextCompacted?.();
+      } catch {
+        // Context invalidation must not break generic compaction tracking.
+      }
+    }
     if (!isRootCompactionEvent(event)) {
       return;
     }

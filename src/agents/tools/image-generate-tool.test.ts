@@ -25,14 +25,15 @@ const taskRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
 
+let sessionAccessor: typeof import("../../config/sessions/session-accessor.js");
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
-let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.js").resetRecentMediaGenerationDuplicateGuardsForTests;
+let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.test-support.js").resetRecentMediaGenerationDuplicateGuardsForTests;
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
-let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
+let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.test-support.js").resolveImageGenerationModelConfigForTool;
 
 const GENERATION_PROVIDER_ENV_VARS = [
   "BYTEPLUS_API_KEY",
@@ -330,13 +331,15 @@ describe("createImageGenerateTool", () => {
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
     imageOps = await import("../../media/media-services.js");
+    sessionAccessor = await import("../../config/sessions/session-accessor.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
     ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
-      await import("../media-generation-task-status-shared.js"));
-    ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
-      await import("./image-generate-tool.js"));
+      await import("../media-generation-task-status-shared.test-support.js"));
+    ({ createImageGenerateTool } = await import("./image-generate-tool.js"));
+    ({ resolveImageGenerationModelConfigForTool } =
+      await import("./image-generate-tool.test-support.js"));
   });
 
   beforeEach(() => {
@@ -373,7 +376,7 @@ describe("createImageGenerateTool", () => {
 
     const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
 
-    expect(tool.description).toContain('outputFormat="png" or "webp"');
+    expect(tool.description).toContain("outputFormat png|webp");
     expect(tool.description).toContain('background="transparent"');
     expect(tool.description).toContain("openai.background");
     expect(tool.description).toContain("gpt-image-1.5");
@@ -883,6 +886,14 @@ describe("createImageGenerateTool", () => {
   it("starts run-scoped cron image generation as a tracked async task", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    vi.spyOn(sessionAccessor, "loadSessionEntry").mockReturnValue({
+      sessionId: "run-123",
+      updatedAt: 1,
+      cronRunContinuation: {
+        lifecycleRevision: "revision-1",
+        phase: "running",
+      },
+    });
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
       model: "gpt-image-1",
@@ -2722,3 +2733,4 @@ describe("createImageGenerateTool", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

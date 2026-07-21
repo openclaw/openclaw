@@ -2,7 +2,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
@@ -54,7 +53,6 @@ function createPlugin(params: {
   imageGenerationProviderMetadata?: PluginManifestRecord["imageGenerationProviderMetadata"];
   videoGenerationProviderMetadata?: PluginManifestRecord["videoGenerationProviderMetadata"];
   musicGenerationProviderMetadata?: PluginManifestRecord["musicGenerationProviderMetadata"];
-  providerAuthEnvVars?: PluginManifestRecord["providerAuthEnvVars"];
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
@@ -72,7 +70,6 @@ function createPlugin(params: {
     imageGenerationProviderMetadata: params.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.musicGenerationProviderMetadata,
-    providerAuthEnvVars: params.providerAuthEnvVars,
     setup: params.setupProviders ? { providers: params.setupProviders } : undefined,
   };
 }
@@ -170,7 +167,7 @@ describe("optional media tool factory planning", () => {
       workflow: { "1": { inputs: {} } },
       promptNodeId: "1",
     });
-    setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.join(process.cwd(), "extensions"));
     legacyComfyToolNames = (
       await createOpenClawToolsForTest({
         config,
@@ -181,7 +178,7 @@ describe("optional media tool factory planning", () => {
     clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
-    setBundledPluginsDirOverrideForTest(undefined);
+    vi.unstubAllEnvs();
   });
 
   beforeEach(() => {
@@ -193,7 +190,6 @@ describe("optional media tool factory planning", () => {
     clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
-    setBundledPluginsDirOverrideForTest(undefined);
     vi.unstubAllEnvs();
   });
 
@@ -238,7 +234,7 @@ describe("optional media tool factory planning", () => {
   it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
     // Workspace snapshots are process-local facts and must not leak to unrelated runs.
     const config: OpenClawConfig = {};
-    setBundledPluginsDirOverrideForTest("/nonexistent/bundled/plugins");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     installSnapshot(
       config,
       [
@@ -523,16 +519,19 @@ describe("optional media tool factory planning", () => {
     });
   });
 
-  it("keeps manifest provider auth env aliases on the music factory path", () => {
+  it("keeps manifest setup provider env vars on the music factory path", () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, [
       createPlugin({
         id: "minimax",
         contracts: { musicGenerationProviders: ["minimax", "minimax-portal"] },
-        providerAuthEnvVars: {
-          minimax: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
-          "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
-        },
+        setupProviders: [
+          {
+            id: "minimax",
+            envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
+          },
+          { id: "minimax-portal", envVars: ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"] },
+        ],
       }),
     ]);
     vi.stubEnv("MINIMAX_API_KEY", "minimax-key");
@@ -1091,3 +1090,4 @@ describe("optional media tool factory planning", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

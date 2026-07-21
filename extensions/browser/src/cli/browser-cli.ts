@@ -66,6 +66,8 @@ const browserCommandGroupDefinitions: readonly BrowserCommandGroupDefinition[] =
       command("focus", "Focus a tab by tab reference"),
       command("close", "Close a tab (tab reference optional)"),
       command("profiles", "List all browser profiles"),
+      command("system-profiles", "List Chrome-family profiles available for cookie import"),
+      command("import-profile", "Import cookies from a macOS Chrome-family profile"),
       command("create-profile", "Create a new browser profile"),
       command("delete-profile", "Delete a browser profile"),
       command("doctor", "Check browser plugin readiness", [
@@ -238,12 +240,7 @@ function resolveBrowserLazySubcommand(argv: string[]): string | null {
 }
 
 function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
-  for (let current: Command | null | undefined = cmd; current; current = current.parent) {
-    if (current.name() === "browser") {
-      return current.opts() as BrowserParentOpts;
-    }
-  }
-  return cmd.parent?.opts?.() as BrowserParentOpts;
+  return cmd.optsWithGlobals<BrowserParentOpts>();
 }
 
 function registerLazyBrowserCommands(

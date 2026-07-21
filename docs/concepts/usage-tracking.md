@@ -20,6 +20,7 @@ title: "Usage tracking"
 - CLI: `openclaw status --usage` prints a full per-provider usage/quota breakdown.
 - CLI: `openclaw models status` lists OAuth/token auth profiles and shows a usage-window summary next to each provider that has one.
 - Control UI: **Usage** shows provider plan and billing cards above OpenClaw's session-derived token and estimated-cost analysis. Anthropic and OpenAI Admin API credentials add provider-reported today, 7-day, and 30-day spend, daily trends, token totals, top models, and cost categories.
+- Control UI: the chat composer's context ring popover shows **plan usage** for subscription providers — per-window bars (5-hour, weekly, model-scoped) with reset times, the provider plan when known (for example `Max (20x)`), and extra-usage credits. Sessions billed through a plan hide per-token dollar estimates; API-billed sessions keep `Est. cost` and the cost-by-type breakdown. Claude Code CLI (`claude-cli`) setups reuse the same Anthropic subscription usage.
 - macOS menu bar: a root "Usage" section appears below Context when provider usage snapshots are available. See [Menu bar](/platforms/mac/menu-bar).
 
 `openclaw channels list` no longer prints provider usage; it points users to `openclaw status` or `openclaw models list` instead.
@@ -195,16 +196,10 @@ change:
   "aliases": { "<table>": { "<value>": "<label>" } },
   "output": {
     "sep": "", // joins surviving pieces
-    "default": [
-      /* pieces */
-    ], // fallback for any surface
+    "default": [/* pieces */], // fallback for any surface
     "surfaces": {
-      "discord": [
-        /* pieces */
-      ],
-      "telegram": [
-        /* pieces */
-      ],
+      "discord": [/* pieces */],
+      "telegram": [/* pieces */],
     },
   },
 }
@@ -251,12 +246,18 @@ Pipe a value through verbs left to right; a non-verb segment is the fallback.
 | Verb            | Effect                                | Example                           |
 | --------------- | ------------------------------------- | --------------------------------- |
 | `num`           | compact count                         | `272000 -> 272k`                  |
-| `fixed:N`       | N decimals (default 2)                | `0.0377`                          |
+| `fixed:N`       | N decimals (`0..100`, default 2)      | `0.0377`                          |
 | `dur`           | seconds to duration                   | `14820 -> 4h07m`                  |
 | `pct`           | append `%`                            | `96 -> 96%`                       |
 | `inv`           | `100 - x`                             | for used to remaining             |
 | `alias:TABLE`   | lookup in `aliases`, echo if unlisted | `medium -> 🌗`                    |
 | `meter:W:SCALE` | W-cell glyph bar over a 0-100 value   | `[⣿⣿⠐⠐⠐]` (`meter:1` = one glyph) |
+
+`fixed:N` accepts only a complete decimal integer from 0 through 100. Invalid
+precision arguments make that interpolation empty.
+
+`meter:W:SCALE` accepts only a complete decimal integer width from 1 through 100. Leave the width blank to use the default 5 (`meter::braille`); invalid
+widths make that interpolation empty.
 
 ### Piece forms
 

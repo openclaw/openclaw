@@ -22,7 +22,7 @@ public enum OpenClawChatOutboxMessageState: Equatable, Sendable {
 }
 
 /// Durable offline command outbox. Sends made while the gateway is unhealthy
-/// are persisted (per gateway, alongside the transcript cache) and flushed
+/// are persisted in installation-wide client state and flushed
 /// strictly in createdAt order when health recovers. A gateway ACK only moves
 /// a row to awaiting-confirmation; canonical history owns durable completion.
 extension OpenClawChatViewModel {
@@ -30,6 +30,13 @@ extension OpenClawChatViewModel {
         let presentationSessionKey: String
         let deliverySessionKey: String
         let agentID: String?
+    }
+
+    private enum OutboxFlushDisposition {
+        case continueFlush
+        case continueAndReconcile(OutboxDeliveryTarget)
+        case stop
+        case stopAndReconcile(OutboxDeliveryTarget)
     }
 
     public func outboxState(for messageID: UUID) -> OpenClawChatOutboxMessageState? {
@@ -132,25 +139,41 @@ extension OpenClawChatViewModel {
     /// Durable capture path used before text or attachment delivery: persist
     /// first, then render the queued bubble. A full queue refuses the enqueue
     /// and keeps the exact draft intact.
+    @discardableResult
     func enqueueOutboxCommand(
         text: String,
         draftInput: String,
+        draftRevision: UInt64,
         draftAttachments: [OpenClawPendingAttachment] = [],
-        session: SessionSnapshot) async
+        session: SessionSnapshot) async -> Bool
     {
-        guard let outbox else { return }
+        guard let outbox else { return false }
         let agentID = self.outboxAgentID(for: session)
         if self.outboxRequiresAgentID(for: session), agentID == nil {
             self.errorText = "Select an agent before queueing this message."
-            return
+            return false
         }
         guard
             let deliverySessionKey = self.outboxDeliverySessionKey(for: session, agentID: agentID),
             let routingContract = self.outboxRoutingContract(for: session)
         else {
             self.errorText = "Reconnect to verify this message's delivery target before queueing."
-            return
+            return false
         }
+        // Capture the effective value only after model selection settles. Raw
+        // preferences can outlive this process, when model metadata is absent.
+        await self.waitForPendingSessionSettings(
+            in: session.key,
+            canonicalSessionKey: deliverySessionKey,
+            agentID: agentID,
+            sessionRoutingContract: routingContract)
+        guard self.isCurrentSession(session) else { return false }
+        let thinking = self.effectiveThinkingLevelForSend(
+            self.preferredThinkingLevel,
+            sessionKey: session.key,
+            canonicalSessionKey: deliverySessionKey,
+            agentID: agentID,
+            sessionRoutingContract: routingContract)
         let command = OpenClawChatOutboxCommand(
             id: UUID().uuidString,
             sessionKey: session.key,
@@ -166,18 +189,27 @@ extension OpenClawChatViewModel {
                     data: $0.data,
                     durationSeconds: $0.durationSeconds)
             },
-            thinking: self.effectiveThinkingLevelForSend,
+            thinking: thinking,
             createdAt: Date().timeIntervalSince1970,
             status: .queued,
             retryCount: 0,
             lastError: nil)
         let accepted = await outbox.enqueueCommand(command)
-        guard self.isCurrentSession(session) else { return }
         guard accepted else {
-            self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
-            return
+            if self.isCurrentSession(session) {
+                self.errorText = "Offline queue is full. Delete a queued message or reconnect to send."
+            }
+            return false
         }
-        if self.input == draftInput { self.input = "" }
+        // Acceptance is durable even if the user switched sessions during the
+        // await. The caller must still retire that session's draft/history.
+        // Bubble render and flush scheduling stay with the displayed session
+        // (shipped behavior predating this path); the stored command delivers
+        // on the next flush trigger, e.g. returning here or a health event.
+        guard self.isCurrentSession(session) else { return true }
+        if self.input == draftInput, self.composerRevision(for: session.key) == draftRevision {
+            self.input = ""
+        }
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
@@ -187,6 +219,7 @@ extension OpenClawChatViewModel {
         if self.healthOK {
             self.flushOutboxIfNeeded()
         }
+        return true
     }
 
     /// Durable path for a failed live text send. Known pre-dispatch route
@@ -347,8 +380,8 @@ extension OpenClawChatViewModel {
     }
 
     /// Appends bubbles for commands in the current session, adopting rows
-    /// that already carry the command's user idempotency key (cache pre-paint
-    /// or an earlier restore), and refreshes their display states.
+    /// that already carry the command's user idempotency key from an earlier
+    /// restore, and refreshes their display states.
     private func presentOutboxCommands(_ commands: [OpenClawChatOutboxCommand]) {
         self.pruneOutboxMappings()
         guard !commands.isEmpty else { return }
@@ -414,7 +447,11 @@ extension OpenClawChatViewModel {
 
     // MARK: - Health
 
-    func pollHealthIfNeeded(force: Bool, sessionSnapshot: SessionSnapshot? = nil) async {
+    func pollHealthIfNeeded(
+        force: Bool,
+        sessionSnapshot: SessionSnapshot? = nil,
+        refreshSessionsOnReconnect: Bool = true) async
+    {
         if !force, let last = lastHealthPollAt, Date().timeIntervalSince(last) < 10 {
             return
         }
@@ -422,7 +459,7 @@ extension OpenClawChatViewModel {
         do {
             let ok = try await self.transport.requestHealth(timeoutMs: 5000)
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
-            self.applyTransportHealth(ok)
+            self.applyTransportHealth(ok, refreshSessionsOnReconnect: refreshSessionsOnReconnect)
         } catch {
             if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.applyTransportHealth(false)
@@ -431,11 +468,20 @@ extension OpenClawChatViewModel {
 
     /// Single choke point for health updates so the offline outbox flushes
     /// exactly on the unhealthy -> healthy transition.
-    func applyTransportHealth(_ ok: Bool) {
+    func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
         self.healthOK = ok
+        if !ok, wasHealthy || self.hasCurrentSessionMetadata {
+            self.invalidateSessionMetadataReadiness()
+        }
         if ok, !wasHealthy {
-            self.flushOutboxIfNeeded()
+            guard self.outbox != nil else { return }
+            if self.hasCurrentSessionMetadata {
+                self.flushOutboxIfNeeded()
+            } else if refreshSessionsOnReconnect {
+                let session = self.currentSessionSnapshot()
+                Task { await self.fetchSessions(limit: 50, sessionSnapshot: session) }
+            }
         }
     }
 
@@ -443,6 +489,9 @@ extension OpenClawChatViewModel {
 
     func flushOutboxIfNeeded() {
         guard self.outbox != nil, self.healthOK else { return }
+        // Health is intentionally established before sessions.list. Replays
+        // need the current connection's model/runtime metadata first.
+        guard self.hasCurrentSessionMetadata else { return }
         guard !self.isFlushingOutbox else {
             // Coalesce triggers that land mid-pass (tap-to-retry, enqueue
             // race) so their commands are not stranded until the next
@@ -499,7 +548,7 @@ extension OpenClawChatViewModel {
             return
         }
         var confirmationTargets: Set<OutboxDeliveryTarget> = []
-        while self.healthOK {
+        flushLoop: while self.healthOK {
             let presentationGeneration = self.outboxPresentationGeneration
             let commands = await outbox.loadCommands()
             if presentationGeneration != self.outboxPresentationGeneration {
@@ -519,105 +568,25 @@ extension OpenClawChatViewModel {
                 continue
             }
             // Same ordering contract as the live send path: a run must not
-            // start on a stale model while a sessions.patch(model) for its
-            // session is still in flight.
-            await self.waitForPendingModelPatches(in: next.sessionKey)
+            // start with stale model or thinking state while a settings patch
+            // for its session is still in flight.
+            await self.waitForPendingSessionSettings(
+                in: next.sessionKey,
+                canonicalSessionKey: next.deliverySessionKey,
+                agentID: next.agentID,
+                sessionRoutingContract: next.routingContract)
             self.setOutboxState(.sending, forCommandID: next.id)
-            do {
-                let response = try await routeLease.sendMessage(
-                    sessionKey: next.deliverySessionKey,
-                    agentID: next.agentID,
-                    message: next.text,
-                    // Preserve the queued level when supported, but never send
-                    // an explicit unsupported level after the gate changes.
-                    thinking: self.effectiveThinkingLevelForSend(
-                        next.thinking,
-                        sessionKey: next.sessionKey),
-                    idempotencyKey: next.id,
-                    attachments: next.attachments.map {
-                        OpenClawChatAttachmentPayload(
-                            type: $0.type,
-                            mimeType: $0.mimeType,
-                            fileName: $0.fileName,
-                            content: $0.data.base64EncodedString())
-                    })
-                if response.status == "error" || response.status == "timeout" {
-                    // Gateway rejected the run: this burns a retry attempt,
-                    // unlike transport-level failures handled in catch.
-                    let handled = await self.recordOutboxRejection(
-                        of: next,
-                        outbox: outbox,
-                        reason: "Run failed to start (\(response.status)).")
-                    if handled { continue } else { break }
-                }
-                // Deliberately no pendingRuns adoption for background flushes:
-                // the reply still lands via handleChatEvent's external-run
-                // final branch (session-scoped, run-id independent),
-                // handleSessionMessageEvent, and the post-drain history
-                // refresh below. Run tracking (typing indicator, streaming,
-                // timeouts) stays owned by interactive performSend.
-                // chat.send ACK precedes durable user-turn persistence. Keep
-                // the outbox row until history carries its idempotency key;
-                // the cache splice makes the acknowledged turn visible while
-                // canonical history catches up.
-                await self.pendingCacheWriteTask?.value
-                await self.spliceSentCommandIntoCachedTranscript(next)
-                let confirmationUpdate = await outbox.markCommandAwaitingConfirmation(id: next.id)
-                if confirmationUpdate == .unavailable {
-                    self.applyTransportHealth(false)
-                    break
-                }
-                if confirmationUpdate == .updated {
-                    self.setOutboxState(.confirming, forCommandID: next.id)
-                } else {
-                    // A concurrent canonical history/session.message
-                    // confirmation already removed the row.
-                    self.clearOutboxState(forCommandID: next.id)
-                }
-                confirmationTargets.insert(Self.deliveryTarget(for: next))
-            } catch is OpenClawChatTransportSendError {
-                // The transport proved this payload never reached its request
-                // channel, so it is safe to retry automatically.
-                await outbox.markCommandQueued(
-                    id: next.id,
-                    retryCount: next.retryCount,
-                    lastError: nil)
-                self.setOutboxState(.queued, forCommandID: next.id)
-                self.applyTransportHealth(false)
-                break
-            } catch is CancellationError {
-                // Cancellation while the request is suspended does not prove
-                // that the gateway rejected it. Never replay automatically.
-                let update = await self.parkOutboxCommandWithUnconfirmedDelivery(next, outbox: outbox)
-                if update == .updated {
-                    confirmationTargets.insert(Self.deliveryTarget(for: next))
-                }
-                self.applyTransportHealth(false)
-                break
-            } catch let error as GatewayResponseError {
-                if error.detailsReason == OpenClawChatSessionRoutingContract.changedErrorReason {
-                    guard await self.parkOutboxCommandForChangedTarget(next, outbox: outbox) else { break }
-                    continue
-                }
-                // A response error proves the gateway rejected the request;
-                // unlike a socket/timeout failure, replay cannot duplicate an
-                // accepted run and should consume the normal retry budget.
-                let handled = await self.recordOutboxRejection(
-                    of: next,
-                    outbox: outbox,
-                    reason: error.localizedDescription)
-                if handled { continue } else { break }
-            } catch {
-                // A socket error or timeout is not a gateway rejection: the
-                // request may have landed before its ACK was lost. Preserve
-                // it for history reconciliation or explicit user retry.
-                outboxLogger.error("outbox flush send failed \(error.localizedDescription, privacy: .public)")
-                let update = await self.parkOutboxCommandWithUnconfirmedDelivery(next, outbox: outbox)
-                if update == .updated {
-                    confirmationTargets.insert(Self.deliveryTarget(for: next))
-                }
-                self.applyTransportHealth(false)
-                break
+            switch await self.deliverOutboxCommand(next, outbox: outbox, routeLease: routeLease) {
+            case .continueFlush:
+                continue
+            case let .continueAndReconcile(target):
+                confirmationTargets.insert(target)
+                continue
+            case .stop:
+                break flushLoop
+            case let .stopAndReconcile(target):
+                confirmationTargets.insert(target)
+                break flushLoop
             }
         }
         if !confirmationTargets.isEmpty {
@@ -625,6 +594,123 @@ extension OpenClawChatViewModel {
                 targets: confirmationTargets,
                 routeLease: routeLease)
         }
+    }
+
+    private func deliverOutboxCommand(
+        _ command: OpenClawChatOutboxCommand,
+        outbox: any OpenClawChatCommandOutbox,
+        routeLease: OpenClawChatTransportRouteLease) async -> OutboxFlushDisposition
+    {
+        do {
+            let response = try await routeLease.sendMessage(
+                sessionKey: command.deliverySessionKey,
+                agentID: command.agentID,
+                message: command.text,
+                // Preserve the queued level when supported, but never send an
+                // explicit unsupported level after the gate changes.
+                thinking: self.effectiveThinkingLevelForSend(
+                    command.thinking,
+                    sessionKey: command.sessionKey,
+                    canonicalSessionKey: command.deliverySessionKey,
+                    agentID: command.agentID,
+                    sessionRoutingContract: command.routingContract),
+                idempotencyKey: command.id,
+                attachments: command.attachments.map {
+                    OpenClawChatAttachmentPayload(
+                        type: $0.type,
+                        mimeType: $0.mimeType,
+                        fileName: $0.fileName,
+                        content: $0.data.base64EncodedString())
+                })
+            if response.status == "error" || response.status == "timeout" {
+                // Gateway rejection consumes a retry attempt, unlike a
+                // transport failure that proved the request was not sent.
+                return await self.outboxRejectionDisposition(
+                    command,
+                    outbox: outbox,
+                    reason: "Run failed to start (\(response.status)).")
+            }
+            return await self.finishAcceptedOutboxCommand(command, outbox: outbox)
+        } catch is OpenClawChatTransportSendError {
+            // The transport proved this payload never reached its request
+            // channel, so it is safe to retry automatically.
+            await outbox.markCommandQueued(
+                id: command.id,
+                retryCount: command.retryCount,
+                lastError: nil)
+            self.setOutboxState(.queued, forCommandID: command.id)
+            self.applyTransportHealth(false)
+            return .stop
+        } catch is CancellationError {
+            // Cancellation while the request is suspended does not prove that
+            // the gateway rejected it. Never replay automatically.
+            return await self.stopAfterUnconfirmedDelivery(command, outbox: outbox)
+        } catch let error as GatewayResponseError {
+            if error.detailsReason == OpenClawChatSessionRoutingContract.changedErrorReason {
+                let parked = await self.parkOutboxCommandForChangedTarget(command, outbox: outbox)
+                return parked ? .continueFlush : .stop
+            }
+            // A response error proves the gateway rejected the request; unlike
+            // a socket/timeout failure, replay cannot duplicate an accepted run.
+            return await self.outboxRejectionDisposition(
+                command,
+                outbox: outbox,
+                reason: error.localizedDescription)
+        } catch {
+            // A socket error or timeout is ambiguous: preserve the command for
+            // canonical-history reconciliation or explicit user retry.
+            outboxLogger.error("outbox flush send failed \(error.localizedDescription, privacy: .public)")
+            return await self.stopAfterUnconfirmedDelivery(command, outbox: outbox)
+        }
+    }
+
+    private func finishAcceptedOutboxCommand(
+        _ command: OpenClawChatOutboxCommand,
+        outbox: any OpenClawChatCommandOutbox) async -> OutboxFlushDisposition
+    {
+        // Deliberately no pendingRuns adoption for background flushes: the
+        // reply still lands via handleChatEvent's external-run final branch,
+        // handleSessionMessageEvent, and the post-drain history refresh. Run
+        // tracking (typing indicator, streaming, timeouts) stays owned by
+        // interactive performSend. chat.send ACK precedes durable user-turn
+        // persistence. The durable outbox remains the sole owner of the
+        // optimistic bubble until canonical history carries its key; writing
+        // it into the cache would require cross-database cancellation logic.
+        let update = await outbox.markCommandAwaitingConfirmation(id: command.id)
+        guard update != .unavailable else {
+            self.applyTransportHealth(false)
+            return .stop
+        }
+        if update == .updated {
+            self.setOutboxState(.confirming, forCommandID: command.id)
+        } else {
+            // A concurrent canonical history/session.message confirmation
+            // already removed the row.
+            self.clearOutboxState(forCommandID: command.id)
+        }
+        return .continueAndReconcile(Self.deliveryTarget(for: command))
+    }
+
+    private func outboxRejectionDisposition(
+        _ command: OpenClawChatOutboxCommand,
+        outbox: any OpenClawChatCommandOutbox,
+        reason: String) async -> OutboxFlushDisposition
+    {
+        let canContinue = await self.recordOutboxRejection(
+            of: command,
+            outbox: outbox,
+            reason: reason)
+        return canContinue ? .continueFlush : .stop
+    }
+
+    private func stopAfterUnconfirmedDelivery(
+        _ command: OpenClawChatOutboxCommand,
+        outbox: any OpenClawChatCommandOutbox) async -> OutboxFlushDisposition
+    {
+        let update = await self.parkOutboxCommandWithUnconfirmedDelivery(command, outbox: outbox)
+        self.applyTransportHealth(false)
+        guard update == .updated else { return .stop }
+        return .stopAndReconcile(Self.deliveryTarget(for: command))
     }
 
     private static func needsOutboxDeliveryReconciliation(_ command: OpenClawChatOutboxCommand) -> Bool {
@@ -739,25 +825,6 @@ extension OpenClawChatViewModel {
         }
     }
 
-    /// Appends a flushed background-session turn to that session's cached
-    /// transcript so a cold offline reopen shows it before live history.
-    private func spliceSentCommandIntoCachedTranscript(_ command: OpenClawChatOutboxCommand) async {
-        guard let transcriptCache else { return }
-        let key = Self.outboxUserIdempotencyKey(command.id)
-        let cacheAgentID = Self.transcriptCacheAgentID(
-            sessionKey: command.sessionKey,
-            agentID: command.agentID)
-        var cached = await transcriptCache.loadTranscript(
-            sessionKey: command.sessionKey,
-            agentID: cacheAgentID)
-        guard !cached.contains(where: { $0.idempotencyKey == key }) else { return }
-        cached.append(Self.outboxUserMessage(for: command))
-        await transcriptCache.storeTranscript(
-            sessionKey: command.sessionKey,
-            agentID: cacheAgentID,
-            messages: cached)
-    }
-
     private func recoverInterruptedOutboxSendsIfNeeded() async -> Bool {
         guard let outbox else { return false }
         // The store owns the once-per-process gate so overlapping/replacement
@@ -801,7 +868,7 @@ extension OpenClawChatViewModel {
         guard let agentID else { return nil }
         let normalized = raw.lowercased()
         if normalized == "global" { return "global" }
-        if Self.agentID(fromSessionKey: raw) != nil { return raw }
+        if OpenClawChatSessionKey.agentID(from: raw) != nil { return raw }
         // A malformed ownership prefix must fail closed, not become a nested
         // key such as agent:<id>:agent::main.
         guard !normalized.hasPrefix("agent:") else { return nil }

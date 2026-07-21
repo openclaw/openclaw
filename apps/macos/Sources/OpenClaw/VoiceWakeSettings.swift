@@ -158,7 +158,9 @@ struct VoiceWakeSettings: View {
                     SettingsCardGroup("Activation") {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
-                            subtitle: "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
+                            subtitle: """
+                            Listen for a wake phrase before running voice commands. Recognition runs fully on-device.
+                            """,
                             binding: self.voiceWakeBinding)
 
                         SettingsCardToggleRow(
@@ -184,7 +186,9 @@ struct VoiceWakeSettings: View {
 
                         SettingsCardToggleRow(
                             title: "Play phase-transition sounds",
-                            subtitle: "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
+                            subtitle: """
+                            Play short sounds when Talk Mode switches between listening, thinking, and speaking.
+                            """,
                             binding: self.$state.talkPhaseSoundsEnabled)
 
                         SettingsCardToggleRow(
@@ -453,7 +457,7 @@ struct VoiceWakeSettings: View {
     }
 
     private func chimeRow(
-        title: String,
+        title: SettingsTextValue,
         selection: Binding<VoiceWakeChime>,
         showsDivider: Bool = true) -> some View
     {
@@ -607,7 +611,7 @@ struct VoiceWakeSettings: View {
         }
     }
 
-    private var additionalLanguagesSubtitle: String {
+    private var additionalLanguagesSubtitle: SettingsTextValue {
         if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
             return "None configured."
         }
@@ -853,7 +857,9 @@ private struct AdditionalLanguageRow: View {
 
     var body: some View {
         SettingsCardRow(
-            title: "Language \(self.index + 2)",
+            title: .verbatim(String(
+                format: String(localized: "Language %lld"),
+                self.index + 2)),
             subtitle: "Fallback recognition language.",
             showsDivider: self.showsDivider)
         {

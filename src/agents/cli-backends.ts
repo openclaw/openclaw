@@ -7,6 +7,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
+import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import {
   resolvePluginSetupCliBackend,
@@ -50,12 +51,14 @@ export type ResolvedCliBackend = {
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 type ResolvedCliBackendLiveTest = {
@@ -67,7 +70,7 @@ type ResolvedCliBackendLiveTest = {
 };
 
 /** Binding between a model provider and the CLI runtime that serves it. */
-export type CliRuntimeModelBackendBinding = {
+type CliRuntimeModelBackendBinding = {
   provider: string;
   runtime: string;
   pluginId?: string;
@@ -86,12 +89,14 @@ type FallbackCliBackendPolicy = {
   textTransforms?: PluginTextTransforms;
   defaultAuthProfileId?: string;
   authEpochMode?: CliBackendAuthEpochMode;
+  autoSelectAuthProfile?: boolean;
   contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
+  runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
 };
 
 const FALLBACK_CLI_BACKEND_POLICIES: Record<string, FallbackCliBackendPolicy> = {};
@@ -128,12 +133,14 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     textTransforms: entry.backend.textTransforms,
     defaultAuthProfileId: entry.backend.defaultAuthProfileId,
     authEpochMode: entry.backend.authEpochMode,
+    autoSelectAuthProfile: entry.backend.autoSelectAuthProfile,
     contextEngineHostCapabilities: entry.backend.contextEngineHostCapabilities,
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
+    runtimeArtifact: entry.backend.runtimeArtifact,
   };
 }
 
@@ -330,10 +337,8 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
   }
   const baseFresh = base.reliability?.watchdog?.fresh ?? {};
   const baseResume = base.reliability?.watchdog?.resume ?? {};
-  const baseOutputLimits = base.reliability?.outputLimits ?? {};
   const overrideFresh = override.reliability?.watchdog?.fresh ?? {};
   const overrideResume = override.reliability?.watchdog?.resume ?? {};
-  const overrideOutputLimits = override.reliability?.outputLimits ?? {};
   return {
     ...base,
     ...override,
@@ -347,10 +352,6 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     reliability: {
       ...base.reliability,
       ...override.reliability,
-      outputLimits: {
-        ...baseOutputLimits,
-        ...overrideOutputLimits,
-      },
       watchdog: {
         ...base.reliability?.watchdog,
         ...override.reliability?.watchdog,
@@ -429,12 +430,14 @@ export function resolveCliBackendConfig(
       textTransforms: mergePluginTextTransforms(runtimeTextTransforms, registered.textTransforms),
       defaultAuthProfileId: registered.defaultAuthProfileId,
       authEpochMode: registered.authEpochMode,
+      autoSelectAuthProfile: registered.autoSelectAuthProfile,
       contextEngineHostCapabilities: registered.contextEngineHostCapabilities,
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
+      runtimeArtifact: registered.runtimeArtifact,
     };
   }
 
@@ -463,12 +466,14 @@ export function resolveCliBackendConfig(
       ),
       defaultAuthProfileId: fallbackPolicy.defaultAuthProfileId,
       authEpochMode: fallbackPolicy.authEpochMode,
+      autoSelectAuthProfile: fallbackPolicy.autoSelectAuthProfile,
       contextEngineHostCapabilities: fallbackPolicy.contextEngineHostCapabilities,
       ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
       prepareExecution: fallbackPolicy.prepareExecution,
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
       nativeToolMode: fallbackPolicy.nativeToolMode,
       sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
+      runtimeArtifact: fallbackPolicy.runtimeArtifact,
     };
   }
   const mergedFallback = fallbackPolicy?.baseConfig
@@ -494,17 +499,19 @@ export function resolveCliBackendConfig(
     ),
     defaultAuthProfileId: fallbackPolicy?.defaultAuthProfileId,
     authEpochMode: fallbackPolicy?.authEpochMode,
+    autoSelectAuthProfile: fallbackPolicy?.autoSelectAuthProfile,
     contextEngineHostCapabilities: fallbackPolicy?.contextEngineHostCapabilities,
     ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
     prepareExecution: fallbackPolicy?.prepareExecution,
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
     sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
+    runtimeArtifact: fallbackPolicy?.runtimeArtifact,
   };
 }
 
 /** Test-only dependency controls for CLI backend registry resolution. */
-export const testing = {
+const testing = {
   resetDepsForTest(): void {
     cliBackendsDeps = defaultCliBackendsDeps;
   },
@@ -515,4 +522,7 @@ export const testing = {
     };
   },
 } as const;
-export { testing as __testing };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliBackendsTestApi")] = testing;
+}

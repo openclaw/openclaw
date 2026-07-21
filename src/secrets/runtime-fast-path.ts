@@ -12,6 +12,7 @@ import {
   AUTH_STATE_FILENAME,
   LEGACY_AUTH_FILENAME,
 } from "../agents/auth-profiles/path-constants.js";
+import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveOAuthPath } from "../config/paths.js";
@@ -169,7 +170,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
     (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
   if (web && typeof web === "object" && !Array.isArray(web)) {
     const webRecord = web as Record<string, unknown>;
-    if ("search" in webRecord || "x_search" in webRecord) {
+    if ("search" in webRecord) {
       return true;
     }
     if (
@@ -232,6 +233,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   usesAuthStoreFallback: boolean;
 } | null {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
+  const authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
   const sourceConfig = structuredClone(params.config);
   const resolvedConfig = structuredClone(params.config);
   const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
@@ -271,7 +273,10 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     sourceConfig,
     config: resolvedConfig,
     authStores,
+    authStoreCredentialsRevision,
     warnings: [],
+    degradedOwners: [],
+    secretOwners: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
   };
   return {

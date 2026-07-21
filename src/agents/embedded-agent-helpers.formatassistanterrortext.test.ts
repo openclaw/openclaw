@@ -11,8 +11,8 @@ import {
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
-  sanitizeUserFacingText,
 } from "./embedded-agent-helpers.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 describe("formatAssistantErrorText", () => {
@@ -362,6 +362,13 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for empty stream chunk errors", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
+  });
+
+  it("does not rewrite Provider finish_reason: error into a timeout (#109218)", () => {
+    const msg = makeAssistantError("Provider finish_reason: error");
+    // Keep provider signal; do not rewrite to the timeout string (formatAssistantErrorText
+    // may return undefined for some paths — assert the concrete copy we preserve).
+    expect(formatAssistantErrorText(msg)).toBe("Provider finish_reason: error");
   });
 
   it("returns a connection-refused message for ECONNREFUSED failures", () => {
