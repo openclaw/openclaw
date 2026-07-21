@@ -10,11 +10,11 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS } from "./workspace-quiescence-renew-script.js";
 import {
   REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
   REMOTE_WORKSPACE_MANIFEST_JS,
   REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   REMOTE_WORKSPACE_RESUME_JS,
 } from "./workspace-sync-scripts.js";
 
