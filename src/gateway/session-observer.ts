@@ -1,18 +1,11 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
-import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
-import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import { getAgentRunContext, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
-  assembleSessionObserverAssistantBuffer,
-  assistantBufferHasOpenContext,
   buildSessionObserverPrompt,
   createDormantSessionObserverRun,
   defaultCompleteModel,
-  keepUtf16SafeTail,
-  SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
   defaultPersistDigest,
   defaultPrepareModel,
   defaultReadSession,
@@ -20,15 +13,12 @@ import {
   markSessionObserverRunSuperseded,
   normalizeSessionObserverModelOutput,
   readFiniteNumber,
-  readString,
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
   rememberSessionObserverItemStatus,
   rememberSessionObserverRevisionFloor,
-  sanitizeSessionObserverActivityText,
   SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
-  summarizeSessionObserverToolArgs,
   synthesizeSessionObserverTerminalDigest,
   terminalHealthFor,
 } from "./session-observer-model.js";
@@ -39,6 +29,10 @@ import type {
   SessionObserverRevisionFloor,
   SessionObserverState,
 } from "./session-observer-model.js";
+import {
+  flushSessionObserverAssistantNote,
+  noteSessionObserverEvent,
+} from "./session-observer-notes.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
@@ -48,15 +42,12 @@ const MODEL_TIMEOUT_MS = 10_000;
 const MAX_DIGESTS_PER_RUN = 40;
 const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
-const MAX_NOTES = 40;
-const MAX_NOTE_BYTES = 8 * 1024;
 const MAX_ITEM_STATUSES = 160;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 const PERSIST_INTERVAL_MS = 60_000;
-const ASSISTANT_NOTE_MAX_CHARS = 240;
 // The Control UI opens at most six live session subscriptions; matching that cap
 // prevents background observer calls from outgrowing the surface consuming them.
-export const MAX_CONCURRENT_OBSERVED_SESSIONS = 6;
+const MAX_CONCURRENT_OBSERVED_SESSIONS = 6;
 
 export function createSessionObserver(deps: SessionObserverDeps) {
   const now = deps.now ?? Date.now;
@@ -184,49 +175,8 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     return resolveUtilityModelRef({ cfg, agentId: state.agentId }) === state.utilityModelRef;
   };
 
-  const addNote = (state: SessionObserverState, raw: string) => {
-    const text = sanitizeSessionObserverActivityText(raw, 360);
-    if (!text) {
-      return;
-    }
-    state.noteSequence += 1;
-    const note = {
-      sequence: state.noteSequence,
-      text,
-      bytes: Buffer.byteLength(text, "utf8"),
-    };
-    state.notes.push(note);
-    state.noteBytes += note.bytes;
-    while (state.notes.length > MAX_NOTES || state.noteBytes > MAX_NOTE_BYTES) {
-      const removed = state.notes.shift();
-      state.noteBytes -= removed?.bytes ?? 0;
-    }
-  };
-
   const rememberItemStatus = (state: SessionObserverState, itemId: string, status: string) =>
     rememberSessionObserverItemStatus(state.itemStatuses, itemId, status, MAX_ITEM_STATUSES);
-
-  // Assistant prose is redacted only as assembled text: per-fragment sanitizing
-  // cannot match secrets split across stream chunks, and raw fragments must not
-  // count toward the digest note threshold.
-  const flushAssistantNote = (state: SessionObserverState) => {
-    if (!state.assistantBuffer || assistantBufferHasOpenContext(state.assistantBuffer)) {
-      return;
-    }
-    const sanitized = sanitizeSessionObserverActivityText(
-      state.assistantBuffer,
-      SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-    );
-    const visible = keepUtf16SafeTail(sanitized, ASSISTANT_NOTE_MAX_CHARS).trim();
-    if (!visible || visible === HEARTBEAT_TOKEN || visible === HEARTBEAT_TRANSCRIPT_PROMPT) {
-      return;
-    }
-    if (visible === state.lastAssistantNote) {
-      return;
-    }
-    state.lastAssistantNote = visible;
-    addNote(state, `Assistant: ${visible}`);
-  };
 
   const ensurePrepared = async (state: SessionObserverState): Promise<PreparedModel> => {
     state.preparedPromise ??= prepareModel({
@@ -404,7 +354,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     if (state.digestCount >= digestLimit) {
       return;
     }
-    flushAssistantNote(state);
+    flushSessionObserverAssistantNote(state);
     const selectedNotes = pendingNotes(state);
     if (!final && selectedNotes.length < MIN_NOTES_PER_DIGEST) {
       return;
@@ -579,102 +529,6 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     return state;
   };
 
-  const noteEvent = (state: SessionObserverState, event: AgentEventPayload) => {
-    const data = event.data;
-    switch (event.stream) {
-      case "lifecycle": {
-        const phase = data.phase;
-        if (phase === "start") {
-          addNote(state, "Run started");
-        } else if (phase === "finishing") {
-          addNote(state, "Run is wrapping up");
-        } else if (phase === "end" || phase === "error") {
-          const health = terminalHealthFor(event);
-          const error = readString(data.error);
-          addNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`);
-        }
-        return;
-      }
-      case "tool": {
-        // Tool results are intentionally ignored: their details field is private
-        // runtime context and must never enter an observer-model prompt.
-        if (data.phase !== "start") {
-          return;
-        }
-        const name = readString(data.name) ?? "tool";
-        const args = summarizeSessionObserverToolArgs(data.args);
-        addNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`);
-        return;
-      }
-      case "command_output": {
-        if (data.phase !== "end") {
-          return;
-        }
-        const title = readString(data.title) ?? readString(data.name) ?? "command";
-        const exitCode = readFiniteNumber(data.exitCode);
-        const status = readString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
-        addNote(state, `${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`);
-        return;
-      }
-      case "item": {
-        const status = readString(data.status);
-        const title = readString(data.title);
-        const itemId = readString(data.itemId) ?? title;
-        if (!status || !title || !itemId) {
-          return;
-        }
-        if (!["running", "completed", "failed", "blocked"].includes(status)) {
-          return;
-        }
-        if (!rememberItemStatus(state, itemId, status)) {
-          return;
-        }
-        addNote(state, `${title}: ${status}`);
-        return;
-      }
-      case "plan": {
-        const steps = normalizeAgentPlanSteps(data.steps);
-        if (!steps) {
-          return;
-        }
-        state.planProgress = {
-          completed: steps.filter((step) => step.status === "completed").length,
-          total: steps.length,
-        };
-        for (const [index, step] of steps.entries()) {
-          const itemId = `plan:${index}:${step.step}`;
-          if (!rememberItemStatus(state, itemId, step.status)) {
-            continue;
-          }
-          const status = step.status === "in_progress" ? "running" : step.status;
-          addNote(state, `Plan: ${step.step}: ${status}`);
-        }
-        return;
-      }
-      case "assistant": {
-        const full = readString(data.text);
-        const delta = readString(data.delta);
-        if (full) {
-          state.assistantBuffer = assembleSessionObserverAssistantBuffer(full);
-        } else if (delta) {
-          state.assistantBuffer = assembleSessionObserverAssistantBuffer(
-            state.assistantBuffer + delta,
-          );
-        }
-        return;
-      }
-      case "approval": {
-        if (data.status !== "pending" && data.phase !== "requested") {
-          return;
-        }
-        addNote(state, `Waiting for approval: ${readString(data.title) ?? "user action"}`);
-        break;
-      }
-      default:
-        break;
-    }
-  };
-
   const handleEvent = (event: AgentEventPayload) => {
     if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
@@ -770,7 +624,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     if (eventStartedAt !== undefined) {
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
-    noteEvent(state, event);
+    noteSessionObserverEvent(state, event, rememberItemStatus);
     if (terminal) {
       state.terminalHealth = terminalHealthFor(event);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();

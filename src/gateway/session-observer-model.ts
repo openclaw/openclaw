@@ -7,11 +7,6 @@ import {
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
-import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-  stripInternalRuntimeContext,
-} from "../agents/internal-runtime-context.js";
 import type {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
@@ -32,58 +27,8 @@ const MAX_DORMANT_RUNS = 256;
 const MAX_DISABLED_RUNS = 512;
 
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
-export const SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS = 4096;
-
-/**
- * Assemble streamed assistant prose: strip complete runtime-context blocks,
- * then truncate without ever discarding an unmatched context BEGIN marker so
- * the eventual END still closes and strips the whole block. Accepted tradeoff:
- * a truncation boundary landing inside a split marker while the model echoes
- * >4 KB of context is treated as ordinary prose (flush stays redacted).
- */
-export function assembleSessionObserverAssistantBuffer(value: string): string {
-  // Detect a still-open block on the RAW text: the stripper drops an
-  // unterminated marker together with its tail, which would leave the block
-  // body arriving in later deltas indistinguishable from ordinary prose.
-  const openIndex = value.lastIndexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-  const isOpen = openIndex !== -1 && value.indexOf(INTERNAL_RUNTIME_CONTEXT_END, openIndex) === -1;
-  if (!isOpen) {
-    return keepUtf16SafeTail(
-      stripInternalRuntimeContext(value),
-      SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-    );
-  }
-  const head = keepUtf16SafeTail(
-    stripInternalRuntimeContext(value.slice(0, openIndex)),
-    SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-  );
-  const body = keepUtf16SafeTail(
-    value.slice(openIndex + INTERNAL_RUNTIME_CONTEXT_BEGIN.length),
-    SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-  );
-  return `${head}${INTERNAL_RUNTIME_CONTEXT_BEGIN}${body}`;
-}
-
-/** True while the buffer holds a still-streaming runtime-context block. */
-export function assistantBufferHasOpenContext(value: string): boolean {
-  return value.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-}
-
-/** Keep the newest chars without starting on the low half of a surrogate pair. */
-export function keepUtf16SafeTail(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  let start = value.length - maxChars;
-  const lead = value.charCodeAt(start);
-  if (lead >= 0xdc00 && lead <= 0xdfff) {
-    start += 1;
-  }
-  return value.slice(start);
-}
-
-export type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
-export type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
+type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
+type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
 export type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 export type SessionObserverState = {
@@ -299,51 +244,6 @@ const ModelDigestSchema = z
 function normalizeModelString(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(value).replace(/\s+/gu, " ").trim();
   return truncateUtf16Safe(normalized, maxChars);
-}
-
-export function sanitizeSessionObserverActivityText(value: string, maxChars: number): string {
-  return normalizeModelString(stripInternalRuntimeContext(value), maxChars);
-}
-
-export function summarizeSessionObserverToolArgs(args: unknown): string {
-  if (!args || typeof args !== "object") {
-    return "";
-  }
-  const record = args as Record<string, unknown>;
-  const summary: Record<string, string | number | boolean> = {};
-  for (const key of [
-    "action",
-    "cmd",
-    "command",
-    "cwd",
-    "file",
-    "filePath",
-    "host",
-    "package",
-    "path",
-    "pattern",
-    "query",
-    "target",
-    "url",
-  ]) {
-    const value = record[key];
-    if (typeof value === "string") {
-      summary[key] = redactToolPayloadText(value);
-    } else if (typeof value === "number" || typeof value === "boolean") {
-      summary[key] = value;
-    }
-  }
-  try {
-    if (Object.keys(summary).length > 0) {
-      return sanitizeSessionObserverActivityText(JSON.stringify(summary), 220);
-    }
-    return sanitizeSessionObserverActivityText(
-      `args: ${Object.keys(record).toSorted().slice(0, 8).join(", ")}`,
-      220,
-    );
-  } catch {
-    return "";
-  }
 }
 
 export function defaultReadSession(sessionKey: string, agentId: string): SessionEntry | undefined {
