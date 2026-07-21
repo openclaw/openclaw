@@ -18,6 +18,7 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelOption
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
@@ -241,6 +242,7 @@ fun ChatScreen(
   onOpenGatewaySettings: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
+  val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
@@ -643,6 +645,7 @@ fun ChatScreen(
       sessionKey = sessionKey,
       session = activeSession,
       messages = messages,
+      transcriptAnchor = transcriptAnchor,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
@@ -1132,6 +1135,7 @@ private fun ChatMessageList(
   sessionKey: String,
   session: ChatSessionEntry?,
   messages: List<ChatMessage>,
+  transcriptAnchor: ChatTranscriptAnchorState?,
   historyLoading: Boolean,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
@@ -1168,7 +1172,19 @@ private fun ChatMessageList(
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
   val workingRun = workingRunTracker.resolve(indicatorVisible, session, SystemClock.elapsedRealtime())
   val turnRecapResolver = remember { TurnRecapResolver() }
-  val turnRecap = turnRecapResolver.resolve(sessionKey, indicatorVisible, session)
+  val turnRecap =
+    turnRecapResolver.resolve(
+      sessionKey = sessionKey,
+      indicatorVisible = indicatorVisible,
+      row = session,
+      transcript =
+        TurnRecapTranscriptState(
+          sessionKey = transcriptAnchor?.sessionKey,
+          newestItemId = transcriptAnchor?.newestItemId,
+          completedEndedAt = transcriptAnchor?.completedEndedAt,
+          completedNewestItemId = transcriptAnchor?.completedNewestItemId,
+        ),
+    )
   val timeline = remember(baseTimeline, turnRecap) { baseTimeline.withTurnRecap(turnRecap) }
   val readerScroll =
     rememberChatReaderScrollController(

@@ -140,6 +140,100 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
+  fun settledRecapSticksOnlyWhileItsTranscriptAnchorIsNewest() {
+    val resolver = TurnRecapResolver()
+    resolver.resolve(session, true, done(previousEndedAt), transcript("user-1"))
+    val terminal = done(runEndedAt, runtimeMs = 51_000L, outputTokens = 485L)
+    val expected = TurnRecap(runtimeMs = 51_000L, outputTokens = 485L)
+
+    assertNull(
+      resolver.resolve(session, false, terminal, transcript("assistant-tool")),
+    )
+    assertEquals(
+      expected,
+      resolver.resolve(session, false, terminal, transcript("assistant-1", completedEndedAt = runEndedAt)),
+    )
+    assertEquals(
+      expected,
+      resolver.resolve(session, false, terminal, transcript("assistant-1", completedEndedAt = runEndedAt)),
+    )
+    assertNull(
+      resolver.resolve(
+        session,
+        false,
+        terminal,
+        transcript("assistant-2", completedEndedAt = runEndedAt + 1_000L),
+      ),
+    )
+  }
+
+  @Test
+  fun emptyTranscriptWaitsForTheCompletedItemBeforeSettling() {
+    val resolver = TurnRecapResolver()
+    resolver.resolve(session, true, done(previousEndedAt), transcript(null))
+    val terminal = done(runEndedAt, runtimeMs = 2_000L)
+
+    assertNull(resolver.resolve(session, false, terminal, transcript(null)))
+    assertEquals(
+      TurnRecap(runtimeMs = 2_000L, outputTokens = null),
+      resolver.resolve(session, false, terminal, transcript("assistant-1", completedEndedAt = runEndedAt)),
+    )
+  }
+
+  @Test
+  fun newerContentAlreadyPresentWhenHistoryCompletesDropsTheRecap() {
+    val resolver = TurnRecapResolver()
+    resolver.resolve(session, true, done(previousEndedAt), transcript("user-1"))
+    val terminal = done(runEndedAt, runtimeMs = 2_000L)
+
+    assertNull(
+      resolver.resolve(
+        session,
+        false,
+        terminal,
+        transcript(
+          newestItemId = "user-2",
+          completedEndedAt = runEndedAt,
+          completedNewestItemId = "assistant-1",
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun changedTerminalWhileWaitingForHistoryDestroysAttribution() {
+    val resolver = TurnRecapResolver()
+    resolver.resolve(session, true, done(previousEndedAt), transcript("user-1"))
+    assertNull(
+      resolver.resolve(session, false, done(runEndedAt), transcript("user-1")),
+    )
+
+    assertNull(
+      resolver.resolve(
+        session,
+        false,
+        done(runEndedAt + 1_000L, runtimeMs = 9_000L),
+        transcript("assistant-2", completedEndedAt = runEndedAt + 1_000L),
+      ),
+    )
+  }
+
+  @Test
+  fun terminalWaitingForHistoryStillExpires() {
+    var nowMs = 1_000_000L
+    val resolver = TurnRecapResolver { nowMs }
+    resolver.resolve(session, true, done(previousEndedAt), transcript("user-1"))
+    assertNull(
+      resolver.resolve(session, false, done(runEndedAt), transcript("user-1")),
+    )
+
+    nowMs += TURN_RECAP_SETTLE_WINDOW_MS + 1L
+    assertNull(
+      resolver.resolve(session, false, done(runEndedAt), transcript("assistant-1", completedEndedAt = runEndedAt)),
+    )
+  }
+
+  @Test
   fun hidesTheRecapAsSoonAsTheNextIndicatorAppears() {
     val resolver = TurnRecapResolver()
     resolver.resolve(session, true, done(previousEndedAt))
@@ -201,4 +295,17 @@ class ChatTurnRecapResolverTest {
     assertEquals("1.2k", formatCompactTokenCount(1_234L))
     assertEquals("1M", formatCompactTokenCount(999_999L))
   }
+
+  private fun transcript(
+    newestItemId: String?,
+    completedEndedAt: Long? = null,
+    transcriptSessionKey: String? = session,
+    completedNewestItemId: String? = newestItemId.takeIf { completedEndedAt != null },
+  ): TurnRecapTranscriptState =
+    TurnRecapTranscriptState(
+      sessionKey = transcriptSessionKey,
+      newestItemId = newestItemId,
+      completedEndedAt = completedEndedAt,
+      completedNewestItemId = completedNewestItemId,
+    )
 }

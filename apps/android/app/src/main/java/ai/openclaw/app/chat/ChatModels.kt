@@ -26,6 +26,13 @@ data class ChatMessage(
   val idempotencyKey: String? = null,
 )
 
+data class ChatTranscriptAnchorState(
+  val sessionKey: String,
+  val newestItemId: String?,
+  val completedEndedAt: Long?,
+  val completedNewestItemId: String?,
+)
+
 /**
  * One content part in a chat message; binary parts carry base64 plus their MIME metadata.
  */

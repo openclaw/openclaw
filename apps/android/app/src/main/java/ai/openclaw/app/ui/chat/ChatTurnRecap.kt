@@ -20,6 +20,13 @@ internal data class TurnRecap(
   val outputTokens: Long?,
 )
 
+internal data class TurnRecapTranscriptState(
+  val sessionKey: String?,
+  val newestItemId: String?,
+  val completedEndedAt: Long?,
+  val completedNewestItemId: String?,
+)
+
 internal data class TurnRecapTokenFormat(
   val singular: Boolean,
   val count: String,
@@ -29,7 +36,7 @@ internal data class TurnRecapTokenFormat(
  * [baselineEndedAt] is the session row's endedAt when the working indicator appeared: the
  * previous run's terminal stamp, or null once the run-start patch cleared it. Only a row whose
  * endedAt moved past that baseline belongs to the run this pane watched. [settled] freezes the
- * first recap so a later background, cron, or other-device run cannot rewrite the displayed row.
+ * first recap while [settledTranscriptItemId] still identifies the transcript's newest item.
  */
 private data class TurnRecapWatch(
   var watching: Boolean,
@@ -40,7 +47,11 @@ private data class TurnRecapWatch(
   var absorbedTerminal: Boolean,
   /** First idle render after the indicator cleared; canceled queued sends must expire promptly. */
   var settleStartedAt: Long?,
+  var pendingTerminal: TurnRecap?,
+  var pendingTerminalEndedAt: Long?,
   val settled: TurnRecap?,
+  val settledTranscriptItemId: String?,
+  val tracksTranscript: Boolean,
 )
 
 /**
@@ -56,7 +67,7 @@ internal class TurnRecapResolver(
 ) {
   private val watches = mutableMapOf<String, TurnRecapWatch>()
 
-  /** Leaving before settlement destroys attribution; settled recaps remain sticky. */
+  /** Leaving before settlement destroys attribution; settled recaps remain until superseded. */
   fun abandonActiveWatch(sessionKey: String) {
     val watch = watches[sessionKey] ?: return
     if (watch.settled == null) watches.remove(sessionKey)
@@ -70,6 +81,32 @@ internal class TurnRecapResolver(
     sessionKey: String,
     indicatorVisible: Boolean,
     row: ChatSessionEntry?,
+  ): TurnRecap? =
+    resolveInternal(
+      sessionKey = sessionKey,
+      indicatorVisible = indicatorVisible,
+      row = row,
+      transcript = null,
+    )
+
+  fun resolve(
+    sessionKey: String,
+    indicatorVisible: Boolean,
+    row: ChatSessionEntry?,
+    transcript: TurnRecapTranscriptState,
+  ): TurnRecap? =
+    resolveInternal(
+      sessionKey = sessionKey,
+      indicatorVisible = indicatorVisible,
+      row = row,
+      transcript = transcript,
+    )
+
+  private fun resolveInternal(
+    sessionKey: String,
+    indicatorVisible: Boolean,
+    row: ChatSessionEntry?,
+    transcript: TurnRecapTranscriptState?,
   ): TurnRecap? {
     val watch = watches[sessionKey]
     val rowEndedAt = row?.endedAt
@@ -82,7 +119,11 @@ internal class TurnRecapResolver(
             baselineEndedAt = rowEndedAt,
             absorbedTerminal = false,
             settleStartedAt = null,
+            pendingTerminal = null,
+            pendingTerminalEndedAt = null,
             settled = null,
+            settledTranscriptItemId = null,
+            tracksTranscript = transcript != null,
           )
       } else if (!watch.baselineKnown) {
         if (row != null) {
@@ -97,7 +138,19 @@ internal class TurnRecapResolver(
     }
     if (watch == null) return null
     watch.watching = false
-    watch.settled?.let { return it }
+    watch.settled?.let { settled ->
+      if (
+        !watch.tracksTranscript ||
+        transcript?.sessionKey != sessionKey ||
+        watch.settledTranscriptItemId == transcript.newestItemId
+      ) {
+        return settled
+      }
+      // A newer transcript turn has replaced the content this recap summarized. Session rows do
+      // not expose enough run identity to reposition it safely, so discard it.
+      watches.remove(sessionKey)
+      return null
+    }
     if (watch.absorbedTerminal || !watch.baselineKnown) {
       // Attribution is ambiguous, so fail quiet instead of freezing another run's numbers.
       watches.remove(sessionKey)
@@ -116,13 +169,46 @@ internal class TurnRecapResolver(
       // No watched terminal yet. Stamps never regress, so <= stays stale until the bounded expiry.
       return null
     }
-    // Any fresh terminal concludes the watch. Waiting past a non-done terminal could attach a
-    // later unrelated success to this turn.
-    watches.remove(sessionKey)
+    // Any fresh non-success concludes the watch. Waiting past it could attach a later unrelated
+    // success to this turn.
     val runtimeMs = row.runtimeMs
-    if (row.status != "done" || runtimeMs == null) return null
-    val settled = TurnRecap(runtimeMs = runtimeMs, outputTokens = row.outputTokens)
-    watches[sessionKey] = watch.copy(settled = settled)
+    if (row.status != "done" || runtimeMs == null) {
+      watches.remove(sessionKey)
+      return null
+    }
+    val terminal = TurnRecap(runtimeMs = runtimeMs, outputTokens = row.outputTokens)
+    if (watch.pendingTerminalEndedAt != null && watch.pendingTerminalEndedAt != rowEndedAt) {
+      // Session rows have no run id. Once another terminal replaces the candidate, attribution is
+      // gone even if a history refresh completes inside the settlement window.
+      watches.remove(sessionKey)
+      return null
+    }
+    if (
+      watch.tracksTranscript &&
+      (
+        transcript?.sessionKey != sessionKey ||
+          transcript.completedEndedAt != rowEndedAt
+      )
+    ) {
+      // The terminal session row can arrive before the terminal-triggered chat.history snapshot.
+      // Keep waiting so its final item becomes the recap anchor, not an intermediate tool row.
+      watch.pendingTerminal = terminal
+      watch.pendingTerminalEndedAt = rowEndedAt
+      return null
+    }
+    if (watch.tracksTranscript && transcript?.newestItemId != transcript?.completedNewestItemId) {
+      // Newer transcript content already superseded the completed snapshot before this pane could
+      // settle it, so there is no safe recap attribution left to display.
+      watches.remove(sessionKey)
+      return null
+    }
+    watches.remove(sessionKey)
+    val settled = watch.pendingTerminal ?: terminal
+    watches[sessionKey] =
+      watch.copy(
+        settled = settled,
+        settledTranscriptItemId = transcript?.completedNewestItemId,
+      )
     return settled
   }
 }
