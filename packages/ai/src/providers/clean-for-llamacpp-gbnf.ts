@@ -10,6 +10,7 @@ export const LLAMACPP_TOOL_SCHEMA_PROFILE = "llamacpp";
 
 // llama.cpp compiles bounded maxLength into repeated grammar rules and caps the
 // repetition count near 2000; larger values fail GBNF compilation (#108580).
+// Open additionalProperties also explode grammar size (#108690).
 const LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD = 2000;
 
 const SCHEMA_MAP_KEYS = new Set([
@@ -51,6 +52,10 @@ function cleanLlamacppGbnfNode(node: unknown): unknown {
 
   for (const [key, value] of Object.entries(record)) {
     if (key === "pattern") {
+      continue;
+    }
+    if (key === "additionalProperties" && value === true) {
+      cleaned[key] = false;
       continue;
     }
     if (
@@ -101,6 +106,9 @@ function collectLlamacppGbnfViolations(node: unknown, path: string, out: string[
   if (typeof record.pattern === "string") {
     out.push(`${path}.pattern`);
   }
+  if (record.additionalProperties === true) {
+    out.push(`${path}.additionalProperties`);
+  }
   if (
     typeof record.maxLength === "number" &&
     record.maxLength > LLAMACPP_GBNF_MAX_REPETITION_THRESHOLD
@@ -123,7 +131,7 @@ function collectLlamacppGbnfViolations(node: unknown, path: string, out: string[
   }
 }
 
-/** Remove llama.cpp GBNF-incompatible pattern and oversized maxLength constraints. */
+/** Remove llama.cpp GBNF-incompatible pattern, open additionalProperties, and oversized maxLength constraints. */
 export function cleanSchemaForLlamacppGbnf(schema: unknown): TSchema {
   return cleanLlamacppGbnfNode(schema) as TSchema;
 }

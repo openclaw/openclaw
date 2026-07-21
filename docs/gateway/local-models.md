@@ -215,7 +215,7 @@ Compat overrides for stricter OpenAI-compatible backends:
   }
   ```
 
-  The profile removes `pattern` constraints and `maxLength` values above 2,000 from the model-facing schema because llama.cpp's JSON Schema-to-GBNF converter rejects those forms. Smaller bounds remain, and OpenClaw's tool execution path still validates canonical arguments. Do not enable this profile for ordinary providers: without the explicit profile or a bundled llama.cpp-backed provider hook, canonical tool-schema constraints remain unchanged.
+  The profile removes `pattern` constraints, closes open `additionalProperties`, and drops `maxLength` values above 2,000 from the model-facing schema because llama.cpp's JSON Schema-to-GBNF converter rejects or explodes on those forms. Smaller bounds remain, and OpenClaw's tool execution path still validates canonical arguments. Do not enable this profile for ordinary providers: without the explicit profile or a bundled llama.cpp-backed provider hook, canonical tool-schema constraints remain unchanged.
 
 - **Bracketed tool text**: some local models emit standalone bracketed tool requests as text, like `[tool_name]` followed by JSON and `[END_TOOL_REQUEST]`. OpenClaw promotes those to real tool calls only when the name exactly matches a registered tool for the turn; otherwise it stays as hidden, unsupported text.
 - **Unstructured tool-call-looking text**: if a model emits JSON/XML/ReAct-style text that looks like a tool call but wasn't a structured invocation, OpenClaw leaves it as text and logs a warning with the run id, provider/model, detected pattern, and tool name when available. That is provider/model incompatibility, not a completed tool run.

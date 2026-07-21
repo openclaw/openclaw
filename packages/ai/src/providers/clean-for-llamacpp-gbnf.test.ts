@@ -77,6 +77,36 @@ describe("cleanSchemaForLlamacppGbnf", () => {
       ],
     });
   });
+
+  it("closes open additionalProperties to prevent GBNF grammar overflow", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        job: {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    };
+
+    expect(cleanSchemaForLlamacppGbnf(schema)).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        job: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    });
+  });
 });
 
 describe("findLlamacppGbnfSchemaViolations", () => {
@@ -95,6 +125,24 @@ describe("findLlamacppGbnfSchemaViolations", () => {
     ).toEqual([
       "demo.parameters.properties.key.pattern",
       "demo.parameters.properties.script.maxLength",
+    ]);
+  });
+
+  it("reports open additionalProperties paths", () => {
+    expect(
+      findLlamacppGbnfSchemaViolations(
+        {
+          type: "object",
+          additionalProperties: true,
+          properties: {
+            nested: { type: "object", additionalProperties: true },
+          },
+        },
+        "demo.parameters",
+      ),
+    ).toEqual([
+      "demo.parameters.additionalProperties",
+      "demo.parameters.properties.nested.additionalProperties",
     ]);
   });
 });

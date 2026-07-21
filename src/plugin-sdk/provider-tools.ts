@@ -112,6 +112,7 @@ export function inspectGeminiToolSchemas(
 
 /**
  * Rewrites tool schemas into llama.cpp GBNF-compatible JSON schema before dispatch.
+ * Strips pattern, closes open additionalProperties, and removes oversized maxLength.
  */
 export function normalizeLlamacppGbnfToolSchemas(
   /** Provider tool-schema normalization context containing the active tool list. */

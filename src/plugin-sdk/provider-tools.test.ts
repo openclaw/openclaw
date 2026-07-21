@@ -72,16 +72,23 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         description: "",
         parameters: {
           type: "object",
+          additionalProperties: true,
           properties: {
-            declarationKey: {
-              type: "string",
-              maxLength: 200,
-              pattern: "\\S",
-            },
-            script: {
-              type: "string",
-              minLength: 1,
-              maxLength: 65_536,
+            job: {
+              type: "object",
+              additionalProperties: true,
+              properties: {
+                declarationKey: {
+                  type: "string",
+                  maxLength: 200,
+                  pattern: "\\S",
+                },
+                script: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 65_536,
+                },
+              },
             },
           },
         },
@@ -96,14 +103,21 @@ describe("buildProviderToolCompatFamilyHooks", () => {
 
     expect(normalized[0]?.parameters).toEqual({
       type: "object",
+      additionalProperties: false,
       properties: {
-        declarationKey: {
-          type: "string",
-          maxLength: 200,
-        },
-        script: {
-          type: "string",
-          minLength: 1,
+        job: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            declarationKey: {
+              type: "string",
+              maxLength: 200,
+            },
+            script: {
+              type: "string",
+              minLength: 1,
+            },
+          },
         },
       },
     });
@@ -118,8 +132,10 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         toolName: "cron",
         toolIndex: 0,
         violations: [
-          "cron.parameters.properties.declarationKey.pattern",
-          "cron.parameters.properties.script.maxLength",
+          "cron.parameters.additionalProperties",
+          "cron.parameters.properties.job.additionalProperties",
+          "cron.parameters.properties.job.properties.declarationKey.pattern",
+          "cron.parameters.properties.job.properties.script.maxLength",
         ],
       },
     ]);

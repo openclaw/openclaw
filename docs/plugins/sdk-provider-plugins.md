@@ -571,7 +571,7 @@ catalog, API-key auth, and dynamic model resolution.
     | --- | --- | --- |
     | `deepseek` | Removes JSON Schema keywords unsupported by DeepSeek tool calling and reports remaining violations | `deepseek` |
     | `gemini` | Projects canonical schemas into Gemini's supported schema subset and reports unsupported keywords | `google`, `google-gemini-cli` |
-    | `llamacpp-gbnf` | Removes `pattern` and `maxLength` values above 2,000 before llama.cpp converts tool schemas to GBNF; smaller bounds remain | `llama-cpp`, `lmstudio`, `ollama`, `ollama-cloud` |
+    | `llamacpp-gbnf` | Removes `pattern`, closes open `additionalProperties`, and drops `maxLength` values above 2,000 before llama.cpp converts tool schemas to GBNF; smaller bounds remain | `llama-cpp`, `lmstudio`, `ollama`, `ollama-cloud` |
     | `openai` | Applies native OpenAI strict-object schema requirements where the active model API requires them | `openai` |
 
     Use `llamacpp-gbnf` only for providers whose tool schemas are converted by

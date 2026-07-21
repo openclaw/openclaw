@@ -71,6 +71,10 @@ function collectGbnfViolations(node: unknown, path: string, out: string[]): void
     );
   }
 
+  if (record.additionalProperties === true) {
+    out.push(`${path}.additionalProperties is true (GBNF grammar overflow risk)`);
+  }
+
   for (const [key, value] of Object.entries(record)) {
     if (SCHEMA_MAP_KEYS.has(key)) {
       if (value && typeof value === "object" && !Array.isArray(value)) {
