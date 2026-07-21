@@ -152,7 +152,7 @@ export function renderSettingsToggleRow(props: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   /** Runs synchronously during direct activation for effects gated on user activation. */
-  onUserToggle?: (checked: boolean) => void;
+  onActivate?: (checked: boolean) => void;
   disabled?: boolean;
 }): TemplateResult {
   const notifySwitchActivation = (event: MouseEvent | KeyboardEvent) => {
@@ -165,7 +165,7 @@ export function renderSettingsToggleRow(props: {
     }
     const checked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
     if (checked !== props.checked) {
-      props.onUserToggle?.(checked);
+      props.onActivate?.(checked);
     }
   };
   return html`
@@ -177,7 +177,7 @@ export function renderSettingsToggleRow(props: {
           return;
         }
         const checked = !props.checked;
-        props.onUserToggle?.(checked);
+        props.onActivate?.(checked);
         props.onChange(checked);
       }}
     >

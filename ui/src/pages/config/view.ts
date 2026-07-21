@@ -1131,7 +1131,7 @@ function renderLobsterPetSection(props: ConfigProps) {
             : t("quickSettings.appearance.lobsterSoundsOff"),
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
-          onUserToggle: (enabled) => {
+          onActivate: (enabled) => {
             if (enabled) {
               previewLobsterPetChirp();
             }
