@@ -376,18 +376,34 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(Buffer.from(await media.arrayBuffer())).toEqual(testCase.mediaBytes);
   });
 
-  it("leaves unrelated SDK multipart uploads on the SDK serialization path", async () => {
+  it.each([
+    {
+      name: "other endpoints",
+      url: "https://open.feishu.cn/open-apis/drive/v1/files/upload_all",
+      method: "POST",
+    },
+    {
+      name: "upload paths mentioned only in a query",
+      url: "https://open.feishu.cn/upload?return=/open-apis/im/v1/files",
+      method: "POST",
+    },
+    {
+      name: "non-POST requests",
+      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      method: "GET",
+    },
+  ])("leaves $name on the SDK multipart serialization path", async ({ url, method }) => {
     createFeishuClient({
-      appId: "app_upload_other",
+      appId: `app_upload_other_${method}`,
       appSecret: "test-app-secret", // pragma: allowlist secret
-      accountId: "multipart-upload-other",
+      accountId: `multipart-upload-other-${method}-${url.length}`,
     });
     const httpInstance = readLastClientHttpInstance();
     const data = { file_name: "drive.txt", file: Buffer.from("drive") };
 
     await httpInstance.request({
-      url: "https://open.feishu.cn/open-apis/drive/v1/files/upload_all",
-      method: "POST",
+      url,
+      method,
       headers: { "Content-Type": "multipart/form-data" },
       data,
     });

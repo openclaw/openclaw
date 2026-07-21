@@ -113,15 +113,26 @@ function isMultipartFormRequest(opts: Lark.HttpRequestOptions<unknown>): boolean
   return /^multipart\/form-data(?:;|$)/i.test(readHeader(opts.headers, "content-type") ?? "");
 }
 
-const FEISHU_MESSAGE_MEDIA_UPLOAD_PATH_RE = /\/open-apis\/im\/v1\/(?:files|images)(?:[?#]|$)/;
+const FEISHU_MESSAGE_MEDIA_UPLOAD_PATHS = new Set([
+  "/open-apis/im/v1/files",
+  "/open-apis/im/v1/images",
+]);
 
 function isFeishuMessageMediaUploadRequest(
   opts: Lark.HttpRequestOptions<unknown>,
   data: Record<string, unknown>,
 ): boolean {
+  if (typeof opts.url !== "string" || opts.method?.toUpperCase() !== "POST") {
+    return false;
+  }
+  let pathname: string;
+  try {
+    pathname = new URL(opts.url).pathname;
+  } catch {
+    return false;
+  }
   return (
-    typeof opts.url === "string" &&
-    FEISHU_MESSAGE_MEDIA_UPLOAD_PATH_RE.test(opts.url) &&
+    FEISHU_MESSAGE_MEDIA_UPLOAD_PATHS.has(pathname) &&
     (Buffer.isBuffer(data.file) || Buffer.isBuffer(data.image))
   );
 }
