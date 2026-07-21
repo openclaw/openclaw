@@ -297,8 +297,11 @@ describe("qqbot config", () => {
       expect(resolved.secretSource).toBe(source);
       expect(qqbotSetupPlugin.config.isConfigured?.(resolved, cfg)).toBe(configured);
     } finally {
-      if (previous === undefined) delete process.env.QQBOT_CLIENT_SECRET;
-      else process.env.QQBOT_CLIENT_SECRET = previous;
+      if (previous === undefined) {
+        delete process.env.QQBOT_CLIENT_SECRET;
+      } else {
+        process.env.QQBOT_CLIENT_SECRET = previous;
+      }
     }
   });
 
