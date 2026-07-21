@@ -18,7 +18,6 @@ import {
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
-import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
 
@@ -163,15 +162,11 @@ describe("memory search config", () => {
   function expectMergedRemoteConfig(
     resolved: ReturnType<typeof resolveMemorySearchConfig>,
     apiKey: unknown,
-    extras?: { nonBatchConcurrency?: number },
   ) {
     expect(resolved?.remote).toEqual({
       baseUrl: "https://agent.example/v1",
       apiKey,
       headers: { "X-Default": "on" },
-      ...(typeof extras?.nonBatchConcurrency === "number"
-        ? { nonBatchConcurrency: extras.nonBatchConcurrency }
-        : {}),
       batch: {
         enabled: false,
         wait: true,
@@ -494,22 +489,12 @@ describe("memory search config", () => {
     expectDefaultRemoteBatch(resolved);
   });
 
-  it("resolves sync config without consulting embedding providers", () => {
+  it("resolves fixed sync defaults without consulting embedding providers", () => {
     clearMemoryEmbeddingProviders();
     const cfg = asConfig({
       memory: {
         search: {
           provider: "openai",
-          sync: {
-            onSessionStart: false,
-            onSearch: true,
-            watch: false,
-            sessions: {
-              deltaBytes: 321,
-              deltaMessages: 7,
-              postCompactionForce: false,
-            },
-          },
         },
       },
 
@@ -519,28 +504,25 @@ describe("memory search config", () => {
     });
 
     expect(resolveMemorySearchSyncConfig(cfg, "main")).toEqual({
-      onSessionStart: false,
+      onSessionStart: true,
       onSearch: true,
-      watch: false,
+      watch: true,
       watchDebounceMs: 1500,
       intervalMinutes: 0,
       embeddingBatchTimeoutSeconds: undefined,
       sessions: {
-        deltaBytes: 321,
-        deltaMessages: 7,
-        postCompactionForce: false,
+        deltaBytes: 100_000,
+        deltaMessages: 50,
+        postCompactionForce: true,
       },
     });
   });
 
-  it("uses configured embeddingBatchTimeoutSeconds when set", () => {
+  it("keeps the fixed embedding batch timeout unset", () => {
     const cfg = asConfig({
       memory: {
         search: {
           provider: "openai",
-          sync: {
-            embeddingBatchTimeoutSeconds: 600,
-          },
         },
       },
 
@@ -549,7 +531,9 @@ describe("memory search config", () => {
       },
     });
 
-    expect(resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds).toBe(600);
+    expect(
+      resolveMemorySearchSyncConfig(cfg, "main")?.embeddingBatchTimeoutSeconds,
+    ).toBeUndefined();
   });
 
   it("merges defaults and overrides", () => {
@@ -560,7 +544,6 @@ describe("memory search config", () => {
           model: "text-embedding-3-small",
           store: {
             vector: {
-              enabled: false,
               extensionPath: "/opt/sqlite-vec.dylib",
             },
           },
@@ -577,11 +560,6 @@ describe("memory search config", () => {
             memory: {
               search: {
                 query: { maxResults: 8 },
-                store: {
-                  vector: {
-                    enabled: true,
-                  },
-                },
               },
             },
           },
@@ -811,54 +789,6 @@ describe("memory search config", () => {
     expectDefaultRemoteBatch(resolved);
   });
 
-  it("normalizes remote batch timer config once before provider adapters receive it", () => {
-    const cfg = asConfig({
-      memory: {
-        search: {
-          provider: "openai",
-          remote: {
-            batch: {
-              pollIntervalMs: Number.MAX_SAFE_INTEGER,
-              timeoutMinutes: Number.MAX_SAFE_INTEGER,
-            },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-
-    expect(resolved?.remote?.batch?.pollIntervalMs).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(resolved?.remote?.batch?.timeoutMinutes).toBe(Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000));
-  });
-
-  it("keeps the default remote batch poll delay for zero intervals", () => {
-    const cfg = asConfig({
-      memory: {
-        search: {
-          provider: "openai",
-          remote: {
-            batch: {
-              pollIntervalMs: 0,
-            },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    });
-
-    const resolved = resolveMemorySearchConfig(cfg, "main");
-
-    expect(resolved?.remote?.batch?.pollIntervalMs).toBe(2000);
-  });
-
   it("keeps remote unset for local provider without overrides", () => {
     const cfg = configWithDefaultProvider("local");
     const resolved = resolveMemorySearchConfig(cfg, "main");
@@ -953,7 +883,7 @@ describe("memory search config", () => {
     expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
   });
 
-  it("merges remote non-batch concurrency from defaults with agent overrides", () => {
+  it("ignores retired remote non-batch concurrency", () => {
     const cfg = configWithRemoteDefaults({
       apiKey: "default-key", // pragma: allowlist secret
       headers: { "X-Default": "on" },
@@ -962,7 +892,7 @@ describe("memory search config", () => {
 
     const resolved = resolveMemorySearchConfig(cfg, "main");
 
-    expectMergedRemoteConfig(resolved, "default-key", { nonBatchConcurrency: 1 }); // pragma: allowlist secret
+    expectMergedRemoteConfig(resolved, "default-key"); // pragma: allowlist secret
   });
 
   it("preserves SecretRef remote apiKey when merging defaults with agent overrides", () => {
@@ -980,7 +910,7 @@ describe("memory search config", () => {
     });
   });
 
-  it("gates session sources behind experimental flag", () => {
+  it("gates session sources behind rememberAcrossConversations", () => {
     const cfg = asConfig({
       memory: {
         search: {
@@ -998,7 +928,6 @@ describe("memory search config", () => {
             memory: {
               search: {
                 rememberAcrossConversations: false,
-                experimental: { sessionMemory: false },
               },
             },
           },
@@ -1009,13 +938,13 @@ describe("memory search config", () => {
     expect(resolved?.sources).toEqual(["memory"]);
   });
 
-  it("allows session sources when experimental flag is enabled", () => {
+  it("allows session sources when cross-conversation recall is enabled", () => {
     const cfg = asConfig({
       memory: {
         search: {
           provider: "openai",
           sources: ["memory", "sessions"],
-          experimental: { sessionMemory: true },
+          rememberAcrossConversations: true,
         },
       },
 
