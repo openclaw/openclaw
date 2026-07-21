@@ -27,7 +27,7 @@ import type { ModelRegistry } from "./sessions/model-registry.js";
 
 const MODEL_RUNTIME_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 
-export type PreparedModelRuntimeCatalogMode = "live" | "static";
+type PreparedModelRuntimeCatalogMode = "live" | "static";
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
   agentId?: string;
