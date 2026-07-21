@@ -16,6 +16,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import { buildOpenAICompatibleLiveModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   buildProviderReplayFamilyHooks,
@@ -134,20 +135,23 @@ function resolveMinimaxDynamicModel(params: {
   });
 }
 
-function resolveApiCatalog(ctx: ProviderCatalogContext) {
-  const apiKey = ctx.resolveProviderApiKey(API_PROVIDER_ID).apiKey;
-  if (!apiKey) {
+async function resolveApiCatalog(ctx: ProviderCatalogContext) {
+  const auth = ctx.resolveProviderApiKey(API_PROVIDER_ID);
+  if (!auth.apiKey) {
     return null;
   }
   return {
-    provider: {
-      ...buildMinimaxProvider(ctx.env),
-      apiKey,
-    },
+    provider: await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: API_PROVIDER_ID,
+      providerConfig: buildMinimaxProvider(ctx.env),
+      apiKey: auth.apiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+      discovery: { endpointPath: "v1/models" },
+    }),
   };
 }
 
-function resolvePortalCatalog(ctx: ProviderCatalogContext) {
+async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
   const explicitProvider = ctx.config.models?.providers?.[PORTAL_PROVIDER_ID];
   const envApiKey = ctx.resolveProviderApiKey(PORTAL_PROVIDER_ID).apiKey;
   const authStore = ensureAuthProfileStore(ctx.agentDir, {
@@ -162,10 +166,17 @@ function resolvePortalCatalog(ctx: ProviderCatalogContext) {
 
   const explicitBaseUrl = normalizeOptionalString(explicitProvider?.baseUrl);
 
+  const providerConfig = buildPortalProviderCatalog({
+    baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
+    apiKey,
+  });
   return {
-    provider: buildPortalProviderCatalog({
-      baseUrl: explicitBaseUrl || buildMinimaxPortalProvider(ctx.env).baseUrl,
+    provider: await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: PORTAL_PROVIDER_ID,
+      providerConfig,
       apiKey,
+      discoveryApiKey: ctx.resolveProviderApiKey(PORTAL_PROVIDER_ID).discoveryApiKey,
+      discovery: { endpointPath: "v1/models" },
     }),
   };
 }
