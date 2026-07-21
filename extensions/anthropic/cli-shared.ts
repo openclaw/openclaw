@@ -3,11 +3,16 @@
  */
 import type {
   CliBackendConfig,
+  CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
+import {
+  requiresClaudeMandatoryAdaptiveThinking,
+  resolveClaudeFable5ModelIdentity,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
+import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants.js";
 export {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
@@ -46,6 +51,9 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_FOUNDRY",
   "CLAUDE_CODE_USE_VERTEX",
+  // Re-injected per run by resolveClaudeCliThinkingEnv; an inherited value
+  // would override the session's /think level inside Claude Code.
+  "MAX_THINKING_TOKENS",
   "OTEL_EXPORTER_OTLP_ENDPOINT",
   "OTEL_EXPORTER_OTLP_HEADERS",
   "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
@@ -242,9 +250,58 @@ function normalizeClaudeSettingSourcesArgs(args?: string[]): string[] | undefine
   return normalized;
 }
 
+// Claude Code cannot express off via --effort, so off resolves per model:
+// Fable 5 (including Claude Code's bare "fable" shorthand) rejects disabled
+// thinking and floors to the lowest effort, mirroring the API transport.
+// Mythos routes expose only the "off" opt-out sentinel profile
+// (CLAUDE_CLI_OFF_THINKING_PROFILE), so their args/env stay unmanaged.
+// Everything else drops the flag and disables thinking through env.
+function resolveClaudeCliOffThinkingArgAction(modelId: string): ClaudeCliEffortArgAction {
+  const normalized = normalizeOptionalLowercaseString(modelId) ?? "";
+  const aliased = CLAUDE_CLI_MODEL_ALIASES[normalized] ?? normalized;
+  if (aliased === "fable" || resolveClaudeFable5ModelIdentity({ id: aliased })) {
+    return { mode: "set", effort: "low" };
+  }
+  if (requiresClaudeMandatoryAdaptiveThinking({ id: aliased })) {
+    return { mode: "preserve" };
+  }
+  return { mode: "omit" };
+}
+
+/**
+ * Per-run env for `/think off`, which Claude Code cannot express via --effort.
+ * MAX_THINKING_TOKENS=0 is Claude Code's only thinking kill switch. Gateway
+ * env never reaches node-placed runs, so off degrades to Claude Code's
+ * default effort there — accepted; node runs also skip the compaction env.
+ */
+export function resolveClaudeCliThinkingEnv(params: {
+  thinkingLevel?: string | null;
+  modelId: string;
+  executionMode?: CliBackendExecutionMode;
+}): Record<string, string> | undefined {
+  // Side questions already reset effort/thinking args to Claude Code defaults.
+  if (params.executionMode === "side-question") {
+    return undefined;
+  }
+  if (normalizeOptionalLowercaseString(params.thinkingLevel) !== "off") {
+    return undefined;
+  }
+  // Shared off resolver keeps the env decision aligned with the args path:
+  // only the strip-the-flag branch may disable thinking through env.
+  if (resolveClaudeCliOffThinkingArgAction(params.modelId).mode !== "omit") {
+    return undefined;
+  }
+  return { MAX_THINKING_TOKENS: "0" };
+}
+
 /** Resolve whether a run preserves, removes, or sets a Claude CLI effort override. */
-function resolveClaudeCliEffortArgAction(thinkingLevel?: string | null): ClaudeCliEffortArgAction {
+function resolveClaudeCliEffortArgAction(
+  thinkingLevel: string | null | undefined,
+  modelId: string,
+): ClaudeCliEffortArgAction {
   switch (normalizeOptionalLowercaseString(thinkingLevel)) {
+    case "off":
+      return resolveClaudeCliOffThinkingArgAction(modelId);
     case "minimal":
     case "low":
       return { mode: "set", effort: "low" };
@@ -475,7 +532,7 @@ export function resolveClaudeCliExecutionArgs(
     if (context.executionMode === "side-question") {
       return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
     }
-    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel);
+    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel, context.modelId);
     switch (action.mode) {
       case "preserve":
         return [...context.baseArgs];

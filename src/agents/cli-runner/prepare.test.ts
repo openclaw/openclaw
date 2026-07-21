@@ -339,6 +339,7 @@ describe("prepareCliRunContext", () => {
         prompt: "latest ask",
         provider: testCase.provider,
         model: testCase.model,
+        thinkLevel: "ultra",
         timeoutMs: 1_000,
         runId: "run-configured-context-budget",
         config: {
@@ -405,7 +406,11 @@ describe("prepareCliRunContext", () => {
       expect(context.backendResolved.modelProvider).toBe("fixture-anthropic");
       expect(context.contextWindowInfo?.tokens).toBe(testCase.expectedContextTokens);
       expect(prepareExecution).toHaveBeenCalledWith(
-        expect.objectContaining({ contextTokenBudget: testCase.expectedContextTokens }),
+        expect.objectContaining({
+          contextTokenBudget: testCase.expectedContextTokens,
+          // "ultra" folds into the CLI backend contract's "max".
+          thinkingLevel: "max",
+        }),
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

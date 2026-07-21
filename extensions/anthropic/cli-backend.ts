@@ -16,6 +16,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliThinkingEnv,
 } from "./cli-shared.js";
 
 /** Build the Claude CLI backend plugin descriptor. */
@@ -106,9 +107,12 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     },
     normalizeConfig: normalizeClaudeBackendConfig,
     autoSelectAuthProfile: false,
-    prepareExecution: ({ contextTokenBudget }) => {
-      const env = resolveClaudeCliAutoCompactEnv(contextTokenBudget);
-      return env ? { env } : undefined;
+    prepareExecution: ({ contextTokenBudget, modelId, thinkingLevel, executionMode }) => {
+      const env = {
+        ...resolveClaudeCliAutoCompactEnv(contextTokenBudget),
+        ...resolveClaudeCliThinkingEnv({ thinkingLevel, modelId, executionMode }),
+      };
+      return Object.keys(env).length > 0 ? { env } : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };
