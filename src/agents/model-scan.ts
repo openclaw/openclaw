@@ -5,6 +5,7 @@ import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   asDateTimestampMs,
+  parseStrictFiniteNumber,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -129,21 +130,12 @@ function parseModality(modality: string | null): Array<"text" | "image"> {
 }
 
 function parseNumberString(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const num = Number(trimmed);
-  if (!Number.isFinite(num)) {
-    return null;
-  }
-  return num;
+  // OpenRouter pricing fields are provider-controlled strings. Number() would
+  // silently coerce hex ("0x0" -> 0), binary ("0b0" -> 0), or octal ("0o0" -> 0)
+  // forms into wrong-but-valid prices; a hex-zero would even mark a paid model
+  // free. parseStrictFiniteNumber accepts only decimal/scientific tokens and
+  // rejects those coercion-prone forms.
+  return parseStrictFiniteNumber(value) ?? null;
 }
 
 function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
