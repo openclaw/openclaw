@@ -6,7 +6,6 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { loadSettings } from "../../app/settings.ts";
-import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
@@ -26,7 +25,7 @@ import * as catalog from "./catalog-target.ts";
 import { CloudProfileDiscovery, selectProfiles } from "./cloud-profile-discovery.ts";
 import { PendingCloudRecoveryState, resolveScope } from "./cloud-recovery-state.ts";
 import { advanceCloudDraftSession } from "./cloud-submit.ts";
-import { renderNewSessionDraftComposer } from "./composer.ts";
+import { renderDraftError, renderNewSessionDraftComposer } from "./composer.ts";
 import { buildDraftSessionCreateParams, isWorktreeNameValid } from "./create-params.ts";
 import {
   type BrowserTarget,
@@ -35,6 +34,7 @@ import {
   type DraftNode,
   readDraftNodes,
 } from "./discovery.ts";
+import { GatewayNameDiscovery } from "./gateway-name-discovery.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 import { isAbsolutePath } from "./path.ts";
@@ -43,15 +43,6 @@ import { retainRejectedInitialTurn } from "./rejected-initial-turn.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 
 const CATALOG_RETRY_DELAYS_MS = [0, 1_000, 3_000] as const;
-
-function renderDraftError(message: string) {
-  return html`
-    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
-      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="callout__content new-session-page__alert-message">${message}</span>
-    </div>
-  `;
-}
 
 class NewSessionPage extends OpenClawLightDomElement {
   @property({ attribute: false }) data: NewSessionRouteData | undefined;
@@ -67,6 +58,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   @state() private branches: DraftBranches | null = null;
   @state() private branchesLoading = false;
   @state() private nodes: DraftNode[] = [];
+  @state() private gatewayName = "";
   @state() private execNode = "";
   @state() private cloudProfiles: DraftCloudProfile[] = [];
   @state() private cloudProfilesHydrated = false;
@@ -95,6 +87,10 @@ class NewSessionPage extends OpenClawLightDomElement {
   private folderSelectedByUser = false;
   private submitRequestToken = 0;
   private nodesRequestToken = 0;
+  private readonly gatewayNameDiscovery = new GatewayNameDiscovery(
+    () => this.context?.gateway.snapshot,
+    (name) => (this.gatewayName = name),
+  );
   private readonly pendingCloud = new PendingCloudRecoveryState();
   private readonly cloudProfileDiscovery = new CloudProfileDiscovery({
     snapshot: () => ({
@@ -199,6 +195,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       if (becameConnected) {
         this.gatewayConnectionEpoch += 1;
         this.retryPendingCatalogTarget();
+        void this.gatewayNameDiscovery.load();
       }
       void this.cloudProfileDiscovery.load();
     }
@@ -207,6 +204,7 @@ class NewSessionPage extends OpenClawLightDomElement {
   private invalidateGatewayDiscovery(resetHostSelection: boolean) {
     this.nodesRequestToken += 1;
     this.nodesHydrated = false;
+    this.gatewayNameDiscovery.invalidate();
     this.cloudProfileDiscovery.invalidate();
     this.branchesRequestToken += 1;
     this.branchesLoading = false;
@@ -1218,6 +1216,7 @@ class NewSessionPage extends OpenClawLightDomElement {
       workspace: this.workspacePath(),
       sessions: this.context?.sessions.state.result?.sessions ?? [],
       execNodes: this.isAdmin() ? execNodes : [],
+      gatewayName: this.gatewayName,
       cloudProfiles: this.isAdmin() ? cloudProfiles : [],
       cloudProfileId: this.cloudProfileId,
       execNode: this.execNode,

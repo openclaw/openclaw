@@ -403,6 +403,8 @@ type OpenClawCodingToolsOptions = {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
+  inheritRuntimeToolAllowlist?: boolean;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
@@ -520,6 +522,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
     });
@@ -540,6 +543,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     subagentPolicy,
     inheritedToolPolicy,
     runtimePluginToolGrant,
+    runtimeToolPolicyForInheritance,
   } = capabilityProfile.policy;
 
   const enableHeartbeatTool =
@@ -1124,6 +1128,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       {
         policy: subagentPolicyWithToolSearchControls,
         label: "subagent tools.allow",
+        unavailableCoreToolReason,
+      },
+      {
+        policy: runtimeToolPolicyForInheritance,
+        label: "runtime tools.allow",
         unavailableCoreToolReason,
       },
       { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },

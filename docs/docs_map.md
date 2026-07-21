@@ -4943,6 +4943,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Requirements
   - H2: The computer agent tool
+  - H2: Windows and Linux (experimental, via cua-driver)
   - H2: The computer.act node command
   - H2: Enable and arm
   - H2: Safety
@@ -6381,6 +6382,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Distribution
   - H2: Surface
   - H2: Configure
+
+## plugins/reference/cua-computer.md
+
+- Route: /plugins/reference/cua-computer
+- Headings:
+  - H1: Cua Computer plugin
+  - H2: Distribution
+  - H2: Surface
 
 ## plugins/reference/deepgram.md
 
@@ -9126,7 +9135,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Global rule: image sanitization
   - H2: Global rule: malformed tool calls
   - H2: Global rule: tool result pairing
-  - H2: Global rule: incomplete reasoning-only turns
+  - H2: Global rule: incomplete or silent reasoning-only turns
   - H2: Global rule: inter-session input provenance
   - H2: Provider matrix (current behavior)
   - H2: Historical behavior (pre-2026.1.22)

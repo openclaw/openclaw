@@ -300,6 +300,12 @@ openclaw-board-widget-cell {
   position: absolute;
 }
 
+/* Passive trust indicator: only meaningful where chrome hides (fine pointer),
+   so the base rule keeps it off and the overlay block reveals it at rest. */
+.board-widget__grant-dot {
+  display: none;
+}
+
 .board-widget__frame {
   background: transparent;
   border: 0;
@@ -523,6 +529,30 @@ openclaw-board-widget-cell {
        authoritative because no transition-property is redeclared here. */
     transition-delay: 0s;
     visibility: visible;
+  }
+
+  /* While chrome is hidden, a granted widget keeps a small trust dot in the
+     bar's corner; the revealed bar carries the full capabilities chip, so the
+     dot fades out together with the chrome fade-in. */
+  .board-widget__grant-dot {
+    background: var(--ok, #4ec9a8);
+    border-radius: 50%;
+    display: block;
+    height: 6px;
+    pointer-events: none;
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    transition: opacity 120ms ease;
+    width: 6px;
+    z-index: 4;
+  }
+
+  .board-widget:hover .board-widget__grant-dot,
+  .board-widget:focus-within .board-widget__grant-dot,
+  .board-widget--dragging .board-widget__grant-dot,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__grant-dot {
+    opacity: 0;
   }
 
   /* Frameless is a fine-pointer treatment only: touch keeps the card shell

@@ -67,6 +67,12 @@ private enum ScrollFollowTarget: Equatable {
     case user(UUID)
 }
 
+private struct ChatTurnRecapObservation: Equatable {
+    let sessionKey: String
+    let indicatorVisible: Bool
+    let row: ChatTurnRecapSessionRow?
+}
+
 public struct OpenClawChatDisplayOptions: OptionSet, Sendable {
     public let rawValue: UInt8
 
@@ -120,6 +126,9 @@ public struct OpenClawChatView: View {
     @State private var isKeyboardVisible = false
     @State private var expandedUserMessageIDs: Set<UUID> = []
     @State private var fullMessageRequest: ChatFullMessageReaderRequest?
+    @State private var turnRecapResolver = ChatTurnRecapResolver()
+    @State private var turnRecap: ChatTurnRecap?
+    @State private var turnRecapSessionKey: String?
     private let showsSessionSwitcher: Bool
     private let drawsBackground: Bool
     private let style: Style
@@ -226,6 +235,9 @@ public struct OpenClawChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
+        .onChange(of: self.turnRecapObservation, initial: true) { _, observation in
+            self.updateTurnRecap(observation)
+        }
         .sheet(item: self.$fullMessageRequest) { request in
             ChatFullMessageReader(
                 request: request,
@@ -246,6 +258,7 @@ public struct OpenClawChatView: View {
                 .padding(.horizontal, Layout.outerPaddingHorizontal)
             self.planPill
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
+            self.turnRecapRow
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
         }
@@ -259,6 +272,7 @@ public struct OpenClawChatView: View {
             self.planPill
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
+            self.turnRecapRow
             self.composer
                 .padding(.horizontal, Layout.composerPaddingHorizontal)
                 .padding(.top, Layout.stackSpacing)
@@ -297,6 +311,19 @@ public struct OpenClawChatView: View {
             talkControl: self.talkControl,
             dictationControl: self.dictationControl,
             voiceNoteControl: self.voiceNoteControl)
+    }
+
+    @ViewBuilder
+    private var turnRecapRow: some View {
+        if !self.showsWorkingIndicator,
+           self.turnRecapSessionKey == self.viewModel.sessionKey,
+           let turnRecap
+        {
+            ChatTurnRecapRow(recap: turnRecap)
+                .padding(.horizontal, Layout.outerPaddingHorizontal + Layout.messageListPaddingHorizontal)
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 
     private var messageList: some View {
@@ -438,14 +465,15 @@ public struct OpenClawChatView: View {
 
         OpenClawQuestionCards(viewModel: self.viewModel)
 
-        if self.viewModel.hasBlockingRunActivity, !self.hasVisibleStreamingAssistantText {
+        if self.showsWorkingIndicator {
             ChatTypingIndicatorBubble(
                 style: self.style,
                 assistantName: self.assistantName,
                 assistantAvatarText: self.assistantAvatarText,
                 assistantAvatarTint: self.assistantAvatarTint,
                 showsAssistantAvatar: self.showsAssistantAvatars,
-                isClean: self.composerChrome == .clean)
+                isClean: self.composerChrome == .clean,
+                runIdentity: self.viewModel.workingIndicatorIdentity)
                 .equatable()
         }
 
@@ -730,6 +758,29 @@ public struct OpenClawChatView: View {
         return AssistantTextParser.hasVisibleContent(
             in: text,
             includeThinking: self.displayOptions.contains(.reasoning))
+    }
+
+    private var showsWorkingIndicator: Bool {
+        self.viewModel.hasBlockingRunActivity && !self.hasVisibleStreamingAssistantText
+    }
+
+    private var turnRecapObservation: ChatTurnRecapObservation {
+        let row = self.viewModel.currentSessionEntry().map(ChatTurnRecapSessionRow.init)
+        return ChatTurnRecapObservation(
+            sessionKey: self.viewModel.sessionKey,
+            indicatorVisible: self.showsWorkingIndicator,
+            row: row)
+    }
+
+    private func updateTurnRecap(_ observation: ChatTurnRecapObservation) {
+        var resolver = self.turnRecapResolver
+        let recap = resolver.resolve(
+            sessionKey: observation.sessionKey,
+            indicatorVisible: observation.indicatorVisible,
+            row: observation.row)
+        self.turnRecapResolver = resolver
+        self.turnRecap = recap
+        self.turnRecapSessionKey = recap == nil ? nil : observation.sessionKey
     }
 
     private var hasVisibleTransientContent: Bool {
@@ -1164,9 +1215,7 @@ extension OpenClawChatView {
     }
 
     private var messageSessionActionsDisabled: Bool {
-        self.viewModel.hasBlockingRunActivity ||
-            self.viewModel.isSending ||
-            self.viewModel.isAborting
+        !self.viewModel.canPerformMessageSessionAction
     }
 
     @ViewBuilder

@@ -225,13 +225,13 @@ internal fun OpenClawWearApp(
     state.messages,
     state.activeRunId,
     state.sending,
-    state.error,
+    state.failure,
     awaitingReply,
   ) {
     if (!awaitingReply) return@LaunchedEffect
     val activeSnapshot = snapshot
     if (
-      state.error != null ||
+      state.failure != null ||
       activeSnapshot == null ||
       activeSnapshot.activeSessionId != awaitingReplySessionId
     ) {
@@ -282,15 +282,13 @@ internal fun OpenClawWearApp(
   }
 
   val failure =
-    when {
-      state.phoneNodeId == null && !state.loading -> WearConversationFailure.PHONE_UNAVAILABLE
-      state.error?.contains("update", ignoreCase = true) == true ->
-        WearConversationFailure.INCOMPATIBLE
-      else -> null
-    }
+    state.failure
+      ?: WearConversationFailure.PHONE_UNAVAILABLE.takeIf {
+        state.phoneNodeId == null && !state.loading
+      }
   val resolvedInteraction =
     when {
-      state.error != null -> WearInteractionState.ERROR
+      state.failure != null -> WearInteractionState.ERROR
       state.sending -> WearInteractionState.SENDING
       state.activeRunId != null -> WearInteractionState.AGENT_WORKING
       else -> interaction

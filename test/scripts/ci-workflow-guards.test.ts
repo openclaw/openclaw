@@ -983,6 +983,7 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
     expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
     expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
     expect(refreshStep.run).toContain("run_refresh anthropic");
@@ -1011,7 +1012,9 @@ describe("ci workflow guards", () => {
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values*/assistant.xml",
       "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/android/wear/src/main/res/values*/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
+      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
       "apps/ios/Sources/*.lproj/InfoPlist.strings",
       "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
       "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
@@ -4678,8 +4681,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "MANTIS_GITHUB_APP_PRIVATE_KEY",
       "OPENAI_API_KEY",
       "OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY",
+      "OPENCLAW_QA_CONVEX_SECRET_CI",
+      "OPENCLAW_QA_CONVEX_SITE_URL",
     ]);
-    for (const secret of ["CLAWSWEEPER_APP_PRIVATE_KEY", "MANTIS_GITHUB_APP_PRIVATE_KEY"]) {
+    for (const secret of [
+      "CLAWSWEEPER_APP_PRIVATE_KEY",
+      "MANTIS_GITHUB_APP_PRIVATE_KEY",
+      "OPENCLAW_QA_CONVEX_SECRET_CI",
+      "OPENCLAW_QA_CONVEX_SITE_URL",
+    ]) {
       expect(maturityWorkflow.on.workflow_call.secrets[secret].required).toBe(false);
     }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
@@ -4716,6 +4726,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       qa_profile: "all",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+    expect(generateJob.secrets).toMatchObject({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    });
 
     const workflowStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step: WorkflowStep) => step.name === "Resolve job workflow identity",
@@ -5090,7 +5105,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(job.with).not.toHaveProperty("qa_profile");
     expect(job.with).not.toHaveProperty("publish_pull_request");
-    expect(Object.keys(job.secrets)).toEqual(["OPENAI_API_KEY"]);
+    expect(job.secrets).toMatchObject({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    });
     expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
     expect(verifyStep.env.MATURITY_SCORECARD_RELEASE_CHECKS_RESULT).toBe(
       "${{ needs.maturity_scorecard_release_checks.result }}",
