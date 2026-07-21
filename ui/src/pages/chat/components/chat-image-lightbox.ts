@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import "../../../components/image-lightbox.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
 import { t } from "../../../i18n/index.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 
 export function inlineChatImageFromEvent(event: Event): HTMLImageElement | null {
   const target = event
@@ -24,12 +25,17 @@ export function openInlineChatImage(
   onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
 ) {
   const image = inlineChatImageFromEvent(event);
-  if (!image || !onOpenImage) {
+  if (!image) {
     return;
   }
   event.preventDefault();
+  const src = image.currentSrc || image.src;
   const title = image.alt.trim() || t("chat.imageLightbox.untitled");
-  onOpenImage({ src: image.currentSrc || image.src, title });
+  if (onOpenImage) {
+    onOpenImage({ src, title });
+  } else {
+    openExternalUrlSafe(src, { allowDataImage: true });
+  }
 }
 
 export function renderChatImageLightbox(

@@ -1724,6 +1724,14 @@ describe("chat composer workbench", () => {
     trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     expect(onOpenImage).toHaveBeenCalledWith({ src, title: "Markdown preview" });
 
+    const fallbackContainer = renderChatView();
+    const fallbackTrigger = trigger.cloneNode(true) as HTMLButtonElement;
+    fallbackContainer.querySelector(".chat")?.append(fallbackTrigger);
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(null);
+    fallbackTrigger.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(openSpy).toHaveBeenCalledWith(src, "_blank", "noopener,noreferrer");
+    openSpy.mockRestore();
+
     const onCloseImage = vi.fn();
     const lightboxContainer = renderChatView({
       imageLightbox: { src, title: "Artifact preview" },

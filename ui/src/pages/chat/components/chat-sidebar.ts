@@ -20,6 +20,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
 import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import "./session-discussion-panel.ts";
 import "./session-diff-panel.ts";
@@ -496,6 +497,18 @@ function resolveSidebarCanvasSandbox(
     : "allow-scripts";
 }
 
+function openSidebarImage(
+  onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
+  src: string,
+  title: string,
+) {
+  if (onOpenImage) {
+    onOpenImage({ src, title });
+  } else {
+    openExternalUrlSafe(src, { allowDataImage: true });
+  }
+}
+
 type MarkdownSidebarProps = {
   content: SidebarContent | null;
   error: string | null;
@@ -648,7 +661,8 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                                 type="button"
                                 class="chat-tool-card__preview-image-button"
                                 aria-label=${t("chat.imageLightbox.open", { title })}
-                                @click=${() => props.onOpenImage?.({ src: content.src, title })}
+                                @click=${() =>
+                                  openSidebarImage(props.onOpenImage, content.src, title)}
                               >
                                 <img
                                   class="chat-tool-card__preview-image"
