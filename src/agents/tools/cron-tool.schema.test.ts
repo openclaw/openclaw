@@ -141,9 +141,16 @@ describe("createCronToolSchema", () => {
     for (const path of ["job.failureAlert.after", "patch.failureAlert.after"]) {
       expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "integer", minimum: 1 });
     }
-    for (const path of ["job.payload.timeoutSeconds", "patch.payload.timeoutSeconds"]) {
-      expect(propertyAt(schemaRecord, path)).toMatchObject({ type: "number", minimum: 0 });
-    }
+    expect(propertyAt(schemaRecord, "job.payload.timeoutSeconds")).toMatchObject({
+      type: "number",
+      minimum: 0,
+    });
+    expect(propertyAt(schemaRecord, "patch.payload.timeoutSeconds")).toMatchObject({
+      anyOf: expect.arrayContaining([
+        expect.objectContaining({ type: "number", minimum: 0 }),
+        expect.objectContaining({ type: "null" }),
+      ]),
+    });
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
@@ -282,11 +289,31 @@ describe("createCronToolSchema", () => {
           displayName: null,
           sessionKey: null,
           payload: {
+            timeoutSeconds: null,
             toolsAllow: null,
           },
         },
       }),
     ).toBe(true);
+  });
+
+  it("rejects null timeoutSeconds in create payloads", () => {
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: {
+          name: "script job",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "script",
+            script: "return { notify: 'done' }",
+            timeoutSeconds: null,
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("accepts payload.model and payload.fallbacks null in patch (clear-to-inherit)", () => {

@@ -17,6 +17,7 @@ function cronAgentTurnPayloadSchema(params: {
   fallbacks: TSchema;
   toolsAllow: TSchema;
   thinking: TSchema;
+  timeoutSeconds?: TSchema;
 }) {
   return closedObject({
     kind: Type.Literal("agentTurn"),
@@ -24,7 +25,7 @@ function cronAgentTurnPayloadSchema(params: {
     model: Type.Optional(params.model),
     fallbacks: Type.Optional(params.fallbacks),
     thinking: Type.Optional(params.thinking),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    timeoutSeconds: Type.Optional(params.timeoutSeconds ?? Type.Number({ minimum: 0 })),
     allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
     lightContext: Type.Optional(Type.Boolean()),
     toolsAllow: Type.Optional(params.toolsAllow),
@@ -35,14 +36,18 @@ function cronAgentTurnPayloadSchema(params: {
 }
 
 /** Builds command payload variants while preserving create/patch argv optionality. */
-function cronCommandPayloadSchema(params: { argv: TSchema; toolsAllow: TSchema }) {
+function cronCommandPayloadSchema(params: {
+  argv: TSchema;
+  toolsAllow: TSchema;
+  timeoutSeconds?: TSchema;
+}) {
   return closedObject({
     kind: Type.Literal("command"),
     argv: params.argv,
     cwd: Type.Optional(Type.String({ minLength: 1 })),
     env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.String())),
     input: Type.Optional(Type.String()),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    timeoutSeconds: Type.Optional(params.timeoutSeconds ?? Type.Number({ minimum: 0 })),
     noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
     toolsAllow: Type.Optional(params.toolsAllow),
@@ -286,10 +291,12 @@ const CronPayloadPatchSchema = Type.Union([
     fallbacks: Type.Union([Type.Array(Type.String()), Type.Null()]),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
     thinking: Type.Union([Type.String(), Type.Null()]),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
   }),
   cronCommandPayloadSchema({
     argv: Type.Optional(Type.Array(NonEmptyString, { minItems: 1 })),
     toolsAllow: Type.Union([Type.Array(Type.String()), Type.Null()]),
+    timeoutSeconds: Type.Union([Type.Number({ minimum: 0 }), Type.Null()]),
   }),
   cronScriptPayloadSchema({
     script: Type.Optional(Type.String({ minLength: 1, maxLength: 65_536 })),

@@ -161,6 +161,24 @@ describe("mergeCronPayload trigger tool caps", () => {
     ).toEqual({ kind: "agentTurn", message: "after" });
   });
 
+  it("clears command payload timeout when patch timeoutSeconds is null", () => {
+    expect(
+      mergeCronPayload(
+        { kind: "command", argv: ["sh", "-lc", "echo ok"], timeoutSeconds: 100 },
+        { kind: "command", timeoutSeconds: null },
+      ),
+    ).toEqual({ kind: "command", argv: ["sh", "-lc", "echo ok"] });
+  });
+
+  it("clears agent payload timeout when patch timeoutSeconds is null", () => {
+    expect(
+      mergeCronPayload(
+        { kind: "agentTurn", message: "warm", timeoutSeconds: 100 },
+        { kind: "agentTurn", timeoutSeconds: null },
+      ),
+    ).toEqual({ kind: "agentTurn", message: "warm" });
+  });
+
   it("treats undefined toolsAllow as omitted across a kind change", () => {
     expect(
       mergeCronPayload(

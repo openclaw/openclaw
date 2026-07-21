@@ -294,11 +294,17 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
+} & Partial<
+  Omit<
+    CronAgentTurnPayloadFields,
+    "model" | "fallbacks" | "toolsAllow" | "thinking" | "timeoutSeconds"
+  >
+> & {
     model?: string | null;
     fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
     thinking?: string | null;
+    timeoutSeconds?: number | null;
   };
 
 type CronCommandPayloadFields = {
@@ -318,7 +324,9 @@ type CronCommandPayload = {
 
 type CronCommandPayloadPatch = {
   kind: "command";
-} & Partial<CronCommandPayloadFields>;
+} & Partial<Omit<CronCommandPayloadFields, "timeoutSeconds">> & {
+    timeoutSeconds?: number | null;
+  };
 
 type CronScriptPayloadFields = {
   script: string;

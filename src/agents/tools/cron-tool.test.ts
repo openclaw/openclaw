@@ -2730,6 +2730,43 @@ describe("cron tool", () => {
     });
   });
 
+  it("preserves null timeoutSeconds payload patches on update", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        id: "job-timeout",
+        payload: { kind: "agentTurn", message: "before", timeoutSeconds: 100 },
+      })
+      .mockResolvedValueOnce({ ok: true });
+    const tool = createTestCronTool();
+
+    await tool.execute("call-update-clear-timeout", {
+      action: "update",
+      id: "job-timeout",
+      patch: {
+        payload: {
+          timeoutSeconds: null,
+        },
+      },
+    });
+
+    const params = readGatewayCall(1).params as
+      | {
+          id?: string;
+          patch?: {
+            payload?: {
+              kind?: string;
+              timeoutSeconds?: number | null;
+            };
+          };
+        }
+      | undefined;
+    expect(params?.id).toBe("job-timeout");
+    expect(params?.patch?.payload).toEqual({
+      kind: "agentTurn",
+      timeoutSeconds: null,
+    });
+  });
+
   it("caps agentTurn update toolsAllow to the creator tool surface", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
