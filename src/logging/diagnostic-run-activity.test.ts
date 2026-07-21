@@ -441,4 +441,46 @@ describe("diagnostic run activity retention", () => {
     expect(getRecoveredOwnerCutoffCountForTest({ sessionKey })).toBe(0);
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "recovered-rotation-0" })).toEqual({});
   });
+
+  it("does not restore recovered runs from queued progress", async () => {
+    startDiagnosticRunActivityTracking();
+    const session = {
+      sessionId: "recovered-progress-session",
+      sessionKey: "agent:main:recovered-progress",
+    };
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      ...session,
+      runId: "recovered-progress-run",
+      reason: "proof:queued-before-recovery",
+    });
+    clearDiagnosticEmbeddedRunActivityForSession({
+      ...session,
+      activeSessionId: session.sessionId,
+      recoveryStartedAfterDiagnosticEventSequence: getInternalDiagnosticEventSequence(),
+    });
+    await waitForDiagnosticEventsDrained();
+
+    markDiagnosticRunProgress({
+      ...session,
+      runId: "replacement-progress-run",
+      reason: "proof:replacement",
+    });
+    markDiagnosticEmbeddedRunStarted(session);
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      ...session,
+      runId: "replacement-progress-run",
+      durationMs: 1,
+      outcome: "completed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const completedSnapshot = getDiagnosticSessionActivitySnapshot(session);
+    expect(completedSnapshot).toMatchObject({
+      activeWorkKind: undefined,
+      lastProgressReason: "run:completed",
+    });
+    expect(completedSnapshot).not.toHaveProperty("hasActiveEmbeddedRun");
+  });
 });

@@ -347,6 +347,10 @@ export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityE
   if (!activity) {
     return;
   }
+  if (shouldIgnoreRecoveredOwnerStartEvent(activity.recoveredOwnerStartEventCutoffs, params)) {
+    sessionActivityRefs.prune(activity);
+    return;
+  }
   registerActiveRun(activity, params);
   touchSessionActivity(activity, params.reason);
 }
