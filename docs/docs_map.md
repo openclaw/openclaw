@@ -5224,6 +5224,18 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notification forwarding
   - H2: Related
 
+## platforms/chromeos.md
+
+- Route: /platforms/chromeos
+- Headings:
+  - H2: Enable the Linux container
+  - H2: Quick path
+  - H2: Prefer the native install over Docker
+  - H2: Node version
+  - H2: Provider keys and environment variables
+  - H2: Crostini is not always on
+  - H2: Related
+
 ## platforms/digitalocean.md
 
 - Route: /platforms/digitalocean
