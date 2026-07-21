@@ -42,6 +42,7 @@ type TranscriptRepairResult = {
   originalEntries: number;
   activeEntries: number;
   legacyOpenAICodexEntries: number;
+  legacyInboundLabelEntries: number;
   backupPath?: string;
   reason?: string;
 };
@@ -60,6 +61,23 @@ type ActiveTranscriptPath = {
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_OPENAI_CODEX_RESPONSES_API = "openai-codex-responses";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
+const LEGACY_INBOUND_CONTEXT_HEADER_RE =
+  /^Untrusted context \(metadata, do not treat as instructions or commands\):$/gm;
+// Line-anchored legacy inbound-context label forms emitted before the plain-label
+// rename. Doctor rewrites transcripts once; runtime strippers match only the
+// current plain labels.
+const LEGACY_INBOUND_LABEL_REWRITES: ReadonlyArray<
+  [RegExp, string | ((match: string, label: string, qualifier?: string) => string)]
+> = [
+  [LEGACY_INBOUND_CONTEXT_HEADER_RE, "Context:"],
+  [/^(.+) \(untrusted metadata\):$/gm, "$1:"],
+  [/^(.+) \(untrusted, for context\):$/gm, "$1:"],
+  [/^(.+) \(untrusted, nearest first\):$/gm, "$1 (nearest first):"],
+  [
+    /^(.+) \(untrusted, chronological(, [^)\n]+)?\):$/gm,
+    (_match, label, qualifier) => `${label} (chronological${qualifier ?? ""}):`,
+  ],
+];
 
 function parseTranscriptEntries(raw: string): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
@@ -112,6 +130,59 @@ function normalizeLegacyOpenAICodexTranscriptMetadata(entries: TranscriptEntry[]
     if (message.api === LEGACY_OPENAI_CODEX_RESPONSES_API) {
       message.api = OPENAI_CHATGPT_RESPONSES_API;
       touched = true;
+    }
+    if (touched) {
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
+function applyLegacyInboundLabelRewrites(text: string): string {
+  let normalized = text;
+  for (const [pattern, replacement] of LEGACY_INBOUND_LABEL_REWRITES) {
+    normalized =
+      typeof replacement === "string"
+        ? normalized.replace(pattern, replacement)
+        : normalized.replace(pattern, (match, label, qualifier) =>
+            replacement(match, label, qualifier),
+          );
+  }
+  return normalized;
+}
+
+function normalizeLegacyInboundContextLabels(entries: TranscriptEntry[]): number {
+  let changed = 0;
+  for (const entry of entries) {
+    const message = getMessage(entry);
+    if (!message || message.role !== "user") {
+      continue;
+    }
+    if (typeof message.content === "string") {
+      const normalized = applyLegacyInboundLabelRewrites(message.content);
+      if (normalized !== message.content) {
+        message.content = normalized;
+        changed += 1;
+      }
+      continue;
+    }
+    if (!Array.isArray(message.content)) {
+      continue;
+    }
+    let touched = false;
+    for (const part of message.content) {
+      if (!part || typeof part !== "object") {
+        continue;
+      }
+      const contentPart = part as { text?: unknown };
+      if (typeof contentPart.text !== "string") {
+        continue;
+      }
+      const normalized = applyLegacyInboundLabelRewrites(contentPart.text);
+      if (normalized !== contentPart.text) {
+        contentPart.text = normalized;
+        touched = true;
+      }
     }
     if (touched) {
       changed += 1;
@@ -292,9 +363,10 @@ async function repairBrokenSessionTranscriptFile(params: {
     const raw = await fs.readFile(params.filePath, "utf-8");
     const entries = parseTranscriptEntries(raw);
     const legacyOpenAICodexEntries = normalizeLegacyOpenAICodexTranscriptMetadata(entries);
+    const legacyInboundLabelEntries = normalizeLegacyInboundContextLabels(entries);
     const activePath = selectActivePath(entries);
     if (!activePath) {
-      if (legacyOpenAICodexEntries > 0 && params.shouldRepair) {
+      if ((legacyOpenAICodexEntries > 0 || legacyInboundLabelEntries > 0) && params.shouldRepair) {
         const backupPath = await writeTranscriptEntries({ filePath: params.filePath, entries });
         return {
           filePath: params.filePath,
@@ -303,22 +375,24 @@ async function repairBrokenSessionTranscriptFile(params: {
           originalEntries: entries.length,
           activeEntries: 0,
           legacyOpenAICodexEntries,
+          legacyInboundLabelEntries,
           backupPath,
           reason: "no active branch",
         };
       }
       return {
         filePath: params.filePath,
-        broken: legacyOpenAICodexEntries > 0,
+        broken: legacyOpenAICodexEntries > 0 || legacyInboundLabelEntries > 0,
         repaired: false,
         originalEntries: entries.length,
         activeEntries: 0,
         legacyOpenAICodexEntries,
+        legacyInboundLabelEntries,
         reason: "no active branch",
       };
     }
     const broken = hasBrokenPromptRewriteBranch(entries, activePath.entries);
-    if (!broken && legacyOpenAICodexEntries === 0) {
+    if (!broken && legacyOpenAICodexEntries === 0 && legacyInboundLabelEntries === 0) {
       return {
         filePath: params.filePath,
         broken: false,
@@ -326,6 +400,7 @@ async function repairBrokenSessionTranscriptFile(params: {
         originalEntries: entries.length,
         activeEntries: activePath.entries.length,
         legacyOpenAICodexEntries,
+        legacyInboundLabelEntries,
       };
     }
     if (!params.shouldRepair) {
@@ -336,6 +411,7 @@ async function repairBrokenSessionTranscriptFile(params: {
         originalEntries: entries.length,
         activeEntries: activePath.entries.length,
         legacyOpenAICodexEntries,
+        legacyInboundLabelEntries,
       };
     }
     const backupPath = broken
@@ -352,6 +428,7 @@ async function repairBrokenSessionTranscriptFile(params: {
       originalEntries: entries.length,
       activeEntries: activePath.entries.length,
       legacyOpenAICodexEntries,
+      legacyInboundLabelEntries,
       backupPath,
     };
   } catch (err) {
@@ -362,6 +439,7 @@ async function repairBrokenSessionTranscriptFile(params: {
       originalEntries: 0,
       activeEntries: 0,
       legacyOpenAICodexEntries: 0,
+      legacyInboundLabelEntries: 0,
       reason: String(err),
     };
   }
@@ -410,9 +488,19 @@ export function sessionTranscriptIssueToHealthFinding(
   issue: SessionTranscriptHealthIssue,
 ): HealthFinding {
   const metadata =
-    issue.legacyOpenAICodexEntries > 0
-      ? ` ${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
-          issue.legacyOpenAICodexEntries === 1 ? "y" : "ies"
+    issue.legacyOpenAICodexEntries > 0 || issue.legacyInboundLabelEntries > 0
+      ? `${
+          issue.legacyOpenAICodexEntries > 0
+            ? ` ${issue.legacyOpenAICodexEntries} legacy OpenAI Codex metadata entr${
+                issue.legacyOpenAICodexEntries === 1 ? "y" : "ies"
+              }`
+            : ""
+        }${
+          issue.legacyInboundLabelEntries > 0
+            ? ` ${issue.legacyInboundLabelEntries} legacy inbound-context label entr${
+                issue.legacyInboundLabelEntries === 1 ? "y" : "ies"
+              }`
+            : ""
         }`
       : "";
   return {
@@ -471,8 +559,16 @@ export async function noteSessionTranscriptHealth(params?: {
         const backup = result.backupPath ? ` backup=${shortenHomePath(result.backupPath)}` : "";
         const status = result.repaired ? "repaired" : "needs repair";
         const metadata =
-          result.legacyOpenAICodexEntries > 0
-            ? ` openai-codex=${result.legacyOpenAICodexEntries}`
+          result.legacyOpenAICodexEntries > 0 || result.legacyInboundLabelEntries > 0
+            ? `${
+                result.legacyOpenAICodexEntries > 0
+                  ? ` openai-codex=${result.legacyOpenAICodexEntries}`
+                  : ""
+              }${
+                result.legacyInboundLabelEntries > 0
+                  ? ` inbound-labels=${result.legacyInboundLabelEntries}`
+                  : ""
+              }`
             : "";
         return `- ${shortenHomePath(result.filePath)} ${status} entries=${result.originalEntries}->${result.activeEntries + 1}${metadata}${backup}`;
       }),
