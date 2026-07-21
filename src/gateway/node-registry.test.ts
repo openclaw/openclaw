@@ -772,11 +772,13 @@ describe("gateway/node-registry", () => {
 
   it("clears presence only for the current connection and selects the next active Mac", () => {
     const registry = createTestNodeRegistry();
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-1", "node-1", [], { permissions: { accessibility: true } }),
       {},
     );
-    registry.register(
+    registerNodeSession(
+      registry,
       makeClient("conn-2", "node-2", [], { permissions: { accessibility: true } }),
       {},
     );
@@ -797,7 +799,7 @@ describe("gateway/node-registry", () => {
     expect(registry.getActiveNode()?.nodeId).toBe("node-2");
     expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(true);
     expect(registry.getActiveNode()?.nodeId).toBe("node-1");
-    expect(getActiveNodeContext()).toEqual({ nodeId: "node-1" });
+    expect(getCurrentActiveNodeContext()).toEqual({ nodeId: "node-1" });
     expect(registry.clearPresenceActivity({ nodeId: "node-2", connId: "conn-2" })).toBe(false);
   });
 
