@@ -12,7 +12,7 @@ import type {
 } from "./runtime-api.js";
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
-export type MatrixReadReceiptMode = "immediate" | "on-reply" | "off";
+type MatrixReadReceiptMode = "immediate" | "on-reply" | "off";
 
 type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
