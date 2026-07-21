@@ -83,6 +83,9 @@ private fun installControlUiAuthScript(
 ) {
   if (page.token == null && page.password == null) return
   if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) return
+  // Document-start rules are origins (scheme://host[:port]); a base-path URL
+  // is an invalid rule and throws while constructing the WebView.
+  val originRule = controlUiOriginRule(page.baseUrl) ?: return
   val gatewayUrl = page.baseUrl.replaceFirst("http", "ws")
   val payload =
     buildJsonObject {
@@ -101,5 +104,15 @@ private fun installControlUiAuthScript(
       } catch (e) {}
     })();
     """.trimIndent()
-  WebViewCompat.addDocumentStartJavaScript(webView, script, setOf(page.baseUrl))
+  WebViewCompat.addDocumentStartJavaScript(webView, script, setOf(originRule))
+}
+
+/** scheme://host[:port] origin for WebView script rules; brackets IPv6 hosts. */
+internal fun controlUiOriginRule(baseUrl: String): String? {
+  val uri = android.net.Uri.parse(baseUrl)
+  val scheme = uri.scheme ?: return null
+  val host = uri.host ?: return null
+  val hostPart = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
+  val port = if (uri.port != -1) ":${uri.port}" else ""
+  return "$scheme://$hostPart$port"
 }
