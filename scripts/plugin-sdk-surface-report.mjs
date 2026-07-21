@@ -145,16 +145,14 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
-      // +1: queryInstructionTemplate embedding provider option (#79702).
-      4722,
+      4721,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
-      // +1: queryInstructionTemplate embedding provider option (#79702).
-      2880,
+      2879,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
