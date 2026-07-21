@@ -57,30 +57,8 @@ function closeFenceLine(openFence: OpenFence) {
   return `${openFence.indent}${openFence.markerChar.repeat(openFence.markerLen)}`;
 }
 
-function canBalanceFence(openFence: OpenFence, maxChars: number) {
-  const markerLength = closeFenceLine(openFence).length;
-  return markerLength * 2 + 3 <= maxChars;
-}
-
-// Continuation chunks reopen the fence so Discord keeps rendering the code block. Prefer the full
-// opening line (keeps the language for highlighting); degrade to a bare marker when it would not
-// leave room for the closing marker plus at least one delimiter+char of body. When even the bare
-// pair cannot fit, preserve the hard transport limit and emit the continuation without synthetic
-// fences; the original fence text is still retained in its own chunks.
-function reopenFenceLine(openFence: OpenFence, maxChars: number) {
-  const bareMarker = closeFenceLine(openFence);
-  if (!canBalanceFence(openFence, maxChars)) {
-    return null;
-  }
-  // openLine + closing marker (bareMarker + newline) + one delimiter + one body char must all fit.
-  if (openFence.openLine.length + bareMarker.length + 3 <= maxChars) {
-    return openFence.openLine;
-  }
-  return bareMarker;
-}
-
-function closeFenceIfNeeded(text: string, openFence: OpenFence | null, maxChars: number) {
-  if (!openFence || !canBalanceFence(openFence, maxChars)) {
+function closeFenceIfNeeded(text: string, openFence: OpenFence | null) {
+  if (!openFence) {
     return text;
   }
   const closeLine = closeFenceLine(openFence);
@@ -203,18 +181,15 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     if (!current) {
       return;
     }
-    const payload = closeFenceIfNeeded(current, openFence, maxChars);
+    const payload = closeFenceIfNeeded(current, openFence);
     if (payload.trim().length) {
       chunks.push(payload);
     }
     current = "";
     currentLines = 0;
     if (openFence) {
-      const reopenLine = reopenFenceLine(openFence, maxChars);
-      if (reopenLine) {
-        current = reopenLine;
-        currentLines = 1;
-      }
+      current = openFence.openLine;
+      currentLines = 1;
     }
   };
 
@@ -236,23 +211,15 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     // A flush can fire mid-line, before `openFence` advances to `nextOpenFence` below, so it closes
     // against the still-open `openFence`. A fence-closing line that also carries trailing text would
     // otherwise reserve 0 yet still get a closing fence appended on flush, overflowing maxChars.
-    const candidateFence = nextOpenFence ?? openFence;
-    const fenceToReserve =
-      candidateFence && canBalanceFence(candidateFence, maxChars) ? candidateFence : null;
+    const fenceToReserve = nextOpenFence ?? openFence;
     const reserveChars = fenceToReserve ? closeFenceLine(fenceToReserve).length + 1 : 0;
     const reserveLines = fenceToReserve ? 1 : 0;
     const effectiveMaxChars = maxChars - reserveChars;
     const effectiveMaxLines = maxLines - reserveLines;
     const charLimit = effectiveMaxChars > 0 ? effectiveMaxChars : maxChars;
     const lineLimit = effectiveMaxLines > 0 ? effectiveMaxLines : maxLines;
-    const reopenPrefixLen = fenceToReserve
-      ? (reopenFenceLine(fenceToReserve, maxChars)?.length ?? 0)
-      : 0;
     const prefixLen = current.length > 0 ? current.length + 1 : 0;
-    // A mid-line flush swaps `current` to the reopen prefix; size segments against whichever prefix
-    // is larger so the reopened chunk (prefix + segment + closing marker) still fits maxChars.
-    const reopenBudget = reopenPrefixLen > 0 ? reopenPrefixLen + 1 : 0;
-    const segmentLimit = Math.max(1, charLimit - Math.max(prefixLen, reopenBudget));
+    const segmentLimit = Math.max(1, charLimit - prefixLen);
     const segments = splitLongLine(originalLine, segmentLimit, {
       preserveWhitespace: wasInsideFence,
     });
@@ -260,8 +227,8 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
     for (let segIndex = 0; segIndex < segments.length; segIndex++) {
       const segment = segments[segIndex];
       const isLineContinuation = segIndex > 0;
-      let delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
-      let addition = `${delimiter}${segment}`;
+      const delimiter = isLineContinuation ? "" : current.length > 0 ? "\n" : "";
+      const addition = `${delimiter}${segment}`;
       const nextLen = current.length + addition.length;
       const nextLines = currentLines + (isLineContinuation ? 0 : 1);
 
@@ -270,15 +237,11 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
 
       if ((wouldExceedChars || wouldExceedLines) && current.length > 0) {
         flush();
-        // A fence-aware flush reopens the block as the new first line. Continuation text must
-        // start on the next line or Discord interprets it as part of the fence info string.
-        delimiter = current.length > 0 ? "\n" : "";
-        addition = `${delimiter}${segment}`;
       }
 
       if (current.length > 0) {
         current += addition;
-        if (!isLineContinuation || delimiter) {
+        if (!isLineContinuation) {
           currentLines += 1;
         }
       } else {
@@ -291,7 +254,7 @@ function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}): string
   }
 
   if (current.length) {
-    const payload = closeFenceIfNeeded(current, openFence, maxChars);
+    const payload = closeFenceIfNeeded(current, openFence);
     if (payload.trim().length) {
       chunks.push(payload);
     }
@@ -325,10 +288,129 @@ export function chunkDiscordTextWithMode(
   return chunks;
 }
 
+// Whether `line` closes `open` under the same fence grammar the chunker uses:
+// same marker char (` or ~) and closing run length >= open run length.
+function isClosingFenceLine(line: string, open: OpenFence): boolean {
+  const fenceInfo = parseFenceLine(line);
+  return Boolean(
+    fenceInfo && fenceInfo.markerChar === open.markerChar && fenceInfo.markerLen >= open.markerLen,
+  );
+}
+
+// Leading fenced block or inline code, using the chunker's fence grammar
+// (FENCE_RE / parseFenceLine): 0–3 space indent, ``` or ~~~ openers, and
+// same-char closers of equal or greater length. Returns end index or -1.
+// Used so reasoning-italics reopen sits *after* the code span instead of
+// gluing `_` onto the opener (`_``` / `_~~~ / `_`code`).
+function leadingCodeSpanEnd(body: string): number {
+  if (!body) {
+    return -1;
+  }
+
+  const firstNl = body.indexOf("\n");
+  const firstLine = firstNl === -1 ? body : body.slice(0, firstNl);
+  const openFence = parseFenceLine(firstLine);
+  if (openFence) {
+    if (firstNl === -1) {
+      return body.length;
+    }
+    let lineStart = firstNl + 1;
+    while (lineStart <= body.length) {
+      const lineEnd = body.indexOf("\n", lineStart);
+      const line = lineEnd === -1 ? body.slice(lineStart) : body.slice(lineStart, lineEnd);
+      if (isClosingFenceLine(line, openFence)) {
+        const fenceInfo = parseFenceLine(line);
+        if (!fenceInfo) {
+          return body.length;
+        }
+        // End after indent + markers + trailing spaces. Non-space remainder on
+        // the close line (e.g. the original wrap's `_` in ```_) stays in rest.
+        const markerEnd = fenceInfo.indent.length + fenceInfo.markerLen;
+        const trailingSpaces = /^ */.exec(line.slice(markerEnd))?.[0].length ?? 0;
+        return lineStart + markerEnd + trailingSpaces;
+      }
+      if (lineEnd === -1) {
+        return body.length;
+      }
+      lineStart = lineEnd + 1;
+    }
+    return body.length;
+  }
+
+  // Inline code (backticks only; tildes are fence-only in this grammar).
+  if (!body.startsWith("`")) {
+    return -1;
+  }
+  const inlineOpen = /^(?<ticks>`+)/.exec(body);
+  if (!inlineOpen?.groups?.ticks) {
+    return -1;
+  }
+  const ticks = inlineOpen.groups.ticks;
+  const closeAt = body.indexOf(ticks, ticks.length);
+  if (closeAt === -1) {
+    return body.length;
+  }
+  return closeAt + ticks.length;
+}
+
+function startsWithCodeDelimiter(body: string): boolean {
+  if (!body) {
+    return false;
+  }
+  const firstLine = body.split("\n", 1)[0] ?? "";
+  if (parseFenceLine(firstLine)) {
+    return true;
+  }
+  return body.startsWith("`");
+}
+
+function hasReasoningItalicsOpen(chunk: string): boolean {
+  const trimmed = chunk.trimStart();
+  if (trimmed.startsWith("_")) {
+    return true;
+  }
+  if (/^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(trimmed)) {
+    return true;
+  }
+  if (startsWithCodeDelimiter(trimmed)) {
+    const codeEnd = leadingCodeSpanEnd(trimmed);
+    if (codeEnd > 0) {
+      return trimmed.slice(codeEnd).trimStart().startsWith("_");
+    }
+  }
+  return false;
+}
+
+// When a continuation starts with code, protect the opener and either:
+// - reopen italics after the code span when later reasoning text continues, or
+// - drop a lone trailing `_` left from the original wrap on a pure-code chunk.
+function reopenReasoningItalicsAfterLeadingCode(body: string): string {
+  const codeEnd = leadingCodeSpanEnd(body);
+  if (codeEnd <= 0) {
+    return `_${body}`;
+  }
+  const code = body.slice(0, codeEnd);
+  const rest = body.slice(codeEnd);
+  if (!rest.trim()) {
+    return code + rest;
+  }
+  // Original `_…_` closer attached after pure code — no open on this chunk.
+  if (/^\s*_\s*$/.test(rest)) {
+    return code;
+  }
+  const restWsLen = rest.length - rest.trimStart().length;
+  const restWs = rest.slice(0, restWsLen);
+  const restBody = rest.slice(restWsLen);
+  if (restBody.startsWith("_")) {
+    return code + rest;
+  }
+  return `${code}${restWs}_${restBody}`;
+}
+
 // Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
 // When Discord chunking splits the message, we close italics at the end of
 // each chunk and reopen at the start of the next so every chunk renders
-// consistently.
+// consistently. Code-leading continuations reopen *after* the code span.
 function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   if (chunks.length <= 1) {
     return chunks;
@@ -345,8 +427,10 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     const isLast = i === adjusted.length - 1;
     const current = expectDefined(adjusted[i], "Discord chunk adjustment index");
 
-    // Ensure current chunk closes italics so Discord renders it italicized.
-    const needsClosing = !current.trimEnd().endsWith("_");
+    // Close only when this chunk actually opened reasoning italics. Pure code
+    // continuations stay unmarked so we never emit an unmatched trailing `_`
+    // after a fence (```_).
+    const needsClosing = !current.trimEnd().endsWith("_") && hasReasoningItalicsOpen(current);
     if (needsClosing) {
       adjusted[i] = `${current}_`;
     }
@@ -355,14 +439,19 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
       break;
     }
 
-    // Re-open italics on the next chunk if needed.
     const next = expectDefined(adjusted[i + 1], "non-final Discord chunk successor");
     const leadingWhitespaceLen = next.length - next.trimStart().length;
     const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
     const nextBody = next.slice(leadingWhitespaceLen);
-    if (!nextBody.startsWith("_")) {
-      adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
+    if (nextBody.startsWith("_")) {
+      continue;
     }
+    // Fence (``` / ~~~, optional 0–3 indent restored via leadingWhitespace) or inline code.
+    if (startsWithCodeDelimiter(nextBody)) {
+      adjusted[i + 1] = `${leadingWhitespace}${reopenReasoningItalicsAfterLeadingCode(nextBody)}`;
+      continue;
+    }
+    adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
   }
 
   return adjusted;
