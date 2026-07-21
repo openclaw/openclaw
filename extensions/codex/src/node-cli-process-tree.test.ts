@@ -80,7 +80,7 @@ describe("signalCodexResumeProcessTree", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("falls back to the direct child signal when taskkill cannot start", () => {
+  it("retries tree termination before direct fallback when taskkill cannot start", () => {
     const child = createChild();
     const spawnTaskkill = vi.fn(() => {
       throw new Error("missing taskkill");
@@ -92,6 +92,7 @@ describe("signalCodexResumeProcessTree", () => {
       taskkillPath: "C:\\Windows\\System32\\taskkill.exe",
     });
 
+    expect(spawnTaskkill).toHaveBeenCalledTimes(2);
     expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 
@@ -104,7 +105,8 @@ describe("signalCodexResumeProcessTree", () => {
     expect(errorHandler).toEqual(expect.any(Function));
     errorHandler?.(new Error("missing taskkill"));
 
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(runtime.spawn).toHaveBeenCalledTimes(2);
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("falls back when taskkill exits unsuccessfully", () => {
@@ -118,7 +120,8 @@ describe("signalCodexResumeProcessTree", () => {
     expect(closeHandler).toEqual(expect.any(Function));
     closeHandler?.(1);
 
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(runtime.spawn).toHaveBeenCalledTimes(2);
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("does not fall back after taskkill exits successfully", () => {
@@ -134,7 +137,7 @@ describe("signalCodexResumeProcessTree", () => {
     expect(child.kill).not.toHaveBeenCalled();
   });
 
-  it("bounds a stalled taskkill before falling back", () => {
+  it("retries tree termination when the first taskkill stalls", () => {
     vi.useFakeTimers();
     try {
       const child = createChild();
@@ -145,6 +148,25 @@ describe("signalCodexResumeProcessTree", () => {
 
       expect(taskkillKill).toHaveBeenCalledWith("SIGKILL");
       expect(unref).toHaveBeenCalledOnce();
+      expect(runtime.spawn).toHaveBeenCalledTimes(2);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds two stalled tree attempts before direct fallback", () => {
+    vi.useFakeTimers();
+    try {
+      const child = createChild();
+      const { runtime, taskkillKill, unref } = createRuntime();
+
+      signalCodexResumeProcessTree(child, "SIGTERM", runtime);
+      vi.advanceTimersByTime(10_000);
+
+      expect(runtime.spawn).toHaveBeenCalledTimes(2);
+      expect(taskkillKill).toHaveBeenCalledTimes(2);
+      expect(unref).toHaveBeenCalledTimes(2);
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     } finally {
       vi.useRealTimers();

@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 
 const WINDOWS_TASKKILL_TIMEOUT_MS = 5_000;
+const WINDOWS_TASKKILL_MAX_ATTEMPTS = 2;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
 type ResumeChildProcess = Pick<ChildProcess, "kill" | "pid">;
@@ -79,15 +80,11 @@ export function signalCodexResumeProcessTree(
   // would orphan descendants before taskkill can enumerate them.
   const args = ["/F", "/T", "/PID", String(pid)];
   let settled = false;
-  let watchdog: NodeJS.Timeout | undefined;
   const fallbackToChild = () => {
     if (settled) {
       return;
     }
     settled = true;
-    if (watchdog) {
-      clearTimeout(watchdog);
-    }
     child.kill(signal);
   };
   const finishSuccessfully = () => {
@@ -95,35 +92,71 @@ export function signalCodexResumeProcessTree(
       return;
     }
     settled = true;
-    if (watchdog) {
-      clearTimeout(watchdog);
-    }
   };
-
-  try {
-    const taskkill = runtime.spawn(runtime.taskkillPath, args, {
-      stdio: "ignore",
-      windowsHide: true,
-    });
-    taskkill.once("error", fallbackToChild);
-    taskkill.once("close", (code) => {
-      if (code === 0) {
-        finishSuccessfully();
+  const runTreeKillAttempt = (attempt: number) => {
+    if (settled) {
+      return;
+    }
+    let attemptSettled = false;
+    let watchdog: NodeJS.Timeout | undefined;
+    const failAttempt = () => {
+      if (attemptSettled || settled) {
+        return;
+      }
+      attemptSettled = true;
+      if (watchdog) {
+        clearTimeout(watchdog);
+      }
+      if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
+        runTreeKillAttempt(attempt + 1);
       } else {
         fallbackToChild();
       }
-    });
-    watchdog = setTimeout(() => {
-      try {
-        taskkill.kill("SIGKILL");
-      } catch {
-        // The guarded direct-child fallback remains authoritative below.
-      }
-      taskkill.unref();
-      fallbackToChild();
-    }, WINDOWS_TASKKILL_TIMEOUT_MS);
-    watchdog.unref?.();
-  } catch {
-    fallbackToChild();
-  }
+    };
+    try {
+      const taskkill = runtime.spawn(runtime.taskkillPath, args, {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      taskkill.once("error", failAttempt);
+      taskkill.once("close", (code) => {
+        if (attemptSettled || settled) {
+          return;
+        }
+        attemptSettled = true;
+        if (watchdog) {
+          clearTimeout(watchdog);
+        }
+        if (code === 0) {
+          finishSuccessfully();
+        } else if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
+          runTreeKillAttempt(attempt + 1);
+        } else {
+          fallbackToChild();
+        }
+      });
+      watchdog = setTimeout(() => {
+        if (attemptSettled || settled) {
+          return;
+        }
+        attemptSettled = true;
+        try {
+          taskkill.kill("SIGKILL");
+        } catch {
+          // Continue with a fresh tree-level attempt below.
+        }
+        taskkill.unref();
+        if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
+          runTreeKillAttempt(attempt + 1);
+        } else {
+          fallbackToChild();
+        }
+      }, WINDOWS_TASKKILL_TIMEOUT_MS);
+      watchdog.unref?.();
+    } catch {
+      failAttempt();
+    }
+  };
+
+  runTreeKillAttempt(1);
 }
