@@ -714,8 +714,12 @@ describe("cron stream watchers", () => {
 
     it("lets a newer explicit start replace an owner being removed", async () => {
       const fake = fakeSupervisor();
+      const retireSource = vi.fn(async (_jobId: string, _scheduleKey: string, identity: string) => {
+        return `${identity}:retired`;
+      });
       const watchers = createWatchers({
         getProcessSupervisor: () => fake.supervisor,
+        retireSource,
         updateState: vi.fn(async () => {}),
         recordFailure: vi.fn(async () => {}),
         fireBatch: vi.fn(async () => "fired" as const),
@@ -731,7 +735,11 @@ describe("cron stream watchers", () => {
       expect(watchers.inspect("stream-job")).toMatchObject({
         state: "running",
         processAlive: true,
+        // Only the durable removal retires; disposing the obsolete owner for
+        // the replacement start must not rotate the incoming identity.
+        sourceIdentity: "source:stream-job",
       });
+      expect(retireSource).toHaveBeenCalledTimes(1);
       await watchers.stopAll("shutdown");
     });
 

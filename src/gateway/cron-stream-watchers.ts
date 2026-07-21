@@ -188,7 +188,10 @@ export function createCronStreamWatchers(params: {
       if (!existing) {
         return createOwner(job);
       }
-      await existing.stop("removed");
+      // Watcher-internal disposal of an obsolete owner, not a durable removal:
+      // a retiring "removed" stop would rotate the live job's identity and
+      // strand the replacement built from this snapshot behind the CAS guard.
+      await existing.stop("schedule-update");
       if (!isCurrent()) {
         return undefined;
       }
