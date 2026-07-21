@@ -171,9 +171,10 @@ class ChatTurnRecapResolverTest {
   }
 
   @Test
-  fun leavingTheSessionAbandonsOnlyAnActiveWatch() {
+  fun leavingTheSessionAbandonsUnsettledButKeepsSettled() {
     val resolver = TurnRecapResolver()
     resolver.resolve(session, true, done(previousEndedAt))
+    assertNull(resolver.resolve(session, false, done(previousEndedAt)))
     resolver.abandonActiveWatch(session)
     assertNull(resolver.resolve(session, false, done(runEndedAt)))
 

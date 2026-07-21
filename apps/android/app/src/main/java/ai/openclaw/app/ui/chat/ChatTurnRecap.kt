@@ -56,10 +56,10 @@ internal class TurnRecapResolver(
 ) {
   private val watches = mutableMapOf<String, TurnRecapWatch>()
 
-  /** Leaving mid-watch destroys attribution; settled recaps remain sticky across navigation. */
+  /** Leaving before settlement destroys attribution; settled recaps remain sticky. */
   fun abandonActiveWatch(sessionKey: String) {
     val watch = watches[sessionKey] ?: return
-    if (watch.watching && watch.settled == null) watches.remove(sessionKey)
+    if (watch.settled == null) watches.remove(sessionKey)
   }
 
   /**
