@@ -1,7 +1,6 @@
 // Covers diagnostic event emission and metadata handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasInternalDiagnosticEventListeners } from "./diagnostic-event-listener-presence.js";
-import { hasPendingInternalDiagnosticOwnerEvent } from "./diagnostic-events-state.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
@@ -12,6 +11,7 @@ import {
   emitTrustedSecurityEvent,
   formatDiagnosticTraceparentForPropagation,
   getInternalDiagnosticEventSequence,
+  hasPendingInternalDiagnosticOwnerEvent,
   hasPendingInternalDiagnosticEvent,
   isInternalDiagnosticEventMetadata,
   isDiagnosticsEnabled,

@@ -13,6 +13,7 @@ import {
   untrackPendingAsyncRunEvent,
   untrackPendingAsyncSessionEvent,
 } from "./diagnostic-events-state.js";
+export { hasPendingInternalDiagnosticOwnerEvent } from "./diagnostic-events-state.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
