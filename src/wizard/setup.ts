@@ -54,15 +54,17 @@ async function offerLiveModelVerification(params: {
   runtime: RuntimeEnv;
   workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  required?: boolean;
 }): Promise<{ config: OpenClawConfig; verified: boolean }> {
-  const shouldTest = await params.prompter.confirm({
-    message: t("wizard.setup.testAiAccess"),
-    initialValue: true,
-  });
-  if (!shouldTest) {
-    return { config: params.config, verified: false };
+  if (!params.required) {
+    const shouldTest = await params.prompter.confirm({
+      message: t("wizard.setup.testAiAccess"),
+      initialValue: true,
+    });
+    if (!shouldTest) {
+      return { config: params.config, verified: false };
+    }
   }
-
   const { verifySetupInferenceConfig } = await import("../system-agent/setup-inference.js");
   const verify = async (candidate: SetupModelAuthCandidate) => {
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
@@ -107,14 +109,16 @@ async function offerLiveModelVerification(params: {
     if (result.authProfiles) {
       candidate.authProfiles = result.authProfiles;
     }
-    const action = await params.prompter.select({
-      message: t("wizard.setup.testAiFailureChoice"),
-      options: [
-        { value: "fix", label: t("wizard.setup.testAiFix") },
-        { value: "continue", label: t("wizard.setup.testAiContinue") },
-      ],
-    });
-    if (action === "continue") {
+    if (
+      !params.required &&
+      (await params.prompter.select({
+        message: t("wizard.setup.testAiFailureChoice"),
+        options: [
+          { value: "fix", label: t("wizard.setup.testAiFix") },
+          { value: "continue", label: t("wizard.setup.testAiContinue") },
+        ],
+      })) === "continue"
+    ) {
       return { config: params.config, verified: false };
     }
 
@@ -614,11 +618,12 @@ async function runSetupWizardOnce(
   });
 
   let liveModelVerified = false;
+  // keepExistingModelConfig is latched before auth setup, so this distinguishes
+  // a route supplied by the import from one configured normally after the import.
   if (
     opts.nonInteractive !== true &&
-    opts.authChoice !== "skip" &&
-    !usedImportFlow &&
-    hasConfiguredDefaultModel(nextConfig)
+    hasConfiguredDefaultModel(nextConfig) &&
+    ((usedImportFlow && keepExistingModelConfig) || opts.authChoice !== "skip")
   ) {
     const verification = await offerLiveModelVerification({
       config: nextConfig,
@@ -628,6 +633,7 @@ async function runSetupWizardOnce(
       workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
+      required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
     liveModelVerified = verification.verified;

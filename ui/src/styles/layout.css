@@ -2243,7 +2243,17 @@ html.openclaw-native-macos
   border-radius: var(--radius-md);
   transition:
     opacity var(--duration-fast) ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow var(--duration-fast) ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @starting-style {
+    .sidebar-r .sidebar-zone-entry {
+      opacity: 0;
+      transform: translateX(-8px) scale(0.98);
+    }
+  }
 }
 
 .sidebar-zone-entry--dragging {

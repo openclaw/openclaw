@@ -280,6 +280,11 @@ openclaw-board-widget-cell {
   position: relative;
 }
 
+.board-widget__body--card {
+  box-sizing: border-box;
+  padding: var(--widget-frame-inset);
+}
+
 .board-widget__body--scrollable {
   overflow: auto;
 }
@@ -483,6 +488,17 @@ openclaw-board-widget-cell {
       visibility 0s linear 120ms;
     visibility: hidden;
     z-index: 5;
+    /* The overlay strip must not steal clicks from widget content underneath:
+       only real controls stay interactive, everything else passes through. */
+    pointer-events: none;
+  }
+
+  /* Capabilities chip stays interactive for its granted-permissions tooltip;
+     the kind badge and title are display-only and pass clicks through. */
+  .board-widget__bar > .board-widget__drag-handle,
+  .board-widget__bar > .board-widget__capabilities,
+  .board-widget__bar > .board-widget__menu {
+    pointer-events: auto;
   }
 
   .board-widget__resize-handle {
@@ -507,6 +523,22 @@ openclaw-board-widget-cell {
        authoritative because no transition-property is redeclared here. */
     transition-delay: 0s;
     visibility: visible;
+  }
+
+  /* Frameless is a fine-pointer treatment only: touch keeps the card shell
+     because there is no hover to rediscover the widget bounds. While dragging,
+     the reset stops applying so the widget materializes back into a full card
+     (accent border + drop shadow from --dragging) under the pointer. */
+  .board-widget--frameless:not(.board-widget--dragging) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .board-widget--frameless:hover,
+  .board-widget--frameless:focus-within,
+  .board-widget--frameless:has(.board-widget__menu[open]) {
+    border-color: var(--board-line);
   }
 
   .board-widget__body {

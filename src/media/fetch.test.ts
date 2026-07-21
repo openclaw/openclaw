@@ -1033,6 +1033,35 @@ describe("readRemoteMediaBuffer", () => {
     },
   );
 
+  it.each([
+    [`attachment; filename*=UTF-8''reports%2FQ1.pdf`, "reports_Q1.pdf"],
+    [`attachment; filename*=UTF-8''reports%5CQ1.pdf`, "reports_Q1.pdf"],
+    [`attachment; filename*=UTF-8''reports%2F%2FQ1.pdf`, "reports__Q1.pdf"],
+  ])(
+    "keeps decoded content-disposition filename* separators inside the selected filename",
+    async (contentDisposition, fileName) => {
+      const fetchImpl = vi.fn(
+        async () =>
+          new Response(makeStream([new Uint8Array([1, 2, 3])]), {
+            status: 200,
+            headers: {
+              "content-disposition": contentDisposition,
+              "content-type": "application/pdf",
+            },
+          }),
+      );
+
+      const saved = await saveRemoteMedia({
+        url: "https://example.com/download",
+        fetchImpl,
+        lookupFn: makeLookupFn(),
+        maxBytes: 8,
+      });
+
+      expect(saved.fileName).toBe(fileName);
+    },
+  );
+
   it("saves bodyless successful responses without unbounded buffering", async () => {
     const saved = await saveResponseMedia(new Response(null, { status: 204 }), {
       sourceUrl: "https://example.com/empty",

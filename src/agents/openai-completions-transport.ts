@@ -1886,23 +1886,29 @@ export function buildOpenAICompletionsParams(
 }
 
 function parseTransportChunkUsage(
-  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & { cost?: unknown },
+  rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
+    cost?: unknown;
+    prompt_tokens_details?: { cache_write_tokens?: number | null };
+  },
   model: Model,
 ): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
+  // OpenRouter reports cache writes separately inside prompt totals. Keep read/write
+  // buckets out of input so normalized prompt buckets stay disjoint.
+  const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
-  const input = Math.max(0, promptTokens - cachedTokens);
+  const input = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
   const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
   const usage: MutableAssistantOutput["usage"] = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
-    cacheWrite: 0,
+    cacheWrite: cacheWriteTokens,
     ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
       ? { reasoningTokens }
       : {}),
-    totalTokens: input + outputTokens + cachedTokens,
+    totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
   calculateCost(model as never, usage as never);
