@@ -5,7 +5,7 @@
  * behavior from endpoint attribution without scattering provider-specific flags.
  */
 import type { Model } from "@openclaw/llm-core";
-import type { AiProviderRequestCapabilities } from "../host.js";
+import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
 import { resolveProviderRequestCapabilities } from "./host-policy.js";
 
 type ProviderEndpointClass = string;
@@ -152,8 +152,11 @@ export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;
   },
+  resolveCapabilities: (
+    input: AiProviderRequestPolicyInput,
+  ) => ProviderRequestCapabilities = resolveProviderRequestCapabilities,
 ): DetectedOpenAICompletionsCompat {
-  const capabilities = resolveProviderRequestCapabilities({
+  const capabilities = resolveCapabilities({
     provider: model.provider,
     api: "openai-completions",
     baseUrl: model.baseUrl,
