@@ -1,5 +1,6 @@
 // Memory Lancedb helper module supports config behavior.
 import fs from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
@@ -41,7 +42,7 @@ function resolveDefaultDbPath(): string {
   }
 
   for (const legacy of LEGACY_STATE_DIRS) {
-    const candidate = join(home, legacy, "memory", "lancedb");
+    const candidate = join(homedir(), legacy, "memory", "lancedb");
     try {
       if (fs.existsSync(candidate)) {
         return candidate;
