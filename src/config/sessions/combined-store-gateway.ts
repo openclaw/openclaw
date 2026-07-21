@@ -31,6 +31,7 @@ function loadGatewayStoreEntries(params: {
     listSessionEntriesReadOnly({
       agentId: params.agentId,
       clone: false,
+      light: true,
       storePath: params.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );

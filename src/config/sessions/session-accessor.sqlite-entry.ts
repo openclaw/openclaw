@@ -36,7 +36,6 @@ import {
   readSqliteLifecycleTargetSnapshot,
   readSqliteSessionEntrySelectionSnapshot,
   readSqliteSessionIdentitySnapshot,
-  readSqliteSessionEntryStore,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { listSqliteTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
@@ -64,6 +63,7 @@ import {
   parseSqliteSessionEntryJson as parseSessionEntryRow,
   readSqliteSessionEntriesByStatus,
 } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryListScope } from "./session-accessor.types.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
@@ -134,26 +134,82 @@ export function resolveSqliteSessionKeyBySessionId(
 }
 
 /** Lists session entries from the additive SQLite session store. */
-export function listSqliteSessionEntries(
-  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
-): SessionEntrySummary[] {
+export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+
+  if (scope.light) {
+    return listSqliteSessionEntriesLight(scope);
+  }
+
   if (isSessionStoreCacheEnabled()) {
     const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
     if (cached) {
-      return Object.entries(cached)
+      let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
         .map(([sessionKey, entry]) => ({ sessionKey, entry }));
+      if (scope.offset) entries = entries.slice(scope.offset);
+      if (scope.limit) entries = entries.slice(0, scope.limit);
+      return entries;
     }
   }
-  const result = listSqliteSessionEntriesFromDatabase(database);
+
+  const db = getSessionKysely(database.db);
+  let query = db
+    .selectFrom("session_entries")
+    .select(["session_key", "entry_json", "session_id", "updated_at"])
+    .orderBy("session_key", "asc");
+
+  if (scope.limit) query = query.limit(scope.limit);
+  if (scope.offset) query = query.offset(scope.offset);
+
+  const rows = executeSqliteQuerySync(database.db, query).rows;
+  const result = rows
+    .map((row) => {
+      if (isInternalSessionEffectsKey(row.session_key)) return undefined;
+      const entry = parseSessionEntryRow(row);
+      return entry ? { sessionKey: row.session_key, entry } : undefined;
+    })
+    .filter((entry): entry is SessionEntrySummary => entry !== undefined);
+
   if (isSessionStoreCacheEnabled()) {
-    const storeRecord = readSqliteSessionEntryStore(database);
+    const storeRecord: Record<string, SessionEntry> = {};
+    for (const { sessionKey, entry } of result) {
+      storeRecord[sessionKey] = entry;
+    }
     writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
   }
+
   return result;
+}
+
+/** Lists session entries with only metadata fields — skips large blob fields.
+ *  systemPromptReport (~62%) and skillsSnapshot (~33%) dominate the entry_json
+ *  payload but are unused in list views. */
+export function listSqliteSessionEntriesLight(
+  scope: SessionEntryListScope = {},
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select(["session_key", "entry_json", "session_id", "updated_at"])
+      .orderBy("session_key", "asc"),
+  ).rows;
+  return rows
+    .map((row) => {
+      if (isInternalSessionEffectsKey(row.session_key)) return undefined;
+      const entry = parseSessionEntryRow(row);
+      if (!entry) return undefined;
+      // Strip blob fields — not needed for list views
+      const { systemPromptReport, skillsSnapshot, ...lightEntry } = entry;
+      return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
+    })
+    .filter((entry): entry is SessionEntrySummary => entry !== undefined);
 }
 
 /**
