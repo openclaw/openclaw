@@ -112,7 +112,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(metadata).toBeGreaterThan(build);
   });
 
-  it("fails the screenshot lane from authoritative Xcode test results", () => {
+  it("fails from authoritative Xcode results and keeps successful bundles outside screenshots", () => {
     const fastfile = readFastfile();
     const screenshots = laneBody(fastfile, "screenshots");
     const verifier = functionBody(fastfile, "verify_snapshot_test_result!");
@@ -122,6 +122,17 @@ describe("iOS Fastlane release upload gates", () => {
     expect(screenshots).toContain("number_of_retries: 0");
     expect(screenshots).toContain("stop_after_first_error: true");
     expect(screenshots).toContain("verify_snapshot_test_result!(result_bundle_path, device)");
+    expect(screenshots).toContain(
+      'result_bundle_archive_directory = File.join(ios_root, "build", "SnapshotTestResults")',
+    );
+    expect(screenshots.indexOf("verify_snapshot_test_result!")).toBeLessThan(
+      screenshots.indexOf("FileUtils.mv(result_bundle_path, archived_result_bundle_path)"),
+    );
+    expect(
+      screenshots.indexOf("FileUtils.mv(result_bundle_path, archived_result_bundle_path)"),
+    ).toBeLessThan(
+      screenshots.indexOf('FileUtils.rm_rf(File.join(output_directory, "test_output"))'),
+    );
     expect(verifier).toContain('"xcresulttool"');
     expect(verifier).toContain('summary.fetch("failedTests")');
     expect(verifier).toContain("UI.test_failure!");
