@@ -1026,11 +1026,11 @@ export function mergeExecApprovalsSocketDefaults(params: {
   normalized: ExecApprovalsFile;
   current?: ExecApprovalsFile;
 }): ExecApprovalsFile {
-  const currentSocketPath = params.current?.socket?.path?.trim();
-  const currentToken = params.current?.socket?.token?.trim();
+  const currentSocketPath = params.current?.socket?.path?.trim() || undefined;
+  const currentToken = params.current?.socket?.token?.trim() || undefined;
   const socketPath =
-    params.normalized.socket?.path?.trim() ?? currentSocketPath ?? resolveExecApprovalsSocketPath();
-  const token = params.normalized.socket?.token?.trim() ?? currentToken ?? generateToken();
+    params.normalized.socket?.path?.trim() || currentSocketPath || resolveExecApprovalsSocketPath();
+  const token = params.normalized.socket?.token?.trim() || currentToken || generateToken();
   return {
     ...params.normalized,
     socket: {
