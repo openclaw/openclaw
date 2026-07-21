@@ -56,6 +56,68 @@ describe("openai transport stream", () => {
     expect(events.filter((event) => event.type === "thinking_delta")).toHaveLength(1);
   });
 
+  it("tags text before a tool-call completion as commentary", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ content: "I'll inspect the workspace first." }),
+        makeCompletionsChunk({
+          tool_calls: [
+            {
+              index: 0,
+              id: "call_1",
+              type: "function",
+              function: { name: "bash", arguments: '{"cmd":"ls"}' },
+            },
+          ],
+        }),
+        makeCompletionsChunk({}, "tool_calls"),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content[0]).toEqual({
+      type: "text",
+      text: "I'll inspect the workspace first.",
+      textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
+    const textEnd = events.find((event) => event.type === "text_end");
+    expect(textEnd?.contentIndex).toBe(0);
+    const endedText = (textEnd?.partial as { content?: Array<Record<string, unknown>> } | undefined)
+      ?.content?.[0];
+    expect(endedText).toMatchObject({
+      type: "text",
+      textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+    });
+  });
+
+  it("emits an unphased text_end for a completed final answer", async () => {
+    const model = makeCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        makeCompletionsChunk({ content: "Here is the final answer." }),
+        makeCompletionsChunk({}, "stop"),
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    const textEnd = events.find((event) => event.type === "text_end");
+    expect(textEnd?.contentIndex).toBe(0);
+    expect(textEnd?.partial).toMatchObject({
+      content: [{ type: "text", text: "Here is the final answer." }],
+    });
+  });
+
   it("drops mirrored reasoning when disabled without recovering hidden reasoning tags", async () => {
     const model = makeCompletionsModel({
       id: "MiniMax-M2.7",

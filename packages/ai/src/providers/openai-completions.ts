@@ -554,9 +554,6 @@ export const streamOpenAICompletions: StreamFunction<
 
       flushPartitionedContent();
 
-      for (const block of blocks) {
-        finishBlock(block);
-      }
       if (options?.signal?.aborted) {
         throw new Error("Request was aborted");
       }
@@ -583,6 +580,30 @@ export const streamOpenAICompletions: StreamFunction<
       }
       if (hasToolCalls && output.stopReason !== "toolUse") {
         output.content = output.content.filter((block) => block.type !== "toolCall");
+      }
+      if (output.stopReason === "toolUse") {
+        const textSignature = JSON.stringify({
+          v: 1,
+          id:
+            output.responseId ??
+            output.content.find((block) => block.type === "toolCall")?.id ??
+            "chat-completion",
+          phase: "commentary",
+        });
+        // Chat Completions exposes the tool boundary only at completion. Tag
+        // preceding text before text_end so delivery routes it as private commentary.
+        for (const block of output.content) {
+          if (
+            block.type === "text" &&
+            block.text.trim().length > 0 &&
+            block.textSignature === undefined
+          ) {
+            block.textSignature = textSignature;
+          }
+        }
+      }
+      for (const block of blocks) {
+        finishBlock(block);
       }
 
       stream.push({ type: "done", reason: output.stopReason, message: output });

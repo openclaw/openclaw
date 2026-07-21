@@ -181,6 +181,88 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("classifies a loopback tool preamble before ending its text block", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify(
+            makeCompletionsChunk({ role: "assistant", content: "I will inspect the workspace." }),
+          )}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify(
+            makeCompletionsChunk({
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_loopback",
+                  type: "function",
+                  function: { name: "bash", arguments: '{"cmd":"ls"}' },
+                },
+              ],
+            }),
+          )}\n\n`,
+        );
+        res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "tool_calls"))}\n\n`);
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = makeCompletionsModel({
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      });
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Inspect the workspace", timestamp: Date.now() }],
+          tools: [
+            { name: "bash", description: "Run a shell command", parameters: { type: "object" } },
+          ],
+        } as never,
+        { apiKey: "test-auth-token" } as never,
+      );
+      const events: Array<{ type: string; partial?: unknown }> = [];
+      for await (const event of stream as AsyncIterable<{ type: string; partial?: unknown }>) {
+        events.push(event);
+      }
+
+      const textEndIndex = events.findIndex((event) => event.type === "text_end");
+      const toolCallIndex = events.findIndex((event) => event.type === "toolcall_start");
+      const textEnd = events[textEndIndex];
+      expect(toolCallIndex).toBeGreaterThanOrEqual(0);
+      expect(textEndIndex).toBeGreaterThan(toolCallIndex);
+      expect(textEnd?.partial).toMatchObject({ stopReason: "toolUse" });
+      expect(
+        (textEnd?.partial as { content?: Array<Record<string, unknown>> } | undefined)
+          ?.content?.[0],
+      ).toMatchObject({
+        type: "text",
+        text: "I will inspect the workspace.",
+        textSignature: JSON.stringify({ v: 1, id: "chatcmpl-test", phase: "commentary" }),
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = makeCompletionsModel({
       id: "qwen-coder-plus",
@@ -824,6 +906,7 @@ describe("openai transport stream", () => {
       "thinking_delta",
       "text_start",
       "text_delta",
+      "text_end",
     ]);
     expect(events[1]).toHaveProperty("delta", "");
     expect(output.content).toEqual([
@@ -861,7 +944,7 @@ describe("openai transport stream", () => {
       { push: (event) => events.push(event as CapturedStreamEvent) },
     );
 
-    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta"]);
+    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta", "text_end"]);
     expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
   });
 

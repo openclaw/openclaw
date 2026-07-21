@@ -805,6 +805,41 @@ async function processOpenAICompletionsStream(
   if (hasToolCalls && output.stopReason !== "toolUse") {
     output.content = output.content.filter((block) => block.type !== "toolCall");
   }
+  if (output.stopReason === "toolUse") {
+    const textSignature = JSON.stringify({
+      v: 1,
+      id:
+        output.responseId ??
+        output.content.find((block) => block.type === "toolCall")?.id ??
+        "chat-completion",
+      phase: "commentary",
+    });
+    // Chat Completions exposes the tool boundary only at completion. Preserve
+    // that result on pre-tool text so delivery keeps it out of final replies.
+    for (const block of output.content) {
+      if (
+        block.type === "text" &&
+        typeof block.text === "string" &&
+        block.text.trim().length > 0 &&
+        !block.textSignature
+      ) {
+        block.textSignature = textSignature;
+      }
+    }
+  }
+  // Chat Completions does not disclose the turn phase until its terminal
+  // chunk. End text blocks only after that classification so text_end consumers
+  // never durably deliver a tool preamble as an answer.
+  for (const [contentIndex, block] of output.content.entries()) {
+    if (block.type === "text" && typeof block.text === "string") {
+      stream.push({
+        type: "text_end",
+        contentIndex,
+        content: block.text,
+        partial: output,
+      });
+    }
+  }
 }
 
 type CompletionsReasoningDelta =
