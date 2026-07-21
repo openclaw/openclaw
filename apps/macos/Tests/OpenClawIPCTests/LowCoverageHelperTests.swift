@@ -122,7 +122,7 @@ struct LowCoverageHelperTests {
         #expect(!PresenceReporter._testPlatformString().isEmpty)
         _ = PresenceReporter._testPrimaryIPv4Address()
         let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
-        #expect(privacyParameters["lastInputSeconds"] == nil)
+        #expect(privacyParameters["lastInputSeconds"]?.base as? Int == 2_592_000)
         #expect(
             privacyParameters["tags"]?.base as? [String] ==
                 ["system-presence-clear-last-input"])

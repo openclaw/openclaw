@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG, validateSystemEventParams } from "./system-event.js";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+  validateSystemEventParams,
+} from "./system-event.js";
 
 describe("validateSystemEventParams", () => {
   it("accepts input activity values and the backward-compatible clear marker", () => {
@@ -7,6 +11,7 @@ describe("validateSystemEventParams", () => {
     expect(
       validateSystemEventParams({
         text: "Node: mac",
+        lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
         tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
       }),
     ).toBe(true);

@@ -3,7 +3,10 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG } from "../../../packages/gateway-protocol/src/schema.js";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -199,6 +202,7 @@ describe("system-event routing", () => {
         instanceId,
         host: "Operator Mac",
         mode: "ui",
+        lastInputSeconds: SYSTEM_PRESENCE_LEGACY_CLEAR_LAST_INPUT_SECONDS,
         tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
       },
       respond: vi.fn(),

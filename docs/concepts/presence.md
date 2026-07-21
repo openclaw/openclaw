@@ -63,7 +63,9 @@ input activity is not part of this generic beacon; the purpose-specific native
 node event described in [Active computer presence](/nodes/presence) owns it. The
 Mac tags these beacons with `system-presence-clear-last-input`; current Gateways
 use that backward-compatible marker to remove any input recency retained from an
-older app without making older closed schemas reject the beacon.
+older app. The beacon also carries a fixed 30-day value so older Gateways that
+ignore the tag overwrite exact recency instead of retaining it. No new activity
+is sampled for this compatibility value.
 
 ### 4) Node connects (role: node)
 

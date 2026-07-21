@@ -11,6 +11,7 @@ final class PresenceReporter {
     private let interval: TimeInterval = 180 // a few minutes
     private let instanceId: String = InstanceIdentity.instanceId
     private static let clearLastInputTag = "system-presence-clear-last-input"
+    private static let legacyClearedLastInputSeconds = 30 * 24 * 60 * 60
 
     func start() {
         guard self.task == nil else { return }
@@ -45,8 +46,9 @@ final class PresenceReporter {
             "version": AnyHashable(version),
             "platform": AnyHashable(platform),
             "deviceFamily": AnyHashable("Mac"),
-            // Older Gateways accept tags but reject JSON null in this closed schema.
-            // Current Gateways interpret this marker as an explicit privacy clear.
+            // Older Gateways ignore the tag but overwrite exact recency with this
+            // fixed sentinel. Current Gateways let the tag win and delete the field.
+            "lastInputSeconds": AnyHashable(Self.legacyClearedLastInputSeconds),
             "tags": AnyHashable([Self.clearLastInputTag]),
             "reason": AnyHashable(reason),
         ]
@@ -108,7 +110,10 @@ extension PresenceReporter {
     }
 
     static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
-        ["tags": AnyHashable([Self.clearLastInputTag])]
+        [
+            "lastInputSeconds": AnyHashable(Self.legacyClearedLastInputSeconds),
+            "tags": AnyHashable([Self.clearLastInputTag]),
+        ]
     }
 }
 #endif
