@@ -11,7 +11,10 @@ import {
   isCompactionFailureError,
   isLikelyContextOverflowError,
 } from "../../embedded-agent-helpers.js";
-import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
+import {
+  buildEmbeddedCompactionRuntimeContext,
+  buildEmbeddedRecoveryChatContext,
+} from "../compaction-runtime-context.js";
 import {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -213,10 +216,7 @@ export async function recoverEmbeddedRunOverflow(input: {
       const overflowCompactionRuntimeContext = {
         ...buildEmbeddedCompactionRuntimeContext({
           sessionKey: runParams.sessionKey,
-          messageChannel: runParams.messageChannel,
-          messageProvider: runParams.messageProvider,
-          clientCaps: runParams.clientCaps,
-          chatType: runParams.chatType,
+          ...buildEmbeddedRecoveryChatContext(runParams),
           agentAccountId: runParams.agentAccountId,
           currentChannelId: runParams.currentChannelId,
           currentThreadTs: runParams.currentThreadTs,

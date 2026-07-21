@@ -5,6 +5,7 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundChatType } from "../../channels/inbound-chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
@@ -29,6 +30,7 @@ export type CompactEmbeddedAgentSessionParams = {
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   chatType?: ChatType;
+  inboundChatType?: InboundChatType;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;

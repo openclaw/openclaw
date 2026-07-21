@@ -6,6 +6,7 @@ import { createProcessSessionFixture } from "../bash-process-registry.test-helpe
 import { resetProcessRegistryForTests } from "../bash-process-registry.test-support.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  buildEmbeddedRecoveryChatContext,
   resolveCompactionHarnessRuntime,
   resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
@@ -65,6 +66,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       messageChannel: "slack",
       messageProvider: "slack",
       chatType: "channel",
+      inboundChatType: "supergroup",
       agentAccountId: "acct-1",
       currentChannelId: "C123",
       currentThreadTs: "thread-9",
@@ -87,6 +89,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.messageChannel).toBe("slack");
     expect(result.messageProvider).toBe("slack");
     expect(result.chatType).toBe("channel");
+    expect(result.inboundChatType).toBe("supergroup");
     expect(result.agentAccountId).toBe("acct-1");
     expect(result.currentChannelId).toBe("C123");
     expect(result.currentThreadTs).toBe("thread-9");
@@ -743,5 +746,24 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "claude-opus-4-5",
     });
     expect(result.provider).toBe("anthropic");
+  });
+});
+
+describe("buildEmbeddedRecoveryChatContext", () => {
+  it("preserves runtime-owned inbound chat type for timeout and overflow reconstruction", () => {
+    expect(
+      buildEmbeddedRecoveryChatContext({
+        messageChannel: "telegram",
+        messageProvider: "telegram",
+        chatType: "group",
+        inboundChatType: "supergroup",
+      }),
+    ).toStrictEqual({
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      clientCaps: undefined,
+      chatType: "group",
+      inboundChatType: "supergroup",
+    });
   });
 });

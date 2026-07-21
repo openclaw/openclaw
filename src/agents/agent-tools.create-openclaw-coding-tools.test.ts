@@ -831,6 +831,7 @@ describe("createOpenClawCodingTools", () => {
         modelProvider: "openrouter",
         modelId: "openrouter/auto",
         nativeChannelId: "oc_native_chat",
+        inboundChatType: "supergroup",
         clientCaps: ["inline-widgets"],
         toolConstructionPlan: {
           includeBaseCodingTools: false,
@@ -847,6 +848,7 @@ describe("createOpenClawCodingTools", () => {
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
       expect(pluginToolOptions?.nativeChannelId).toBe("oc_native_chat");
+      expect(pluginToolOptions?.inboundChatType).toBe("supergroup");
       expect(pluginToolOptions?.clientCaps).toEqual(["inline-widgets"]);
     } finally {
       resolvePluginToolsSpy.mockRestore();
@@ -932,7 +934,7 @@ describe("createOpenClawCodingTools", () => {
     }
   });
 
-  it("forwards the native channel id through standard tool construction", () => {
+  it("forwards trusted inbound conversation facts through standard tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
 
@@ -940,10 +942,12 @@ describe("createOpenClawCodingTools", () => {
       config: testConfig,
       chatType: "group",
       nativeChannelId: "oc_native_chat",
+      inboundChatType: "supergroup",
       messageActionTurnCapability: "turn-capability-1",
     });
 
     expect(latestCreateOpenClawToolsOptions().nativeChannelId).toBe("oc_native_chat");
+    expect(latestCreateOpenClawToolsOptions().inboundChatType).toBe("supergroup");
     expect(latestCreateOpenClawToolsOptions().currentChatType).toBe("group");
     expect(latestCreateOpenClawToolsOptions().messageActionTurnCapability).toBe(
       "turn-capability-1",

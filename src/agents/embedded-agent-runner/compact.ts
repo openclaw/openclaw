@@ -1137,6 +1137,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           messageProvider: resolvedMessageProvider,
           clientCaps: params.clientCaps,
           chatType: params.chatType,
+          inboundChatType: params.inboundChatType,
           agentAccountId: params.agentAccountId,
           sessionKey: sandboxSessionKey,
           runSessionKey:

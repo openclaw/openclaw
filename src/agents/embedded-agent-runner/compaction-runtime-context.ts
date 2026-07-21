@@ -4,6 +4,7 @@
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import type { InboundChatType } from "../../channels/inbound-chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -29,6 +30,7 @@ type EmbeddedCompactionRuntimeContext = {
   messageProvider?: string;
   clientCaps?: string[];
   chatType?: ChatType;
+  inboundChatType?: InboundChatType;
   agentAccountId?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -57,6 +59,22 @@ type EmbeddedCompactionRuntimeContext = {
   ownerNumbers?: string[];
   activeProcessSessions?: ActiveProcessSessionReference[];
 };
+
+export function buildEmbeddedRecoveryChatContext(params: {
+  messageChannel?: string;
+  messageProvider?: string;
+  clientCaps?: string[];
+  chatType?: ChatType;
+  inboundChatType?: InboundChatType;
+}) {
+  return {
+    messageChannel: params.messageChannel,
+    messageProvider: params.messageProvider,
+    clientCaps: params.clientCaps,
+    chatType: params.chatType,
+    inboundChatType: params.inboundChatType,
+  };
+}
 
 /** Resolve the configured compaction override against the actual model/runtime candidate. */
 export function resolveEmbeddedCompactionThinkingLevel(params: {
@@ -303,6 +321,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   messageProvider?: string | null;
   clientCaps?: string[];
   chatType?: ChatType | null;
+  inboundChatType?: InboundChatType | null;
   agentAccountId?: string | null;
   currentChannelId?: string | null;
   currentThreadTs?: string | null;
@@ -361,6 +380,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     messageProvider: params.messageProvider ?? undefined,
     clientCaps: params.clientCaps,
     chatType: params.chatType ?? undefined,
+    inboundChatType: params.inboundChatType ?? undefined,
     agentAccountId: params.agentAccountId ?? undefined,
     currentChannelId: params.currentChannelId ?? undefined,
     currentThreadTs: params.currentThreadTs ?? undefined,

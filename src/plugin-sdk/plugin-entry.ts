@@ -1,3 +1,4 @@
+import type { InboundChatType as _InboundChatType } from "../channels/inbound-chat-type.js";
 // Plugin entry contracts define the manifest-facing hooks implemented by plugin packages.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emptyPluginConfigSchema } from "../plugins/config-schema.js";
@@ -171,6 +172,7 @@ export type OpenClawPluginService = _OpenClawPluginService;
 export type OpenClawPluginServiceContext = _OpenClawPluginServiceContext;
 export type OpenClawPluginToolContext = _OpenClawPluginToolContext;
 export type OpenClawPluginToolFactory = _OpenClawPluginToolFactory;
+export type InboundChatType = _InboundChatType;
 export type PluginAgentEventEmitParams = _PluginAgentEventEmitParams;
 export type PluginAgentEventEmitResult = _PluginAgentEventEmitResult;
 export type PluginAgentEventSubscriptionRegistration = _PluginAgentEventSubscriptionRegistration;
