@@ -114,7 +114,9 @@
   pointer-events: none;
 }
 
-.chat-group-footer--persistent-identity .chat-group-footer__meta > :not(.chat-sender-name),
+.chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group-footer--persistent-identity .chat-group-timestamp,
+.chat-group-footer--persistent-identity .msg-meta,
 .chat-group-footer--persistent-identity > .chat-group-footer-actions {
   position: absolute;
   opacity: 0;
@@ -127,9 +129,15 @@
   pointer-events: auto;
 }
 
-.chat-group:hover .chat-group-footer--persistent-identity .chat-group-footer__meta > *,
-.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-footer__meta > *,
-.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-footer__meta > *,
+.chat-group:hover .chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group:hover .chat-group-footer--persistent-identity .chat-group-timestamp,
+.chat-group:hover .chat-group-footer--persistent-identity .msg-meta,
+.chat-group:focus-within .chat-group-footer--persistent-identity .chat-delete-wrap,
+.chat-group:focus-within .chat-group-footer--persistent-identity .chat-group-timestamp,
+.chat-group:focus-within .chat-group-footer--persistent-identity .msg-meta,
+.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-delete-wrap,
+.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .chat-group-timestamp,
+.chat-group-footer--persistent-identity:has(details.msg-meta[open]) .msg-meta,
 .chat-group:hover .chat-group-footer--persistent-identity > .chat-group-footer-actions,
 .chat-group:focus-within .chat-group-footer--persistent-identity > .chat-group-footer-actions,
 .chat-group-footer--persistent-identity:has(details.msg-meta[open]) > .chat-group-footer-actions {
@@ -568,7 +576,9 @@ img.chat-avatar {
     margin-bottom: 14px;
   }
 
-  .chat-group-footer--persistent-identity .chat-group-footer__meta > *,
+  .chat-group-footer--persistent-identity .chat-delete-wrap,
+  .chat-group-footer--persistent-identity .chat-group-timestamp,
+  .chat-group-footer--persistent-identity .msg-meta,
   .chat-group-footer--persistent-identity > .chat-group-footer-actions {
     position: static;
     opacity: 1;

@@ -88,10 +88,12 @@ describeControlUiE2e("Control UI attributed chat identity", () => {
       page.locator(".chat-group-footer--persistent-identity .chat-sender-name"),
     ).toHaveText(["Riley", "Colin"]);
     await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
+    const hoverDetails = userGroups.last().locator(".chat-group-timestamp");
+    await expect(hoverDetails).toHaveCSS("opacity", "0");
     await captureProof(page, "after-default.png");
 
     await userGroups.last().hover();
-    await expect(userGroups.last().locator(".chat-group-footer")).toHaveCSS("opacity", "1");
+    await expect(hoverDetails).toHaveCSS("opacity", "1");
     await expect(page.locator(".chat-author-avatar")).toHaveCount(0);
     await captureProof(page, "after-hover.png");
 
