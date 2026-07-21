@@ -334,6 +334,8 @@ function ancestors(rows) {
   return result;
 }
 function persistLease(processes, expiresAtMs) {
+  // workspace-sync.ts serializes heartbeat and final renewals through renewalQueue;
+  // the watchdog only reads this lease, so one nonce has exactly one writer at a time.
   const temporary = leasePath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
   fs.writeFileSync(temporary, JSON.stringify({ ...input, processes, expiresAtMs }), { mode: 0o600, flag: "wx" });
   fs.renameSync(temporary, leasePath);

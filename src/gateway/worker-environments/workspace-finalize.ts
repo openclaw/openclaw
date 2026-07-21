@@ -5,17 +5,23 @@ import type {
 import type { WorkerWorkspaceApplyResult } from "./workspace-reconcile.js";
 
 export class WorkerWorkspaceQuiescenceError extends Error {
-  constructor(cause: unknown) {
+  readonly retryableForReclaim: boolean;
+
+  constructor(cause: unknown, options: { retryableForReclaim: boolean }) {
     super(cause instanceof Error ? cause.message : "Worker workspace quiescence failed", { cause });
     this.name = "WorkerWorkspaceQuiescenceError";
+    this.retryableForReclaim = options.retryableForReclaim;
   }
 }
 
-async function assertQuiescenceActive(quiescence: WorkerWorkspaceQuiescence): Promise<void> {
+async function assertQuiescenceActive(
+  quiescence: WorkerWorkspaceQuiescence,
+  options: { retryableForReclaim: boolean },
+): Promise<void> {
   try {
     await quiescence.assertActive();
   } catch (error) {
-    throw new WorkerWorkspaceQuiescenceError(error);
+    throw new WorkerWorkspaceQuiescenceError(error, options);
   }
 }
 
@@ -27,13 +33,13 @@ export async function verifyReconciledWorkspaceFinal(
   if (reconciliation.applyPreparedStagedResult && reconciliation.publishStagedResult) {
     try {
       await reconciliation.verifyStable();
-      await assertQuiescenceActive(quiescence);
+      await assertQuiescenceActive(quiescence, { retryableForReclaim: true });
       await reconciliation.verifyStable();
       await reconciliation.applyPreparedStagedResult();
       await reconciliation.verifyLocalStable();
       // Applying can outlive the lease renewed above. Only publish the candidate
       // after both owners pass a fresh fence, so restart recovery cannot adopt it early.
-      await assertQuiescenceActive(quiescence);
+      await assertQuiescenceActive(quiescence, { retryableForReclaim: false });
       await reconciliation.verifyStable();
       await reconciliation.verifyLocalStable();
       await reconciliation.publishStagedResult();
@@ -45,7 +51,9 @@ export async function verifyReconciledWorkspaceFinal(
   }
   await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
-  await assertQuiescenceActive(quiescence);
+  await assertQuiescenceActive(quiescence, {
+    retryableForReclaim: !reconciliation.changed,
+  });
   await reconciliation.verifyStable();
   await reconciliation.verifyLocalStable();
   return reconciliation.getAppliedWorkspaceResult?.();

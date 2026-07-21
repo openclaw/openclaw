@@ -461,9 +461,9 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         } catch (error) {
           // An unstaged quiescence failure is retryable even after an unchanged
           // manifest commit; the journal remains authoritative for the next attempt.
-          await cancelUnstagedFailedReclaim(error instanceof WorkerWorkspaceQuiescenceError).catch(
-            () => undefined,
-          );
+          await cancelUnstagedFailedReclaim(
+            error instanceof WorkerWorkspaceQuiescenceError && error.retryableForReclaim,
+          ).catch(() => undefined);
           throw error;
         }
       },

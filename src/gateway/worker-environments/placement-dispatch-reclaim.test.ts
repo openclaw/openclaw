@@ -266,6 +266,27 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
+  it("keeps a changed result fenced when quiescence fails after apply", async () => {
+    const harness = createHarness(placementStore, { leaseFailureCount: 1 });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace quiescence expired");
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "active",
+      turnClaim: { owner: "worker" },
+    });
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: null, stagedResultRef: null },
+    ]);
+  });
+
   it("keeps a committed failed stop result fenced for recovery", async () => {
     const priorConflict = {
       paths: ["notes.md"],
