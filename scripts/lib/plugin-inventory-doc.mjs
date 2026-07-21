@@ -2,13 +2,20 @@ function formatIdentifiers(values) {
   return values.map((value) => `\`${value}\``).join(", ");
 }
 
+function encodeDashboardPluginIdSegment(pluginId) {
+  return pluginId.replaceAll("%", "%25").replaceAll(".", "%2E");
+}
+
 function resolveDashboardCapabilityIds(manifest, field) {
   if (typeof manifest.id !== "string" || !Array.isArray(manifest.dashboard?.[field])) {
     return [];
   }
+  const pluginIdSegment = encodeDashboardPluginIdSegment(manifest.id);
   return manifest.dashboard[field]
     .map((entry) =>
-      typeof entry?.id === "string" && entry.id.length > 0 ? `${manifest.id}.${entry.id}` : null,
+      typeof entry?.id === "string" && entry.id.length > 0
+        ? `${pluginIdSegment}.${entry.id}`
+        : null,
     )
     .filter((value) => value !== null);
 }

@@ -26,4 +26,19 @@ describe("resolvePluginSurface", () => {
   it("retains the generic fallback", () => {
     expect(resolvePluginSurface({})).toBe("plugin");
   });
+
+  it("escapes dashboard plugin owner delimiters and literal escape markers", () => {
+    expect(
+      resolvePluginSurface({
+        id: "dashboard.segmented",
+        dashboard: { actionVerbs: [{ id: "refresh" }] },
+      }),
+    ).toBe("dashboard action verbs: `dashboard%2Esegmented.refresh`");
+    expect(
+      resolvePluginSurface({
+        id: "dashboard%2Esegmented",
+        dashboard: { dataBindings: [{ id: "refresh" }] },
+      }),
+    ).toBe("dashboard data bindings: `dashboard%252Esegmented.refresh`");
+  });
 });
