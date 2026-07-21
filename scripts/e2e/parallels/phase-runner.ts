@@ -15,7 +15,18 @@ function appendTextTail(current: string, chunk: string, maxBytes: number): strin
   }
   const marker = `[phase log tail truncated to last ${maxBytes} bytes]\n`;
   const tailBytes = Math.max(0, maxBytes - Buffer.byteLength(marker));
-  const tail = Buffer.from(combined).subarray(-tailBytes).toString("utf8");
+  const rawTail = Buffer.from(combined).subarray(-tailBytes);
+  // Skip leading UTF-8 continuation bytes so the tail starts at a character
+  // boundary instead of producing replacement characters in diagnostic output.
+  let tailStart = 0;
+  while (tailStart < rawTail.length) {
+    const byte = rawTail.at(tailStart);
+    if (byte === undefined || (byte & 0xc0) !== 0x80) {
+      break;
+    }
+    tailStart += 1;
+  }
+  const tail = rawTail.subarray(tailStart).toString("utf8");
   return `${marker}${tail}`;
 }
 
