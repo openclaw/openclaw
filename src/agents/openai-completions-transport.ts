@@ -1888,18 +1888,13 @@ export function buildOpenAICompletionsParams(
 function parseTransportChunkUsage(
   rawUsage: NonNullable<ChatCompletionChunk["usage"]> & {
     cost?: unknown;
-    prompt_tokens_details?: { cache_write_tokens?: number };
+    prompt_tokens_details?: { cache_write_tokens?: number | null };
   },
   model: Model,
 ): MutableAssistantOutput["usage"] {
   const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
-  // Follow documented OpenAI/OpenRouter semantics: cached_tokens is cache-read
-  // tokens (hits). OpenAI does not document or emit cache_write_tokens, but
-  // OpenRouter-compatible providers can include it as a separate write count.
-  // OpenRouter's own provider/tests affirm the separate mapping:
-  // https://github.com/OpenRouterTeam/ai-sdk-provider/pull/409
-  // Do not subtract writes from cached_tokens, otherwise spec-compliant
-  // providers are under-reported. Mirrors the plugin-sdk completions provider.
+  // OpenRouter reports cache writes separately inside prompt totals. Keep read/write
+  // buckets out of input so normalized prompt buckets stay disjoint.
   const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
