@@ -8,6 +8,9 @@ import {
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
   BOARD_GRID_ROW_HEIGHT,
+  boardChromeRowPx,
+  effectiveBoardWidgetRows,
+  FINE_POINTER_QUERY,
   layout,
   nudge,
   previewDrag,
@@ -23,11 +26,6 @@ import type {
   BoardViewWidget,
   BoardWidgetFrameUrl,
 } from "../../lib/board/view-types.ts";
-import {
-  boardChromeRowPx,
-  effectiveBoardWidgetRows,
-  FINE_POINTER_QUERY,
-} from "../../lib/board/widget-rows.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/board.css";
 import "../web-awesome-tabs.ts";

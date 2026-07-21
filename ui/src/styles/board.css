@@ -493,8 +493,9 @@ openclaw-board-widget-cell {
     pointer-events: none;
   }
 
+  /* Capabilities chip stays interactive for its granted-permissions tooltip;
+     the kind badge and title are display-only and pass clicks through. */
   .board-widget__bar > .board-widget__drag-handle,
-  .board-widget__bar > .board-widget__kind,
   .board-widget__bar > .board-widget__capabilities,
   .board-widget__bar > .board-widget__menu {
     pointer-events: auto;

@@ -119,7 +119,7 @@ function contentControlsDocument(): string {
   <input aria-label="Release note" placeholder="Release note"></main><script>
     const report=()=>parent.postMessage({type:"openclaw:widget-size",height:document.body.scrollHeight},"*");
     addEventListener("load",report);addEventListener("resize",report);new ResizeObserver(report).observe(document.documentElement);
-  <\/script>`;
+  </script>`;
 }
 
 function clockDocument(): string {
