@@ -211,7 +211,8 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Choose a managed provider now, and Codex-capable models can also use native Codex web search.",
+      "Codex-capable models can use native Codex web search.",
+      "Other models use a separate web search provider, which you can configure here.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -219,7 +220,7 @@ async function promptWebToolsConfig(
 
   const enableSearch = guardCancel(
     await confirm({
-      message: "Enable web_search?",
+      message: "Enable the web_search tool?",
       initialValue: existingSearch?.enabled ?? hasManagedSearchProviders,
     }),
     runtime,
@@ -239,12 +240,12 @@ async function promptWebToolsConfig(
     if (codexRelevant) {
       note(
         [
-          "Codex-capable models can optionally use native Codex web search.",
-          "Managed web_search still controls non-Codex models.",
-          "If no managed provider is configured, non-Codex models still rely on provider auto-detect and may have no search available.",
+          "Codex-capable models can use native Codex web search instead of a separate provider.",
+          "Other models need a separate web search provider.",
+          "If you do not choose one, OpenClaw can select a provider from available credentials; otherwise other models may not have web search.",
           ...(describeCodexNativeWebSearch(nextConfig)
             ? [describeCodexNativeWebSearch(nextConfig)!]
-            : ["Recommended mode: cached."]),
+            : []),
         ].join("\n"),
         "Codex native search",
       );
@@ -261,7 +262,7 @@ async function promptWebToolsConfig(
       if (enableCodexNative) {
         const codexMode = guardCancel(
           await select({
-            message: "Codex native web search mode",
+            message: "Native Codex web search mode",
             options: [
               {
                 value: "cached",
@@ -289,7 +290,9 @@ async function promptWebToolsConfig(
         };
         configureManagedProvider = guardCancel(
           await confirm({
-            message: "Configure or change a managed web search provider now?",
+            message: existingSearch?.provider
+              ? `Change the separate web search provider (currently ${existingSearch.provider})?`
+              : "Also configure a separate web search provider for other models?",
             initialValue: Boolean(existingSearch?.provider),
           }),
           runtime,
@@ -342,9 +345,17 @@ async function promptWebToolsConfig(
     }
   }
 
+  note(
+    [
+      "`web_fetch` is a separate tool for reading a specific URL.",
+      "It does not require an API key and works independently of web search providers, including Codex.",
+    ].join("\n"),
+    "Web fetch",
+  );
+
   const enableFetch = guardCancel(
     await confirm({
-      message: "Enable web_fetch (keyless HTTP fetch)?",
+      message: "Enable the web_fetch tool?",
       initialValue: existingFetch?.enabled ?? true,
     }),
     runtime,

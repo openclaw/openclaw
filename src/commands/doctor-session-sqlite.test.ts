@@ -626,6 +626,26 @@ describe("runDoctorSessionSqlite", () => {
     );
   });
 
+  it.skipIf(process.platform === "win32")(
+    "allows hard-linked legacy stores during SQLite compaction",
+    async () => {
+      const { store } = await createImportedStoreForCompaction();
+      const externalStorePath = path.join(store.tempDir, "external-sessions.json");
+      fs.writeFileSync(store.storePath, "{}\n", { mode: 0o600 });
+      fs.linkSync(store.storePath, externalStorePath);
+
+      const report = await runDoctorSessionSqlite({
+        env: store.env,
+        mode: "compact",
+        store: store.storePath,
+      });
+
+      expect(report.totals.issues).toBe(0);
+      expect(fs.statSync(externalStorePath).nlink).toBe(2);
+      expect(fs.readFileSync(externalStorePath, "utf8")).toBe("{}\n");
+    },
+  );
+
   it("refuses compaction while this process owns an open agent database handle", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();
     openOpenClawAgentDatabase({

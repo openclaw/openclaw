@@ -31,7 +31,7 @@ overrides:
   tar: 7.5.19
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 7.6.3
+  protobufjs: 7.6.5
   uuid: 14.0.0
 
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
@@ -86,8 +86,8 @@ importers:
         specifier: 0.4.4
         version: 0.4.4
       '@openclaw/proxyline':
-        specifier: 0.3.3
-        version: 0.3.3(undici@8.5.0)
+        specifier: 0.3.4
+        version: 0.3.4(undici@8.5.0)
       '@silvia-odwyer/photon-node':
         specifier: 0.3.4
         version: 0.3.4
@@ -642,6 +642,22 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/crabbox:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/cua-computer:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      rastermill:
+        specifier: 0.3.1
+        version: 0.3.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -3712,11 +3728,11 @@ packages:
       node-pty:
         optional: true
 
-  '@openclaw/proxyline@0.3.3':
-    resolution: {integrity: sha512-sftHnW69NHQqLjCxBTvQ8f/eQl+peZ5pHCBQtuTWBbeuYRHZ0/GXVTmw/O/YKsShMbqPWhJB0UYtPPdvCUSS8w==}
+  '@openclaw/proxyline@0.3.4':
+    resolution: {integrity: sha512-WuLE282PW7vLienDNFTjdSI/BCYDAepvr5siOTYABQhqFo8qbP9MgmJzZnwmskUqiYugGzle6gvaRbJTkwbZ8A==}
     engines: {node: '>=22.19.0'}
     peerDependencies:
-      undici: '>=8.3.0 <9'
+      undici: '>=8.5.0 <9'
 
   '@openclaw/uirouter@0.1.0':
     resolution: {integrity: sha512-w5tNj2FIukVJqJ1wt5wiDbrI6DI4tOkUbtqnnU5Fl4EgnRKFJtfHI3WrWTWTTJlXbbrwGSMptyrSZmQVdRo83Q==}
@@ -4226,9 +4242,6 @@ packages:
 
   '@protobufjs/float@1.0.2':
     resolution: {integrity: sha512-Ddb+kVXlXst9d+R9PfTIxh1EdNkgoRe5tOX6t01f1lYWOvJnSPDBlG241QLzcyPdoNTsblLUdujGSE4RzrTZGQ==}
-
-  '@protobufjs/inquire@1.1.2':
-    resolution: {integrity: sha512-pa0vFRuws4wkvaXKK1uXZMAwAX4/t8ANaJo45iw/oQHNQ9q5xUzwgFmVJGXiga2BeN+zpX7Vf9vmsiIa2J+MUw==}
 
   '@protobufjs/path@1.1.2':
     resolution: {integrity: sha512-6JOcJ5Tm08dOHAbdR3GrvP+yUUfkjG5ePsHYczMFLq3ZmMkAD98cDgcT2iA1lJ9NVwFd4tH/iSSoe44YWkltEA==}
@@ -7241,8 +7254,8 @@ packages:
   property-information@7.2.0:
     resolution: {integrity: sha512-IAtzIB6sUiWaJYrX9smp3V46pBGbBeLFRGdh25kg1334VcBlD8HzhPeNIWQH9zhGmo2itIe25EHt9dQP7G5hmg==}
 
-  protobufjs@7.6.3:
-    resolution: {integrity: sha512-+k0vdJKNdW+Vu+dYe8tZA/VvQb6XKNWexC6URwBFXxNnjLJz9nQJCemGyNgRAWD+B7+nGNc9qMPGwcD7s4nzUw==}
+  protobufjs@7.6.5:
+    resolution: {integrity: sha512-/FPD0nUc9jH6rfFjji9IBqOz4pcSE3CsT1m7Ep6Mdb0LxSUMj8hgl6GomOvZzpNpAqqGaXA0P3VSrZLFzIhQrw==}
     engines: {node: '>=12.0.0'}
 
   proxy-addr@2.0.7:
@@ -9465,7 +9478,7 @@ snapshots:
     dependencies:
       google-auth-library: 10.9.0
       p-retry: 4.6.2
-      protobufjs: 7.6.3
+      protobufjs: 7.6.5
       ws: 8.21.0
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
@@ -9495,7 +9508,7 @@ snapshots:
     dependencies:
       lodash.camelcase: 4.3.0
       long: 5.3.2
-      protobufjs: 7.6.3
+      protobufjs: 7.6.5
       yargs: 17.7.3
 
   '@hapi/boom@9.1.4':
@@ -9634,7 +9647,7 @@ snapshots:
       lodash.identity: 3.0.0
       lodash.merge: 4.6.2
       lodash.pickby: 4.6.0
-      protobufjs: 7.6.3
+      protobufjs: 7.6.5
       qs: 6.15.2
       ws: 8.21.0
     transitivePeerDependencies:
@@ -10090,7 +10103,7 @@ snapshots:
     dependencies:
       ghostty-web: 0.4.0
 
-  '@openclaw/proxyline@0.3.3(undici@8.5.0)':
+  '@openclaw/proxyline@0.3.4(undici@8.5.0)':
     dependencies:
       undici: 8.5.0
 
@@ -10515,8 +10528,6 @@ snapshots:
       '@protobufjs/aspromise': 1.1.2
 
   '@protobufjs/float@1.0.2': {}
-
-  '@protobufjs/inquire@1.1.2': {}
 
   '@protobufjs/path@1.1.2': {}
 
@@ -11533,7 +11544,7 @@ snapshots:
       music-metadata: 11.13.0
       p-queue: 9.3.0
       pino: 9.14.0
-      protobufjs: 7.6.3
+      protobufjs: 7.6.5
       whatsapp-rust-bridge: 0.5.4
       ws: 8.21.0
     optionalDependencies:
@@ -12844,7 +12855,7 @@ snapshots:
   libsignal@6.0.0:
     dependencies:
       curve25519-js: 0.0.4
-      protobufjs: 7.6.3
+      protobufjs: 7.6.5
 
   lie@3.3.0:
     dependencies:
@@ -13946,7 +13957,7 @@ snapshots:
 
   property-information@7.2.0: {}
 
-  protobufjs@7.6.3:
+  protobufjs@7.6.5:
     dependencies:
       '@protobufjs/aspromise': 1.1.2
       '@protobufjs/base64': 1.1.2
@@ -13954,7 +13965,6 @@ snapshots:
       '@protobufjs/eventemitter': 1.1.1
       '@protobufjs/fetch': 1.1.1
       '@protobufjs/float': 1.0.2
-      '@protobufjs/inquire': 1.1.2
       '@protobufjs/path': 1.1.2
       '@protobufjs/pool': 1.1.0
       '@protobufjs/utf8': 1.1.1

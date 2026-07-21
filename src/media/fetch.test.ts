@@ -65,6 +65,21 @@ function makeStallingFetch(firstChunk: Uint8Array) {
   });
 }
 
+function makeResponseHeaderStallingFetch() {
+  return vi.fn(
+    async (_input: RequestInfo | URL, init?: RequestInit) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        const rejectForAbort = () => reject(abortReasonError(signal));
+        if (signal?.aborted) {
+          rejectForAbort();
+          return;
+        }
+        signal?.addEventListener("abort", rejectForAbort, { once: true });
+      }),
+  );
+}
+
 function makeLookupFn(): LookupFn {
   return vi.fn(async () => ({ address: "149.154.167.220", family: 4 })) as unknown as LookupFn;
 }
@@ -406,18 +421,7 @@ describe("readRemoteMediaBuffer", () => {
   it("aborts when response headers exceed their deadline", async () => {
     vi.useFakeTimers();
     try {
-      const fetchImpl = vi.fn(
-        async (_input: RequestInfo | URL, init?: RequestInit) =>
-          await new Promise<Response>((_resolve, reject) => {
-            const signal = init?.signal;
-            const rejectForAbort = () => reject(abortReasonError(signal));
-            if (signal?.aborted) {
-              rejectForAbort();
-              return;
-            }
-            signal?.addEventListener("abort", rejectForAbort, { once: true });
-          }),
-      );
+      const fetchImpl = makeResponseHeaderStallingFetch();
 
       const result = readRemoteMediaBuffer({
         url: "https://example.com/file.bin",
@@ -428,6 +432,28 @@ describe("readRemoteMediaBuffer", () => {
       }).catch((error: unknown) => error);
 
       await vi.advanceTimersByTimeAsync(25);
+
+      await expect(result).resolves.toMatchObject({
+        name: "MediaFetchError",
+        code: "fetch_failed",
+        cause: { name: "TimeoutError" },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the default response-header deadline for stalled media", async () => {
+    vi.useFakeTimers();
+    try {
+      const result = readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl: makeResponseHeaderStallingFetch(),
+        lookupFn: makeLookupFn(),
+        maxBytes: 1024,
+      }).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(15 * 60_000 + 5);
 
       await expect(result).resolves.toMatchObject({
         name: "MediaFetchError",
@@ -769,6 +795,7 @@ describe("readRemoteMediaBuffer", () => {
       lookupFn,
       dispatcherPolicy,
       mode: "trusted_explicit_proxy",
+      signal: expect.any(AbortSignal),
     });
   });
 

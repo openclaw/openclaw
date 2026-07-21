@@ -140,6 +140,8 @@ const runRespawnedChild = (command, args, env) => {
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
+  let firstForwardedSignal = null;
+  let hardKillBackstopStarted = false;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -172,6 +174,7 @@ const runRespawnedChild = (command, args, env) => {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         process.exit(1);
@@ -180,7 +183,8 @@ const runRespawnedChild = (command, args, env) => {
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = () => {
+  const scheduleParentExit = (signal) => {
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -196,7 +200,7 @@ const runRespawnedChild = (command, args, env) => {
       } catch {
         // Best-effort signal forwarding.
       }
-      scheduleParentExit();
+      scheduleParentExit(signal);
     };
     try {
       process.on(signal, listener);
@@ -208,7 +212,15 @@ const runRespawnedChild = (command, args, env) => {
   child.once("exit", (code, signal) => {
     detach();
     if (signal) {
-      process.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      process.exit(forwardedSignalExitCode ?? 1);
     }
     process.exit(code ?? 1);
   });

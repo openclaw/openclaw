@@ -2117,10 +2117,11 @@ export type PluginPackageChannelDoctorCapabilities = {
   warnOnEmptyGroupSenderAllowlist?: boolean;
 };
 
-type PluginPackageChannelCliOption = {
+export type PluginPackageChannelCliOption = {
   flags: string;
   description: string;
   defaultValue?: boolean | string;
+  valueType?: "int" | "list";
 };
 
 export type PluginPackageInstall = {

@@ -56,7 +56,17 @@
       "commands": {
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
-      }
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--bot-token <token>",
+          "description": "Bot token"
+        },
+        {
+          "flags": "--app-token <token>",
+          "description": "App token"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/slack",

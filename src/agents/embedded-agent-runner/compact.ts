@@ -19,7 +19,7 @@ import {
 } from "../../gateway/session-compaction-checkpoints.js";
 import {
   formatActiveNodeContextLabel,
-  getActiveNodeContext,
+  getCurrentActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
@@ -1317,7 +1317,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
           agentId: sessionAgentId,
         }),
       }),
-      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()),
+      activeNode: formatActiveNodeContextLabel(getCurrentActiveNodeContext()),
     };
     const sandboxInfoExecPolicy = resolveEmbeddedSandboxInfoExecPolicy({
       config: params.config,

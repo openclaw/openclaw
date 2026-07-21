@@ -597,6 +597,7 @@ async function dispatchReplyFromConfigInner(
     delete messageReceivedCtx.MediaUrls;
     delete messageReceivedCtx.MediaType;
     delete messageReceivedCtx.MediaTypes;
+    delete messageReceivedCtx.media;
     return {
       ...buildHookState(messageReceivedCtx).hookContext,
       mediaRemoteHost,

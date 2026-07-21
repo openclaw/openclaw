@@ -1081,7 +1081,7 @@ extension RootTabsSourceGuardTests {
         let storeSource = try String(contentsOf: Self.watchInboxStoreSourceURL(), encoding: .utf8)
         let consumePayload = try Self.extract(
             receiverSource,
-            from: "private func consumeIncomingPayload(_ payload: [String: Any], transport: String)",
+            from: "private func consumeIncomingPayload(",
             to: "}\n}")
         let appSnapshotConsume = try #require(
             consumePayload.range(of: "self.store.consume(appSnapshot: appSnapshot)"))

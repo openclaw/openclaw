@@ -2,7 +2,13 @@ import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
+// The fixture page renders outside the app shell, so it must load the app
+// stylesheet itself (Web Awesome theme included) or dropdown menus render
+// theme-less: dark item text on the fixture's dark panels.
+import "../styles.css";
 import "../components/board/board-view.ts";
+
+document.documentElement.classList.add("wa-dark");
 
 const initialSnapshot: BoardSnapshot = {
   sessionKey: "agent:main:board-fixture",

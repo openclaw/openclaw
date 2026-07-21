@@ -748,6 +748,49 @@ describe("runConfigureWizard", () => {
     expect(codexSearch.enabled).toBe(true);
     expect(codexSearch.mode).toBe("cached");
     expect(mocks.setupSearch).not.toHaveBeenCalled();
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "Web search lets your agent look things up online using the `web_search` tool.",
+        "Codex-capable models can use native Codex web search.",
+        "Other models use a separate web search provider, which you can configure here.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
+      "Web search",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "Codex-capable models can use native Codex web search instead of a separate provider.",
+        "Other models need a separate web search provider.",
+        "If you do not choose one, OpenClaw can select a provider from available credentials; otherwise other models may not have web search.",
+      ].join("\n"),
+      "Codex native search",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      [
+        "`web_fetch` is a separate tool for reading a specific URL.",
+        "It does not require an API key and works independently of web search providers, including Codex.",
+      ].join("\n"),
+      "Web fetch",
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enable the web_search tool?" }),
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Enable native Codex web search for Codex-capable models?",
+      }),
+    );
+    expect(mocks.clackSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Native Codex web search mode" }),
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Also configure a separate web search provider for other models?",
+      }),
+    );
+    expect(mocks.clackConfirm).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enable the web_fetch tool?" }),
+    );
   });
 
   it("preserves disabled native Codex search when toggled off", async () => {

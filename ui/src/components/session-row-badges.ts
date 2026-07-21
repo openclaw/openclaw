@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 // Deep import on purpose: the protocol barrel carries typebox and every
 // schema, which must stay out of the Control UI startup bundle.
 import { isCloudWorkerPlacementState } from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
@@ -16,15 +17,39 @@ export function isStoppableCloudWorkerPlacement(
   return placement?.state === "active";
 }
 
+function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"]): string {
+  switch (state) {
+    case "open":
+      return t("chat.pullRequests.open");
+    case "draft":
+      return t("chat.pullRequests.draft");
+    case "merged":
+      return t("chat.pullRequests.merged");
+    case "closed":
+      return t("chat.pullRequests.closed");
+    default:
+      return state satisfies never;
+  }
+}
+
+function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSummary): string {
+  const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
+  return `${numbers} · ${pullRequestStateLabel(summary.state)}`;
+}
+
 export function renderSessionRowBadges(params: {
   isChild?: boolean;
   hasAutomation: boolean;
-  hasOpenPullRequest?: boolean;
+  pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
   placementState?: SessionPlacementState;
   workspaceConflictCount?: number;
 }) {
   const hasAutomation = !params.isChild && params.hasAutomation;
+  const pullRequestLabel = params.pullRequest
+    ? formatSessionPullRequestSummary(params.pullRequest)
+    : undefined;
+  const pullRequestState = params.pullRequest?.state;
   const placementState = params.isChild ? undefined : params.placementState;
   const cloudPlacementState = isCloudWorkerPlacementState(placementState)
     ? placementState
@@ -36,7 +61,7 @@ export function renderSessionRowBadges(params: {
   const hasWorkspaceConflict = workspaceConflictCount > 0;
   if (
     !hasAutomation &&
-    !params.hasOpenPullRequest &&
+    !pullRequestLabel &&
     !params.hasApproval &&
     !displayedPlacementState &&
     !hasWorkspaceConflict
@@ -73,12 +98,13 @@ export function renderSessionRowBadges(params: {
           >${icons.clock}</span
         >`
       : nothing}
-    ${params.hasOpenPullRequest
+    ${pullRequestLabel
       ? html`<span
           class="session-row-badge session-row-badge--pull-request"
+          data-pull-request-state=${pullRequestState ?? nothing}
           role="img"
-          aria-label=${t("sessionsView.openPullRequest")}
-          title=${t("sessionsView.openPullRequest")}
+          aria-label=${pullRequestLabel}
+          title=${pullRequestLabel}
           >${icons.gitPullRequest}</span
         >`
       : nothing}

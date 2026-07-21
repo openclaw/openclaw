@@ -45,6 +45,7 @@ import {
   resolveUiGlobalAliasAgentId,
   type UiSessionDefaultsHost,
 } from "../../../lib/sessions/session-key.ts";
+import { resolveTurnRecap } from "../chat-progress.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -67,6 +68,7 @@ import { renderBackgroundTasksStatusRow } from "./chat-background-tasks-status.t
 import type { BackgroundTasksProps } from "./chat-background-tasks.ts";
 import { renderChatDivider } from "./chat-divider.ts";
 import {
+  dismissConfirmedActionPopovers,
   getAssistantAttachmentAvailabilityRenderVersion,
   openChatHideConfirmation,
   openChatRewindConfirmation,
@@ -79,6 +81,7 @@ import { renderRealtimeTalkConversation } from "./chat-realtime-controls.ts";
 import { handleChatSelectionPointerUp, removeChatSelectionPopup } from "./chat-selection-popup.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
 const deletedMessagesMap = new Map<string, DeletedMessages>();
@@ -547,8 +550,11 @@ function getPinnedMessageSummary(message: unknown): string {
   return extractTextCached(message) ?? "";
 }
 
-export function resetChatThreadPresentationState(paneId?: string) {
+export function resetChatThreadPresentationState(paneId?: string, owner?: ParentNode) {
   removeReplyContextMenu(paneId);
+  if (owner) {
+    dismissConfirmedActionPopovers(owner);
+  }
   // The selection popup is body-portaled; pane teardown/route changes must
   // drop it so it cannot outlive the render that owns its callbacks.
   removeChatSelectionPopup();
@@ -695,10 +701,17 @@ function removeReplyContextMenu(paneId?: string) {
   if (paneId && paneId !== activeReplyContextMenuPaneId) {
     return;
   }
-  activeReplyContextMenu?.remove();
+  if (activeReplyContextMenu) {
+    dismissConfirmedActionPopovers(activeReplyContextMenu);
+    activeReplyContextMenu.remove();
+  }
   activeReplyContextMenu = null;
   activeReplyContextMenuPaneId = null;
-  document.querySelector(".chat-reply-context-menu")?.remove();
+  const fallbackMenu = document.querySelector<HTMLElement>(".chat-reply-context-menu");
+  if (fallbackMenu) {
+    dismissConfirmedActionPopovers(fallbackMenu);
+    fallbackMenu.remove();
+  }
   if (contextMenuDocumentClickHandler) {
     document.removeEventListener("click", contextMenuDocumentClickHandler);
     contextMenuDocumentClickHandler = null;
@@ -1293,6 +1306,18 @@ function renderChatThreadContents(
       content: realtimeConversation,
     });
   }
+  // Watch/settle on actual indicator visibility (not runWorking): queued
+  // sends show the claw before the run starts, and the recap must never
+  // stack under a visible working row.
+  const workingIndicatorVisible = chatItems.some((item) => item.kind === "reading-indicator");
+  const turnRecap = resolveTurnRecap(props.sessionKey, workingIndicatorVisible, activeSession);
+  if (turnRecap !== null && !isEmpty && !showLoadingSkeleton) {
+    transcriptRows.push({
+      kind: "content",
+      key: "turn-recap",
+      content: renderTurnRecapRow(turnRecap),
+    });
+  }
   const backgroundTasks =
     !props.runWorking && !isEmpty && !showLoadingSkeleton
       ? renderBackgroundTasksStatusRow(props.backgroundTasks)
@@ -1341,6 +1366,7 @@ function renderChatThreadContents(
     props.allowExternalEmbedUrls ?? false,
     threadContextWindow,
     props.onSetReply,
+    turnRecap === null ? "" : `${turnRecap.runtimeMs}:${turnRecap.outputTokens ?? ""}`,
   ]);
   const transcriptContents =
     showLoadingSkeleton || isEmpty

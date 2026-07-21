@@ -125,8 +125,8 @@ Google Play API commands, or Play Console mutation commands.
 
 The release lane uploads the phone and Wear bundles in one atomic Google Play
 edit. It publishes the phone bundle to `GOOGLE_PLAY_TRACK` and maps the Wear
-bundle to the corresponding form-factor track (`wear:qa` for the default
-internal channel, otherwise `wear:<track>`).
+bundle to the corresponding form-factor track (`wear:<track>`), so the default
+internal channel publishes to `internal` and `wear:internal`.
 
 See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 

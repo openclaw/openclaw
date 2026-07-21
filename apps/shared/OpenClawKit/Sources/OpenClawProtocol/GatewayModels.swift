@@ -80,6 +80,16 @@ public enum NodePresenceAliveReason: String, Codable, Sendable {
     case connect = "connect"
 }
 
+public enum SessionObserverHealth: String, Codable, Sendable {
+    case onTrack = "on-track"
+    case grinding = "grinding"
+    case stuck = "stuck"
+    case waitingOnUser = "waiting-on-user"
+    case wrappingUp = "wrapping-up"
+    case done = "done"
+    case failed = "failed"
+}
+
 public enum SessionPlacementState: String, Codable, Sendable {
     case local = "local"
     case requested = "requested"
@@ -4013,6 +4023,24 @@ public struct SessionCatalogDescriptor: Codable, Sendable {
     }
 }
 
+public struct SessionCatalogPullRequestSummary: Codable, Sendable {
+    public let numbers: [Int]
+    public let state: AnyCodable
+
+    public init(
+        numbers: [Int],
+        state: AnyCodable)
+    {
+        self.numbers = numbers
+        self.state = state
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case numbers
+        case state
+    }
+}
+
 public struct SessionCatalogSession: Codable, Sendable {
     public let threadid: String
     public let name: String?
@@ -4026,6 +4054,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let cliversion: String?
     public let gitbranch: String?
     public let customgroup: String?
+    public let pullrequest: SessionCatalogPullRequestSummary?
     public let archived: Bool
     public let sessionkey: String?
     public let cancontinue: Bool
@@ -4045,6 +4074,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         cliversion: String? = nil,
         gitbranch: String? = nil,
         customgroup: String? = nil,
+        pullrequest: SessionCatalogPullRequestSummary? = nil,
         archived: Bool,
         sessionkey: String? = nil,
         cancontinue: Bool,
@@ -4063,6 +4093,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.cliversion = cliversion
         self.gitbranch = gitbranch
         self.customgroup = customgroup
+        self.pullrequest = pullrequest
         self.archived = archived
         self.sessionkey = sessionkey
         self.cancontinue = cancontinue
@@ -4083,6 +4114,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case cliversion = "cliVersion"
         case gitbranch = "gitBranch"
         case customgroup = "customGroup"
+        case pullrequest = "pullRequest"
         case archived
         case sessionkey = "sessionKey"
         case cancontinue = "canContinue"
@@ -4688,6 +4720,66 @@ public struct SessionOperationEvent: Codable, Sendable {
         case ts
         case completed
         case reason
+    }
+}
+
+public struct SessionObserverPlanProgress: Codable, Sendable {
+    public let completed: Int
+    public let total: Int
+
+    public init(
+        completed: Int,
+        total: Int)
+    {
+        self.completed = completed
+        self.total = total
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case completed
+        case total
+    }
+}
+
+public struct SessionObserverDigest: Codable, Sendable {
+    public let sessionkey: String
+    public let runid: String?
+    public let revision: Int
+    public let updatedat: Int
+    public let headline: String
+    public let assessment: String?
+    public let health: SessionObserverHealth
+    public let planprogress: SessionObserverPlanProgress?
+
+    public init(
+        sessionkey: String,
+        runid: String? = nil,
+        revision: Int,
+        updatedat: Int,
+        headline: String,
+        assessment: String? = nil,
+        health: SessionObserverHealth,
+        planprogress: SessionObserverPlanProgress? = nil)
+    {
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.revision = revision
+        self.updatedat = updatedat
+        self.headline = headline
+        self.assessment = assessment
+        self.health = health
+        self.planprogress = planprogress
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case revision
+        case updatedat = "updatedAt"
+        case headline
+        case assessment
+        case health
+        case planprogress = "planProgress"
     }
 }
 

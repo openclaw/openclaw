@@ -27,10 +27,50 @@ struct MacGatewayProfilesTests {
     }
 
     @Test func `profile URL rejects dashboard schemes`() {
-        #expect(throws: MacGatewayProfileError.self) {
+        #expect(throws: MacGatewayProfileError.invalidURL) {
             try MacGatewayProfileStore.canonicalURL(
                 #require(URL(string: "https://studio.example")))
         }
+    }
+
+    @Test(arguments: [
+        "ws://gateway.example:18789",
+        "ws://203.0.113.10:18789",
+        "ws://[2001:db8::10]:18789",
+        "ws://[gateway.local]:18789",
+        "ws://[192.168.1.20]:18789",
+    ])
+    func `profile URL rejects public plaintext hosts`(rawURL: String) throws {
+        #expect(throws: MacGatewayProfileError.insecureRemoteURL) {
+            try MacGatewayProfileStore.canonicalURL(#require(URL(string: rawURL)))
+        }
+    }
+
+    @Test(arguments: [
+        "ws://localhost",
+        "ws://127.0.0.1",
+        "ws://10.0.0.5",
+        "ws://172.16.1.5",
+        "ws://192.168.1.20",
+        "ws://169.254.1.5",
+        "ws://100.64.0.9",
+        "ws://gateway.local",
+        "ws://gateway.tailnet.ts.net",
+        "ws://[fd00::1]",
+        "ws://[fe80::1]",
+    ])
+    func `profile URL accepts trusted plaintext hosts`(rawURL: String) throws {
+        let url = try MacGatewayProfileStore.canonicalURL(#require(URL(string: rawURL)))
+
+        #expect(url.scheme == "ws")
+        #expect(url.port == 18789)
+    }
+
+    @Test func `profile URL accepts public secure hosts`() throws {
+        let url = try MacGatewayProfileStore.canonicalURL(
+            #require(URL(string: "wss://gateway.example")))
+
+        #expect(url.absoluteString == "wss://gateway.example:443/")
     }
 
     @Test func `blank profile form preserves saved credentials`() {

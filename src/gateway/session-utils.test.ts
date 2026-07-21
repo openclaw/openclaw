@@ -244,6 +244,61 @@ describe("gateway session utils", () => {
     expect(buildGatewaySessionRow({ ...params, now: 1_001 }).agentStatus).toBeUndefined();
   });
 
+  test("projects the compact persisted observer digest", () => {
+    const observerDigest = {
+      sessionKey: "agent:main:main",
+      runId: "run-1",
+      revision: 3,
+      updatedAt: 2_000,
+      headline: "Wrapping up the implementation",
+      assessment: "The focused tests pass.",
+      health: "wrapping-up" as const,
+      planProgress: { completed: 3, total: 4 },
+    };
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "session", updatedAt: 1, observerDigest },
+    });
+
+    expect(row.observerDigest).toEqual({
+      headline: observerDigest.headline,
+      health: observerDigest.health,
+      updatedAt: observerDigest.updatedAt,
+      revision: observerDigest.revision,
+    });
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).observerDigest).toEqual(
+      row.observerDigest,
+    );
+  });
+
+  test("does not project an observer digest older than the latest run", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session",
+        updatedAt: 3_000,
+        startedAt: 3_000,
+        observerDigest: {
+          sessionKey: "agent:main:main",
+          runId: "previous-run",
+          revision: 2,
+          updatedAt: 2_000,
+          headline: "Previous run failed",
+          health: "failed",
+        },
+      },
+    });
+
+    expect(row.observerDigest).toBeUndefined();
+    expect(buildGatewaySessionEventFields({ sessionRow: row }).observerDigest).toBeNull();
+  });
+
   test("session lists apply a bounded default and expose truncation metadata", async () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(

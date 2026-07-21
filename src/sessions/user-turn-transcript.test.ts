@@ -374,6 +374,22 @@ describe("user turn transcript persistence", () => {
   });
 
   describe("createUserTurnTranscriptRecorder", () => {
+    it("accepts and normalizes provider-defined persisted media kinds", () => {
+      const input: UserTurnInput = {
+        text: "inspect this attachment",
+        media: [{ path: " /tmp/provider-media.bin ", kind: " provider/custom-media " }],
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        input,
+        target: unusedRecorderTarget,
+      });
+
+      expect(recorder.message).toMatchObject({
+        MediaPath: "/tmp/provider-media.bin",
+        MediaType: "provider/custom-media",
+      });
+    });
+
     it("persists fallback user turns only once", async () => {
       const dir = createTempDir("openclaw-user-turn-recorder-fallback-");
       const target = createSqliteTranscriptTarget({ dir });

@@ -27,6 +27,14 @@
       "markdownCapable": true,
       "cliAddOptions": [
         {
+          "flags": "--cli-path <path>",
+          "description": "Channel CLI path"
+        },
+        {
+          "flags": "--http-url <url>",
+          "description": "Channel HTTP service URL"
+        },
+        {
           "flags": "--signal-number <e164>",
           "description": "Signal account number (E.164)"
         },
