@@ -18,7 +18,7 @@ const SystemEventParamsSchema = closedObject({
   platform: Type.Optional(Type.String()),
   deviceFamily: Type.Optional(Type.String()),
   modelIdentifier: Type.Optional(Type.String()),
-  lastInputSeconds: Type.Optional(Type.Number()),
+  lastInputSeconds: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
   reason: Type.Optional(Type.String()),
   roles: Type.Optional(Type.Array(Type.String())),
   scopes: Type.Optional(Type.Array(Type.String())),

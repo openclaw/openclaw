@@ -184,9 +184,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     const deviceFamily = readStringValue(params.deviceFamily);
     const modelIdentifier = readStringValue(params.modelIdentifier);
     const lastInputSeconds =
-      typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
+      params.lastInputSeconds === null
+        ? null
+        : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
+          ? params.lastInputSeconds
+          : undefined;
     const reason = readStringValue(params.reason);
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")

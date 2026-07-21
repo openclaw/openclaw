@@ -35,7 +35,6 @@ final class PresenceReporter {
         let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
         let platform = Self.platformString()
-        let lastInput = SystemPresenceInfo.lastInputSeconds()
         let text = Self.composePresenceSummary(mode: mode, reason: reason)
         var params: [String: AnyHashable] = [
             "instanceId": AnyHashable(self.instanceId),
@@ -45,10 +44,10 @@ final class PresenceReporter {
             "version": AnyHashable(version),
             "platform": AnyHashable(platform),
             "deviceFamily": AnyHashable("Mac"),
+            "lastInputSeconds": AnyHashable(NSNull()),
             "reason": AnyHashable(reason),
         ]
         if let model = InstanceIdentity.modelIdentifier { params["modelIdentifier"] = AnyHashable(model) }
-        if let lastInput { params["lastInputSeconds"] = AnyHashable(lastInput) }
         do {
             try await ControlChannel.shared.sendSystemEvent(text, params: params)
         } catch {
@@ -65,9 +64,7 @@ final class PresenceReporter {
         let host = InstanceIdentity.displayName
         let ip = SystemPresenceInfo.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
-        let lastInput = SystemPresenceInfo.lastInputSeconds()
-        let lastLabel = lastInput.map { "last input \($0)s ago" } ?? "last input unknown"
-        return "Node: \(host) (\(ip)) · app \(version) · \(lastLabel) · mode \(mode) · reason \(reason)"
+        return "Node: \(host) (\(ip)) · app \(version) · mode \(mode) · reason \(reason)"
     }
 
     private static func appVersionString() -> String {
@@ -86,7 +83,7 @@ final class PresenceReporter {
         return "macos \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    // (SystemPresenceInfo) last input + primary IPv4.
+    // SystemPresenceInfo supplies the best-effort primary IPv4 address.
 }
 
 #if DEBUG
@@ -101,10 +98,6 @@ extension PresenceReporter {
 
     static func _testPlatformString() -> String {
         self.platformString()
-    }
-
-    static func _testLastInputSeconds() -> Int? {
-        SystemPresenceInfo.lastInputSeconds()
     }
 
     static func _testPrimaryIPv4Address() -> String? {

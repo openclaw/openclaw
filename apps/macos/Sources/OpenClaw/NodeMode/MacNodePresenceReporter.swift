@@ -4,10 +4,15 @@ import Foundation
 @MainActor
 final class MacNodePresenceReporter {
     typealias Sender = @MainActor @Sendable (_ event: String, _ payloadJSON: String) async -> Bool
+    typealias IdleSecondsProvider = @MainActor @Sendable () -> Int?
 
     private struct Payload: Codable {
         let idleSeconds: Int
         let saturated: Bool?
+    }
+
+    private struct ClearPayload: Codable {
+        let action = "clear"
     }
 
     private struct IdleSample {
@@ -27,44 +32,132 @@ final class MacNodePresenceReporter {
     private static let maximumIdleSeconds = 30 * 24 * 60 * 60
 
     private var task: Task<Void, Never>?
+    private var sender: Sender?
+    private var delivery: DeliveryState?
+    private var reportingEnabled: Bool
+    private var clearPending = false
+    private var generation: UInt64 = 0
+    private let idleSecondsProvider: IdleSecondsProvider
+
+    init(
+        reportingEnabled: Bool = UserDefaults.standard.bool(forKey: activeComputerPresenceEnabledKey),
+        idleSecondsProvider: @escaping IdleSecondsProvider = {
+            guard AXIsProcessTrusted() else { return nil }
+            return SystemPresenceInfo.lastHardwareInputSeconds()
+        })
+    {
+        self.reportingEnabled = reportingEnabled
+        self.idleSecondsProvider = idleSecondsProvider
+    }
 
     func start(sender: @escaping Sender) {
         self.stop()
+        self.sender = sender
+        self.generation &+= 1
+        self.clearPending = !self.reportingEnabled
         self.task = Task {
-            var delivery: DeliveryState?
             while !Task.isCancelled {
-                if let sample = Self.currentIdleSample(),
-                   Self.shouldSend(
-                       idleSeconds: sample.seconds,
-                       saturated: sample.saturated,
-                       nowMs: Self.nowMs(),
-                       delivery: delivery)
-                {
-                    let nowMs = Self.nowMs()
-                    let lastActiveAtMs = max(0, nowMs - Int64(sample.seconds) * 1000)
-                    let payload = Payload(
-                        idleSeconds: sample.seconds,
-                        saturated: sample.saturated ? true : nil)
-                    if let data = try? JSONEncoder().encode(payload),
-                       let payloadJSON = String(data: data, encoding: .utf8),
-                       await sender(Self.eventName, payloadJSON)
-                    {
-                        delivery = DeliveryState(sentAtMs: nowMs, lastActiveAtMs: lastActiveAtMs)
-                    }
-                }
+                await self.reportCurrentState()
                 try? await Task.sleep(for: Self.sampleInterval)
             }
         }
     }
 
     func stop() {
+        self.generation &+= 1
         self.task?.cancel()
         self.task = nil
+        self.sender = nil
+        self.delivery = nil
+        self.clearPending = false
     }
 
-    private static func currentIdleSample() -> IdleSample? {
-        // Presence is intentionally opt-in through the app's existing Accessibility grant.
-        guard AXIsProcessTrusted(), let seconds = SystemPresenceInfo.lastHardwareInputSeconds() else { return nil }
+    func setReportingEnabled(_ enabled: Bool) async {
+        if self.reportingEnabled == enabled {
+            if !enabled, self.clearPending {
+                await self.sendPendingClear()
+            }
+            return
+        }
+
+        self.reportingEnabled = enabled
+        self.generation &+= 1
+        self.delivery = nil
+        if enabled {
+            self.clearPending = false
+            await self.reportCurrentState()
+        } else {
+            self.clearPending = true
+            await self.sendPendingClear()
+        }
+    }
+
+    private func reportCurrentState() async {
+        guard self.reportingEnabled else {
+            await self.sendPendingClear()
+            return
+        }
+        guard let seconds = self.idleSecondsProvider() else { return }
+        let sample = Self.idleSample(seconds: seconds)
+        guard Self.shouldSend(
+            idleSeconds: sample.seconds,
+            saturated: sample.saturated,
+            nowMs: Self.nowMs(),
+            delivery: self.delivery)
+        else { return }
+
+        let nowMs = Self.nowMs()
+        let lastActiveAtMs = max(0, nowMs - Int64(sample.seconds) * 1000)
+        let payload = Payload(
+            idleSeconds: sample.seconds,
+            saturated: sample.saturated ? true : nil)
+        guard let sender = self.sender,
+              let data = try? JSONEncoder().encode(payload),
+              let payloadJSON = String(data: data, encoding: .utf8)
+        else { return }
+        let generation = self.generation
+        guard await sender(Self.eventName, payloadJSON) else { return }
+        guard generation == self.generation else {
+            self.delivery = nil
+            if self.reportingEnabled {
+                await self.reportCurrentState()
+            } else {
+                self.clearPending = true
+                await self.sendPendingClear()
+            }
+            return
+        }
+        guard self.reportingEnabled else {
+            self.clearPending = true
+            await self.sendPendingClear()
+            return
+        }
+        self.delivery = DeliveryState(sentAtMs: nowMs, lastActiveAtMs: lastActiveAtMs)
+    }
+
+    private func sendPendingClear() async {
+        guard self.clearPending,
+              let sender = self.sender,
+              let data = try? JSONEncoder().encode(ClearPayload()),
+              let payloadJSON = String(data: data, encoding: .utf8)
+        else { return }
+        let generation = self.generation
+        guard await sender(Self.eventName, payloadJSON) else { return }
+        guard generation == self.generation else {
+            if self.reportingEnabled {
+                self.clearPending = false
+                self.delivery = nil
+                await self.reportCurrentState()
+            } else {
+                self.clearPending = true
+                await self.sendPendingClear()
+            }
+            return
+        }
+        self.clearPending = false
+    }
+
+    private static func idleSample(seconds: Int) -> IdleSample {
         let bounded = min(max(0, seconds), self.maximumIdleSeconds)
         return IdleSample(seconds: bounded, saturated: seconds > self.maximumIdleSeconds)
     }

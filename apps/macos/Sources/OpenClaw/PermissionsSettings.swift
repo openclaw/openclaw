@@ -4,6 +4,7 @@ import OpenClawKit
 import SwiftUI
 
 struct PermissionsSettings: View {
+    @Bindable var state: AppState
     let status: [Capability: CapabilityAuthorizationStatus]
     let refresh: () async -> Void
     let showOnboarding: () -> Void
@@ -23,6 +24,16 @@ struct PermissionsSettings: View {
 
                 SettingsCardGroup("Location") {
                     LocationAccessSettings()
+                }
+
+                SettingsCardGroup("Privacy") {
+                    SettingsCardToggleRow(
+                        title: "Active computer detection",
+                        subtitle: """
+                        Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.
+                        """,
+                        binding: self.$state.activeComputerPresenceEnabled,
+                        showsDivider: false)
                 }
 
                 SettingsCardGroup("Setup") {
@@ -368,6 +379,7 @@ struct PermissionRow: View {
 struct PermissionsSettings_Previews: PreviewProvider {
     static var previews: some View {
         PermissionsSettings(
+            state: AppState(preview: true),
             status: [
                 .appleScript: .granted,
                 .notifications: .granted,

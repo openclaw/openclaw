@@ -117,9 +117,9 @@ struct LowCoverageHelperTests {
     @Test @MainActor func `presence reporter helpers`() {
         let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
+        #expect(!summary.contains("last input"))
         #expect(!PresenceReporter._testAppVersionString().isEmpty)
         #expect(!PresenceReporter._testPlatformString().isEmpty)
-        _ = PresenceReporter._testLastInputSeconds()
         _ = PresenceReporter._testPrimaryIPv4Address()
     }
 

@@ -53,6 +53,7 @@ final class AppState {
     private var lastConfigFingerprint: Data?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
+    @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
 
     private func ifNotPreview(_ action: () -> Void) {
         guard !self.isPreview else { return }
@@ -82,6 +83,10 @@ final class AppState {
         bundleLocationAllowsPersistentIntegration: Bool) -> Bool
     {
         !isInitializing && !isHydrating && (!isEnabling || bundleLocationAllowsPersistentIntegration)
+    }
+
+    static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: activeComputerPresenceEnabledKey)
     }
 
     var onboardingSeen: Bool {
@@ -258,6 +263,23 @@ final class AppState {
 
     var quickChatEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.quickChatEnabled, forKey: quickChatEnabledKey) } }
+    }
+
+    var activeComputerPresenceEnabled: Bool {
+        didSet {
+            self.ifNotPreview {
+                let enabled = self.activeComputerPresenceEnabled
+                UserDefaults.standard.set(
+                    enabled,
+                    forKey: activeComputerPresenceEnabledKey)
+                PresenceReporter.shared.sendImmediate(reason: "activity-sharing-changed")
+                let previous = self.activeComputerPresenceTask
+                self.activeComputerPresenceTask = Task {
+                    await previous?.value
+                    await MacNodeModeCoordinator.shared.setPresenceActivityReportingEnabled(enabled)
+                }
+            }
+        }
     }
 
     var execApprovalMode: ExecApprovalQuickMode
@@ -453,6 +475,7 @@ final class AppState {
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.quickChatEnabled = UserDefaults.standard.object(forKey: quickChatEnabledKey) as? Bool ?? true
+        self.activeComputerPresenceEnabled = Self.resolveActiveComputerPresenceEnabled()
         self.execApprovalMode = .deny
         self.execApprovalPolicyLoadState = .loading
         self.peekabooBridgeEnabled = UserDefaults.standard

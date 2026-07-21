@@ -269,6 +269,10 @@ final class MacNodeModeCoordinator: NSObject {
         await self.session.currentCanvasHostRoute()
     }
 
+    func setPresenceActivityReportingEnabled(_ enabled: Bool) async {
+        await self.presenceReporter.setReportingEnabled(enabled)
+    }
+
     func refreshCanvasPluginSurfaceRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
         await self.session.refreshCanvasHostRoute(replacing: observedURL)
     }
