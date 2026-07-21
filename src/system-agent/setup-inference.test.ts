@@ -5200,6 +5200,11 @@ describe("verifySetupInference", () => {
         loadAuthProfileStoreForRuntime: vi.fn(() => ({ version: 1, profiles })) as never,
         ensureAuthProfileStore: vi.fn(() => ({ version: 1, profiles })) as never,
         resolveApiKeyForProvider: vi.fn(async () => verifiedAuth),
+        // Owner revalidation resolves the route model for transport facts; the
+        // real resolver cold-loads catalog discovery and dominates wall time.
+        resolveModelAsync: vi.fn(async () => ({
+          model: { id: "gpt-5.5", provider: "openai", api: "openai-responses" },
+        })) as never,
         runEmbeddedAgent: runEmbeddedAgent as never,
         createTempDir: makeTempDir,
       },
