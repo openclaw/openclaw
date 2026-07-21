@@ -2135,9 +2135,9 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
       120_000,
     );
-    expect(
-      requireRecord(defaultLoadOptions, "loadWebMedia options").responseHeaderTimeoutMs,
-    ).toBe(15 * 60_000);
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").responseHeaderTimeoutMs).toBe(
+      15 * 60_000,
+    );
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
