@@ -9,11 +9,7 @@ import type { OpenAICompletionsOptions, OpenAIModeModel } from "@openclaw/ai/tra
  */
 import type { Context } from "../llm/types.js";
 
-export { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
-export {
-  createAzureOpenAIResponsesTransportStreamFn,
-  createOpenAIResponsesTransportStreamFn,
-} from "@openclaw/ai/transports";
+export { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 
 // Keep this SDK-exported declaration anchored to the long-lived facade while the
 // completions implementation remains independently owned.

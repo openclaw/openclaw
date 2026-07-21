@@ -2,6 +2,7 @@
 import { resolveUnsupportedToolSchemaKeywords } from "@openclaw/ai/internal/openai";
 import { detectOpenAICompletionsCompat } from "@openclaw/ai/transports";
 import type { ModelCompatConfig } from "../config/types.models.js";
+import "../llm/ai-transport-host.js";
 import type { Model } from "../llm/types.js";
 
 export function extractModelCompat(

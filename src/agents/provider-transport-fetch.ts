@@ -461,7 +461,7 @@ async function requestBodyHasStreamTrue(
   }
 }
 
-export function parseRetryAfterSeconds(headers: Headers): number | undefined {
+function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
     const trimmedRetryAfterMs = retryAfterMs.trim();

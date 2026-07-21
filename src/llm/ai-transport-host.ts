@@ -1,7 +1,12 @@
 // Installs OpenClaw-owned policy ports before package providers or shared
 // transport helpers run. Direct transport imports need the same wiring as the
 // process-default stream facade.
-import { configureAiTransportHost, type AiProviderRequestCapabilities } from "@openclaw/ai";
+import {
+  configureAiTransportHost,
+  getAiTransportHost,
+  type AiProviderRequestCapabilities,
+  type AiTransportPluginHost,
+} from "@openclaw/ai";
 import { createAnthropicVertexStreamFnForModel } from "../agents/anthropic-vertex-stream.js";
 import {
   buildCopilotDynamicHeaders,
@@ -24,15 +29,8 @@ import {
   resolveModelRequestTimeoutMs,
 } from "../agents/provider-transport-fetch.js";
 import { transformTransportMessages } from "../agents/transport-message-transform.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import {
-  resolveProviderStreamFn,
-  resolveProviderTransportTurnStateWithPlugin,
-  wrapProviderSimpleCompletionStreamFn,
-} from "../plugins/provider-runtime.js";
 import { swapSecretSentinelsInText } from "../secrets/sentinel.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
@@ -44,6 +42,15 @@ function transportLog(subsystem: string): ReturnType<typeof createSubsystemLogge
     transportLogBySubsystem.set(subsystem, log);
   }
   return log;
+}
+
+/** Installs plugin-owned ports without making the eager stream facade load plugin runtime. */
+export function configureAiTransportPluginHost(plugin: Partial<AiTransportPluginHost>): void {
+  const host = getAiTransportHost();
+  configureAiTransportHost({
+    ...host,
+    plugin: { ...host.plugin, ...plugin },
+  });
 }
 
 configureAiTransportHost({
@@ -62,35 +69,7 @@ configureAiTransportHost({
   redactToolPayloadText,
   resolveOpenAIStrictToolSetting,
   plugin: {
-    resolveProviderStream: (params) =>
-      resolveProviderStreamFn({
-        ...params,
-        config: params.config as OpenClawConfig | undefined,
-        context: {
-          ...params.context,
-          config: params.context.config as OpenClawConfig | undefined,
-          model: params.context.model as ProviderRuntimeModel,
-        },
-      }),
-    resolveTransportTurnState: (params) =>
-      resolveProviderTransportTurnStateWithPlugin({
-        ...params,
-        config: params.config as OpenClawConfig | undefined,
-        context: {
-          ...params.context,
-          model: params.context.model as ProviderRuntimeModel | undefined,
-        },
-      }),
-    wrapSimpleCompletionStream: (params) =>
-      wrapProviderSimpleCompletionStreamFn({
-        ...params,
-        config: params.config as OpenClawConfig | undefined,
-        context: {
-          ...params.context,
-          config: params.context.config as OpenClawConfig | undefined,
-          model: params.context.model as ProviderRuntimeModel,
-        },
-      }),
+    ...getAiTransportHost().plugin,
     createAnthropicVertexStream: createAnthropicVertexStreamFnForModel,
   },
   buildCopilotDynamicHeaders: (messages) =>
@@ -104,8 +83,7 @@ configureAiTransportHost({
       capability: "llm",
       transport: "stream",
     }).headers,
-  resolveModelRequestTimeoutMs: (model) =>
-    resolveModelRequestTimeoutMs(model as ProviderRuntimeModel, undefined),
+  resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
   requiresManagedTransport: (model) => {
     const request = getModelProviderRequestTransport(model);
     return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));

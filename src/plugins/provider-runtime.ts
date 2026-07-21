@@ -17,6 +17,7 @@ import type { ProviderSystemPromptContribution } from "../agents/system-prompt-c
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { UsageProviderId } from "../infra/provider-usage.types.js";
+import { configureAiTransportPluginHost } from "../llm/ai-transport-host.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
@@ -173,6 +174,38 @@ export const testing = {
   clearProviderRuntimePluginCacheForTest,
   resetExternalAuthFallbackWarningCacheForTest,
 } as const;
+
+configureAiTransportPluginHost({
+  resolveProviderStream: (params) =>
+    resolveProviderStreamFn({
+      ...params,
+      config: params.config as OpenClawConfig | undefined,
+      context: {
+        ...params.context,
+        config: params.context.config as OpenClawConfig | undefined,
+        model: params.context.model as ProviderRuntimeModel,
+      },
+    }),
+  resolveTransportTurnState: (params) =>
+    resolveProviderTransportTurnStateWithPlugin({
+      ...params,
+      config: params.config as OpenClawConfig | undefined,
+      context: {
+        ...params.context,
+        model: params.context.model as ProviderRuntimeModel | undefined,
+      },
+    }),
+  wrapSimpleCompletionStream: (params) =>
+    wrapProviderSimpleCompletionStreamFn({
+      ...params,
+      config: params.config as OpenClawConfig | undefined,
+      context: {
+        ...params.context,
+        config: params.context.config as OpenClawConfig | undefined,
+        model: params.context.model as ProviderRuntimeModel,
+      },
+    }),
+});
 
 function resolveProviderPluginsForCatalogHooks(params: {
   config?: OpenClawConfig;
