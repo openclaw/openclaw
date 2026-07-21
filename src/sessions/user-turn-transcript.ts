@@ -38,10 +38,6 @@ type PersistedUserTurnMediaFields = {
   MediaTypes?: string[];
 };
 
-type ResolvePersistedUserTurnTextOptions = {
-  hasMedia?: boolean;
-};
-
 type PersistedUserTurnMediaFieldSource = {
   MediaPath?: string | null;
   MediaPaths?: readonly (string | null | undefined)[] | null;
@@ -61,19 +57,10 @@ function normalizeTranscriptText(value: string | null | undefined): string {
   return value ?? "";
 }
 
-const CHANNEL_MEDIA_PLACEHOLDER_PATTERN = /^<media:[a-z0-9_-]+>(?:\s+\([^)]*\))?$/i;
-
-// Select text for persisted user turns. Channel-generated media placeholders
-// are dropped only when structured media is present, keeping plain text intact.
-export function resolvePersistedUserTurnText(
-  value: string | null | undefined,
-  options: ResolvePersistedUserTurnTextOptions = {},
-): string | undefined {
+// Select normalized text for persisted user turns.
+export function resolvePersistedUserTurnText(value: string | null | undefined): string | undefined {
   const normalized = normalizeOptionalText(value);
   if (!normalized) {
-    return undefined;
-  }
-  if (options.hasMedia === true && CHANNEL_MEDIA_PLACEHOLDER_PATTERN.test(normalized)) {
     return undefined;
   }
   return normalized;
@@ -580,6 +567,7 @@ export function createUserTurnTranscriptRecorder(
     expectedSessionId?: string;
     expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
     sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
+    retryIfUnpersisted?: boolean;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
@@ -591,9 +579,19 @@ export function createUserTurnTranscriptRecorder(
       await waitForRuntimePersistence();
     }
     if (selfPersistencePromise) {
-      return await selfPersistencePromise;
+      const existingPromise = selfPersistencePromise;
+      const existingResult = await existingPromise;
+      if (existingResult || !options.retryIfUnpersisted) {
+        return existingResult;
+      }
+      // A guarded store write can lose a session-generation race without appending.
+      // Explicit retry callers may re-resolve the target, but concurrent ownership stays shared.
+      if (selfPersistencePromise !== existingPromise) {
+        return await selfPersistencePromise;
+      }
+      selfPersistencePromise = undefined;
     }
-    selfPersistencePromise = (async () => {
+    const persistencePromise = (async () => {
       const resolvedMessage = options.message ?? (await resolveMessageForPersistence());
       if (!resolvedMessage) {
         return undefined;
@@ -665,8 +663,13 @@ export function createUserTurnTranscriptRecorder(
       }
       return result;
     })();
+    selfPersistencePromise = persistencePromise;
     try {
-      return await selfPersistencePromise;
+      const result = await persistencePromise;
+      if (!result && options.retryIfUnpersisted && selfPersistencePromise === persistencePromise) {
+        selfPersistencePromise = undefined;
+      }
+      return result;
     } catch (error) {
       handlePersistenceError(error);
       throw error;
@@ -710,6 +713,7 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
+        retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;

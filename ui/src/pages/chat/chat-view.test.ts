@@ -45,6 +45,10 @@ import {
 } from "./components/chat-thread.ts";
 import { renderWelcomeState } from "./components/chat-welcome.ts";
 import { RealtimeTalkLevelSignal } from "./realtime-talk-level.ts";
+import {
+  workspaceConflictPathForDisplay,
+  workspaceResultConflictFromTranscript,
+} from "./workspace-conflict.ts";
 
 const registeredAttachmentPayloads = new Map<
   string,
@@ -268,6 +272,7 @@ function renderWorkGroupSummaryMock(
 beforeEach(() => {
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
+  vi.spyOn(chatThread, "getExpandedUserMessages").mockReturnValue(new Map<string, boolean>());
   vi.spyOn(chatThread, "syncToolCardExpansionState").mockImplementation(() => undefined);
   vi.spyOn(chatMessage, "getAssistantAttachmentAvailabilityRenderVersion").mockImplementation(
     () => assistantAttachmentRenderVersionMock.value,
@@ -751,6 +756,112 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("cloud workspace conflict notice", () => {
+  const conflict = {
+    paths: [
+      "src/[path]-1.ts",
+      "src/path-2.ts",
+      "src/path-3.ts",
+      "src/path-4.ts",
+      "src/path-5.ts",
+      "src/path-6.ts",
+    ],
+    stagedResultRef: "refs/openclaw/worker-results/claim-123",
+    totalCount: 9,
+  };
+
+  it("bounds paths and renders copyable staged-ref guidance", () => {
+    const onDismissWorkspaceConflict = vi.fn();
+    const container = renderChatView({
+      workspaceConflict: conflict,
+      onDismissWorkspaceConflict,
+    });
+
+    const notice = requireElement(
+      container,
+      ".chat-workspace-conflict-notice",
+      "workspace conflict notice",
+    );
+    expect(notice.textContent).toContain("9 cloud workspace conflicts");
+    expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
+    expect(notice.textContent).toContain("+4 more paths");
+    expect(notice.textContent).toContain(conflict.stagedResultRef);
+    expect(notice.textContent).toContain("Git Bash on Windows");
+    expect(notice.textContent).toContain("file/directory conflict");
+    expect(notice.textContent).toContain("cloud deleted it");
+    expect(notice.textContent).toContain("staged ref is missing");
+
+    const commands = [...notice.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+      (element) => element.textContent,
+    );
+    expect(commands).toEqual([
+      "git show 'refs/openclaw/worker-results/claim-123:src/[path]-1.ts'",
+      "git checkout 'refs/openclaw/worker-results/claim-123' -- ':(top,literal)src/[path]-1.ts'",
+    ]);
+    expect(
+      notice.querySelector<HTMLButtonElement>('[aria-label="Copy cloud inspect command"]'),
+    ).toBeInstanceOf(HTMLButtonElement);
+    expect(
+      notice.querySelector<HTMLButtonElement>('[aria-label="Copy take-cloud command"]'),
+    ).toBeInstanceOf(HTMLButtonElement);
+
+    notice
+      .querySelector<HTMLButtonElement>('[aria-label="Dismiss workspace conflict notice"]')!
+      .click();
+    expect(onDismissWorkspaceConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the notice after the cleared projection drops the conflict", () => {
+    const container = document.createElement("div");
+    render(renderChat(createChatProps({ workspaceConflict: conflict })), container);
+    expect(container.querySelector(".chat-workspace-conflict-notice")).not.toBeNull();
+
+    render(renderChat(createChatProps()), container);
+    expect(container.querySelector(".chat-workspace-conflict-notice")).toBeNull();
+  });
+
+  it.each(["\u001b[201~echo injected\n", "\r", "\u007f", "\u0085"])(
+    "keeps terminal-control paths visible without building copyable commands (%j)",
+    (controlSequence) => {
+      const entryPath = `src/${controlSequence}unsafe.ts`;
+      const normalizedConflict = workspaceResultConflictFromTranscript({
+        role: "custom",
+        customType: "cloud-workspace-conflict",
+        details: {
+          paths: [entryPath],
+          stagedResultRef: "refs/openclaw/worker-results/claim-unsafe",
+        },
+      });
+      expect(normalizedConflict).toBeDefined();
+      const container = renderChatView({ workspaceConflict: normalizedConflict });
+      expect(container.querySelector(".chat-workspace-conflict-paths code")?.textContent).toBe(
+        workspaceConflictPathForDisplay(entryPath),
+      );
+      expect(container.querySelector(".chat-workspace-conflict-commands")).toBeNull();
+      expect(container.textContent).toContain("will not build a copyable shell command");
+    },
+  );
+
+  it("builds recovery commands for the first shell-safe conflicted path", () => {
+    const normalizedConflict = workspaceResultConflictFromTranscript({
+      role: "custom",
+      customType: "cloud-workspace-conflict",
+      details: {
+        paths: ["src/unsafe\nname.ts", "src/safe.ts"],
+        stagedResultRef: "refs/openclaw/worker-results/claim-mixed",
+      },
+    });
+    const container = renderChatView({ workspaceConflict: normalizedConflict });
+    const commands = [...container.querySelectorAll(".chat-workspace-conflict-commands code")].map(
+      (element) => element.textContent,
+    );
+    expect(commands).toEqual([
+      "git show 'refs/openclaw/worker-results/claim-mixed:src/safe.ts'",
+      "git checkout 'refs/openclaw/worker-results/claim-mixed' -- ':(top,literal)src/safe.ts'",
+    ]);
+  });
+});
+
 describe("chat conversation width", () => {
   it("applies a configured width once to the centered transcript frame", () => {
     const container = renderChatView({
@@ -899,7 +1010,7 @@ describe("direct thread avatar mode", () => {
       sessionKey: "kind-direct",
       sessions: sessionsListWithKind("kind-direct", "direct"),
       messages: labeledHistory,
-      attributedIdentity: true,
+      userId: "profile-1",
     });
     // Multi-user gateways share even 1:1-shaped sessions, so the author
     // marker is signal, not decoration.
@@ -1727,6 +1838,34 @@ describe("per-pane chat presentation state", () => {
 });
 
 describe("chat transcript rendering cache", () => {
+  it("rerenders transcript groups when the current profile id arrives", () => {
+    const messages = [{ role: "user", content: "hi" }];
+    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
+      {
+        kind: "group",
+        key: "group:user:test",
+        role: "user",
+        messages: [{ key: "message:user:test", message: messages[0] }],
+        timestamp: 1,
+        isStreaming: false,
+      },
+    ]);
+    const transcript = new ChatTranscriptController({
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate: () => undefined,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost);
+    const props = createChatProps({ messages, transcript, userName: "Fuller Stack" });
+    const container = document.createElement("div");
+
+    render(renderChat(props), container);
+    render(renderChat({ ...props, userId: "profile-1" }), container);
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
+    expect(renderMessageGroupMock.mock.calls[1]?.[1]).toMatchObject({ userId: "profile-1" });
+  });
+
   it("rerenders transcript groups when assistant attachment availability changes", () => {
     const messages = [{ role: "assistant", content: "ready" }];
     const toolMessages: unknown[] = [];

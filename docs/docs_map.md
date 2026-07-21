@@ -1912,6 +1912,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H4: MCP servers
   - H4: Model providers
   - H4: Network
+  - H4: Message routing
   - H4: Ingress and channel access
   - H4: Gateway
   - H4: Agent workspace
@@ -5181,6 +5182,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /platforms/android
 - Headings:
   - H2: Support snapshot
+  - H2: Simultaneous gateway sessions
   - H2: Wear OS companion
   - H2: Install outside Google Play
   - H2: Mirror and control Android from a remote Mac
@@ -5195,7 +5197,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: 2. Verify discovery (optional)
   - H4: Cross-network discovery via unicast DNS-SD
   - H3: 3. Connect from Android
-  - H3: Multiple gateways
+  - H3: Manage paired gateways
   - H3: Presence alive beacons
   - H3: 4. Approve pairing (CLI)
   - H3: 5. Verify the node is connected
@@ -5487,6 +5489,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /platforms/mac/webchat
 - Headings:
+  - H2: Multiple Gateway windows
   - H2: Quick Chat bar
   - H2: Launch and debugging
   - H2: How it is wired
@@ -8989,7 +8992,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /reference/templates/BOOTSTRAP
 - Headings:
   - H1: BOOTSTRAP.md - Birth Sequence
-  - H2: 1. Name Yourself
+  - H2: 1. Ask What to Call You
   - H2: 2. Choose Your Vibe
   - H2: 3. Finish With Recommendations
   - H2: Related
@@ -10315,6 +10318,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Design system
   - H2: Use the tool
   - H2: Interactive widgets
+  - H2: Dashboard capabilities
   - H2: Security and storage
   - H2: Related
 
@@ -10693,6 +10697,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Interaction tiers
   - H2: Widget model and hosting
   - H3: Widgets host content; MCP apps are one content kind
+  - H3: Modeled residual: WebRTC data channels
   - H3: Transcript display: one widget card
   - H3: Server-sourced widgets (pinned MCP apps)
   - H2: Layout: fluid grid
@@ -10712,6 +10717,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Open in Telegram
   - H2: If you see "unauthorized" / 1008
   - H2: Related
+
+## web/dashboards.md
+
+- Route: /web/dashboards
+- Headings:
+  - H2: Build a dashboard by asking
+  - H2: The board
+  - H2: What widgets are allowed to do
+  - H2: MCP apps on the board
+  - H2: Good to know
 
 ## web/index.md
 
