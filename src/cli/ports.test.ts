@@ -5,13 +5,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // Hoist the factory so vi.mock can access it.
 const mockCreateServer = vi.hoisted(() => vi.fn());
+const mockExecFileSync = vi.hoisted(() => vi.fn());
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
   return { ...actual, createServer: mockCreateServer };
 });
 
-import { waitForPortBindable } from "./ports.js";
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, execFileSync: mockExecFileSync };
+});
+
+vi.mock("../infra/ports-lsof.js", () => ({
+  resolveLsofCommandSync: vi.fn(() => "/usr/bin/lsof"),
+}));
+
+import { forceFreePort, waitForPortBindable } from "./ports.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -110,5 +120,96 @@ describe("waitForPortBindable", () => {
         host: "127.0.0.1",
       }),
     ).rejects.toThrow(/still not bindable after 1ms/);
+  });
+});
+
+// ─── forceFreePort ──────────────────────────────────────────────────────────
+
+/** Build fake lsof -FpFc output for the given PIDs. */
+function lsofOutput(pids: number[]): string {
+  return pids.map((p) => `p${p}\ncnode\n`).join("");
+}
+
+describe("forceFreePort", () => {
+  const setPlatform = (platform: NodeJS.Platform) => {
+    Object.defineProperty(process, "platform", {
+      value: platform,
+      configurable: true,
+    });
+  };
+
+  afterEach(() => {
+    // Restore platform to the actual value so other tests are not affected.
+    try {
+      Object.defineProperty(process, "platform", {
+        value: process.platform,
+        configurable: true,
+      });
+    } catch {
+      // Already restored or non-configurable; ignore.
+    }
+  });
+
+  it("swallows ESRCH when a port listener exits before SIGTERM", () => {
+    setPlatform("linux");
+    mockExecFileSync.mockReturnValue(lsofOutput([500, 600]));
+    const killSpy = vi.spyOn(process, "kill");
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    // First kill succeeds, second throws ESRCH.
+    killSpy
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw esrchErr;
+      });
+
+    const result = forceFreePort(9999);
+
+    // Both PIDs reported as freed — ESRCH means the port is already free.
+    expect(result).toEqual([
+      { pid: 500, command: "node" },
+      { pid: 600, command: "node" },
+    ]);
+    expect(killSpy).toHaveBeenCalledTimes(2);
+    expect(killSpy).toHaveBeenCalledWith(500, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledWith(600, "SIGTERM");
+    killSpy.mockRestore();
+  });
+
+  it("re-throws non-ESRCH kill errors", () => {
+    setPlatform("linux");
+    mockExecFileSync.mockReturnValue(lsofOutput([500]));
+    const killSpy = vi.spyOn(process, "kill");
+    const epermErr = Object.assign(new Error("permission denied"), { code: "EPERM" });
+    killSpy.mockImplementation(() => {
+      throw epermErr;
+    });
+
+    expect(() => forceFreePort(9999)).toThrow("failed to kill pid 500");
+    killSpy.mockRestore();
+  });
+
+  it("continues past multiple ESRCH exits in the same call", () => {
+    setPlatform("linux");
+    mockExecFileSync.mockReturnValue(lsofOutput([100, 200, 300]));
+    const killSpy = vi.spyOn(process, "kill");
+    const esrchErr = Object.assign(new Error("no such process"), { code: "ESRCH" });
+    killSpy
+      .mockImplementationOnce(() => {
+        throw esrchErr;
+      })
+      .mockImplementationOnce(() => undefined)
+      .mockImplementationOnce(() => {
+        throw esrchErr;
+      });
+
+    const result = forceFreePort(9999);
+
+    expect(result).toEqual([
+      { pid: 100, command: "node" },
+      { pid: 200, command: "node" },
+      { pid: 300, command: "node" },
+    ]);
+    expect(killSpy).toHaveBeenCalledTimes(3);
+    killSpy.mockRestore();
   });
 });
