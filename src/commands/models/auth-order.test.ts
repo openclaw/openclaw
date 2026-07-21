@@ -29,6 +29,10 @@ vi.mock("./shared.js", () => ({
   },
 }));
 
+vi.mock("../../agents/provider-auth-aliases.js", () => ({
+  resolveProviderIdForAuth: (provider: string) => provider,
+}));
+
 import {
   modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
@@ -74,7 +78,7 @@ describe("models auth order output", () => {
     mocks.loadModelsConfig.mockResolvedValue({} as OpenClawConfig);
   });
 
-  it("describes the saved auth profile order without override jargon", async () => {
+  it("describes the saved auth profile order override", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue(
       createStore(["openai:codex-smoke", "openai:api-smoke"]),
     );
@@ -86,17 +90,45 @@ describe("models auth order output", () => {
       "Agent: main",
       "Provider: openai",
       "Auth state store: /tmp/openclaw/agents/main/openclaw-agent.sqlite",
-      "Auth profile order: openai:codex-smoke, openai:api-smoke",
+      "Auth profile order override: openai:codex-smoke, openai:api-smoke",
     ]);
   });
 
-  it("explains the fallback when no custom order is set", async () => {
+  it("reports the configured order when no per-agent override is set", async () => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      auth: { order: { openai: ["openai:configured"] } },
+    } as OpenClawConfig);
     mocks.ensureAuthProfileStore.mockReturnValue(createStore());
     const runtime = createRuntime();
 
     await modelsAuthOrderGetCommand({ provider: "openai" }, runtime);
 
-    expect(runtime.logs.at(-1)).toBe("Auth profile order: (not set; using config/round-robin)");
+    expect(runtime.logs.at(-1)).toBe(
+      "Auth profile order override: none (using order from config: openai:configured)",
+    );
+  });
+
+  it("reports automatic selection when no order is configured", async () => {
+    mocks.ensureAuthProfileStore.mockReturnValue(createStore());
+    const runtime = createRuntime();
+
+    await modelsAuthOrderGetCommand({ provider: "openai" }, runtime);
+
+    expect(runtime.logs.at(-1)).toBe("Auth profile order override: none (selecting automatically)");
+  });
+
+  it("explains an explicitly empty configured order", async () => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      auth: { order: { openai: [] } },
+    } as OpenClawConfig);
+    mocks.ensureAuthProfileStore.mockReturnValue(createStore());
+    const runtime = createRuntime();
+
+    await modelsAuthOrderGetCommand({ provider: "openai" }, runtime);
+
+    expect(runtime.logs.at(-1)).toBe(
+      "Auth profile order override: none (config selects no profiles)",
+    );
   });
 
   it("reports the order after setting it", async () => {
@@ -113,15 +145,22 @@ describe("models auth order output", () => {
       provider: "openai",
       order,
     });
-    expect(runtime.logs.at(-1)).toBe("Auth profile order: openai:codex-smoke, openai:api-smoke");
+    expect(runtime.logs.at(-1)).toBe(
+      "Auth profile order override: openai:codex-smoke, openai:api-smoke",
+    );
   });
 
-  it("explains the fallback after clearing the order", async () => {
+  it("reports the configured fallback after clearing the order", async () => {
+    mocks.loadModelsConfig.mockResolvedValue({
+      auth: { order: { openai: ["openai:configured"] } },
+    } as OpenClawConfig);
     mocks.setAuthProfileOrder.mockResolvedValue(createStore());
     const runtime = createRuntime();
 
     await modelsAuthOrderClearCommand({ provider: "openai" }, runtime);
 
-    expect(runtime.logs.at(-1)).toBe("Auth profile order cleared; using config/round-robin.");
+    expect(runtime.logs.at(-1)).toBe(
+      "Auth profile order override cleared; using order from config: openai:configured.",
+    );
   });
 });

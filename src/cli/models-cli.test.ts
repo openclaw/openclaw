@@ -146,17 +146,21 @@ describe("models cli", () => {
     });
   });
 
-  it("describes auth profile ordering without override jargon", () => {
+  it("describes per-agent auth profile order overrides", () => {
     const program = createProgram();
     const models = requireCommand(program, "models");
     const auth = requireCommand(models, "auth");
     const order = requireCommand(auth, "order");
 
-    expect(order.description()).toBe("Manage per-agent auth profile order");
-    expect(requireCommand(order, "get").description()).toBe("Show per-agent auth profile order");
-    expect(requireCommand(order, "set").description()).toBe("Set per-agent auth profile order");
+    expect(order.description()).toBe("Manage per-agent auth profile order overrides");
+    expect(requireCommand(order, "get").description()).toBe(
+      "Show per-agent auth profile order override",
+    );
+    expect(requireCommand(order, "set").description()).toBe(
+      "Set per-agent auth profile order override",
+    );
     expect(requireCommand(order, "clear").description()).toBe(
-      "Clear per-agent auth profile order (fall back to config/round-robin)",
+      "Clear per-agent auth profile order override",
     );
   });
 
