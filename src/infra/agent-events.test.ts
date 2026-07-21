@@ -8,7 +8,6 @@ import {
   emitAgentAuditEvent,
   emitAgentEvent,
   emitAgentEventForOwner,
-  emitAgentRunStatusEvent,
   getAgentEventLifecycleGeneration,
   getAgentRunContext,
   listAgentRunsForSession,
@@ -22,6 +21,7 @@ import {
   sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
+import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
 

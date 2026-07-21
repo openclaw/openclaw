@@ -23,10 +23,10 @@ import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
   clearAgentRunContext,
-  emitAgentRunStatusEvent,
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";

@@ -4577,7 +4577,7 @@ describe("agent event handler", () => {
     expect(payload.sessionKey).toBe("session-from-event");
   });
 
-  it("remaps chat-linked tool runId for non-full verbose payloads", () => {
+  it("remaps chat-linked tool-start runId to the client run before UI delivery", () => {
     const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-tool-remap",
     });
@@ -4598,10 +4598,10 @@ describe("agent event handler", () => {
       stream: "tool",
       ts: Date.now(),
       data: {
-        phase: "result",
+        phase: "start",
         name: "exec",
         toolCallId: "tool-remap-1",
-        result: { content: [{ type: "text", text: "secret" }] },
+        args: { command: "true" },
       },
     });
 
