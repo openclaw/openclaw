@@ -5,13 +5,15 @@ import { terminateCodexResumeProcess } from "./node-cli-process-tree.js";
 
 type CodexResumeProcessTreeRuntime = NonNullable<Parameters<typeof terminateCodexResumeProcess>[1]>;
 type ResumeChildProcess = Parameters<typeof terminateCodexResumeProcess>[0];
+type TestResumeChildProcess = Omit<ResumeChildProcess, "exitCode"> &
+  EventEmitter & { exitCode: number | null };
 
 function createChild(pid = 4321) {
   return Object.assign(new EventEmitter(), {
     pid,
     exitCode: null as number | null,
     kill: vi.fn(() => true),
-  }) as ResumeChildProcess;
+  }) as unknown as TestResumeChildProcess;
 }
 
 function createRuntime(platform: NodeJS.Platform = "win32") {

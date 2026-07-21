@@ -7,7 +7,12 @@ const WINDOWS_TASKKILL_MAX_ATTEMPTS = 2;
 const WINDOWS_TASKKILL_TIMEOUT_MS = RESUME_FORCE_KILL_DELAY_MS / WINDOWS_TASKKILL_MAX_ATTEMPTS;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
-type ResumeChildProcess = Pick<ChildProcess, "exitCode" | "kill" | "off" | "once" | "pid">;
+type ResumeChildExitListener = (code: number | null, signal: NodeJS.Signals | null) => void;
+
+type ResumeChildProcess = Pick<ChildProcess, "exitCode" | "kill" | "pid"> & {
+  once(event: "exit", listener: ResumeChildExitListener): unknown;
+  off(event: "exit", listener: ResumeChildExitListener): unknown;
+};
 
 type CodexResumeProcessTreeRuntime = {
   platform: NodeJS.Platform;
