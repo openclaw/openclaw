@@ -291,6 +291,30 @@ describe("buildReplyPromptEnvelope", () => {
     expect(envelope.transcriptCommandBody).toContain("https://example.com/photo.jpg");
   });
 
+  it("pushes media replies toward the message tool first", () => {
+    const sessionCtx = finalizeInboundContext({
+      Body: "",
+      BodyStripped: "",
+      Provider: "telegram",
+      ChatType: "direct",
+      MediaPaths: ["/tmp/openclaw-photo.jpg"],
+    });
+
+    const envelope = buildReplyPromptEnvelope({
+      ctx: sessionCtx,
+      sessionCtx,
+      baseBody: "",
+      hasUserBody: true,
+      inboundUserContext: "",
+      isBareSessionReset: false,
+      startupAction: "new",
+    });
+
+    expect(envelope.prefixedCommandBody).toContain("use the message tool when it is available");
+    expect(envelope.prefixedCommandBody).toContain("one rich message");
+    expect(envelope.prefixedCommandBody).toContain("Only fall back to inline MEDIA:");
+  });
+
   it("keeps soft reset user notes visible without leaking startup context into transcripts", () => {
     const sessionCtx = finalizeInboundContext({
       Body: "",

@@ -12,7 +12,7 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 const REPLY_MEDIA_HINT =
-  "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
+  "To send an image back, use the message tool when it is available so the caption and image ship as one rich message. Pass the image via media/path/filePath and keep the caption in the text body. Only fall back to inline MEDIA:https://example.com/image.jpg or a safe relative path like MEDIA:./image.jpg when the message tool is unavailable. Absolute and ~ paths only work when they stay inside your allowed file-read boundary; host file:// URLs are blocked.";
 const ROOM_EVENT_PROMPT = "[OpenClaw room event]";
 const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Conversation context (untrusted, chronological, selected for current message):",
