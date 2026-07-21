@@ -181,7 +181,7 @@ function pullRequestNumber(value: unknown): number | undefined {
 function desktopPullRequestSummary(
   metadata: DesktopSessionMetadata,
 ): SessionCatalogPullRequestSummary | undefined {
-  const visible: Array<{ number: number; state?: SessionCatalogPullRequestSummary["state"] }> = [];
+  const visibleByNumber = new Map<number, SessionCatalogPullRequestSummary["state"] | undefined>();
   const dismissed = new Set<number>();
   if (Array.isArray(metadata.prs)) {
     for (const value of metadata.prs) {
@@ -195,31 +195,27 @@ function desktopPullRequestSummary(
       }
       if (entry.dismissed === true) {
         dismissed.add(number);
+        visibleByNumber.delete(number);
         continue;
       }
-      if (!visible.some((candidate) => candidate.number === number)) {
-        visible.push({ number, state: pullRequestState(entry.state) });
+      if (!dismissed.has(number) && !visibleByNumber.has(number)) {
+        visibleByNumber.set(number, pullRequestState(entry.state));
       }
     }
   }
   const currentNumber = pullRequestNumber(metadata.prNumber);
-  let current = currentNumber
-    ? visible.find((candidate) => candidate.number === currentNumber)
-    : undefined;
+  let currentState = currentNumber ? visibleByNumber.get(currentNumber) : undefined;
   if (currentNumber && !dismissed.has(currentNumber)) {
-    if (current) {
-      visible.splice(visible.indexOf(current), 1);
-    } else {
-      current = { number: currentNumber, state: pullRequestState(metadata.prState) };
-    }
-    visible.push(current);
+    currentState = pullRequestState(metadata.prState) ?? currentState;
+    // Reinsert the current PR at the tail so truncation always retains it.
+    visibleByNumber.delete(currentNumber);
+    visibleByNumber.set(currentNumber, currentState);
   }
+  const visible = [...visibleByNumber].map(([number, state]) => ({ number, state }));
   if (visible.length === 0) {
     return undefined;
   }
-  const state =
-    (current ? (pullRequestState(metadata.prState) ?? current.state) : undefined) ??
-    visible.at(-1)?.state;
+  const state = currentState ?? visible.at(-1)?.state;
   if (!state) {
     return undefined;
   }

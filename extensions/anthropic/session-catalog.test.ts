@@ -1183,7 +1183,7 @@ describe("Claude session catalog", () => {
       prs: [
         { prNumber: 111772, state: "MERGED" },
         { prNumber: 111179, state: "MERGED", dismissed: true },
-        ...Array.from({ length: 20 }, (_value, index) => ({
+        ...Array.from({ length: 1_000 }, (_value, index) => ({
           prNumber: index + 1,
           state: "CLOSED",
         })),
@@ -1195,7 +1195,7 @@ describe("Claude session catalog", () => {
         {
           threadId: sessionId,
           pullRequest: {
-            numbers: [...Array.from({ length: 19 }, (_value, index) => index + 2), 111772],
+            numbers: [...Array.from({ length: 19 }, (_value, index) => index + 982), 111772],
             state: "merged",
           },
           source: "claude-desktop",
