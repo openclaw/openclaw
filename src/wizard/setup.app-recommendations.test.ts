@@ -198,11 +198,12 @@ describe("setupAppRecommendations", () => {
     });
     const recommend = vi.fn(async () => recommendationResult());
     const log = vi.fn();
+    const prompter = createPrompter();
 
     refreshOnboardRecommendationsCommand(runtime, { clear });
     await setupAppRecommendations({
       config: {},
-      prompter: createPrompter(),
+      prompter,
       runtime: { ...runtime, log },
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
@@ -217,6 +218,36 @@ describe("setupAppRecommendations", () => {
 
     expect(clear).toHaveBeenCalledOnce();
     expect(recommend).toHaveBeenCalledOnce();
+    expect(prompter.plain).toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+    expect(vi.mocked(prompter.plain!).mock.invocationCallOrder[0]).toBeLessThan(
+      recommend.mock.invocationCallOrder[0]!,
+    );
+    expect(log).not.toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+  });
+
+  it("logs the scan disclosure when the prompter has no plain-output surface", async () => {
+    const recommend = vi.fn(async () => recommendationResult());
+    const log = vi.fn();
+    const prompter = createPrompter();
+    delete prompter.plain;
+
+    await setupAppRecommendations({
+      config: {},
+      prompter,
+      runtime: { ...runtime, log },
+      workspaceDir: "/tmp/workspace",
+      modelRouteVerified: true,
+      platform: "darwin",
+      deps: {
+        recommend,
+        ...storeDeps(),
+      },
+    });
+
     expect(log).toHaveBeenCalledWith(
       "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
     );
@@ -265,6 +296,7 @@ describe("setupAppRecommendations", () => {
     expect(log).not.toHaveBeenCalledWith(
       "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
     );
+    expect(prompter.plain).not.toHaveBeenCalled();
     expect(prompter.progress).not.toHaveBeenCalled();
     expect(prompter.multiselect).toHaveBeenCalledOnce();
     expect(store.acknowledgeStored).toHaveBeenCalledOnce();

@@ -189,7 +189,14 @@ export async function setupAppRecommendations(params: {
     appLabels = [...new Set(stored.matches.map((match) => match.appLabel))];
     recordResult = commitStoredResult;
   } else {
-    params.runtime.log(t("wizard.appRecommendations.scanDisclosure"));
+    const scanDisclosure = t("wizard.appRecommendations.scanDisclosure");
+    // Gateway wizards must show the disclosure on the client before app names
+    // leave the machine; CLI plain output preserves the same ordering locally.
+    if (params.prompter.plain) {
+      await params.prompter.plain(scanDisclosure);
+    } else {
+      params.runtime.log(scanDisclosure);
+    }
     const progress = params.prompter.progress(t("wizard.appRecommendations.scanning"));
     let result: SetupAppRecommendationsResult;
     try {

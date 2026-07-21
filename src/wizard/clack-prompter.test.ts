@@ -150,7 +150,7 @@ describe("tokenizedOptionFilter", () => {
 });
 
 describe("createClackPrompter", () => {
-  it("clamps long progress labels by display width without splitting UTF-16 pairs", () => {
+  it("clamps long progress labels by display width without splitting grapheme clusters", () => {
     stubStdoutColumns(20);
     const prompter = createClackPrompter();
 
@@ -167,6 +167,35 @@ describe("createClackPrompter", () => {
       expect.objectContaining({ label: "12345678😀ABC" }),
     );
     expect(osc.setLabel).toHaveBeenCalledWith("正在扫描已安装应用…");
+  });
+
+  it("preserves emoji joined by zero-width joiners when truncating", () => {
+    stubStdoutColumns(14);
+    const prompter = createClackPrompter();
+
+    prompter.progress("👨‍👩‍👧‍👦ABCDEFGH");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("👨‍👩‍👧‍👦A…"));
+  });
+
+  it("shrinks active progress labels without expanding past the initial width", () => {
+    stubStdoutColumns(20);
+    const initialResizeListeners = process.stdout.listenerCount("resize");
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("123456789ABC");
+    stubStdoutColumns(14);
+    process.stdout.emit("resize");
+    stubStdoutColumns(30);
+    process.stdout.emit("resize");
+    progress.update("ABCDEFGHIJK");
+    progress.stop();
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.message).toHaveBeenNthCalledWith(1, theme.accent("123…"));
+    expect(spin.message).toHaveBeenNthCalledWith(2, theme.accent("ABC…"));
+    expect(process.stdout.listenerCount("resize")).toBe(initialResizeListeners);
   });
 
   it("leaves progress labels untouched when terminal columns are unavailable", () => {
