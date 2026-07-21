@@ -20,6 +20,9 @@ type ChannelLogoutResult = {
 type ChannelGatewaySnapshot = {
   client: ChannelGatewayClient | null;
   connected: boolean;
+  hello?: {
+    auth?: { role?: string; scopes?: readonly string[] } | null;
+  } | null;
 };
 
 type ChannelGateway = {
@@ -74,6 +77,16 @@ export type ChannelCapability = {
   subscribe: (listener: (state: ChannelsState) => void) => () => void;
   dispose: () => void;
 };
+
+export function resolveChannelPairingAuthSignature(
+  snapshot: Partial<ChannelGatewaySnapshot>,
+): string {
+  const auth = snapshot.hello?.auth;
+  return JSON.stringify({
+    role: auth?.role ?? null,
+    scopes: auth?.scopes ? [...auth.scopes].toSorted() : null,
+  });
+}
 
 function createInitialChannelsState(snapshot: Partial<ChannelGatewaySnapshot> = {}): ChannelsState {
   return {
@@ -514,6 +527,7 @@ export function resolveChannelExtras(params: {
 export function createChannelCapability(gateway: ChannelGateway): ChannelCapability {
   const state = createInitialChannelsState(gateway.snapshot);
   const listeners = new Set<(state: ChannelsState) => void>();
+  let currentPairingAuthSignature = resolveChannelPairingAuthSignature(gateway.snapshot);
   let disposed = false;
 
   const publish = () => {
@@ -539,16 +553,17 @@ export function createChannelCapability(gateway: ChannelGateway): ChannelCapabil
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== snapshot.connected;
+    const nextPairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
+    const pairingAuthChanged = currentPairingAuthSignature !== nextPairingAuthSignature;
+    currentPairingAuthSignature = nextPairingAuthSignature;
     state.client = snapshot.client;
     state.connected = snapshot.connected;
-    if (clientChanged || connectionChanged) {
-      if (clientChanged) {
-        state.pairingSnapshot = null;
-        state.pairingError = null;
-        state.pairingLastSuccess = null;
-      }
-      // Every transport epoch invalidates both channel loads and login work.
-      // A reconnect may reuse the same client object, so identity alone is insufficient.
+    if (clientChanged || connectionChanged || pairingAuthChanged) {
+      state.pairingSnapshot = null;
+      state.pairingError = null;
+      state.pairingLastSuccess = null;
+      // Every connection or authorization epoch invalidates in-flight work and
+      // cached sender metadata. A reconnect may reuse the same client object.
       const lifecycle = getChannelsLifecycle(state);
       lifecycle.gatewayEpoch += 1;
       lifecycle.whatsappOperationSeq += 1;

@@ -128,6 +128,16 @@ describe("channel DM access request views", () => {
     expect(onDismiss).toHaveBeenCalledWith(request);
   });
 
+  it("hides cached sender data without pairing access", () => {
+    const container = renderInto(
+      renderChannelPairingQueue(createProps({ canManagePairing: false })),
+    );
+
+    expect(container.textContent).toContain("operator.pairing access");
+    expect(container.textContent).not.toContain("+15551234567");
+    expect(container.textContent).not.toContain("Alice");
+  });
+
   it("shows explicit notification and first-owner choices for an admin", () => {
     const container = renderInto(
       renderChannelPairingPrompt(

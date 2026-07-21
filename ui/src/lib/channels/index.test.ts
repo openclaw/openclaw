@@ -377,6 +377,43 @@ describe("channels controller DM pairing", () => {
     channels.dispose();
   });
 
+  it("clears sender metadata on disconnect and pairing-scope changes", () => {
+    const client = { request: vi.fn() };
+    let snapshot = {
+      client,
+      connected: true,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+    };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+    channels.state.pairingSnapshot = pendingPairing;
+
+    snapshot = {
+      ...snapshot,
+      hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+    };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    expect(channels.state.pairingSnapshot).toBeNull();
+
+    channels.state.pairingSnapshot = pendingPairing;
+    snapshot = { ...snapshot, connected: false };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    expect(channels.state.pairingSnapshot).toBeNull();
+    channels.dispose();
+  });
+
   it("keeps the last request snapshot visible when refresh fails", async () => {
     const request = vi.fn(async () => {
       throw new Error("gateway unavailable");

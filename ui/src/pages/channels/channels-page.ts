@@ -13,6 +13,7 @@ import { resolveControlUiAuthHeader } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { resolveChannelPairingAuthSignature } from "../../lib/channels/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -83,6 +84,7 @@ class ChannelsPage extends OpenClawLightDomElement {
   private channelsSource?: ApplicationContext["channels"];
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
+  private gatewayPairingAuthSignature: string | null = null;
   private hasGatewaySnapshot = false;
   private nostrOperationGeneration = 0;
   private readonly pairingPolling = new PollController(
@@ -157,14 +159,24 @@ class ChannelsPage extends OpenClawLightDomElement {
     const clientChanged = this.hasGatewaySnapshot && this.gatewayClient !== snapshot.client;
     const connectionChanged =
       this.hasGatewaySnapshot && this.gatewayConnected !== snapshot.connected;
+    const pairingAccess = hasOperatorPairingAccess(snapshot.hello?.auth ?? null);
+    const pairingAuthSignature = resolveChannelPairingAuthSignature(snapshot);
+    const pairingAuthChanged =
+      this.hasGatewaySnapshot && this.gatewayPairingAuthSignature !== pairingAuthSignature;
     if (!this.hasGatewaySnapshot || sourceChanged || clientChanged || connectionChanged) {
       this.nostrOperationGeneration += 1;
     }
     if (sourceChanged || clientChanged || !snapshot.connected) {
       this.clearNostrForm();
-      this.pairingPrompt = null;
     }
-    if (sourceChanged || clientChanged) {
+    if (
+      sourceChanged ||
+      clientChanged ||
+      pairingAuthChanged ||
+      !snapshot.connected ||
+      !pairingAccess
+    ) {
+      this.pairingPrompt = null;
       this.pairingChannelFilter = null;
       this.pairingAccountFilter = null;
       this.pairingNotice = null;
@@ -172,12 +184,13 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.hasGatewaySnapshot = true;
     this.gatewayClient = snapshot.client;
     this.gatewayConnected = snapshot.connected;
+    this.gatewayPairingAuthSignature = pairingAuthSignature;
     this.syncPairingPolling(snapshot);
     if (snapshot.connected && snapshot.client) {
       this.ensureInitialData();
       if (
-        (sourceChanged || clientChanged || connectionChanged) &&
-        hasOperatorPairingAccess(snapshot.hello?.auth ?? null)
+        (sourceChanged || clientChanged || connectionChanged || pairingAuthChanged) &&
+        pairingAccess
       ) {
         void this.context.channels.refreshPairing();
       }
@@ -234,6 +247,7 @@ class ChannelsPage extends OpenClawLightDomElement {
     this.channelsSource = undefined;
     this.gatewayClient = null;
     this.gatewayConnected = false;
+    this.gatewayPairingAuthSignature = null;
     this.hasGatewaySnapshot = false;
     this.pairingPrompt = null;
     this.pairingChannelFilter = null;

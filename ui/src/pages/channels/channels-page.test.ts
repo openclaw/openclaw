@@ -14,6 +14,12 @@ type ChannelsPageTestElement = HTMLElement & {
   requestUpdate: () => void;
 };
 
+type PairingTestPage = ChannelsPageTestElement & {
+  pairingAccountFilter: string | null;
+  pairingChannelFilter: string | null;
+  pairingPrompt: unknown | null;
+};
+
 type NostrTestPage = ChannelsPageTestElement & {
   nostrProfileFormState: {
     values: NostrProfile;
@@ -149,6 +155,44 @@ describe("ChannelsPage lifecycle", () => {
     second.runtimeConfig.dispose();
     first.channels.dispose();
     second.channels.dispose();
+  });
+
+  it("refreshes pairing data when the authorized scope set changes", async () => {
+    const gateway = createGateway();
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    source.channels.state.pairingSnapshot = {
+      accounts: [],
+      requests: [],
+      commandOwnerConfigured: true,
+      limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+    };
+    const refreshPairing = vi.spyOn(source.channels, "refreshPairing").mockResolvedValue();
+    const page = document.createElement("openclaw-channels-page") as PairingTestPage;
+    page.context = source.context;
+    document.body.append(page);
+    await page.updateComplete;
+    refreshPairing.mockClear();
+    page.pairingPrompt = {};
+    page.pairingChannelFilter = "whatsapp";
+    page.pairingAccountFilter = "personal";
+
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => expect(refreshPairing).toHaveBeenCalled());
+    expect(page.pairingPrompt).toBeNull();
+    expect(page.pairingChannelFilter).toBeNull();
+    expect(page.pairingAccountFilter).toBeNull();
+    source.runtimeConfig.dispose();
+    source.channels.dispose();
   });
 
   it("drops a profile save when the channel source is replaced", async () => {

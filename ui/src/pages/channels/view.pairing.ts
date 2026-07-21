@@ -149,10 +149,11 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
 }
 
 export function renderChannelPairingQueue(props: ChannelsProps) {
-  const accounts = props.pairingSnapshot?.accounts ?? [];
-  const requests = filteredRequests(props);
+  const snapshot = props.canManagePairing ? props.pairingSnapshot : null;
+  const accounts = snapshot?.accounts ?? [];
+  const requests = props.canManagePairing ? filteredRequests(props) : [];
   const hasFilter = Boolean(props.pairingChannelFilter || props.pairingAccountFilter);
-  const count = props.pairingSnapshot?.requests.length ?? 0;
+  const count = snapshot?.requests.length ?? 0;
   return html`
     <div id="channels-pairing-requests">
       ${renderSettingsSection(
@@ -162,7 +163,7 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
           ...(count > 0 ? { count } : {}),
           actions: html`
             <span class="settings-row__value">
-              ${props.pairingLastSuccessAt
+              ${props.canManagePairing && props.pairingLastSuccessAt
                 ? t("channels.hub.updatedAgo", {
                     ago: formatRelativeTimestamp(props.pairingLastSuccessAt),
                   })
@@ -178,45 +179,47 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
             </button>
           `,
         },
-        html`
-          ${!props.canManagePairing
-            ? html`<div class="callout warn">${t("channels.pairing.missingPermission")}</div>`
-            : nothing}
-          ${props.pairingError
-            ? html`<div class="callout danger">${props.pairingError}</div>`
-            : nothing}
-          ${props.pairingNotice
-            ? html`<div class="callout info" role="status">${props.pairingNotice}</div>`
-            : nothing}
-          ${props.pairingSnapshot ? renderFilters(props) : nothing}
-          ${props.pairingLoading && !props.pairingSnapshot
-            ? html`<div class="settings-row">${t("common.loading")}</div>`
-            : accounts.length === 0
-              ? renderSettingsEmpty(t("channels.pairing.noAccounts"))
-              : requests.length === 0
-                ? renderSettingsEmpty(
-                    hasFilter
-                      ? t("channels.pairing.noFilteredRequests")
-                      : t("channels.pairing.noRequests"),
-                  )
-                : requests.map((request) => renderRequest(request, props))}
-          ${props.pairingSnapshot
-            ? html`
-                <div class="channels-pairing-help">
-                  ${t("channels.pairing.limits", {
-                    count: String(props.pairingSnapshot.limits.pendingPerAccount),
-                    minutes: String(Math.round(props.pairingSnapshot.limits.ttlMs / 60_000)),
-                  })}
-                </div>
-              `
-            : nothing}
-        `,
+        !props.canManagePairing
+          ? html`<div class="callout warn">${t("channels.pairing.missingPermission")}</div>`
+          : html`
+              ${props.pairingError
+                ? html`<div class="callout danger">${props.pairingError}</div>`
+                : nothing}
+              ${props.pairingNotice
+                ? html`<div class="callout info" role="status">${props.pairingNotice}</div>`
+                : nothing}
+              ${snapshot ? renderFilters(props) : nothing}
+              ${props.pairingLoading && !snapshot
+                ? html`<div class="settings-row">${t("common.loading")}</div>`
+                : accounts.length === 0
+                  ? renderSettingsEmpty(t("channels.pairing.noAccounts"))
+                  : requests.length === 0
+                    ? renderSettingsEmpty(
+                        hasFilter
+                          ? t("channels.pairing.noFilteredRequests")
+                          : t("channels.pairing.noRequests"),
+                      )
+                    : requests.map((request) => renderRequest(request, props))}
+              ${snapshot
+                ? html`
+                    <div class="channels-pairing-help">
+                      ${t("channels.pairing.limits", {
+                        count: String(snapshot.limits.pendingPerAccount),
+                        minutes: String(Math.round(snapshot.limits.ttlMs / 60_000)),
+                      })}
+                    </div>
+                  `
+                : nothing}
+            `,
       )}
     </div>
   `;
 }
 
 export function renderChannelPairingDetail(channelId: string, props: ChannelsProps) {
+  if (!props.canManagePairing) {
+    return nothing;
+  }
   const accounts = (props.pairingSnapshot?.accounts ?? []).filter(
     (account) => account.channel === channelId,
   );
@@ -263,7 +266,7 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
 
 export function renderChannelPairingPrompt(props: ChannelsProps) {
   const prompt = props.pairingPrompt;
-  if (!prompt) {
+  if (!prompt || !props.canManagePairing) {
     return nothing;
   }
   const request = prompt.request;
