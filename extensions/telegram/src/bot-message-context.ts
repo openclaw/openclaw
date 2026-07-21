@@ -30,7 +30,10 @@ import {
   resolveTelegramMessageContextStorePath,
 } from "./bot-message-context.session.js";
 import type { BuildTelegramMessageContextParams } from "./bot-message-context.types.js";
-import { getTelegramTextParts } from "./bot/body-helpers.js";
+import {
+  shouldSendDirectAudioTypingBeforeBodyResolution,
+  waitForDirectAudioTypingPreflight,
+} from "./bot-message-context.audio-preflight.js";
 import {
   buildTelegramInboundOriginTarget,
   buildTypingThreadParams,
@@ -67,7 +70,6 @@ const loadTelegramMessageContextRuntime = createLazyRuntimeModule(
 );
 
 type TelegramMessageContextPayload = Awaited<ReturnType<typeof buildTelegramInboundContextPayload>>;
-type TelegramMessage = BuildTelegramMessageContextParams["primaryCtx"]["message"];
 type TelegramReactionApi = (
   chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"],
   messageId: number,
@@ -117,67 +119,6 @@ export type TelegramMessageContext = {
   statusReactionController: TelegramStatusReactionController | null;
   accountId: string;
 };
-
-const DIRECT_AUDIO_TYPING_PREFLIGHT_TIMEOUT_MS = 100;
-
-async function waitForDirectAudioTypingPreflight(
-  sendTypingPromise: Promise<void>,
-  params: {
-    chatId: TelegramMessage["chat"]["id"];
-  },
-): Promise<void> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  const guardedSendTypingPromise = sendTypingPromise.then(
-    () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    },
-    (err: unknown) => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      throw err;
-    },
-  );
-  const timeoutPromise = new Promise<void>((resolve) => {
-    timeoutId = setTimeout(() => {
-      timedOut = true;
-      resolve();
-    }, DIRECT_AUDIO_TYPING_PREFLIGHT_TIMEOUT_MS);
-  });
-
-  try {
-    await Promise.race([guardedSendTypingPromise, timeoutPromise]);
-  } finally {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  }
-
-  if (timedOut) {
-    void guardedSendTypingPromise.catch((err: unknown) => {
-      logVerbose(
-        `telegram audio preflight direct typing cue failed for chat ${params.chatId}: ${String(err)}`,
-      );
-    });
-  }
-}
-
-function shouldSendDirectAudioTypingBeforeBodyResolution(params: {
-  msg: TelegramMessage;
-  allMedia: BuildTelegramMessageContextParams["allMedia"];
-  isGroup: boolean;
-}): boolean {
-  if (params.isGroup) {
-    return false;
-  }
-  if (getTelegramTextParts(params.msg).text.trim()) {
-    return false;
-  }
-  return params.allMedia.some((media) => media.contentType?.startsWith("audio/"));
-}
 
 export const buildTelegramMessageContext = async ({
   primaryCtx,

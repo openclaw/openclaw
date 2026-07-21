@@ -345,7 +345,7 @@ describe("buildTelegramMessageContext ACP configured bindings", () => {
         text: undefined,
         voice: { file_id: "voice-1", duration: 1 },
       },
-      allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
+      allMedia: [{ kind: "audio", path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
       sendChatActionHandler: {
         sendChatAction,
         isSuspended: () => false,
