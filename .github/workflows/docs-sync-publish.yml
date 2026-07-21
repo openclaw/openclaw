@@ -19,6 +19,7 @@ concurrency:
 
 jobs:
   sync-publish-repo:
+    if: github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-latest
     env:
       OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
