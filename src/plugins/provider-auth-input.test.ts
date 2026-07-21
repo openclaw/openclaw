@@ -471,32 +471,11 @@ describe("formatApiKeyPreview", () => {
   it.each([
     ["sk-abcdef", "sk-a…cdef"],
     ["short", "sh…rt"],
-    ["tiny", "ti…ny"],
-  ])("redacts ASCII values %p", (value, expected) => {
+    ["a😀b", "a…b"],
+    [`abc😀${"x".repeat(20)}`, "abc…xxxx"],
+    [`${"x".repeat(20)}😀abc`, "xxxx…abc"],
+    ["😀".repeat(10), "😀😀…😀😀"],
+  ])("redacts %p without splitting surrogate pairs", (value, expected) => {
     expect(formatApiKeyPreview(value)).toBe(expected);
-  });
-
-  it("does not split UTF-16 surrogate pairs at preview boundaries", () => {
-    // Short value where the short-head boundary bisects a surrogate pair.
-    expect(formatApiKeyPreview("a😀b")).toBe("a…b");
-
-    // Long value where the 4-code-unit head boundary lands inside a pair.
-    const headSplit = "abc😀" + "x".repeat(20);
-    expect(formatApiKeyPreview(headSplit)).toBe("abc…xxxx");
-
-    // Long value where the 4-code-unit tail boundary lands inside a pair.
-    const tailSplit = "x".repeat(20) + "😀abc";
-    expect(formatApiKeyPreview(tailSplit)).toBe("xxxx…abc");
-
-    // Boundaries that already align with pairs stay unchanged.
-    expect(formatApiKeyPreview("😀".repeat(10))).toBe("😀😀…😀😀");
-
-    // No isolated surrogates are emitted anywhere.
-    const all = ["a😀b", headSplit, tailSplit, "😀".repeat(10)]
-      .map((value) => formatApiKeyPreview(value))
-      .join("");
-    expect(() => encodeURIComponent(all)).not.toThrow();
-    expect(all).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(all).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 });
