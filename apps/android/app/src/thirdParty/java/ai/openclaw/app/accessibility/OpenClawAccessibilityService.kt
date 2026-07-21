@@ -61,6 +61,8 @@ class OpenClawAccessibilityService : AccessibilityService() {
     internal val connection: StateFlow<AccessibilityServiceConnection<OpenClawAccessibilityService>> =
       connectionState.connection
 
+    val isConnected: StateFlow<Boolean> = connectionState.isConnected
+
     val uiEpoch: Long
       get() = uiEpochCounter.get()
 
@@ -78,17 +80,24 @@ internal data class AccessibilityServiceConnection<T : Any>(
 
 internal class ObservableServiceInstance<T : Any> {
   private val mutableConnection = MutableStateFlow(AccessibilityServiceConnection<T>(instance = null, generation = 0))
+  private val mutableIsConnected = MutableStateFlow(false)
 
   val connection: StateFlow<AccessibilityServiceConnection<T>> = mutableConnection.asStateFlow()
+  val isConnected: StateFlow<Boolean> = mutableIsConnected.asStateFlow()
 
   fun connect(instance: T) {
     val current = mutableConnection.value
     mutableConnection.value = AccessibilityServiceConnection(instance, generation = current.generation + 1)
+    mutableIsConnected.value = true
   }
 
   fun disconnect(instance: T) {
     val current = mutableConnection.value
+    // Only the current instance may clear connectivity: during a service-replacement
+    // race the old instance's teardown must not publish false after the replacement
+    // already connected, or NodeRuntime would withdraw the mobile UI capability.
     if (current.instance !== instance) return
     mutableConnection.value = current.copy(instance = null)
+    mutableIsConnected.value = false
   }
 }

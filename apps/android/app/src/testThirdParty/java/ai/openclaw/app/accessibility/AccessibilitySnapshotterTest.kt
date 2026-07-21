@@ -26,19 +26,23 @@ class AccessibilitySnapshotterTest {
     val second = Any()
 
     assertEquals(AccessibilityServiceConnection<Any>(instance = null, generation = 0), state.connection.value)
+    assertFalse(state.isConnected.value)
 
     state.connect(first)
     assertTrue(state.connection.value.instance === first)
     assertEquals(1L, state.connection.value.generation)
+    assertTrue(state.isConnected.value)
 
     state.connect(second)
     state.disconnect(first)
     assertTrue(state.connection.value.instance === second)
     assertEquals(2L, state.connection.value.generation)
+    assertTrue(state.isConnected.value)
 
     state.disconnect(second)
     assertEquals(null, state.connection.value.instance)
     assertEquals(2L, state.connection.value.generation)
+    assertFalse(state.isConnected.value)
   }
 
   @Test
