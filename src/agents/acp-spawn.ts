@@ -68,6 +68,10 @@ import {
 } from "./acp-spawn-parent-stream.js";
 import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
+  expandCursorAcpGrokModelCandidates,
+  resolveCursorAcpGrokHarnessCandidates,
+} from "./cursor-acp-model.js";
+import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
   formatAcpInheritedToolAllowError,
@@ -755,18 +759,15 @@ type AcpSpawnRuntimeOptions = {
   timeoutSeconds?: number;
 };
 
-/** Default Cursor CLI/SDK model ids for Lisa ACP coding (no-fast preferred). */
-const CURSOR_ACP_GROK_MODEL_CANDIDATES = [
-  "cursor-grok-4.5-medium",
-  "cursor-grok-4.5-high",
-  "cursor-grok-4.5-high-fast",
-] as const;
-
 function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
   if (!runTimeoutSeconds) {
     return undefined;
   }
   return Math.min(runTimeoutSeconds, ACP_RUNTIME_TIMEOUT_MAX_SECONDS);
+}
+
+function isCursorAcpTarget(agentId: string | undefined): boolean {
+  return normalizeOptionalAgentId(agentId) === "cursor";
 }
 
 function resolveAcpSpawnModelCandidates(params: {
@@ -785,16 +786,20 @@ function resolveAcpSpawnModelCandidates(params: {
     ...resolveAgentModelFallbackValues(targetAgentConfig?.subagents?.model),
     ...resolveAgentModelFallbackValues(targetAgentConfig?.model),
   ];
-  const harnessDefaults =
-    normalizeOptionalAgentId(params.targetAgentId) === "cursor" ||
-    normalizeOptionalAgentId(params.policyAgentId) === "cursor"
-      ? [...CURSOR_ACP_GROK_MODEL_CANDIDATES]
-      : [];
+  const cursorTarget =
+    isCursorAcpTarget(params.targetAgentId) || isCursorAcpTarget(params.policyAgentId);
+  const harnessDefaults = cursorTarget ? resolveCursorAcpGrokHarnessCandidates() : [];
   const candidates: string[] = [];
   for (const candidate of [primary, ...configuredFallbacks, ...harnessDefaults]) {
     const normalized = normalizeOptionalString(candidate);
-    if (normalized && !candidates.includes(normalized)) {
-      candidates.push(normalized);
+    if (!normalized) {
+      continue;
+    }
+    const expanded = cursorTarget ? expandCursorAcpGrokModelCandidates(normalized) : [normalized];
+    for (const entry of expanded) {
+      if (!candidates.includes(entry)) {
+        candidates.push(entry);
+      }
     }
   }
   return candidates;
