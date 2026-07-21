@@ -12,7 +12,7 @@ type RecordAgentRunOutputTokensParams = {
 
 const usageByRun = new Map<string, Map<string, AgentRunUsage>>();
 
-/** Adds one completed model call and commits the new total only when delivery succeeds. */
+/** Adds one completed model call and emits the new generation-scoped total. */
 export function recordAgentRunOutputTokens(
   params: RecordAgentRunOutputTokensParams,
 ): AgentRunUsage | undefined {
@@ -32,8 +32,16 @@ export function recordAgentRunOutputTokens(
   return usage;
 }
 
-export function clearAgentRunUsage(runId: string): void {
-  usageByRun.delete(runId);
+export function clearAgentRunUsage(runId: string, lifecycleGeneration?: string): void {
+  if (lifecycleGeneration === undefined) {
+    usageByRun.delete(runId);
+    return;
+  }
+  const usageByGeneration = usageByRun.get(runId);
+  usageByGeneration?.delete(lifecycleGeneration);
+  if (usageByGeneration?.size === 0) {
+    usageByRun.delete(runId);
+  }
 }
 
 export function resetAgentRunUsageForTest(): void {

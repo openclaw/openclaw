@@ -507,7 +507,7 @@ export function clearAgentRunContext(
   }
   state.runContextById.delete(runId);
   state.seqByRun.delete(runId);
-  clearAgentRunUsage(runId);
+  clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
 }
 
 /** Releases one tracked owner and clears its context after the final owner exits. */
@@ -550,7 +550,7 @@ export function sweepStaleRunContexts(maxAgeMs = 30 * 60 * 1000): number {
     if (age > maxAgeMs) {
       state.runContextById.delete(runId);
       state.seqByRun.delete(runId);
-      clearAgentRunUsage(runId);
+      clearAgentRunUsage(runId, ctx.lifecycleGeneration);
       getAgentRunContextOwners(state).delete(runId);
       swept++;
     }
