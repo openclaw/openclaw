@@ -1299,7 +1299,7 @@ openclaw-chat-page {
   align-items: end;
   gap: 6px;
   width: calc(100% - 36px);
-  max-width: 48rem;
+  max-width: var(--chat-thread-max-width, 48rem);
   margin: 8px auto 14px;
 }
 
@@ -1440,7 +1440,7 @@ openclaw-chat-page {
   /* Mirror .agent-chat__composer-shell sizing: the rows belong to the input
      stack and must not read as a full-pane banner above a narrower composer. */
   width: calc(100% - 36px);
-  max-width: 48rem;
+  max-width: var(--chat-thread-max-width, 48rem);
   margin: 0 auto;
   padding: 0 0 8px;
 }
