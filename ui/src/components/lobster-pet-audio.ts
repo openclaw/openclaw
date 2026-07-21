@@ -45,7 +45,7 @@ export function playLobsterPetChirp(
   return ctx;
 }
 
-export function previewLobsterPetChirp(): void {
+export function previewLobsterChirp(): void {
   const ctx = playLobsterPetChirp(null, true, "poke");
   if (!ctx) {
     return;

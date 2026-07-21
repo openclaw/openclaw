@@ -35,7 +35,7 @@ import {
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
-import { previewLobsterPetChirp } from "../../components/lobster-pet-audio.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -1131,9 +1131,9 @@ function renderLobsterPetSection(props: ConfigProps) {
             : t("quickSettings.appearance.lobsterSoundsOff"),
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
-          onActivate: (enabled) => {
+          onAct: (enabled) => {
             if (enabled) {
-              previewLobsterPetChirp();
+              previewLobsterChirp();
             }
           },
         })}
