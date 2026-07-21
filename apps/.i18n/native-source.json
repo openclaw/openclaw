@@ -13011,7 +13011,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 222,
+      "line": 223,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "1 token",
       "surface": "android",
@@ -13019,7 +13019,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 224,
+      "line": 225,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "$count tokens",
       "surface": "android",
@@ -13027,23 +13027,23 @@
     },
     {
       "kind": "ui-call",
-      "line": 234,
+      "line": 235,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "Done in $duration",
       "surface": "android",
       "id": "native.android.c32ff602fa622e4b"
     },
     {
-      "kind": "conditional-branch",
-      "line": 253,
+      "kind": "ui-call",
+      "line": 252,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "${decimal(count / 1_000_000.0)}M",
       "surface": "android",
       "id": "native.android.d2797e7488fe5021"
     },
     {
-      "kind": "conditional-branch",
-      "line": 253,
+      "kind": "ui-call",
+      "line": 259,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "${thousands}k",
       "surface": "android",
