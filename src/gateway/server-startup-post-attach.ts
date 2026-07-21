@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as sleep } from "node:timers/promises";
 import pMap from "p-map";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -1030,6 +1031,7 @@ export async function startGatewayPostAttachRuntime(
     };
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
+    ambientEnvTriggers?: AmbientEnvTriggerPolicy;
     pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
     defaultWorkspaceDir: string;
     deps: CliDeps;
@@ -1119,6 +1121,7 @@ export async function startGatewayPostAttachRuntime(
     runtimeDeps.logGatewayStartup({
       cfg: params.cfgAtStart,
       activationSourceConfig: params.activationSourceConfig,
+      ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
       bindHost: params.bindHost,
       bindHosts: params.bindHosts,
       port: params.port,
