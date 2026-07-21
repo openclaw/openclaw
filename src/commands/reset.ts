@@ -115,8 +115,13 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     const ok = await confirm({
       message: stylePromptMessage(`Proceed with ${scope} reset?`),
     });
-    if (isCancel(ok) || !ok) {
+    if (isCancel(ok)) {
       cancel(stylePromptTitle("Reset cancelled.") ?? "Reset cancelled.");
+      runtime.exit(0);
+      return;
+    }
+    if (!ok) {
+      runtime.log("Reset skipped.");
       runtime.exit(0);
       return;
     }

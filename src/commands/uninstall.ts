@@ -169,8 +169,13 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     const ok = await confirm({
       message: stylePromptMessage("Proceed with uninstall?"),
     });
-    if (isCancel(ok) || !ok) {
+    if (isCancel(ok)) {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
+      runtime.exit(0);
+      return;
+    }
+    if (!ok) {
+      runtime.log("Uninstall skipped.");
       runtime.exit(0);
       return;
     }
