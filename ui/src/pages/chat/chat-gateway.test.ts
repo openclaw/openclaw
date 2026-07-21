@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover chat behavior.
 import { describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
