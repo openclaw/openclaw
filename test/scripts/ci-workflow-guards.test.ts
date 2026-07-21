@@ -3216,7 +3216,7 @@ describe("ci workflow guards", () => {
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
       expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain(
-        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+        'timeout --signal=TERM --kill-after=10s 120s git -C "$GITHUB_WORKSPACE"',
       );
       expect(checkoutStep.run, jobName).toContain(
         'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
