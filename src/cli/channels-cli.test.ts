@@ -137,6 +137,62 @@ describe("registerChannelsCli", () => {
     expect(getChannelAddOptionFlags(program)).toContain("--installed-key <key>");
   });
 
+  it("dedupes options by switch identity across differing value placeholders", async () => {
+    listRawChannelPluginCatalogEntriesMock.mockReturnValueOnce([
+      {
+        id: "chat-a",
+        pluginId: "chat-a",
+        origin: "global",
+        channel: {
+          id: "chat-a",
+          label: "Chat A",
+          cliAddOptions: [
+            { flags: "--url <url>", description: "Chat A URL" },
+            { flags: "--token <payload>", description: "Chat A token" },
+          ],
+        },
+        meta: {
+          id: "chat-a",
+          label: "Chat A",
+          selectionLabel: "Chat A",
+          docsPath: "/channels/chat-a",
+          blurb: "Chat A test channel.",
+        },
+        install: { npmSpec: "@openclaw/chat-a" },
+      },
+      {
+        id: "chat-b",
+        pluginId: "chat-b",
+        origin: "global",
+        channel: {
+          id: "chat-b",
+          label: "Chat B",
+          cliAddOptions: [{ flags: "--url <server>", description: "Chat B server URL" }],
+        },
+        meta: {
+          id: "chat-b",
+          label: "Chat B",
+          selectionLabel: "Chat B",
+          docsPath: "/channels/chat-b",
+          blurb: "Chat B test channel.",
+        },
+        install: { npmSpec: "@openclaw/chat-b" },
+      },
+    ]);
+    const program = new Command().name("openclaw");
+
+    // Commander throws on conflicting switches; registration must survive a
+    // plugin redeclaring `--url` with a different placeholder or the static
+    // `--token` with a different value name.
+    await registerChannelsCli(program, ["node", "openclaw", "channels", "add", "--help"]);
+
+    const flags = getChannelAddOptionFlags(program);
+    expect(flags).toContain("--url <url>");
+    expect(flags).not.toContain("--url <server>");
+    expect(flags).toContain("--token <token>");
+    expect(flags).not.toContain("--token <payload>");
+  });
+
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {
     process.argv = ["node", "openclaw", "channels"];
 

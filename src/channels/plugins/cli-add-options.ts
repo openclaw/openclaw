@@ -12,6 +12,15 @@ export type ChannelSetupCliOptionValueMetadata = {
   valueType: NonNullable<PluginPackageChannelCliOption["valueType"]>;
 };
 
+// Commander rejects a second option whose long/short switch matches an existing
+// one even when the value placeholder differs, so dedupe by switch identity or
+// one plugin's `--url <server>` next to another's `--url <url>` would throw and
+// break `channels add` registration entirely.
+export function channelCliOptionSwitchKey(flags: string): string {
+  const option = new Option(flags);
+  return option.long ?? option.short ?? option.flags;
+}
+
 function compareChannels(left: PluginPackageChannel, right: PluginPackageChannel): number {
   const leftOrder = left.order ?? Number.MAX_SAFE_INTEGER;
   const rightOrder = right.order ?? Number.MAX_SAFE_INTEGER;
@@ -29,10 +38,17 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
     .flatMap((entry) => (entry.channel ? [entry.channel] : []))
     .toSorted(compareChannels);
   const channels = [...bundledChannels, ...catalogChannels];
-  const seenFlags = new Set<string>();
+  const seenSwitches = new Set<string>();
   const options = channels
     .flatMap((channel) => channel.cliAddOptions ?? [])
-    .filter((option) => !seenFlags.has(option.flags) && Boolean(seenFlags.add(option.flags)));
+    .filter((option) => {
+      const key = channelCliOptionSwitchKey(option.flags);
+      if (seenSwitches.has(key)) {
+        return false;
+      }
+      seenSwitches.add(key);
+      return true;
+    });
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
   const normalizedChannelId = channelId?.trim().toLowerCase();
   for (const channel of normalizedChannelId

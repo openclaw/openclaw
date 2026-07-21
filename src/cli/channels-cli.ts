@@ -73,14 +73,21 @@ function shouldRegisterChannelSetupOptions(
 }
 
 async function addChannelSetupOptions(command: Command): Promise<Command> {
-  const { resolveChannelSetupCliOptionMetadata } = await channelSetupCliOptionsLoader.load();
-  const seenFlags = new Set(command.options.map((option) => option.flags));
+  const { channelCliOptionSwitchKey, resolveChannelSetupCliOptionMetadata } =
+    await channelSetupCliOptionsLoader.load();
+  // Seed with switch identities, not raw flags strings: Commander throws on a
+  // matching switch with a different placeholder (e.g. plugin `--token <payload>`
+  // vs the static `--token <token>`).
+  const seenSwitches = new Set(
+    command.options.map((option) => option.long ?? option.short ?? option.flags),
+  );
   const { options } = resolveChannelSetupCliOptionMetadata();
   for (const option of options) {
-    if (seenFlags.has(option.flags)) {
+    const key = channelCliOptionSwitchKey(option.flags);
+    if (seenSwitches.has(key)) {
       continue;
     }
-    seenFlags.add(option.flags);
+    seenSwitches.add(key);
     if (option.defaultValue !== undefined) {
       command.option(option.flags, option.description, option.defaultValue);
     } else {
