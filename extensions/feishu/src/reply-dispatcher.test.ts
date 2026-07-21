@@ -945,17 +945,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       runtime: createRuntimeLogger(),
     });
     await options.onReplyStart?.();
-    streamingInstances[0].update.mockImplementationOnce((() => firstUpdate) as () => never);
+    const streamingSession = requireStreamingInstance(0);
+    streamingSession.update.mockImplementationOnce((() => firstUpdate) as () => never);
 
     result.replyOptions.onPartialReply?.({ text: "first" });
     await vi.waitFor(() => {
-      expect(streamingInstances[0].update).toHaveBeenCalledTimes(1);
+      expect(streamingSession.update).toHaveBeenCalledTimes(1);
     });
     result.replyOptions.onPartialReply?.({ text: "first second" });
     result.replyOptions.onPartialReply?.({ text: "first second latest" });
 
     await vi.waitFor(() => {
-      expect(streamingInstances[0].update).toHaveBeenCalledTimes(3);
+      expect(streamingSession.update).toHaveBeenCalledTimes(3);
     });
     expect(streamingUpdateTexts()).toEqual(["first", "first second", "first second latest"]);
 
