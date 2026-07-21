@@ -118,10 +118,10 @@ describe("chat pane pull request refresh", () => {
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const epoch = Symbol("pr-refresh");
-    const setOpenPullRequest = vi.fn();
+    const setPullRequestSummary = vi.fn();
     const sessions = {
-      captureOpenPullRequestEpoch: vi.fn(() => epoch),
-      setOpenPullRequest,
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
     } as unknown as SessionCapability;
     const { pane } = createTestChatPane({ client, sessions });
     pane.context.gateway.snapshot.hello = {
@@ -134,12 +134,22 @@ describe("chat pane pull request refresh", () => {
       "controlUi.sessionPullRequests",
       expect.objectContaining({ sessionKey: "agent:main:current", refresh: true }),
     );
-    expect(setOpenPullRequest).toHaveBeenCalledWith("agent:main:current", true, epoch);
+    expect(setPullRequestSummary).toHaveBeenCalledWith(
+      "agent:main:current",
+      { numbers: [111532], state: "open" },
+      epoch,
+    );
   });
 
   it("clears the pane snapshot when the Gateway source disconnects", () => {
     const client = {} as GatewayBrowserClient;
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({
+      client,
+      sessions: {
+        capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+        setPullRequestSummary: vi.fn(),
+      } as unknown as SessionCapability,
+    });
     pane.sessionPullRequests = [
       {
         number: 111532,
@@ -162,12 +172,12 @@ describe("chat pane pull request refresh", () => {
 
   it("preserves shared PR state for an empty rate-limited snapshot", async () => {
     const request = vi.fn().mockResolvedValue({ pullRequests: [], rateLimited: true });
-    const setOpenPullRequest = vi.fn();
+    const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
       sessions: {
-        captureOpenPullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
-        setOpenPullRequest,
+        capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+        setPullRequestSummary,
       } as unknown as SessionCapability,
     });
     pane.context.gateway.snapshot.hello = {
@@ -176,7 +186,7 @@ describe("chat pane pull request refresh", () => {
 
     await pane.refreshSessionPullRequests();
 
-    expect(setOpenPullRequest).not.toHaveBeenCalled();
+    expect(setPullRequestSummary).not.toHaveBeenCalled();
   });
 
   it("clears shared live PR state after the PR settles", async () => {
@@ -195,12 +205,12 @@ describe("chat pane pull request refresh", () => {
       rateLimited: false,
     });
     const epoch = Symbol("pr-refresh");
-    const setOpenPullRequest = vi.fn();
+    const setPullRequestSummary = vi.fn();
     const { pane } = createTestChatPane({
       client: { request } as unknown as GatewayBrowserClient,
       sessions: {
-        captureOpenPullRequestEpoch: vi.fn(() => epoch),
-        setOpenPullRequest,
+        capturePullRequestEpoch: vi.fn(() => epoch),
+        setPullRequestSummary,
       } as unknown as SessionCapability,
     });
     pane.context.gateway.snapshot.hello = {
@@ -209,7 +219,11 @@ describe("chat pane pull request refresh", () => {
 
     await pane.refreshSessionPullRequests();
 
-    expect(setOpenPullRequest).toHaveBeenCalledWith("agent:main:current", false, epoch);
+    expect(setPullRequestSummary).toHaveBeenCalledWith(
+      "agent:main:current",
+      { numbers: [111532], state: "merged" },
+      epoch,
+    );
   });
 });
 
