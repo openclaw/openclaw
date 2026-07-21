@@ -792,6 +792,25 @@ describe("clawhub helpers", () => {
     );
   });
 
+  it("rejects a Skill Card response with invalid UTF-8 bytes", async () => {
+    const cardBody = "# Agent Receipt\n\nVerified by ClawHub.\n";
+    const pivot = cardBody.indexOf("Agent Receipt") + "Agent Receipt".length;
+    await expect(
+      fetchClawHubSkillCard({
+        slug: "agentreceipt",
+        fetchImpl: async () =>
+          new Response(
+            new Uint8Array([
+              ...new TextEncoder().encode(cardBody.slice(0, pivot)),
+              0xff,
+              ...new TextEncoder().encode(cardBody.slice(pivot)),
+            ]),
+            { status: 200, headers: { "content-type": "text/markdown; charset=utf-8" } },
+          ),
+      }),
+    ).rejects.toThrow(/not valid for encoding/);
+  });
+
   it("wraps non-200 skill verification responses", async () => {
     await expect(
       fetchClawHubSkillVerification({
