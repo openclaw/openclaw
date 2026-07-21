@@ -139,32 +139,45 @@ describe("dreaming markdown storage", () => {
     await expect(fs.readFile(lowercasePath, "utf-8")).resolves.toBe("# Scratch\n\n");
   });
 
-  it("rejects oversized daily memory files before writing inline phase output", async () => {
+  it("updates oversized daily memory files without reading the whole file", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const inlinePath = path.join(workspaceDir, "memory", "2026-04-05.md");
     await fs.mkdir(path.dirname(inlinePath), { recursive: true });
-    await fs.writeFile(inlinePath, Buffer.alloc(MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1));
-
-    await expect(
-      writeDailyDreamingPhaseBlock({
-        workspaceDir,
-        phase: "light",
-        bodyLines: ["- Candidate: should not be appended"],
-        nowMs,
-        timezone,
-        storage: {
-          mode: "inline",
-          separateReports: false,
-        },
-      }),
-    ).rejects.toThrow(
-      `Dreaming left ${inlinePath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. Archive or split the file below 16 MiB, then retry.`,
+    await fs.writeFile(
+      inlinePath,
+      [
+        "# Daily Memory",
+        "",
+        "A".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Old candidate",
+        "<!-- openclaw:dreaming:light:end -->",
+        "",
+        "Unmanaged note stays.",
+        "",
+      ].join("\n"),
+      "utf-8",
     );
 
-    await expectPathMissing(path.join(workspaceDir, "memory-events.jsonl"));
-    await expect(fs.stat(inlinePath)).resolves.toMatchObject({
-      size: MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1,
+    await writeDailyDreamingPhaseBlock({
+      workspaceDir,
+      phase: "light",
+      bodyLines: ["- Candidate: large file update"],
+      nowMs,
+      timezone,
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
     });
+
+    const content = await fs.readFile(inlinePath, "utf-8");
+    expect(content).toContain("A".repeat(1024));
+    expect(content).toContain("Unmanaged note stays.");
+    expect(content).toContain("- Candidate: large file update");
+    expect(content).not.toContain("- Old candidate");
   });
 
   it("still writes deep reports to the per-phase report directory", async () => {
@@ -216,30 +229,43 @@ describe("dreaming markdown storage", () => {
     expect(dreamsContent).toContain("- Ranked 3 candidate(s) for durable promotion.");
   });
 
-  it("rejects oversized DREAMS.md before writing deep summaries", async () => {
+  it("updates oversized DREAMS.md deep summaries without reading the whole file", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-markdown-");
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
-    await fs.writeFile(dreamsPath, Buffer.alloc(MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1));
-
-    await expect(
-      writeDeepDreamingReport({
-        workspaceDir,
-        bodyLines: ["- Should not be appended"],
-        storage: {
-          mode: "inline",
-          separateReports: false,
-        },
-        nowMs,
-        timezone,
-      }),
-    ).rejects.toThrow(
-      `Dreaming left ${dreamsPath} unchanged because it exceeds ${MEMORY_DREAMING_MARKDOWN_MAX_BYTES} bytes. Archive or split the file below 16 MiB, then retry.`,
+    await fs.writeFile(
+      dreamsPath,
+      [
+        "# Dream Diary",
+        "",
+        "B".repeat(MEMORY_DREAMING_MARKDOWN_MAX_BYTES),
+        "",
+        "## Deep Sleep",
+        "<!-- openclaw:dreaming:deep:start -->",
+        "- Old durable summary",
+        "<!-- openclaw:dreaming:deep:end -->",
+        "",
+        "Diary entry stays.",
+        "",
+      ].join("\n"),
+      "utf-8",
     );
 
-    await expectPathMissing(path.join(workspaceDir, "memory-events.jsonl"));
-    await expect(fs.stat(dreamsPath)).resolves.toMatchObject({
-      size: MEMORY_DREAMING_MARKDOWN_MAX_BYTES + 1,
+    await writeDeepDreamingReport({
+      workspaceDir,
+      bodyLines: ["- Durable summary updated."],
+      storage: {
+        mode: "inline",
+        separateReports: false,
+      },
+      nowMs,
+      timezone,
     });
+
+    const content = await fs.readFile(dreamsPath, "utf-8");
+    expect(content).toContain("B".repeat(1024));
+    expect(content).toContain("Diary entry stays.");
+    expect(content).toContain("- Durable summary updated.");
+    expect(content).not.toContain("- Old durable summary");
   });
 
   it("replaces the managed deep summary while preserving the diary block", async () => {
