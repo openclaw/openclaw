@@ -13,24 +13,26 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
+import {
+  captureNodePairingGeneration,
+  captureNodePairingState,
+} from "../../infra/node-pairing-state.js";
 import { approveNodePairing, requestNodePairing } from "../../infra/node-pairing.js";
 import { loadApnsRegistration, registerApnsRegistration } from "../../infra/push-apns.js";
 import { resetRemoteNodeSkillsForTests } from "../../skills/runtime/remote-skills.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import {
-  captureNodePairingGeneration,
-  captureNodePairingState,
-} from "./node-pairing-generation.js";
-import {
   captureNodeWakeLifecycle,
-  nodeWakeByOwner,
-  nodeWakeNudgeByOwner,
-  nodeWakeStateKey,
-} from "./nodes-wake-state.js";
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+  runNodeWakeAttempt,
+  runNodeWakeNudgeAttempt,
+} from "../node-wake-state.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -39,8 +41,8 @@ const pairingGenerationHooks = vi.hoisted(() => ({
   beforeCapture: vi.fn<(nodeId: string) => Promise<void> | void>(),
 }));
 
-vi.mock("./node-pairing-generation.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./node-pairing-generation.js")>();
+vi.mock("../../infra/node-pairing-state.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/node-pairing-state.js")>();
   return {
     ...actual,
     captureNodePairingState: async (nodeId: string) => {
@@ -60,13 +62,31 @@ async function createState(label: string): Promise<OpenClawTestState> {
   return state;
 }
 
+async function seedNodeWakeState(nodeId: string): Promise<void> {
+  await runNodeWakeAttempt({
+    nodeId,
+    force: true,
+    throttleMs: 60_000,
+    attempt: async (markAttempted) => {
+      markAttempted();
+      return { available: true, throttled: false, path: "sent", durationMs: 1 };
+    },
+  });
+  await runNodeWakeNudgeAttempt({
+    nodeId,
+    throttleMs: 60_000,
+    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
+    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
+  });
+}
+
 afterEach(async () => {
   resetDiagnosticEventsForTest();
   resetRemoteNodeSkillsForTests();
-  nodeWakeByOwner.clear();
-  nodeWakeNudgeByOwner.clear();
+  resetNodeWakeStateForTest();
   pairingGenerationHooks.beforeCapture.mockReset();
   vi.clearAllMocks();
+  closeOpenClawStateDatabaseForTest();
   while (createdStates.length > 0) {
     await createdStates.pop()?.cleanup();
   }
@@ -512,8 +532,7 @@ describe("nodeHandlers node.pair.remove", () => {
       topic: "ai.openclaw.ios",
       environment: "sandbox",
     });
-    nodeWakeByOwner.set(nodeWakeStateKey(nodeId), { lastWakeAtMs: Date.now() });
-    nodeWakeNudgeByOwner.set(nodeWakeStateKey(nodeId), Date.now());
+    await seedNodeWakeState(nodeId);
     enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
 
@@ -525,8 +544,7 @@ describe("nodeHandlers node.pair.remove", () => {
     await Promise.resolve();
 
     expect(opts.respond).toHaveBeenCalledWith(true, { nodeId }, undefined);
-    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
-    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     await expect(loadApnsRegistration(nodeId)).resolves.toBeNull();

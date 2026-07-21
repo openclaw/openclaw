@@ -9,14 +9,15 @@ import {
   type DiagnosticSecurityEvent,
 } from "../../infra/diagnostic-events.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
-import { deviceHandlers } from "./devices.js";
 import {
   captureNodeWakeLifecycle,
-  nodeWakeByOwner,
-  nodeWakeNudgeByOwner,
-  nodeWakeStateKey,
+  getNodeWakeStateSnapshot,
   releaseNodeWakeLifecycle,
-} from "./nodes-wake-state.js";
+  resetNodeWakeStateForTest,
+  runNodeWakeAttempt,
+  runNodeWakeNudgeAttempt,
+} from "../node-wake-state.js";
+import { deviceHandlers } from "./devices.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const {
@@ -156,19 +157,35 @@ function captureSecurityEvents(): {
   return { events, stop };
 }
 
+async function seedNodeWakeState(nodeId: string): Promise<void> {
+  await runNodeWakeAttempt({
+    nodeId,
+    force: true,
+    throttleMs: 60_000,
+    attempt: async (markAttempted) => {
+      markAttempted();
+      return { available: true, throttled: false, path: "sent", durationMs: 1 };
+    },
+  });
+  await runNodeWakeNudgeAttempt({
+    nodeId,
+    throttleMs: 60_000,
+    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
+    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
+  });
+}
+
 describe("deviceHandlers", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
-    nodeWakeByOwner.clear();
-    nodeWakeNudgeByOwner.clear();
+    resetNodeWakeStateForTest();
     vi.clearAllMocks();
   });
 
   it("clears and invalidates node runtime state after removing a full device pairing", async () => {
     const nodeId = "disconnected-node-device";
     removePairedDeviceMock.mockResolvedValue({ deviceId: nodeId });
-    nodeWakeByOwner.set(nodeWakeStateKey(nodeId), { lastWakeAtMs: Date.now() });
-    nodeWakeNudgeByOwner.set(nodeWakeStateKey(nodeId), Date.now());
+    await seedNodeWakeState(nodeId);
     enqueueNodePendingWork({ nodeId, type: "location.request" });
     const wakeLifecycle = captureNodeWakeLifecycle(nodeId);
     const opts = createOptions("device.pair.remove", { deviceId: nodeId });
@@ -178,8 +195,7 @@ describe("deviceHandlers", () => {
       'deviceHandlers["device.pair.remove"] test invariant',
     )(opts);
 
-    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
-    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork(nodeId).items.map((item) => item.id)).toEqual(["baseline-status"]);
     const nodeRegistry = opts.context.nodeRegistry as unknown as {

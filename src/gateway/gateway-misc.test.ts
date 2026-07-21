@@ -162,7 +162,7 @@ describe("GatewayClient", () => {
       "utf8",
     );
 
-    expect(source).toContain("deviceId: nodePairingIdentity.nodeId");
+    expect(source).toContain("deviceId: admittedNodePairing.identity.nodeId");
     expect(source).not.toContain("deviceId: authenticatedNodePairing.nodeId");
   });
 

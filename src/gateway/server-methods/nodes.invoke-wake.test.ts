@@ -5,16 +5,15 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 import {
   captureNodeWakeLifecycle,
-  invalidateNodeWakeState,
-  nodeWakeByOwner,
-  nodeWakeNudgeByOwner,
-  nodeWakeStateKey,
-} from "./nodes-wake-state.js";
-import {
   clearNodeWakeState,
+  getNodeWakeStateSnapshot,
+  invalidateNodeWakeState,
+  resetNodeWakeStateForTest,
+} from "../node-wake-state.js";
+import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
+import {
   maybeSendNodeWakeNudge,
   maybeWakeNodeWithApns,
   nodeHandlers,
@@ -65,7 +64,7 @@ vi.mock("../../config/io.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("./node-pairing-generation.js", () => ({
+vi.mock("../../infra/node-pairing-state.js", () => ({
   captureNodePairingGeneration: mocks.captureNodePairingGeneration,
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
@@ -703,8 +702,7 @@ describe("plugin surface refresh", () => {
 
 describe("node.invoke APNs wake path", () => {
   beforeEach(() => {
-    nodeWakeByOwner.clear();
-    nodeWakeNudgeByOwner.clear();
+    resetNodeWakeStateForTest();
     mocks.captureNodePairingGeneration.mockReset().mockImplementation(async (nodeId: string) => ({
       nodeId,
       key: `generation:${nodeId}:1`,
@@ -1010,7 +1008,7 @@ describe("node.invoke APNs wake path", () => {
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
   });
 
   it("does not throttle repeated relay wake attempts when relay config is missing", async () => {
@@ -1085,10 +1083,10 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
-    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId, generationOne.key))).toBe(true);
-    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId, generationTwo.key))).toBe(true);
-    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId, generationOne.key))).toBe(true);
-    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId, generationTwo.key))).toBe(true);
+    expect(getNodeWakeStateSnapshot(nodeId, generationOne.key)?.lastWakeAtMs).toBeGreaterThan(0);
+    expect(getNodeWakeStateSnapshot(nodeId, generationTwo.key)?.lastWakeAtMs).toBeGreaterThan(0);
+    expect(getNodeWakeStateSnapshot(nodeId, generationOne.key)?.lastNudgeAtMs).toBeGreaterThan(0);
+    expect(getNodeWakeStateSnapshot(nodeId, generationTwo.key)?.lastNudgeAtMs).toBeGreaterThan(0);
     invalidateNodeWakeState(nodeId);
   });
 
@@ -1503,8 +1501,7 @@ describe("node.invoke APNs wake path", () => {
 
     expect(mocks.sendApnsBackgroundWake).toHaveBeenCalledTimes(1);
     expect(mocks.sendApnsAlert).not.toHaveBeenCalled();
-    expect(nodeWakeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
-    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey(nodeId))).toBe(false);
+    expect(getNodeWakeStateSnapshot(nodeId)).toBeUndefined();
     expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     const call = firstRespondCall(respond);
     expect(call[0]).toBe(false);

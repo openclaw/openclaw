@@ -28,6 +28,8 @@ import {
   updatePairedDeviceMetadata,
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
+import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
+import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
   deniesCrossDeviceManagement,
   deniesDeviceTokenRoleManagement,
@@ -38,8 +40,6 @@ import {
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
-import { invalidateNodeWakeState } from "./nodes-wake-state.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";

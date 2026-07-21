@@ -12,18 +12,18 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/push-apns.js", () => mocks);
 
-import { nodeWakeByOwner, nodeWakeStateKey } from "./nodes-wake-state.js";
+import { getNodeWakeStateSnapshot, resetNodeWakeStateForTest } from "../node-wake-state.js";
 import { maybeWakeNodeWithApns } from "./nodes.js";
 
 describe("maybeWakeNodeWithApns no-registration cleanup", () => {
   beforeEach(() => {
-    nodeWakeByOwner.clear();
+    resetNodeWakeStateForTest();
     vi.clearAllMocks();
     mocks.loadApnsRegistration.mockResolvedValue(null);
   });
 
   afterEach(() => {
-    nodeWakeByOwner.clear();
+    resetNodeWakeStateForTest();
   });
 
   it("does not retain state for unregistered node ids", async () => {
@@ -35,11 +35,13 @@ describe("maybeWakeNodeWithApns no-registration cleanup", () => {
       });
     }
 
-    expect(nodeWakeByOwner.size).toBe(0);
+    for (let index = 0; index < 50; index += 1) {
+      expect(getNodeWakeStateSnapshot(`unregistered-node-${index}`)).toBeUndefined();
+    }
   });
 
   it("cleans up after a single no-registration result", async () => {
     await maybeWakeNodeWithApns("stale-node-id");
-    expect(nodeWakeByOwner.has(nodeWakeStateKey("stale-node-id"))).toBe(false);
+    expect(getNodeWakeStateSnapshot("stale-node-id")).toBeUndefined();
   });
 });

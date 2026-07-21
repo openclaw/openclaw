@@ -1,19 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PairedDevice } from "../../infra/device-pairing.js";
+import type { PairedDevice } from "./device-pairing.js";
 import {
   captureAuthenticatedNodePairingState,
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
-} from "./node-pairing-generation.js";
+} from "./node-pairing-state.js";
 
 const mocks = vi.hoisted(() => ({
   getPairedDevice: vi.fn(),
 }));
 
-vi.mock("../../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing.js")>(
-    "../../infra/device-pairing.js",
-  );
+vi.mock("./device-pairing.js", async () => {
+  const actual = await vi.importActual<typeof import("./device-pairing.js")>("./device-pairing.js");
   return { ...actual, getPairedDevice: mocks.getPairedDevice };
 });
 

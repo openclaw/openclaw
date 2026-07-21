@@ -2153,7 +2153,7 @@ describe("device pairing tokens", () => {
       nodePairingGenerationChanged: true,
     });
     await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
-      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      token: "abcd1234abcd1234abcd1234abcd1234",
     });
 
     const replacementRepair = await requestDevicePairing(

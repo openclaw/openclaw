@@ -1,9 +1,6 @@
 // Opens APNs HTTP/2 sessions with optional managed proxy tunneling.
 import { once } from "node:events";
-import http from "node:http";
 import http2 from "node:http2";
-import https from "node:https";
-import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { decodeTextPrefix } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
@@ -63,144 +60,6 @@ function apnsAbortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("APNs send invalidated");
 }
 
-function resolveProxyAuthorization(proxyUrl: URL): string | undefined {
-  if (!proxyUrl.username && !proxyUrl.password) {
-    return undefined;
-  }
-  const username = decodeURIComponent(proxyUrl.username);
-  const password = decodeURIComponent(proxyUrl.password);
-  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
-}
-
-function resolveProxyRequestHostname(proxyUrl: URL): string {
-  return proxyUrl.hostname.replace(/^\[|\]$/g, "");
-}
-
-function resolveProxyTlsServername(proxyHostname: string): string {
-  return proxyHostname.includes(":") || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(proxyHostname)
-    ? ""
-    : proxyHostname;
-}
-
-async function openAbortableProxyConnectTunnel(params: {
-  proxyUrl: URL;
-  proxyTls?: ManagedProxyTlsOptions;
-  targetHost: string;
-  targetPort: number;
-  timeoutMs: number;
-  signal: AbortSignal;
-}): Promise<Duplex> {
-  if (params.signal.aborted) {
-    throw apnsAbortError(params.signal);
-  }
-  if (params.proxyUrl.protocol !== "http:" && params.proxyUrl.protocol !== "https:") {
-    throw new Error(`Unsupported proxy protocol: ${params.proxyUrl.protocol}`);
-  }
-
-  const target = `${params.targetHost}:${params.targetPort}`;
-  const authorization = resolveProxyAuthorization(params.proxyUrl);
-  const proxyHostname = resolveProxyRequestHostname(params.proxyUrl);
-  const requestOptions: http.RequestOptions = {
-    protocol: params.proxyUrl.protocol,
-    hostname: proxyHostname,
-    port: params.proxyUrl.port || undefined,
-    method: "CONNECT",
-    path: target,
-    agent: false,
-    headers: {
-      host: target,
-      "proxy-connection": "Keep-Alive",
-      ...(authorization ? { "proxy-authorization": authorization } : {}),
-    },
-  };
-
-  return await new Promise<Duplex>((resolve, reject) => {
-    let settled = false;
-    let request: http.ClientRequest | undefined;
-    let connectedSocket: Duplex | undefined;
-    let timeout: NodeJS.Timeout | undefined;
-    const cleanup = () => {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
-      params.signal.removeEventListener("abort", onAbort);
-      request?.off("connect", onConnect);
-      request?.off("error", onError);
-    };
-    const fail = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      if (connectedSocket) {
-        connectedSocket.destroy();
-      } else {
-        request?.destroy();
-      }
-      const failure = error instanceof Error ? error : new Error(String(error));
-      reject(
-        new Error(`Proxy CONNECT failed via ${params.proxyUrl.origin}: ${failure.message}`, {
-          cause: failure,
-        }),
-      );
-    };
-    const onAbort = () => {
-      fail(apnsAbortError(params.signal));
-    };
-    const onError = (error: Error) => {
-      fail(error);
-    };
-    const onConnect = (response: http.IncomingMessage, socket: Duplex, head: Buffer) => {
-      connectedSocket = socket;
-      const status = response.statusCode;
-      if (status === undefined || status < 200 || status >= 300) {
-        fail(new Error(response.statusMessage || `proxy returned HTTP ${status ?? "unknown"}`));
-        return;
-      }
-      if (settled) {
-        socket.destroy();
-        return;
-      }
-      settled = true;
-      cleanup();
-      if (head.length > 0) {
-        socket.unshift(head);
-      }
-      resolve(socket);
-    };
-
-    try {
-      request =
-        params.proxyUrl.protocol === "https:"
-          ? https.request({
-              ...requestOptions,
-              agent: new https.Agent({
-                ALPNProtocols: ["http/1.1"],
-                servername: resolveProxyTlsServername(proxyHostname),
-                ...(params.proxyTls?.ca ? { ca: params.proxyTls.ca } : {}),
-              }),
-            })
-          : http.request(requestOptions);
-      request.once("connect", onConnect);
-      request.once("error", onError);
-      params.signal.addEventListener("abort", onAbort, { once: true });
-      if (params.signal.aborted) {
-        onAbort();
-        return;
-      }
-      timeout = setTimeout(
-        () => fail(new Error(`Proxy CONNECT timed out after ${params.timeoutMs}ms`)),
-        params.timeoutMs,
-      );
-      timeout.unref?.();
-      request.end();
-    } catch (error) {
-      fail(error);
-    }
-  });
-}
-
 function assertApnsAuthority(authority: string): ApnsAuthority {
   let parsed: URL;
   try {
@@ -258,22 +117,14 @@ async function openApnsTlsTunnel(params: {
   // tokens embedded in a configured proxy URL cannot surface in errors.
   const proxyUrl = normalizeConnectProxyUrl(params.proxyUrl);
   const deadline = Date.now() + params.timeoutMs;
-  const proxySocket = params.signal
-    ? await openAbortableProxyConnectTunnel({
-        proxyUrl,
-        ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-        targetHost: params.targetHost,
-        targetPort: params.targetPort,
-        timeoutMs: params.timeoutMs,
-        signal: params.signal,
-      })
-    : await openProxyConnectTunnel({
-        proxyUrl,
-        ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-        targetHost: params.targetHost,
-        targetPort: params.targetPort,
-        timeoutMs: params.timeoutMs,
-      });
+  const proxySocket = await openProxyConnectTunnel({
+    proxyUrl,
+    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
+    targetHost: params.targetHost,
+    targetPort: params.targetPort,
+    timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
 
   const abortController = new AbortController();
   const abortFromCaller = () => {

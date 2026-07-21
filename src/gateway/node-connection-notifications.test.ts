@@ -17,6 +17,7 @@ function node(
   return {
     nodeId,
     connId: `conn-${nodeId}`,
+    pairingIdentity: `identity-${nodeId}`,
     displayName: nodeId,
     platform: "darwin",
     commands: ["system.notify"],

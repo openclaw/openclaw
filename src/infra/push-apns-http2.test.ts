@@ -13,18 +13,13 @@ type ProxyConnectTunnelParams = Parameters<
 
 const {
   connectSpy,
-  fakeProxyConnectRequest,
   tunnelSpy,
-  httpRequestSpy,
-  httpsRequestSpy,
   tlsConnectSpy,
-  setProxyConnectEvent,
   setTargetTlsEvent,
   fakeProxySocket,
   fakeRequest,
   fakeSession,
   fakeTlsSocket,
-  FakeHttpsAgent,
 } = vi.hoisted(() => {
   class FakeEmitter {
     private readonly handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -95,49 +90,22 @@ const {
     destroy: vi.fn(),
     unshift: vi.fn(),
   });
-  let proxyConnectEvent: "connect" | undefined = "connect";
-  const fakeProxyConnectRequestLocal = Object.assign(new FakeEmitter(), {
-    socket: fakeProxySocketLocal,
-    destroy: vi.fn(() => {
-      fakeProxySocketLocal.destroy();
-    }),
-    end: vi.fn(() => {
-      const event = proxyConnectEvent;
-      if (event) {
-        queueMicrotask(() => {
-          fakeProxyConnectRequestLocal.emit(
-            event,
-            { statusCode: 200, statusMessage: "Connection Established" },
-            fakeProxySocketLocal,
-            Buffer.alloc(0),
-          );
-        });
-      }
-    }),
-  });
   const fakeTlsSocketLocal = Object.assign(new FakeEmitter(), {
     encrypted: true,
     alpnProtocol: "h2" as string | false,
     destroyed: false,
     destroy: vi.fn(),
   });
-  class FakeHttpsAgentLocal {
-    constructor(readonly options: Record<string, unknown>) {}
-  }
   fakeTlsSocketLocal.destroy.mockImplementation(() => {
     fakeTlsSocketLocal.destroyed = true;
   });
   let targetTlsEvent: "secureConnect" | "close" | "error" | undefined = "secureConnect";
   return {
-    fakeProxyConnectRequest: fakeProxyConnectRequestLocal,
     fakeProxySocket: fakeProxySocketLocal,
     fakeRequest: fakeRequestLocal,
     fakeSession: fakeSessionLocal,
     fakeTlsSocket: fakeTlsSocketLocal,
-    FakeHttpsAgent: FakeHttpsAgentLocal,
     connectSpy: vi.fn(() => fakeSessionLocal),
-    httpRequestSpy: vi.fn(() => fakeProxyConnectRequestLocal),
-    httpsRequestSpy: vi.fn((_options: Record<string, unknown>) => fakeProxyConnectRequestLocal),
     tunnelSpy: vi.fn(async (_params: ProxyConnectTunnelParams) => fakeProxySocketLocal),
     tlsConnectSpy: vi.fn(() => {
       const event = targetTlsEvent;
@@ -155,27 +123,13 @@ const {
     setTargetTlsEvent: (event: typeof targetTlsEvent) => {
       targetTlsEvent = event;
     },
-    setProxyConnectEvent: (event: typeof proxyConnectEvent) => {
-      proxyConnectEvent = event;
-    },
   };
 });
-
-vi.mock("node:http", () => ({
-  default: { request: httpRequestSpy },
-  request: httpRequestSpy,
-}));
 
 vi.mock("node:http2", () => ({
   default: { connect: connectSpy, constants: { NGHTTP2_CANCEL: 8 } },
   connect: connectSpy,
   constants: { NGHTTP2_CANCEL: 8 },
-}));
-
-vi.mock("node:https", () => ({
-  default: { Agent: FakeHttpsAgent, request: httpsRequestSpy },
-  Agent: FakeHttpsAgent,
-  request: httpsRequestSpy,
 }));
 
 vi.mock("node:tls", () => ({
@@ -196,23 +150,6 @@ function lastTunnelCall(): ProxyConnectTunnelParams {
   return call[0];
 }
 
-function lastHttpsRequestOptions(): Record<string, unknown> {
-  const calls = httpsRequestSpy.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("expected HTTPS proxy CONNECT request");
-  }
-  return call[0];
-}
-
-function lastHttpsAgentOptions(): Record<string, unknown> {
-  const agent = lastHttpsRequestOptions().agent;
-  if (!(agent instanceof FakeHttpsAgent)) {
-    throw new Error("expected one-off HTTPS proxy agent");
-  }
-  return agent.options;
-}
-
 function lastConnectCall(): [string, http2.ClientSessionOptions] {
   const calls = connectSpy.mock.calls;
   const call = calls[calls.length - 1];
@@ -226,15 +163,9 @@ describe("connectApnsHttp2Session", () => {
   beforeEach(() => {
     vi.useRealTimers();
     connectSpy.mockClear();
-    httpRequestSpy.mockClear();
-    httpsRequestSpy.mockClear();
     tunnelSpy.mockClear();
     tlsConnectSpy.mockClear();
-    setProxyConnectEvent("connect");
     setTargetTlsEvent("secureConnect");
-    fakeProxyConnectRequest.reset();
-    fakeProxyConnectRequest.destroy.mockClear();
-    fakeProxyConnectRequest.end.mockClear();
     fakeProxySocket.reset();
     fakeProxySocket.destroy.mockClear();
     fakeProxySocket.unshift.mockClear();
@@ -326,34 +257,24 @@ describe("connectApnsHttp2Session", () => {
     );
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
+    const controller = new AbortController();
     const session = await connectApnsHttp2Session({
       authority: "https://api.push.apple.com",
       timeoutMs: 10_000,
-      signal: new AbortController().signal,
+      signal: controller.signal,
     });
     stopActiveManagedProxyRegistration(registration);
 
     expect(session).toBe(fakeSession);
-    expect(tunnelSpy).not.toHaveBeenCalled();
-    expect(httpRequestSpy).not.toHaveBeenCalled();
-    expect(lastHttpsRequestOptions()).toMatchObject({
-      protocol: "https:",
-      hostname: "proxy.example",
-      port: "8443",
-      method: "CONNECT",
-      path: "api.push.apple.com:443",
-      agent: expect.any(FakeHttpsAgent),
-      headers: {
-        host: "api.push.apple.com:443",
-        "proxy-connection": "Keep-Alive",
-        "proxy-authorization": "Basic dXNlcjpwYXNz",
-      },
+    const tunnelCall = lastTunnelCall();
+    expect(tunnelCall).toMatchObject({
+      targetHost: "api.push.apple.com",
+      targetPort: 443,
+      timeoutMs: 10_000,
+      proxyTls: { ca: "active-proxy-ca" },
     });
-    expect(lastHttpsAgentOptions()).toMatchObject({
-      ALPNProtocols: ["http/1.1"],
-      servername: "proxy.example",
-      ca: "active-proxy-ca",
-    });
+    expect(String(tunnelCall.proxyUrl)).toBe("https://user:pass@proxy.example:8443/");
+    expect(tunnelCall).toMatchObject({ signal: controller.signal });
     expect(tlsConnectSpy).toHaveBeenCalledWith({
       socket: fakeProxySocket,
       servername: "api.push.apple.com",
@@ -365,51 +286,6 @@ describe("connectApnsHttp2Session", () => {
     const createConnection = connectCall[1].createConnection;
     expect(typeof createConnection).toBe("function");
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
-  });
-
-  it("disables HTTPS proxy SNI when the managed proxy host is an IP address", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://127.0.0.1:8443"), {
-      loopbackMode: "gateway-only",
-    });
-    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
-
-    await connectApnsHttp2Session({
-      authority: "https://api.push.apple.com",
-      timeoutMs: 10_000,
-      signal: new AbortController().signal,
-    });
-    stopActiveManagedProxyRegistration(registration);
-
-    expect(lastHttpsRequestOptions()).toMatchObject({
-      hostname: "127.0.0.1",
-      path: "api.push.apple.com:443",
-    });
-    expect(lastHttpsAgentOptions()).toMatchObject({ servername: "" });
-  });
-
-  it("rejects an invalidated proxy setup and destroys its active CONNECT socket", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
-      loopbackMode: "gateway-only",
-    });
-    const controller = new AbortController();
-    setProxyConnectEvent(undefined);
-    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
-
-    const connecting = connectApnsHttp2Session({
-      authority: "https://api.push.apple.com",
-      timeoutMs: 10_000,
-      signal: controller.signal,
-    });
-    await vi.waitFor(() => expect(httpsRequestSpy).toHaveBeenCalledTimes(1));
-    controller.abort(new Error("pairing removed"));
-
-    await expect(connecting).rejects.toThrow("pairing removed");
-    expect(fakeProxyConnectRequest.destroy).toHaveBeenCalledOnce();
-    expect(fakeProxySocket.destroy).toHaveBeenCalledOnce();
-    expect(tunnelSpy).not.toHaveBeenCalled();
-    expect(tlsConnectSpy).not.toHaveBeenCalled();
-    expect(connectSpy).not.toHaveBeenCalled();
-    stopActiveManagedProxyRegistration(registration);
   });
 
   it("rejects a non-h2 target tunnel without exposing proxy URL details", async () => {
@@ -475,8 +351,6 @@ describe("connectApnsHttp2Session", () => {
       }),
     ).rejects.toThrow("Proxy CONNECT failed via http://proxy.example:8080: URI malformed");
     expect(tunnelSpy).not.toHaveBeenCalled();
-    expect(httpRequestSpy).not.toHaveBeenCalled();
-    expect(httpsRequestSpy).not.toHaveBeenCalled();
   });
 
   it("caps oversized managed proxy timeouts before opening the APNs tunnel", async () => {

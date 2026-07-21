@@ -7,6 +7,11 @@ import {
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  captureNodePairingGeneration,
+  isNodePairingGenerationCurrent,
+  type NodePairingGeneration,
+} from "../../infra/node-pairing-state.js";
+import {
   drainNodePendingWork,
   enqueueNodePendingWork,
   removeNodePendingWorkItem,
@@ -14,23 +19,14 @@ import {
   type NodePendingWorkType,
 } from "../node-pending-work.js";
 import {
-  captureNodePairingGeneration,
-  isNodePairingGenerationCurrent,
-  type NodePairingGeneration,
-} from "./node-pairing-generation.js";
-import {
   captureNodeWakeLifecycle,
   isNodeWakeLifecycleCurrent,
-  releaseNodeWakeLifecycle,
-} from "./nodes-wake-state.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
-import {
-  maybeSendNodeWakeNudge,
-  maybeWakeNodeWithApns,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
   NODE_WAKE_RECONNECT_WAIT_MS,
-  waitForNodeReconnect,
-} from "./nodes.js";
+  releaseNodeWakeLifecycle,
+} from "../node-wake-state.js";
+import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { maybeSendNodeWakeNudge, maybeWakeNodeWithApns, waitForNodeReconnect } from "./nodes.js";
 import type { RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

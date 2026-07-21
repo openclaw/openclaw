@@ -77,7 +77,8 @@ describe("gateway node session runtime", () => {
 
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
-      await runtime.nodeSendToSession("main", "chat", { ok: true });
+      runtime.nodeSendToSession("main", "chat", { ok: true });
+      await vi.waitFor(() => expect(frames).toHaveLength(1));
       expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       parseSpy.mockRestore();
@@ -116,7 +117,7 @@ describe("gateway node session runtime", () => {
     currentPairingGeneration = "generation-b";
     runtime.broadcastVoiceWakeChanged(["retired"]);
     runtime.broadcastVoiceWakeRoutingChanged({ ...routing, updatedAtMs: 2 });
-    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(4));
 
     expect(frames.map((frame) => JSON.parse(frame))).toEqual([
       { type: "event", event: "voicewake.changed", payload: { triggers: ["openclaw"] } },
@@ -125,14 +126,18 @@ describe("gateway node session runtime", () => {
     expect(broadcast).toHaveBeenCalledTimes(4);
   });
 
-  test("fences generation-less voice-wake updates by authenticated pairing identity", () => {
+  test("fences generation-less voice-wake updates by authenticated pairing identity", async () => {
     let pairingExists = true;
     const broadcast = vi.fn();
-    const runtime = createRuntime(
-      async () => "generation-a",
+    const runtime = createGatewayNodeSessionRuntime({
       broadcast,
-      (_nodeId, expected) => pairingExists && expected.identity === "identity-a",
-    );
+      resolveCurrentPairingState: async () =>
+        pairingExists ? { identity: "identity-a" } : undefined,
+      isPairingStateCurrent: (_nodeId, expected) =>
+        pairingExists && expected.identity === "identity-a",
+      sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+      sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
+    });
     const frames: string[] = [];
     const socket: TestSocket = {
       bufferedAmount: 0,
@@ -144,8 +149,10 @@ describe("gateway node session runtime", () => {
     const send = vi.spyOn(runtime.nodeRegistry, "sendEventRawForPairingGeneration");
 
     runtime.broadcastVoiceWakeChanged(["openclaw"]);
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
     pairingExists = false;
     runtime.broadcastVoiceWakeChanged(["retired"]);
+    await vi.waitFor(() => expect(client.invalidated).toBe(true));
 
     expect(send).not.toHaveBeenCalled();
     expect(frames.map((frame) => JSON.parse(frame))).toEqual([
@@ -162,27 +169,28 @@ describe("gateway node session runtime", () => {
     const originalFrames: string[] = [];
     registerNode(runtime, "conn-original", "generation-a", originalFrames);
     runtime.nodeSubscribe("node-a", "main", "conn-original");
-    await runtime.nodeSendToSession("main", "chat", { seq: 1 });
-    expect(originalFrames).toHaveLength(1);
+    runtime.nodeSendToSession("main", "chat", { seq: 1 });
+    await vi.waitFor(() => expect(originalFrames).toHaveLength(1));
 
     currentPairingGeneration = "generation-b";
-    await runtime.nodeSendToSession("main", "chat", { seq: 2 });
+    runtime.nodeSendToSession("main", "chat", { seq: 2 });
+    await vi.waitFor(() => expect(runtime.nodeRegistry.get("node-a")).toBeUndefined());
     expect(originalFrames).toHaveLength(1);
 
     const replacementFrames: string[] = [];
     registerNode(runtime, "conn-replacement", "generation-b", replacementFrames);
     runtime.nodeSubscribe("node-a", "retired", "conn-original");
-    await runtime.nodeSendToSession("retired", "chat", { seq: 3 });
+    runtime.nodeSendToSession("retired", "chat", { seq: 3 });
     expect(replacementFrames).toHaveLength(0);
 
     runtime.nodeSubscribe("node-a", "main", "conn-replacement");
-    await runtime.nodeSendToSession("main", "chat", { seq: 4 });
-    expect(replacementFrames).toHaveLength(1);
+    runtime.nodeSendToSession("main", "chat", { seq: 4 });
+    await vi.waitFor(() => expect(replacementFrames).toHaveLength(1));
 
     const reconnectFrames: string[] = [];
     registerNode(runtime, "conn-reconnect", "generation-b", reconnectFrames);
-    await runtime.nodeSendToSession("main", "chat", { seq: 5 });
-    expect(reconnectFrames).toHaveLength(1);
+    runtime.nodeSendToSession("main", "chat", { seq: 5 });
+    await vi.waitFor(() => expect(reconnectFrames).toHaveLength(1));
   });
 
   test("preserves subscriptions for an exact live pairing generation promotion", async () => {
@@ -205,8 +213,7 @@ describe("gateway node session runtime", () => {
         },
       ),
     ).not.toBeNull();
-    await runtime.nodeSendToSession("main", "chat", { ok: true });
-
-    expect(frames).toHaveLength(1);
+    runtime.nodeSendToSession("main", "chat", { ok: true });
+    await vi.waitFor(() => expect(frames).toHaveLength(1));
   });
 });

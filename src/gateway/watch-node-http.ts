@@ -31,6 +31,7 @@ import {
   requestDevicePairing,
   verifyDeviceToken,
 } from "../infra/device-pairing.js";
+import { captureAuthenticatedNodePairingState } from "../infra/node-pairing-state.js";
 import {
   approveNodePairing,
   beginNodePairingConnect,
@@ -69,7 +70,6 @@ import type {
 } from "./node-registry.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 import type { GatewayBroadcastFn } from "./server-broadcast-types.js";
-import { captureAuthenticatedNodePairingState } from "./server-methods/node-pairing-generation.js";
 import { resolveConnectAuthDecision } from "./server/ws-connection/auth-context.js";
 import { resolveDeviceSignaturePayloadVersion } from "./server/ws-connection/handshake-auth-helpers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";

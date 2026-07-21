@@ -618,7 +618,11 @@ describe("node surface approvals", () => {
         { nodeId: "node-1", platform: "darwin", commands: ["system.run", "system.which"] },
         baseDir,
       );
-      await approveNodePairing(pending.request.requestId, { callerScopes: [] }, baseDir);
+      await approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.admin"] },
+        baseDir,
+      );
 
       const currentGeneration = resolveNodePairingGeneration(
         await getPairedDevice("node-1", baseDir),

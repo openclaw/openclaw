@@ -403,7 +403,9 @@ describe("node exec events", () => {
   it("keeps a node run authorized from exec.started through exec.finished", async () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];
-    registry.register(makeNodeClient("conn-1", "node-1", frames), {});
+    registry.register(makeNodeClient("conn-1", "node-1", frames), {
+      pairingIdentity: "identity-a",
+    });
     const invoke = registry.invoke({
       nodeId: "node-1",
       command: "system.run",

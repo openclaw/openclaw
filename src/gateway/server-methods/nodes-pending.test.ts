@@ -26,12 +26,12 @@ vi.mock("../node-pending-work.js", () => ({
   removeNodePendingWorkItem: mocks.removeNodePendingWorkItem,
 }));
 
-vi.mock("./node-pairing-generation.js", () => ({
+vi.mock("../../infra/node-pairing-state.js", () => ({
   captureNodePairingGeneration: mocks.captureNodePairingGeneration,
   isNodePairingGenerationCurrent: mocks.isNodePairingGenerationCurrent,
 }));
 
-vi.mock("./nodes-wake-state.js", () => ({
+vi.mock("../node-wake-state.js", () => ({
   captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
   isNodeWakeLifecycleCurrent: mocks.isNodeWakeLifecycleCurrent,
   releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,

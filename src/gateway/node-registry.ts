@@ -16,6 +16,7 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { setActiveNodeContext } from "../infra/active-node-context.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
+import type { NodePairingBinding } from "../infra/node-pairing-state.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { normalizeString } from "./node-normalize.js";
 import {
@@ -73,6 +74,20 @@ export type NodeSession = {
   lastActiveAtMs?: number;
   presenceUpdatedAtMs?: number;
 };
+
+type PairingBoundNodeSession = NodeSession & { pairingIdentity: string };
+
+type PairingBoundNodeSessionLease = {
+  session: PairingBoundNodeSession;
+  nodeId: string;
+  connId: string;
+  binding: NodePairingBinding;
+};
+
+type PairingLeaseResolution =
+  | { status: "current"; session: PairingBoundNodeSession }
+  | { status: "stale"; presenceInvalidated: boolean }
+  | { status: "unavailable" };
 
 /** Authorized system.run event window bound to one node connection. */
 type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
@@ -168,44 +183,29 @@ export type NodeEventTransport = {
   checkConnectivity?: (timeoutMs: number) => Promise<NodeConnectivityResult>;
 };
 
-type NodePairingStateSnapshot = {
-  identity: string;
-  generation?: string;
-};
-
-type NodePairingBinding = {
-  identity?: string;
-  generation?: string;
-};
+type NodePairingStateSnapshot = NodePairingBinding;
 
 type NodeSessionRegistrationOptions = {
   remoteIp?: string | undefined;
-  pairingIdentity?: string | undefined;
+  pairingIdentity: string;
   pairingGeneration?: string | undefined;
 };
 
-function pairingBindingForSession(node: NodeSession): NodePairingBinding | undefined {
-  if (!node.pairingIdentity && !node.pairingGeneration) {
-    return undefined;
-  }
+function pairingBindingForSession(node: PairingBoundNodeSession): NodePairingBinding {
   return {
-    ...(node.pairingIdentity ? { identity: node.pairingIdentity } : {}),
+    identity: node.pairingIdentity,
     ...(node.pairingGeneration ? { generation: node.pairingGeneration } : {}),
   };
 }
 
-function pairingStateMatchesSession(
-  node: NodeSession,
+function pairingStateMatchesBinding(
+  binding: NodePairingBinding,
   current: NodePairingStateSnapshot | undefined,
 ): boolean {
-  const binding = pairingBindingForSession(node);
-  if (!binding) {
-    return true;
-  }
   if (!current) {
     return false;
   }
-  if (binding.identity && binding.identity !== current.identity) {
+  if (binding.identity !== current.identity) {
     return false;
   }
   return !binding.generation || binding.generation === current.generation;
@@ -249,7 +249,7 @@ function isSerializedEventPayload(value: unknown): value is SerializedEventPaylo
 
 /** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
-  private nodesById = new Map<string, NodeSession>();
+  private nodesById = new Map<string, PairingBoundNodeSession>();
   private nodesByConn = new Map<string, string>();
   private eventTransportsByConn = new Map<string, NodeEventTransport>();
   private pendingInvokes = new Map<string, PendingInvoke>();
@@ -304,6 +304,74 @@ export class NodeRegistry {
   private pairingGenerationEventChains = new Map<string, Promise<void>>();
 
   constructor(private readonly options: NodeRegistryOptions = {}) {}
+
+  private listConnectedSessions(): PairingBoundNodeSession[] {
+    return [...this.nodesById.values()].filter((node) => node.client.invalidated !== true);
+  }
+
+  private capturePairingLease(node: PairingBoundNodeSession): PairingBoundNodeSessionLease {
+    return {
+      session: node,
+      nodeId: node.nodeId,
+      connId: node.connId,
+      binding: pairingBindingForSession(node),
+    };
+  }
+
+  private currentSessionForLease(
+    lease: PairingBoundNodeSessionLease,
+  ): PairingBoundNodeSession | undefined {
+    const current = this.nodesById.get(lease.nodeId);
+    return current === lease.session &&
+      current.connId === lease.connId &&
+      current.pairingIdentity === lease.binding.identity &&
+      current.pairingGeneration === lease.binding.generation &&
+      current.client.invalidated !== true
+      ? current
+      : undefined;
+  }
+
+  private settlePairingLease(params: {
+    lease: PairingBoundNodeSessionLease;
+    isCurrent: boolean;
+    invalidateStale: boolean;
+  }): PairingLeaseResolution {
+    const current = this.currentSessionForLease(params.lease);
+    if (!current) {
+      return { status: "stale", presenceInvalidated: false };
+    }
+    if (params.isCurrent) {
+      return { status: "current", session: current };
+    }
+    const presenceInvalidated = params.invalidateStale
+      ? this.invalidateSessionForPairingChange(current)
+      : false;
+    return { status: "stale", presenceInvalidated };
+  }
+
+  private async resolvePairingLease(
+    lease: PairingBoundNodeSessionLease,
+    options: { invalidateStale: boolean },
+  ): Promise<PairingLeaseResolution> {
+    const resolveCurrentPairingState = this.options.resolveCurrentPairingState;
+    if (!resolveCurrentPairingState) {
+      const current = this.currentSessionForLease(lease);
+      return current
+        ? { status: "current", session: current }
+        : { status: "stale", presenceInvalidated: false };
+    }
+    let currentPairingState: NodePairingStateSnapshot | undefined;
+    try {
+      currentPairingState = await resolveCurrentPairingState(lease.nodeId);
+    } catch {
+      return { status: "unavailable" };
+    }
+    return this.settlePairingLease({
+      lease,
+      isCurrent: pairingStateMatchesBinding(lease.binding, currentPairingState),
+      invalidateStale: options.invalidateStale,
+    });
+  }
 
   private normalizePluginToolDescriptors(params: {
     nodeId: string;
@@ -360,6 +428,9 @@ export class NodeRegistry {
     opts: NodeSessionRegistrationOptions,
     transport?: NodeEventTransport,
   ) {
+    if (!opts.pairingIdentity) {
+      throw new Error("node session registration requires pairing identity");
+    }
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
     const previousPairingGeneration = this.nodesById.get(nodeId)?.pairingGeneration;
@@ -404,10 +475,10 @@ export class NodeRegistry {
     const declaredNodePluginTools: NodePluginToolDescriptor[] = [];
     const nodePluginTools: NodePluginToolDescriptor[] = [];
     const nodeSkills: NodeSkillDescriptor[] = [];
-    const session: NodeSession = {
+    const session: PairingBoundNodeSession = {
       nodeId,
       connId: client.connId,
-      ...(opts.pairingIdentity ? { pairingIdentity: opts.pairingIdentity } : {}),
+      pairingIdentity: opts.pairingIdentity,
       ...(opts.pairingGeneration ? { pairingGeneration: opts.pairingGeneration } : {}),
       client,
       clientId: connect.client.id,
@@ -495,18 +566,16 @@ export class NodeRegistry {
 
   /** List connected node sessions. */
   listConnected(): NodeSession[] {
-    return [...this.nodesById.values()].filter((node) => node.client.invalidated !== true);
+    return this.listConnectedSessions();
   }
 
   /** Filter connected sessions against an already-loaded pairing-state snapshot. */
   listConnectedForPairingStates(
     currentPairingStates: ReadonlyMap<string, NodePairingStateSnapshot>,
   ): NodeSession[] {
-    return this.listConnected().filter((node) => {
+    return this.listConnectedSessions().filter((node) => {
       const current = currentPairingStates.get(node.nodeId);
-      return Boolean(
-        current && pairingBindingForSession(node) && pairingStateMatchesSession(node, current),
-      );
+      return pairingStateMatchesBinding(pairingBindingForSession(node), current);
     });
   }
 
@@ -518,28 +587,23 @@ export class NodeRegistry {
     }
     const connected: NodeSession[] = [];
     let invalidatedPresence = false;
-    for (const candidate of this.listConnected()) {
-      const binding = pairingBindingForSession(candidate);
-      if (!binding) {
-        connected.push(candidate);
-        continue;
-      }
+    for (const candidate of this.listConnectedSessions()) {
+      const lease = this.capturePairingLease(candidate);
       let isCurrent: boolean;
       try {
-        isCurrent = isPairingStateCurrent(candidate.nodeId, binding);
+        isCurrent = isPairingStateCurrent(candidate.nodeId, lease.binding);
       } catch {
         continue;
       }
-      const current = this.nodesById.get(candidate.nodeId);
-      if (current !== candidate || current.client.invalidated === true) {
-        continue;
-      }
-      if (isCurrent) {
-        connected.push(current);
-        continue;
-      }
-      if (this.invalidateSessionForPairingChange(current)) {
-        invalidatedPresence = true;
+      const resolution = this.settlePairingLease({
+        lease,
+        isCurrent,
+        invalidateStale: true,
+      });
+      if (resolution.status === "current") {
+        connected.push(resolution.session);
+      } else if (resolution.status === "stale") {
+        invalidatedPresence ||= resolution.presenceInvalidated;
       }
     }
     if (invalidatedPresence) {
@@ -550,49 +614,18 @@ export class NodeRegistry {
 
   /** Resolve persistent pairing state before projecting connected sessions. */
   async listCurrentConnected(): Promise<NodeSession[]> {
-    const resolveCurrentPairingState = this.options.resolveCurrentPairingState;
-    if (!resolveCurrentPairingState) {
-      return this.listConnected();
-    }
-    const candidates = this.listConnected().map((node) => ({
-      node,
-      connId: node.connId,
-      pairingIdentity: node.pairingIdentity,
-      pairingGeneration: node.pairingGeneration,
-    }));
     const resolved = await Promise.all(
-      candidates.map(async (candidate) => {
-        try {
-          return {
-            ...candidate,
-            currentPairingState: await resolveCurrentPairingState(candidate.node.nodeId),
-            available: true,
-          };
-        } catch {
-          return { ...candidate, currentPairingState: undefined, available: false };
-        }
-      }),
+      this.listConnectedSessions().map((node) =>
+        this.resolvePairingLease(this.capturePairingLease(node), { invalidateStale: true }),
+      ),
     );
     const connected: NodeSession[] = [];
     let invalidatedPresence = false;
     for (const result of resolved) {
-      const current = this.nodesById.get(result.node.nodeId);
-      if (
-        !result.available ||
-        current !== result.node ||
-        current.connId !== result.connId ||
-        current.pairingIdentity !== result.pairingIdentity ||
-        current.pairingGeneration !== result.pairingGeneration ||
-        current.client.invalidated === true
-      ) {
-        continue;
-      }
-      if (pairingStateMatchesSession(current, result.currentPairingState)) {
-        connected.push(current);
-        continue;
-      }
-      if (this.invalidateSessionForPairingChange(current)) {
-        invalidatedPresence = true;
+      if (result.status === "current") {
+        connected.push(result.session);
+      } else if (result.status === "stale") {
+        invalidatedPresence ||= result.presenceInvalidated;
       }
     }
     if (invalidatedPresence) {
@@ -614,13 +647,24 @@ export class NodeRegistry {
 
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
+    return this.getRegisteredSession(nodeId);
+  }
+
+  private getRegisteredSession(nodeId: string): PairingBoundNodeSession | undefined {
     const node = this.nodesById.get(nodeId);
     return node?.client.invalidated === true ? undefined : node;
   }
 
   /** Return only the session authenticated for the requested persistent pairing generation. */
   getForPairingGeneration(nodeId: string, pairingGeneration: string): NodeSession | undefined {
-    const node = this.get(nodeId);
+    return this.getRegisteredSessionForPairingGeneration(nodeId, pairingGeneration);
+  }
+
+  private getRegisteredSessionForPairingGeneration(
+    nodeId: string,
+    pairingGeneration: string,
+  ): PairingBoundNodeSession | undefined {
+    const node = this.getRegisteredSession(nodeId);
     // A mismatch alone does not reveal whether the session or the requesting
     // operation is stale, so lookup must not revoke either generation.
     return node?.pairingGeneration === pairingGeneration ? node : undefined;
@@ -630,33 +674,19 @@ export class NodeRegistry {
   async isConnectionCurrentPairingState(connId: string): Promise<boolean> {
     const nodeId = this.nodesByConn.get(connId);
     const initial = nodeId ? this.nodesById.get(nodeId) : undefined;
-    const expectedPairingIdentity = initial?.pairingIdentity;
-    const expectedPairingGeneration = initial?.pairingGeneration;
     if (
       !nodeId ||
       !initial ||
       initial.connId !== connId ||
       initial.client.invalidated === true ||
-      (!expectedPairingIdentity && !expectedPairingGeneration) ||
       !this.options.resolveCurrentPairingState
     ) {
       return false;
     }
-    let currentPairingState: NodePairingStateSnapshot | undefined;
-    try {
-      currentPairingState = await this.options.resolveCurrentPairingState(nodeId);
-    } catch {
-      return false;
-    }
-    const current = this.nodesById.get(nodeId);
-    return Boolean(
-      current &&
-      current.connId === connId &&
-      current.client.invalidated !== true &&
-      current.pairingIdentity === expectedPairingIdentity &&
-      current.pairingGeneration === expectedPairingGeneration &&
-      pairingStateMatchesSession(current, currentPairingState),
-    );
+    const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
+      invalidateStale: false,
+    });
+    return resolution.status === "current";
   }
 
   /** Updates recent input activity for the exact authenticated node connection. */
@@ -708,31 +738,25 @@ export class NodeRegistry {
   }
 
   private publishActiveNodeContext(): void {
-    const active = this.getActiveNode();
-    const pairingIdentity = active?.pairingIdentity;
-    const pairingGeneration = active?.pairingGeneration;
+    const active = this.getActiveNode(this.listConnectedSessions()) as
+      | PairingBoundNodeSession
+      | undefined;
+    const lease = active ? this.capturePairingLease(active) : undefined;
     setActiveNodeContext(
       active
         ? {
             nodeId: active.nodeId,
-            ...(pairingGeneration ? { pairingGeneration } : {}),
+            ...(active.pairingGeneration ? { pairingGeneration: active.pairingGeneration } : {}),
           }
         : null,
-      active
+      lease
         ? {
             isCurrent: () => {
-              const current = this.nodesById.get(active.nodeId);
-              if (
-                current !== active ||
-                current.client.invalidated === true ||
-                current.pairingIdentity !== pairingIdentity ||
-                current.pairingGeneration !== pairingGeneration
-              ) {
+              if (!this.currentSessionForLease(lease)) {
                 return false;
               }
-              const binding = pairingBindingForSession(active);
-              return binding && this.options.isPairingStateCurrent
-                ? this.options.isPairingStateCurrent(active.nodeId, binding)
+              return this.options.isPairingStateCurrent
+                ? this.options.isPairingStateCurrent(lease.nodeId, lease.binding)
                 : true;
             },
           }
@@ -992,7 +1016,6 @@ export class NodeRegistry {
         error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
       };
     }
-    const expectedPairingIdentity = node.pairingIdentity;
     const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
     if (this.options.resolveCurrentPairingState && !expectedPairingGeneration) {
       return {
@@ -1013,10 +1036,10 @@ export class NodeRegistry {
       };
     }
     if (expectedPairingGeneration && this.options.resolveCurrentPairingState) {
-      let currentPairingState: NodePairingStateSnapshot | undefined;
-      try {
-        currentPairingState = await this.options.resolveCurrentPairingState(params.nodeId);
-      } catch {
+      const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
+        invalidateStale: false,
+      });
+      if (resolution.status === "unavailable") {
         return {
           ok: false,
           error: {
@@ -1025,30 +1048,13 @@ export class NodeRegistry {
           },
         };
       }
-      if (!pairingStateMatchesSession(node, currentPairingState)) {
+      if (resolution.status !== "current") {
         return {
           ok: false,
           error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
         };
       }
-      // Pairing lookup yields; repeat every process-local ownership check before send.
-      node = this.nodesById.get(params.nodeId);
-      if (!node) {
-        return {
-          ok: false,
-          error: { code: "NOT_CONNECTED", message: "node not connected" },
-        };
-      }
-      if (
-        node.client.invalidated === true ||
-        node.pairingIdentity !== expectedPairingIdentity ||
-        node.pairingGeneration !== expectedPairingGeneration
-      ) {
-        return {
-          ok: false,
-          error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-        };
-      }
+      node = resolution.session;
       if (params.expectedConnId && node.connId !== params.expectedConnId) {
         return {
           ok: false,
@@ -1326,23 +1332,16 @@ export class NodeRegistry {
     ) {
       return false;
     }
-    let currentPairingState: NodePairingStateSnapshot | undefined;
-    try {
-      currentPairingState = await this.options.resolveCurrentPairingState(params.nodeId);
-    } catch {
+    const resolution = await this.resolvePairingLease(this.capturePairingLease(initial), {
+      invalidateStale: true,
+    });
+    if (resolution.status !== "current") {
+      if (resolution.status === "stale" && resolution.presenceInvalidated) {
+        this.publishActiveNodeContext();
+      }
       return false;
     }
-    const current = this.nodesById.get(params.nodeId);
-    if (
-      current !== initial ||
-      current.connId !== params.connId ||
-      current.pairingIdentity !== params.pairingIdentity ||
-      current.client.invalidated === true ||
-      !pairingStateMatchesSession(current, currentPairingState)
-    ) {
-      return false;
-    }
-    return this.sendEventToSession(current, params.event, params.payload);
+    return this.sendEventToSession(resolution.session, params.event, params.payload);
   }
 
   /** Sends only to a session that still owns the requested persistent pairing generation. */
@@ -1376,26 +1375,21 @@ export class NodeRegistry {
     event: string,
     payloadJSON?: SerializedEventPayload | null,
   ): Promise<boolean> {
-    let node = this.getForPairingGeneration(nodeId, pairingGeneration);
+    let node = this.getRegisteredSessionForPairingGeneration(nodeId, pairingGeneration);
     if (!node) {
       return false;
     }
-    const pairingIdentity = node.pairingIdentity;
     if (this.options.resolveCurrentPairingState) {
-      let currentPairingState: NodePairingStateSnapshot | undefined;
-      try {
-        currentPairingState = await this.options.resolveCurrentPairingState(nodeId);
-      } catch {
+      const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
+        invalidateStale: true,
+      });
+      if (resolution.status !== "current") {
+        if (resolution.status === "stale" && resolution.presenceInvalidated) {
+          this.publishActiveNodeContext();
+        }
         return false;
       }
-      if (!pairingStateMatchesSession(node, currentPairingState)) {
-        return false;
-      }
-      // The persistent lookup yields; a same-id replacement must be checked again before send.
-      node = this.getForPairingGeneration(nodeId, pairingGeneration);
-      if (!node || node.pairingIdentity !== pairingIdentity) {
-        return false;
-      }
+      node = resolution.session;
     }
     return this.sendEventRawInternal(node, event, payloadJSON);
   }

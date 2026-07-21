@@ -42,6 +42,22 @@ function testRemoteSession(
   } as NonNullable<ReturnType<NodeRegistry["get"]>>;
 }
 
+function setTestSkillsRemoteRegistry(
+  nodeIds: string | readonly string[],
+  registry: Record<string, unknown> & {
+    get: (nodeId: string) => ReturnType<NodeRegistry["get"]>;
+    listCurrentConnectedSync?: NodeRegistry["listCurrentConnectedSync"];
+  },
+): void {
+  const ids = typeof nodeIds === "string" ? [nodeIds] : nodeIds;
+  setSkillsRemoteRegistry({
+    ...registry,
+    listCurrentConnectedSync:
+      registry.listCurrentConnectedSync ??
+      (() => ids.flatMap((nodeId) => (registry.get(nodeId) ? [registry.get(nodeId)!] : []))),
+  } as unknown as NodeRegistry);
+}
+
 function createRemoteSkillWorkspace(bin: string): { cfg: OpenClawConfig; workspaceDir: string } {
   const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
   const skillDir = path.join(workspaceDir, "skills", "remote-skill");
@@ -333,8 +349,7 @@ describe("skills-remote", () => {
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         invoke: async (params: { command: string }) => {
           invokeCalls.push(params.command);
@@ -392,8 +407,7 @@ describe("skills-remote", () => {
         },
       } satisfies OpenClawConfig;
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         checkConnectivity: async () => ({
           ok: false,
@@ -463,8 +477,7 @@ describe("skills-remote", () => {
       let connId = "conn-old";
       const connectivityCalls: string[] = [];
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () =>
           ({
             nodeId,
@@ -524,8 +537,7 @@ describe("skills-remote", () => {
     let invokeCount = 0;
     let releaseProbe: (() => void) | undefined;
     const probeStarted = new Promise<void>((resolve) => {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         invoke: async () => {
           invokeCount += 1;
@@ -605,8 +617,7 @@ describe("skills-remote", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
     let invokeCount = 0;
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         invoke: async () => {
           invokeCount += 1;
@@ -660,8 +671,7 @@ describe("skills-remote", () => {
     vi.spyOn(Date, "now").mockReturnValue(2_000_000);
     let invokeCount = 0;
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         invoke: async () => {
           invokeCount += 1;
@@ -698,8 +708,7 @@ describe("skills-remote", () => {
     const checkConnectivity = vi.fn(async () => ({ ok: true as const }));
     const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         checkConnectivity,
         invoke,
@@ -744,16 +753,7 @@ describe("skills-remote", () => {
       .mockImplementationOnce(async () => await firstInvoke)
       .mockResolvedValueOnce({ ok: true as const, payload: { bins: [bin] } });
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [
-          {
-            nodeId,
-            connId,
-            pairingGeneration: TEST_PAIRING_GENERATION,
-            platform: "darwin",
-            commands: ["system.run", "system.which"],
-          } as NonNullable<ReturnType<NodeRegistry["get"]>>,
-        ],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () =>
           ({
             nodeId,
@@ -827,8 +827,7 @@ describe("skills-remote", () => {
       .mockImplementationOnce(async () => await retiredProbe)
       .mockResolvedValueOnce({ ok: true as const, payload: { bins: [currentBin] } });
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [session],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => session,
         invoke,
       } as unknown as NodeRegistry);
@@ -890,8 +889,7 @@ describe("skills-remote", () => {
     let pairingGeneration: string | undefined;
     const invoke = vi.fn(async () => ({ ok: true as const, payload: { bins: [bin] } }));
     try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () =>
           ({
             nodeId,
@@ -947,8 +945,7 @@ describe("skills-remote", () => {
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
+      setTestSkillsRemoteRegistry(nodeId, {
         get: () => testRemoteSession(nodeId),
         invoke: async (params: { command: string }) => {
           invokeCalls.push(params.command);
@@ -988,8 +985,7 @@ describe("skills-remote", () => {
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
       const invokeCalls: string[] = [];
-      setSkillsRemoteRegistry({
-        listConnected: () => [testRemoteSession(nodeA), testRemoteSession(nodeB)],
+      setTestSkillsRemoteRegistry([nodeA, nodeB], {
         get: (nodeId: string) => testRemoteSession(nodeId),
         checkConnectivity: (nodeId: string) => {
           if (nodeId === nodeA) {
@@ -1024,20 +1020,8 @@ describe("skills-remote", () => {
     const currentNodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
     const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
-    const staleSession = {
-      nodeId: staleNodeId,
-      connId: "conn-stale",
-      pairingGeneration: TEST_PAIRING_GENERATION,
-      platform: "darwin",
-      commands: ["system.run", "system.which"],
-    } as NonNullable<ReturnType<NodeRegistry["get"]>>;
-    const currentSession = {
-      nodeId: currentNodeId,
-      connId: "conn-current",
-      pairingGeneration: TEST_PAIRING_GENERATION,
-      platform: "darwin",
-      commands: ["system.run", "system.which"],
-    } as NonNullable<ReturnType<NodeRegistry["get"]>>;
+    const staleSession = testRemoteSession(staleNodeId, { connId: "conn-stale" });
+    const currentSession = testRemoteSession(currentNodeId, { connId: "conn-current" });
     const invoke = vi.fn(async () => ({
       ok: false as const,
       error: { code: "TIMEOUT", message: "node invoke timed out" },

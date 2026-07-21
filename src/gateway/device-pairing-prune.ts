@@ -3,7 +3,7 @@ import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
 } from "../infra/device-pairing.js";
-import { clearRemovedNodeRuntimeState } from "./server-methods/node-runtime-state.js";
+import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type PruneContext = Pick<

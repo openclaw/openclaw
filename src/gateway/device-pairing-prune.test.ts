@@ -1,5 +1,5 @@
 // Covers gateway-side cleanup when silent pairing supersedes stale sibling records.
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "vitest";
 import {
   approveDevicePairing,
   listDevicePairing,
@@ -11,13 +11,14 @@ import { loadApnsRegistration, registerApnsRegistration } from "../infra/push-ap
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { pruneSupersededSilentPairingsAfterApproval } from "./device-pairing-prune.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "./node-pending-work.js";
-import { pendingNodeActionsById } from "./server-methods/node-runtime-state.js";
+import { enqueuePendingNodeAction, listPendingNodeActions } from "./node-runtime-state.js";
 import {
   captureNodeWakeLifecycle,
-  nodeWakeByOwner,
-  nodeWakeNudgeByOwner,
-  nodeWakeStateKey,
-} from "./server-methods/nodes-wake-state.js";
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+  runNodeWakeAttempt,
+  runNodeWakeNudgeAttempt,
+} from "./node-wake-state.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-pairing-prune-" });
 
@@ -98,6 +99,10 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     await suiteRootTracker.cleanup();
   });
 
+  afterEach(() => {
+    resetNodeWakeStateForTest();
+  });
+
   test("retires stale node siblings across both pairing stores", async () => {
     const baseDir = await suiteRootTracker.make("case");
     await pairSilentDevice({
@@ -129,19 +134,30 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
       environment: "sandbox",
       baseDir,
     });
-    nodeWakeByOwner.set(nodeWakeStateKey("node-stale"), { lastWakeAtMs: Date.now() });
-    nodeWakeNudgeByOwner.set(nodeWakeStateKey("node-stale"), Date.now());
-    enqueueNodePendingWork({ nodeId: "node-stale", type: "location.request" });
-    pendingNodeActionsById.set("node-stale", [
-      {
-        id: "foreground-1",
-        nodeId: "node-stale",
-        pairingGeneration: "generation-1",
-        command: "camera.capture",
-        idempotencyKey: "idem-1",
-        enqueuedAtMs: Date.now(),
+    await runNodeWakeAttempt({
+      nodeId: "node-stale",
+      force: true,
+      throttleMs: 60_000,
+      attempt: async (markAttempted) => {
+        markAttempted();
+        return { available: true, throttled: false, path: "sent", durationMs: 1 };
       },
-    ]);
+    });
+    await runNodeWakeNudgeAttempt({
+      nodeId: "node-stale",
+      throttleMs: 60_000,
+      throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
+      attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
+    });
+    enqueueNodePendingWork({ nodeId: "node-stale", type: "location.request" });
+    enqueuePendingNodeAction({
+      nodeId: "node-stale",
+      pairingGeneration: "generation-1",
+      command: "camera.capture",
+      idempotencyKey: "idem-1",
+      ttlMs: 60_000,
+      maxPerNode: 10,
+    });
     const wakeLifecycle = captureNodeWakeLifecycle("node-stale");
 
     const harness = createPruneContext();
@@ -157,11 +173,10 @@ describe("pruneSupersededSilentPairingsAfterApproval", () => {
     expect(devices.paired.map((device) => device.deviceId)).toEqual(["node-anchor"]);
     const nodes = await listNodePairing(baseDir);
     expect(nodes.paired).toHaveLength(0);
-    expect(nodeWakeByOwner.has(nodeWakeStateKey("node-stale"))).toBe(false);
-    expect(nodeWakeNudgeByOwner.has(nodeWakeStateKey("node-stale"))).toBe(false);
+    expect(getNodeWakeStateSnapshot("node-stale")).toBeUndefined();
     expect(wakeLifecycle.aborted).toBe(true);
     expect(drainNodePendingWork("node-stale", { includeDefaultStatus: false }).items).toEqual([]);
-    expect(pendingNodeActionsById.has("node-stale")).toBe(false);
+    expect(listPendingNodeActions({ nodeId: "node-stale", ttlMs: 60_000 })).toEqual([]);
     await expect(loadApnsRegistration("node-stale", baseDir)).resolves.toBeNull();
     expect(harness.invalidated).toEqual(["node-stale"]);
     expect(harness.disconnected).toEqual(["node-stale"]);

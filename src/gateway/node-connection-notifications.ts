@@ -175,9 +175,6 @@ class NodeConnectionNotificationRouter {
     if (!this.currentSource(pending, connected)) {
       return false;
     }
-    if (!pending.pairingIdentity && !pending.pairingGeneration) {
-      return true;
-    }
     return await this.registry.isConnectionCurrentPairingState(pending.connId);
   }
 

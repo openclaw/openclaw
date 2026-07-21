@@ -1,5 +1,7 @@
-import { loadPairedDevicePairingStoreRecord } from "../infra/device-pairing-store.js";
-import { getPairedDevice, resolveNodePairingState } from "../infra/device-pairing.js";
+import {
+  isNodePairingBindingCurrent,
+  resolveCurrentNodePairingBinding,
+} from "../infra/node-pairing-state.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 // Gateway node session runtime factory.
 // Creates node registry, subscription, and voice-wake fanout state.
@@ -15,16 +17,6 @@ import type {
 } from "./server-chat-state.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
 import { hasConnectedTalkNode } from "./server-talk-nodes.js";
-
-function snapshotPairingState(device: Awaited<ReturnType<typeof getPairedDevice>>) {
-  const state = resolveNodePairingState(device);
-  return state
-    ? {
-        identity: state.identity.key,
-        ...(state.generation ? { generation: state.generation.key } : {}),
-      }
-    : undefined;
-}
 
 // Node session runtime owns connected node registry state, session event
 // subscriptions, and voice-wake fanout helpers for the gateway process.
@@ -46,18 +38,8 @@ export function createGatewayNodeSessionRuntime(params: {
     nodePluginToolsEnabled: params.nodePluginToolsEnabled,
     nodeSkillsEnabled: params.nodeSkillsEnabled,
     resolveCurrentPairingState:
-      params.resolveCurrentPairingState ??
-      (async (nodeId) => snapshotPairingState(await getPairedDevice(nodeId))),
-    isPairingStateCurrent:
-      params.isPairingStateCurrent ??
-      ((nodeId, expected) => {
-        const current = snapshotPairingState(loadPairedDevicePairingStoreRecord(nodeId));
-        return Boolean(
-          current &&
-          (!expected.identity || current.identity === expected.identity) &&
-          (!expected.generation || current.generation === expected.generation),
-        );
-      }),
+      params.resolveCurrentPairingState ?? resolveCurrentNodePairingBinding,
+    isPairingStateCurrent: params.isPairingStateCurrent ?? isNodePairingBindingCurrent,
     onPairingInvalidated: params.onPairingInvalidated,
     onPairingGenerationChanged: (change) => {
       nodeSubscriptions.updatePairingGeneration({
@@ -84,10 +66,12 @@ export function createGatewayNodeSessionRuntime(params: {
   };
   // Session fanout goes through the subscription manager so node reconnects and
   // explicit unsubscribes keep both node->session indexes in sync.
-  const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) =>
-    nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
-  const nodeSendToAllSubscribed = (event: string, payload: unknown) =>
-    nodeSubscriptions.sendToAllSubscribed(event, payload, nodeSendEvent);
+  const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) => {
+    void nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
+  };
+  const nodeSendToAllSubscribed = (event: string, payload: unknown) => {
+    void nodeSubscriptions.sendToAllSubscribed(event, payload, nodeSendEvent);
+  };
   const resolveSubscriptionGeneration = (nodeId: string, connId?: string) => {
     const node = nodeRegistry.get(nodeId);
     return connId && node?.connId === connId ? node.pairingGeneration : undefined;
@@ -106,12 +90,22 @@ export function createGatewayNodeSessionRuntime(params: {
   };
   const sendVoiceWakeEventToCurrentNodes = (event: string, payload: unknown) => {
     const payloadJSON = serializeEventPayload(payload);
-    for (const node of nodeRegistry.listCurrentConnectedSync()) {
+    for (const node of nodeRegistry.listConnected()) {
       const pairingGeneration = node.pairingGeneration;
       if (!pairingGeneration) {
         // Pending first-surface sessions have no command authority yet, but
         // their authenticated pairing identity still fences compatibility broadcasts.
-        nodeRegistry.sendEvent(node.nodeId, event, payload);
+        if (node.pairingIdentity) {
+          void nodeRegistry
+            .sendEventForPairingIdentity({
+              nodeId: node.nodeId,
+              connId: node.connId,
+              pairingIdentity: node.pairingIdentity,
+              event,
+              payload,
+            })
+            .catch(() => undefined);
+        }
         continue;
       }
       // Voice-wake broadcasts are fire-and-forget, but each node send still

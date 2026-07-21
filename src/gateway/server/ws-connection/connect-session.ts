@@ -9,6 +9,11 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
+import {
+  captureAuthenticatedNodePairingState,
+  type NodePairingGeneration,
+  type NodePairingIdentity,
+} from "../../../infra/node-pairing-state.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
@@ -33,12 +38,6 @@ import {
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
-import {
-  captureAuthenticatedNodePairingState,
-  captureNodePairingState,
-  type NodePairingGeneration,
-  type NodePairingIdentity,
-} from "../../server-methods/node-pairing-generation.js";
 import { formatUserProfileAvatarPath } from "../../user-profiles-http-path.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
@@ -53,6 +52,12 @@ import type {
 
 /** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
+
+type AuthenticatedNodePairingAdmission = {
+  authenticated: { nodeId: string; publicKey: string; token: string };
+  identity: NodePairingIdentity;
+  generation?: NodePairingGeneration;
+};
 
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
@@ -127,27 +132,29 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
-  let nodePairingIdentity: NodePairingIdentity | undefined;
-  let nodePairingGeneration: NodePairingGeneration | undefined;
-  let authenticatedNodePairing: { nodeId: string; publicKey: string; token: string } | undefined;
+  let nodePairingAdmission: AuthenticatedNodePairingAdmission | undefined;
   if (role === "node") {
     const nodeId = device?.id ?? connectParams.client.id;
     const authenticatedNodeToken =
       authMethod === "device-token"
         ? normalizeOptionalString(connectParams.auth?.deviceToken ?? connectParams.auth?.token)
         : deviceToken?.token;
-    authenticatedNodePairing =
-      device && devicePublicKey && authenticatedNodeToken
-        ? {
-            nodeId,
-            publicKey: devicePublicKey,
-            token: authenticatedNodeToken,
-          }
-        : undefined;
-    const admittedPairingState = authenticatedNodePairing
-      ? await captureAuthenticatedNodePairingState(authenticatedNodePairing)
-      : await captureNodePairingState(nodeId);
-    if (authenticatedNodePairing && !admittedPairingState) {
+    if (!device || !devicePublicKey || !authenticatedNodeToken) {
+      const message = "authenticated node pairing identity unavailable";
+      markHandshakeFailure("node-pairing-generation-changed", {});
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+    const authenticatedNodePairing = {
+      nodeId,
+      publicKey: devicePublicKey,
+      token: authenticatedNodeToken,
+    };
+    const admittedPairingState =
+      await captureAuthenticatedNodePairingState(authenticatedNodePairing);
+    if (!admittedPairingState) {
       const message = "node pairing changed during connect";
       markHandshakeFailure(
         "node-pairing-generation-changed",
@@ -158,8 +165,11 @@ export async function attachAuthenticatedGatewayConnect(
       close(1008, truncateCloseReason(message));
       return;
     }
-    nodePairingIdentity = admittedPairingState?.identity;
-    nodePairingGeneration = admittedPairingState?.generation ?? undefined;
+    nodePairingAdmission = {
+      authenticated: authenticatedNodePairing,
+      identity: admittedPairingState.identity,
+      ...(admittedPairingState.generation ? { generation: admittedPairingState.generation } : {}),
+    };
   }
 
   // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
@@ -350,18 +360,19 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
-  if (nodePairingIdentity) {
-    const currentPairingState = authenticatedNodePairing
-      ? await captureAuthenticatedNodePairingState(authenticatedNodePairing)
-      : await captureNodePairingState(nodePairingIdentity.nodeId);
+  const admittedNodePairing = role === "node" ? nodePairingAdmission : undefined;
+  if (admittedNodePairing) {
+    const currentPairingState = await captureAuthenticatedNodePairingState(
+      admittedNodePairing.authenticated,
+    );
     if (
       !currentPairingState ||
-      currentPairingState.identity.key !== nodePairingIdentity.key ||
-      currentPairingState.generation?.key !== nodePairingGeneration?.key
+      currentPairingState.identity.key !== admittedNodePairing.identity.key ||
+      currentPairingState.generation?.key !== admittedNodePairing.generation?.key
     ) {
       const message = "node pairing changed during connect";
       markHandshakeFailure("node-pairing-generation-changed", {
-        deviceId: nodePairingIdentity.nodeId,
+        deviceId: admittedNodePairing.identity.nodeId,
       });
       sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
       await releasePendingNodePairingCleanup();
@@ -439,12 +450,12 @@ export async function attachAuthenticatedGatewayConnect(
     });
     incrementPresenceVersion();
   }
-  if (role === "node") {
-    const pairingGeneration = nodePairingGeneration?.key;
+  if (admittedNodePairing) {
+    const pairingGeneration = admittedNodePairing.generation?.key;
     const requestContext = buildRequestContext();
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
-      ...(nodePairingIdentity ? { pairingIdentity: nodePairingIdentity.key } : {}),
+      pairingIdentity: admittedNodePairing.identity.key,
       ...(pairingGeneration ? { pairingGeneration } : {}),
     });
     recordRemoteNodeInfo({
@@ -483,15 +494,13 @@ export async function attachAuthenticatedGatewayConnect(
         );
         return;
       }
-      if (nodePairingIdentity) {
-        await requestContext.nodeRegistry.sendEventForPairingIdentity({
-          nodeId: nodeSession.nodeId,
-          connId: nodeSession.connId,
-          pairingIdentity: nodePairingIdentity.key,
-          event,
-          payload,
-        });
-      }
+      await requestContext.nodeRegistry.sendEventForPairingIdentity({
+        nodeId: nodeSession.nodeId,
+        connId: nodeSession.connId,
+        pairingIdentity: admittedNodePairing.identity.key,
+        event,
+        payload,
+      });
     };
     runDetachedConnectWork(
       async () => {
