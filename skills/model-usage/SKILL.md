@@ -51,7 +51,7 @@ python {baseDir}/scripts/model_usage.py --provider claude --mode all --format js
 ## Inputs
 
 - Default: runs `codexbar cost --format json --provider <codex|claude>`.
-- macOS and Linux: use the bundled Homebrew formula installer above for live local usage reads. Linux users can also use CodexBar's AUR package or official release tarballs.
+- macOS and Linux: use the bundled Homebrew formula installer above for live local usage reads. Linux users can also use CodexBar's [AUR package](https://aur.archlinux.org/packages/codexbar-cli) or [official release tarballs](https://github.com/steipete/CodexBar/releases).
 - Other platforms: use `--input` with exported CodexBar JSON.
 - File or stdin:
 
