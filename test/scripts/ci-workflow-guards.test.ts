@@ -4639,8 +4639,8 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
-      // Keep the caller's ref while the callee verifies it against expected_sha.
-      ref: "${{ inputs.ref }}",
+      // Reusable jobs start later, so forward the immutable revision instead of a moving branch.
+      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       qa_profile: "all",
     });
