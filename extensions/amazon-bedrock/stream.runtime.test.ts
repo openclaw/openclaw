@@ -104,6 +104,7 @@ describe("Bedrock inbound image base64", () => {
     const messages = testing.convertMessages(userImage(png), model(), "none");
     const firstMessage = messages[0];
     expect(firstMessage).toBeDefined();
+    if (!firstMessage) throw new Error("expected at least one message");
     const content = firstMessage.content as Array<{
       image?: { source?: { bytes?: Uint8Array } };
     }>;
