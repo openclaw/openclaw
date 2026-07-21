@@ -295,6 +295,7 @@ import {
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -657,6 +658,7 @@ export const ProtocolSchemas = {
   MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
   UnknownAgentIdErrorDetails: UnknownAgentIdErrorDetailsSchema,
+  WizardNotFoundErrorDetails: WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
