@@ -1,6 +1,7 @@
 /** Read-only provider/model auth availability with provider-route selection. */
 import {
   findNormalizedProviderValue,
+  normalizeProviderId,
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -19,7 +20,6 @@ import {
   isConfiguredAwsSdkAuthProfileForProvider,
   getRuntimeAuthProfileStoreSnapshot,
   resolveAuthProfileEligibility,
-  resolveInlineProviderApiKeyUnusableUntil,
 } from "./auth-profiles.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import { resolveExternalCliAuthProfiles } from "./auth-profiles/external-cli-sync.js";
@@ -33,7 +33,11 @@ import {
   resolveStoredCredentialReadOnlyAvailability,
 } from "./auth-profiles/read-only-availability.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
-import { isProfileInCooldown } from "./auth-profiles/usage-state.js";
+import {
+  isAuthCooldownBypassedForProvider,
+  isProfileInCooldown,
+  resolveProfileUnusableUntil,
+} from "./auth-profiles/usage-state.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import { resolveProviderEnvAuthEvidence } from "./model-auth-env.js";
 import { isKnownEnvApiKeyMarker, isSecretRefHeaderValueMarker } from "./model-auth-markers.js";
@@ -504,12 +508,16 @@ export function createModelAuthAvailabilityResolver(
     // Config-backed inline provider keys have no auth profile, so a recorded
     // billing/auth cooldown must hide them from browse availability the same way
     // it blocks their resolution — otherwise a cooled key still looks usable.
-    const inlineKeyUnusableUntil = resolveInlineProviderApiKeyUnusableUntil(store, provider);
-    if (
-      inlineKeyUnusableUntil !== null &&
-      inlineKeyUnusableUntil !== undefined &&
-      inlineKeyUnusableUntil > now
-    ) {
+    // Mirrors resolveInlineProviderApiKeyUnusableUntil, but reads the cooldown
+    // via usage-state primitives so this hot browse path stays independent of
+    // the auth-profiles usage module that many callers mock in tests.
+    const inlineUsageStats = isAuthCooldownBypassedForProvider(provider)
+      ? undefined
+      : store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+    const inlineKeyUnusableUntil = inlineUsageStats
+      ? resolveProfileUnusableUntil(inlineUsageStats)
+      : null;
+    if (inlineKeyUnusableUntil != null && inlineKeyUnusableUntil > now) {
       return { availability: false, evidence: "provider-config" };
     }
     if (binding.kind === "literal") {

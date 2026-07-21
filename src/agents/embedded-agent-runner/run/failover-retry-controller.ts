@@ -6,11 +6,8 @@ import {
   markInlineProviderApiKeyFailure,
 } from "../../auth-profiles.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
-import {
-  isConfigBackedInlineProviderApiKey,
-  type ResolvedProviderAuth,
-} from "../../model-auth.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
+import { isConfigBackedInlineProviderApiKey, type ResolvedProviderAuth } from "../../model-auth.js";
 import { log } from "../logger.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
