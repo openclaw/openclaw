@@ -23,6 +23,9 @@ export function rememberRecoveredOwnerStartEventCutoffs(
     return;
   }
   for (const ownerRef of ownerRefs) {
+    if (!hasPendingOwnerEvent(ownerRef, recoveryStartedAfterSequence)) {
+      continue;
+    }
     // Recovery can clear a session before the async diagnostic queue drains.
     // Remember the queue watermark so older start events cannot recreate stale activity.
     cutoffs.set(ownerRef, Math.max(recoveryStartedAfterSequence, cutoffs.get(ownerRef) ?? 0));

@@ -226,12 +226,16 @@ function resolveSessionActivity(params: {
 }
 
 function isIdleSessionActivity(activity: SessionActivity): boolean {
+  // A recovery cutoff owns queued stale events until their indexed drain completes;
+  // evicting it early lets those events recreate the retired owner.
+  pruneRecoveredOwnerStartEventCutoffs(activity.recoveredOwnerStartEventCutoffs);
   return (
     activity.activeRuns.size === 0 &&
     activity.activeReplyOperations.size === 0 &&
     activity.activeEmbeddedRuns.size === 0 &&
     activity.activeTools.size === 0 &&
-    activity.activeModelCalls.size === 0
+    activity.activeModelCalls.size === 0 &&
+    activity.recoveredOwnerStartEventCutoffs.size === 0
   );
 }
 

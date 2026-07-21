@@ -220,6 +220,108 @@ describe("diagnostic run activity retention", () => {
     expect(getDiagnosticSessionActivitySnapshot(recovered)).toEqual({});
   });
 
+  it("retains recovery cutoffs through completed-session churn until queued starts drain", async () => {
+    startDiagnosticRunActivityTracking();
+    const recovered = {
+      runId: "queued-recovered-run",
+      sessionId: "queued-recovered-session",
+      sessionKey: "agent:main:queued-recovered",
+    };
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      ...recovered,
+      callId: "queued-recovered-call",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    clearDiagnosticEmbeddedRunActivityForSession({
+      ...recovered,
+      activeSessionId: recovered.sessionId,
+      recoveryStartedAfterDiagnosticEventSequence: getInternalDiagnosticEventSequence(),
+    });
+
+    for (let index = 0; index <= 2_000; index += 1) {
+      const runId = `cutoff-churn-run-${index}`;
+      const sessionId = `cutoff-churn-session-${index}`;
+      const sessionKey = `agent:main:cutoff-churn-${index}`;
+      markDiagnosticRunProgress({ runId, sessionId, sessionKey, reason: "proof:active" });
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        runId,
+        sessionId,
+        sessionKey,
+        durationMs: 1,
+        outcome: "completed",
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+
+    markDiagnosticRunProgress({
+      runId: "post-cutoff-drain-run",
+      sessionId: "post-cutoff-drain-session",
+      sessionKey: "agent:main:post-cutoff-drain",
+      reason: "proof:active",
+    });
+    emitTrustedDiagnosticEvent({
+      type: "run.completed",
+      runId: "post-cutoff-drain-run",
+      sessionId: "post-cutoff-drain-session",
+      sessionKey: "agent:main:post-cutoff-drain",
+      durationMs: 1,
+      outcome: "completed",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    expect(getDiagnosticSessionActivitySnapshot(recovered)).toEqual({});
+  });
+
+  it("evicts recovery cutoffs whose queued owner event was dropped", () => {
+    startDiagnosticRunActivityTracking();
+    const recovered = {
+      runId: "dropped-recovered-run",
+      sessionId: "dropped-recovered-session",
+      sessionKey: "agent:main:dropped-recovered",
+    };
+    emitTrustedDiagnosticEvent({
+      type: "model.call.started",
+      ...recovered,
+      callId: "dropped-recovered-call",
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    clearDiagnosticEmbeddedRunActivityForSession({
+      ...recovered,
+      activeSessionId: recovered.sessionId,
+      recoveryStartedAfterDiagnosticEventSequence: getInternalDiagnosticEventSequence(),
+    });
+    for (let index = 1; index < 10_000; index += 1) {
+      emitTrustedDiagnosticEvent({
+        type: "model.call.started",
+        runId: `queue-fill-run-${index}`,
+        sessionId: `queue-fill-session-${index}`,
+        callId: `queue-fill-call-${index}`,
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+    }
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.completed",
+      toolName: "priority-drop-trigger",
+      durationMs: 1,
+    });
+
+    for (let index = 0; index <= 2_000; index += 1) {
+      markDiagnosticRunProgress({
+        runId: `post-drop-run-${index}`,
+        sessionId: `post-drop-session-${index}`,
+        sessionKey: `agent:main:post-drop-${index}`,
+        reason: "proof:active",
+      });
+    }
+
+    expect(getDiagnosticSessionActivitySnapshot(recovered)).toEqual({});
+  });
+
   it("keeps completion guards until a saturated async queue drains", async () => {
     startDiagnosticRunActivityTracking();
     const queuedRunCount = 10_000;
