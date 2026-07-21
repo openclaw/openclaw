@@ -1,6 +1,7 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -290,13 +291,13 @@ async function acquirePreparedModelRuntimeLease(
         if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
           throw error;
         }
-        if (hasConfiguredOwnerMatching(owners, input)) {
+        const canActivateConfiglessSetup =
+          input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
+        if (hasConfiguredOwnerMatching(owners, input) || !canActivateConfiglessSetup) {
           throw error;
         }
-        // The requesting runtime has no committed configured owner to rebind to
-        // (e.g. first-run Model Setup on a configless gateway). The raw input
-        // continues to a standalone lease publication below without a configured
-        // rebind.
+        // First-run Model Setup uses the reserved system-agent identity before a configless gateway
+        // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
       }
     }
     try {

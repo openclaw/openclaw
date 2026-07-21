@@ -315,6 +315,7 @@ describe("prepared model runtime snapshots", () => {
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
     const input = {
+      agentId: "openclaw",
       config,
       agentDir: "/tmp/unused-agent",
       inheritedAuthDir: "/tmp/unused-agent",
@@ -330,6 +331,7 @@ describe("prepared model runtime snapshots", () => {
     const config = {};
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
     const input = {
+      agentId: "openclaw",
       config,
       agentDir: "/tmp/unused-agent",
       inheritedAuthDir: "/tmp/unused-agent",
@@ -338,6 +340,22 @@ describe("prepared model runtime snapshots", () => {
     const lease = await acquireAgentRunPreparedModelRuntime(input);
     expect(lease.snapshot.agentDir).toBe("/tmp/unused-agent");
     lease.release();
+  });
+
+  it("rejects an ordinary unconfigured agent on an active gateway", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+
+    await expect(
+      acquireAgentRunPreparedModelRuntime({
+        agentId: "missing",
+        config,
+        agentDir: "/tmp/configured-missing",
+        inheritedAuthDir: "/tmp/unused-agent",
+        workspaceDir: "/tmp/workspace-missing",
+      }),
+    ).rejects.toThrow("prepared model runtime owner was not committed");
   });
 
   it("rebases a stale dynamic owner onto the committed configured generation", async () => {
