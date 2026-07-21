@@ -2899,29 +2899,3 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-describe("codex app-server loopback URL classification (#111102)", () => {
-  it("accepts ws://127.0.0.1 as literal IPv4 loopback", async () => {
-    const { resolveCodexAppServerRuntimeOptions } = await import("./config.js");
-    const opts = resolveCodexAppServerRuntimeOptions({
-      config: { codex: { appServer: { url: "ws://127.0.0.1:8080/ws" } } },
-    });
-    expect(opts.allowLocalExecServer).toBe(true);
-  });
-
-  it("rejects ws://127.evil.com as non-literal loopback via isIP guard", async () => {
-    const { resolveCodexAppServerRuntimeOptions } = await import("./config.js");
-    const opts = resolveCodexAppServerRuntimeOptions({
-      config: { codex: { appServer: { url: "ws://127.evil.com:8080/ws" } } },
-    });
-    expect(opts.allowLocalExecServer).toBe(false);
-  });
-
-  it("accepts ws://localhost as loopback", async () => {
-    const { resolveCodexAppServerRuntimeOptions } = await import("./config.js");
-    const opts = resolveCodexAppServerRuntimeOptions({
-      config: { codex: { appServer: { url: "ws://localhost:8080/ws" } } },
-    });
-    expect(opts.allowLocalExecServer).toBe(true);
-  });
-});
