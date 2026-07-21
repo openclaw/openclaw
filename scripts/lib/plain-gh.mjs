@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 const PLAIN_GH_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const PLAIN_GH_TIMEOUT_MS = 120_000;
 export const PLAIN_GH_SYSTEM_CANDIDATES = [
   // Prefer package-manager opt paths: bin/gh may intentionally be an Octopool shim.
   "/opt/homebrew/opt/gh/bin/gh",
@@ -85,6 +86,8 @@ export function execPlainGh(args, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+    killSignal: "SIGKILL",
+    timeout: PLAIN_GH_TIMEOUT_MS,
   });
 }
 
@@ -96,6 +99,8 @@ export function execGhApiRead(endpoint, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+    killSignal: "SIGKILL",
+    timeout: PLAIN_GH_TIMEOUT_MS,
   });
 }
 
@@ -106,5 +111,7 @@ export function spawnPlainGh(args, options = {}) {
     ...options,
     env,
     maxBuffer: options.maxBuffer ?? PLAIN_GH_MAX_BUFFER_BYTES,
+    killSignal: "SIGKILL",
+    timeout: PLAIN_GH_TIMEOUT_MS,
   });
 }
