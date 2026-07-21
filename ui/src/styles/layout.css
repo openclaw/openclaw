@@ -2533,6 +2533,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--accent);
 }
 
+.session-menu__icon {
+  color: var(--muted);
+}
+
 .session-menu__icon svg,
 .session-menu__check svg,
 .session-menu__chevron svg {

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import type { DraftNode } from "./discovery.ts";
-import { disambiguate } from "./place-labels.ts";
+import { disambiguate, isPhoneFamily, nodeTooltip } from "./place-labels.ts";
 
 type LabelFixture = Pick<DraftNode, "nodeId" | "displayName" | "modelIdentifier" | "remoteIp">;
 
@@ -143,5 +143,35 @@ describe("disambiguate", () => {
       "/same/openclaw · 11111111",
       "/same/openclaw · 22222222",
     ]);
+  });
+});
+
+describe("isPhoneFamily", () => {
+  it.each([
+    ["iPhone", true],
+    ["iPad", true],
+    ["iOS 26", true],
+    ["Android", true],
+    ["Mac", false],
+    [undefined, false],
+  ])("classifies %s as %s", (deviceFamily, expected) => {
+    expect(isPhoneFamily(deviceFamily)).toBe(expected);
+  });
+});
+
+describe("nodeTooltip", () => {
+  it("prettifies the platform and preserves model and IP facts", () => {
+    expect(
+      nodeTooltip({
+        nodeId: "11111111",
+        displayName: "Mac Studio",
+        platform: "darwin",
+        modelIdentifier: "Mac14,12",
+        remoteIp: "192.168.1.11",
+        connected: true,
+        canExec: true,
+        canBrowse: true,
+      }),
+    ).toBe("macOS · Mac14,12 · 192.168.1.11");
   });
 });

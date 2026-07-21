@@ -860,6 +860,16 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
               connected: true,
               commands: ["system.run"],
             },
+            {
+              nodeId: "33333333cccccccc",
+              displayName: "iPhone",
+              platform: "iOS 26.4",
+              deviceFamily: "iPhone",
+              modelIdentifier: "iPhone17,2",
+              remoteIp: "192.168.1.30",
+              connected: true,
+              commands: ["system.run"],
+            },
           ],
         },
         "environments.list": { environments: [], profiles: [] },
@@ -873,9 +883,14 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       await trigger.click();
       const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
       const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
+      const phone = page.locator('[data-value="node:33333333cccccccc"]');
       await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("Mac14,12");
       await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("Mac15,14");
-      expect(await first.getAttribute("title")).toContain("192.168.1.11");
+      await expect.poll(() => phone.locator(".session-menu__text").textContent()).toBe("iPhone");
+      expect(await first.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await second.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await phone.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await first.getAttribute("title")).toBe("macOS · Mac14,12 · 192.168.1.11");
       expect(await second.getAttribute("title")).toContain("192.168.1.12");
       await second.click();
       await expect
