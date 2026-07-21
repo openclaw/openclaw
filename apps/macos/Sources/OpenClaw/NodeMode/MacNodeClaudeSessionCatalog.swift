@@ -7,7 +7,6 @@ enum MacNodeClaudeSessionCatalogContract {
     static let listCommand = "anthropic.claude.sessions.list.v1"
     static let readCommand = "anthropic.claude.sessions.read.v1"
     static let commands = [listCommand, readCommand]
-    static let cliEntrypoints: Set<String> = ["sdk-cli", "cli"]
 }
 
 enum MacNodeClaudeSessionCatalog {
@@ -183,6 +182,7 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxTranscriptItemBytes = 4 * 1024 * 1024
     private static let maxTranscriptPageBytes = 20 * 1024 * 1024
     private static let maxTruncatedTranscriptTextBytes = 512 * 1024
+    private static let cliEntrypoints: Set<String> = ["cli", "sdk-cli"]
     private static let iso8601FractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601Style = Date.ISO8601FormatStyle()
     private static let catalogDiscoveryCache = CatalogDiscoveryCache()
@@ -630,6 +630,11 @@ extension MacNodeClaudeSessionCatalog {
                 (inspection.shouldStop || reachedEnd || fileBytes >= self.metadataPrefixBytes))
     }
 
+    private static func isCLIEntrypoint(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        return self.cliEntrypoints.contains(value)
+    }
+
     private static func inspectCLIRecordLine(
         _ line: Data,
         sessionId: String,
@@ -645,21 +650,19 @@ extension MacNodeClaudeSessionCatalog {
             return
         }
         if let entrypoint = row["entrypoint"] as? String,
-           !MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(entrypoint)
+           !self.isCLIEntrypoint(entrypoint)
         {
             inspection.shouldStop = true
             return
         }
-        if let entrypoint = row["entrypoint"] as? String,
-           MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(entrypoint),
+        if self.isCLIEntrypoint(row["entrypoint"]),
            (row["isSidechain"] as? Bool) == true
         {
             inspection.sidechain = true
             inspection.shouldStop = true
             return
         }
-        guard let entrypoint = row["entrypoint"] as? String,
-              MacNodeClaudeSessionCatalogContract.cliEntrypoints.contains(entrypoint),
+        guard self.isCLIEntrypoint(row["entrypoint"]),
               row["type"] as? String == "user",
               let message = row["message"] as? [String: Any],
               message["role"] as? String == "user",

@@ -67,8 +67,8 @@ const MAX_CATALOG_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 const TRANSCRIPT_READ_CHUNK_BYTES = 128 * 1024;
 const MAX_TRANSCRIPT_SCAN_BYTES = 64 * 1024 * 1024;
 const MAX_TRANSCRIPT_PAGE_BYTES = 20 * 1024 * 1024;
+const CLI_ENTRYPOINTS = new Set(["cli", "sdk-cli"]);
 
-const CLI_ENTRYPOINTS = new Set(["sdk-cli", "cli"]);
 const NODE_INVOKE_TIMEOUT_MS = 30_000;
 // Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
 // The node invoke keeps running so cold native discovery can warm the next poll.
@@ -245,6 +245,10 @@ function parsePullRequestSummary(value: unknown): SessionCatalogPullRequestSumma
     throw new Error("Claude node returned an invalid pull request summary");
   }
   return { numbers: numbers as number[], state };
+}
+
+function isCliEntrypoint(value: unknown): value is string {
+  return typeof value === "string" && CLI_ENTRYPOINTS.has(value);
 }
 
 function timestampMs(value: unknown): number | undefined {
@@ -436,10 +440,6 @@ async function locateSessionFile(homeDir: string, sessionId: string): Promise<st
     }
   }
   return undefined;
-}
-
-function isCliEntrypoint(entrypoint: unknown): entrypoint is string {
-  return typeof entrypoint === "string" && CLI_ENTRYPOINTS.has(entrypoint);
 }
 
 async function discoverCliRecords(
