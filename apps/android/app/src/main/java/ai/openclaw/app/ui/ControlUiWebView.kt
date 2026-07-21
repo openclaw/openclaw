@@ -60,6 +60,9 @@ internal fun ControlUiWebView(
         WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
       }
       webView.overScrollMode = View.OVER_SCROLL_NEVER
+      // System trust only, matching the terminal host this was extracted from:
+      // fingerprint-pinned (self-signed) gateways render natively but not here.
+      // Tracked follow-up: verified SSL handling shared with the native pin.
       webView.webViewClient = WebViewClient()
       installControlUiAuthScript(webView, page)
       webView.loadUrl(url)
