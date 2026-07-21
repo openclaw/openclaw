@@ -121,6 +121,39 @@ describeControlUiE2e("Control UI sidebar customization mocked Gateway E2E", () =
     await server?.close();
   });
 
+  it("aligns the settings search with navigation rows", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1440 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}settings/general`);
+      const settingsSidebar = page.locator(".settings-sidebar");
+      const settingsSearchShell = settingsSidebar.locator(".settings-sidebar__search");
+      const firstSettingsLink = settingsSidebar.locator(".settings-sidebar__item").first();
+      await settingsSidebar.waitFor();
+      await captureSettingsSidebarProof(settingsSidebar, "settings-search-alignment.png");
+      await expect
+        .poll(async () => {
+          const [searchBox, firstLinkBox] = await Promise.all([
+            settingsSearchShell.boundingBox(),
+            firstSettingsLink.boundingBox(),
+          ]);
+          if (!searchBox || !firstLinkBox) {
+            return null;
+          }
+          return Math.round(searchBox.x - firstLinkBox.x);
+        })
+        .toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it("pins routes, restores defaults, and persists navigation state across reloads", async () => {
     if (captureUiProofEnabled) {
       await mkdir(uiProofArtifactDir, { recursive: true });

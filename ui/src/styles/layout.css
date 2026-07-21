@@ -329,7 +329,7 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  margin: 8px 21px 0;
+  margin: 8px 12px 0;
   color: var(--muted);
 }
 
