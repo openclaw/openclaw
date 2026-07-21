@@ -232,11 +232,7 @@ export async function assertHttpUrlTargetsPrivateNetwork(
   try {
     parsed = new URL(url);
   } catch {
-    // Preserve the ERR_INVALID_URL code for caller classification while
-    // stripping the native error's input and cause — Node's URL parser
-    // retains the rejected URL in its structured input property, so callers
-    // that inspect or serialize the complete error graph could recover
-    // credential-bearing endpoint strings despite the safe outer message.
+    // URL parser errors retain rejected input. Keep only stable classification.
     const err = new TypeError("Invalid URL") as TypeError & { code: string };
     err.code = "ERR_INVALID_URL";
     throw err;
