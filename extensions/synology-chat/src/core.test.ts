@@ -223,14 +223,14 @@ describe("synology-chat account resolution", () => {
   });
 
   it("uses env var fallbacks", () => {
-    process.env.SYNOLOGY_CHAT_TOKEN = " env-tok ";
+    process.env.SYNOLOGY_CHAT_TOKEN = " test-auth-token ";
     process.env.SYNOLOGY_CHAT_INCOMING_URL = " https://nas/incoming ";
     process.env.SYNOLOGY_NAS_HOST = " 192.0.2.1 ";
     process.env.OPENCLAW_BOT_NAME = " TestBot ";
 
     const cfg = { channels: { "synology-chat": {} } };
     const account = resolveAccount(cfg);
-    expect(account.token).toBe("env-tok");
+    expect(account.token).toBe("test-auth-token");
     expect(account.incomingUrl).toBe("https://nas/incoming");
     expect(account.nasHost).toBe("192.0.2.1");
     expect(account.botName).toBe("TestBot");
