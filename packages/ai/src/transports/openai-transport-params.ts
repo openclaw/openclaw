@@ -1,19 +1,17 @@
+import type { Context, Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getAiTransportHost } from "../host.js";
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   resolveOpenAIProjectedToolsStrictToolFlag,
   type OpenAIToolProjection,
-} from "@openclaw/ai/internal/openai";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { sha256Hex } from "../infra/crypto-digest.js";
-import type { Context, Model } from "../llm/types.js";
-import { isCodeModeModelVisibleToolName } from "./code-mode-control-tools.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+} from "../internal/openai.js";
+import { resolveModelRequestTimeoutMs, resolveProviderRequestPolicyConfig } from "./host-policy.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
-import { log, type OpenAIModeModel } from "./openai-transport-shared.js";
-import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
-import { resolveModelRequestTimeoutMs } from "./provider-transport-fetch.js";
+import type { OpenAIModeModel } from "./openai-transport-shared.js";
+import { isCodeModeModelVisibleToolName, sha256Hex } from "./transport-utils.js";
 
 const MAX_OPENAI_STRICT_TOOL_DOWNGRADE_DIAGNOSTIC_KEYS = 256;
 const OPENAI_CODEX_RESPONSES_PROVIDERS = new Set(["openai"]);
@@ -119,27 +117,30 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean | undefined {
   const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
-  if (strictSetting === true && strict === false && log.isEnabled("debug", "any")) {
+  if (strictSetting === true && strict === false) {
     const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
-    if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
-      return strict;
-    }
-    const sample = diagnostics.slice(0, 5).map((entry) => ({
-      tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
-      violations: entry.violations.slice(0, 8),
-    }));
-    log.debug(
-      `OpenAI ${context.transport} tool schema strict mode downgraded to strict=false for ` +
-        `${context.model.provider ?? "unknown"}/${context.model.id ?? "unknown"} ` +
-        `because ${diagnostics.length} tool schema(s) are not strict-compatible`,
-      {
-        transport: context.transport,
-        provider: context.model.provider,
-        model: context.model.id,
-        incompatibleToolCount: diagnostics.length,
-        sample,
-      },
-    );
+    getAiTransportHost().logDebug("openai-transport", () => {
+      if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
+        return null;
+      }
+      const sample = diagnostics.slice(0, 5).map((entry) => ({
+        tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
+        violations: entry.violations.slice(0, 8),
+      }));
+      return {
+        message:
+          `OpenAI ${context.transport} tool schema strict mode downgraded to strict=false for ` +
+          `${context.model.provider ?? "unknown"}/${context.model.id ?? "unknown"} ` +
+          `because ${diagnostics.length} tool schema(s) are not strict-compatible`,
+        data: {
+          transport: context.transport,
+          provider: context.model.provider,
+          model: context.model.id,
+          incompatibleToolCount: diagnostics.length,
+          sample,
+        },
+      };
+    });
   }
   return strict;
 }
@@ -148,7 +149,7 @@ export function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
     OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
     (model.api === "openai-chatgpt-responses" ||
-      model.api === "openclaw-openai-responses-transport")
+      model.api === "openclaw-openai-chatgpt-responses-transport")
   );
 }
 
@@ -192,10 +193,7 @@ export function buildOpenAIClientHeaders(
   if (model.provider === "github-copilot") {
     Object.assign(
       providerHeaders,
-      buildCopilotDynamicHeaders({
-        messages: context.messages,
-        hasImages: hasCopilotVisionInput(context.messages),
-      }),
+      getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
     );
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };

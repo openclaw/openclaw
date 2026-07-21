@@ -1,18 +1,27 @@
+import type { Api, Model, OpenAICompletionsCompat, Usage } from "@openclaw/llm-core";
+import { getAiTransportHost } from "../host.js";
 /** Shared options, usage shape, cache identity, ordering, and stream scheduling for OpenAI APIs. */
 import {
   clampOpenAIPromptCacheKey,
   type OpenAICompletionsToolChoice,
   type OpenAIReasoningEffort,
-} from "@openclaw/ai/internal/openai";
-import type { ModelCompatConfig } from "../config/types.models.js";
-import type { Api, Model, Usage } from "../llm/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+} from "../internal/openai.js";
 
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
-export const log = createSubsystemLogger("openai-transport");
+export const log = {
+  debug(message: string, data?: Record<string, unknown>) {
+    getAiTransportHost().logDebug("openai-transport", () => ({ message, data }));
+  },
+  info(message: string, data?: Record<string, unknown>) {
+    getAiTransportHost().logInfo("openai-transport", message, data);
+  },
+  warn(message: string, data?: Record<string, unknown>) {
+    getAiTransportHost().logWarn("openai-transport", message, data);
+  },
+};
 
 export type BaseOpenAIStreamOptions = {
   temperature?: number;
@@ -42,8 +51,13 @@ export type OpenAICompletionsOptions = BaseOpenAIStreamOptions & {
   reasoningEffort?: OpenAIReasoningEffort;
 };
 
-type OpenAIModeCompatInput = Omit<ModelCompatConfig, "thinkingFormat"> & {
+type OpenAIModeCompatInput = Omit<OpenAICompletionsCompat, "thinkingFormat"> & {
   thinkingFormat?: string;
+  requiresStringContent?: boolean;
+  strictMessageKeys?: boolean;
+  unsupportedToolSchemaKeywords?: unknown;
+  omitEmptyArrayItems?: unknown;
+  visibleReasoningDetailTypes?: string[];
 };
 
 export type OpenAIModeModel = Omit<Model, "compat"> & {

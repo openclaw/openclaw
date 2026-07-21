@@ -2,6 +2,22 @@
  * OpenAI Responses transport for Azure variants, replay, reasoning, and payload policy.
  */
 import { randomUUID } from "node:crypto";
+import type { Api, Context, Model, StreamFn } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import OpenAI, { AzureOpenAI } from "openai";
+import type {
+  FunctionTool,
+  ResponseCreateParamsStreaming,
+  ResponseFormatTextConfig,
+  ResponseFunctionCallOutputItemList,
+  ResponseInput,
+  ResponseInputItem,
+  ResponseInputMessageContentList,
+  ResponseOutputMessage,
+  ResponseReasoningItem,
+} from "openai/resources/responses/responses.js";
+import { getAiTransportHost } from "../host.js";
 import {
   createResponsesToolCallTracker,
   isOpenAICompatibleAzureResponsesBaseUrl,
@@ -19,7 +35,7 @@ import {
   type OpenAIReasoningEffort,
   type OpenAIToolProjection,
   type ResponsesToolCallState,
-} from "@openclaw/ai/internal/openai";
+} from "../internal/openai.js";
 import {
   createFirstStreamEventAbortController,
   getEnvApiKey,
@@ -27,35 +43,19 @@ import {
   getFirstStreamEventTimeoutMs,
   parseStreamingJson,
   withFirstStreamEventTimeout,
-} from "@openclaw/ai/internal/runtime";
+} from "../internal/runtime.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultText,
   isImageWithMediaPayload,
   stripSystemPromptCacheBoundary,
-} from "@openclaw/ai/internal/shared";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import OpenAI, { AzureOpenAI } from "openai";
-import type {
-  FunctionTool,
-  ResponseCreateParamsStreaming,
-  ResponseFormatTextConfig,
-  ResponseFunctionCallOutputItemList,
-  ResponseInput,
-  ResponseInputItem,
-  ResponseInputMessageContentList,
-  ResponseOutputMessage,
-  ResponseReasoningItem,
-} from "openai/resources/responses/responses.js";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
-import type { Api, Context, Model } from "../llm/types.js";
-import "../llm/ai-transport-host.js";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { redactIdentifier } from "../logging/redact-identifier.js";
-import { redactSensitiveText } from "../logging/redact.js";
-import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+} from "../internal/shared.js";
+import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import {
+  buildGuardedModelFetch,
+  resolveOpenAIStrictToolSetting,
+  transformTransportMessages,
+} from "./host-policy.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
@@ -68,7 +68,6 @@ import {
 } from "./openai-responses-payload-policy.js";
 import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
 import { recordResponsesTerminalOutcome } from "./openai-responses-terminal-outcome.js";
-import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -91,16 +90,14 @@ import {
   type MutableAssistantOutput,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
-import type { StreamFn } from "./runtime/index.js";
-import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
   mergeTransportMetadata,
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+import { redactIdentifier, redactSensitiveText, sha256HexPrefix } from "./transport-utils.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -1787,14 +1784,14 @@ function resolveProviderTransportTurnState(
     normalizedProvider === "openai" ||
     normalizedProvider === "azure-openai" ||
     normalizedProvider === "azure-openai-responses";
-  return resolveProviderTransportTurnStateWithPlugin({
+  return getAiTransportHost().plugin.resolveTransportTurnState({
     provider: model.provider,
     modelId: model.id,
     allowRuntimePluginLoad,
     context: {
       provider: model.provider,
       modelId: model.id,
-      model: model as ProviderRuntimeModel,
+      model,
       sessionId: params.sessionId,
       turnId: params.turnId,
       attempt: params.attempt,

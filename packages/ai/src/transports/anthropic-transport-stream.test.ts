@@ -1,25 +1,57 @@
+import type { Model } from "@openclaw/llm-core";
 /**
  * Tests Anthropic Messages transport streaming.
  * Covers request construction, SSE parsing, aborts, tool calls, usage, and
  * provider transport hooks.
  */
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { attachModelProviderRequestTransport } from "./provider-request-config.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
   buildGuardedModelFetchMock: vi.fn(),
   guardedFetchMock: vi.fn(),
 }));
 
-vi.mock("./provider-transport-fetch.js", () => ({
-  buildGuardedModelFetch: buildGuardedModelFetchMock,
-  parseRetryAfterSeconds: (headers: Headers) => {
-    const value = headers.get("retry-after");
-    return value && /^\d+$/.test(value) ? Number(value) : undefined;
-  },
-}));
+const coreTransportHost = getAiTransportHost();
+
+function resolveTestEndpointClass(baseUrl?: string): string {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return "default";
+  }
+  try {
+    const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+    const hostname = url.hostname.toLowerCase();
+    if (hostname === "api.anthropic.com") {
+      return "anthropic-public";
+    }
+    if (hostname === "openrouter.ai") {
+      return "openrouter";
+    }
+    if (hostname === "api.xiaomimimo.com" || hostname.endsWith(".xiaomimimo.com")) {
+      return "xiaomi-native";
+    }
+    return "custom";
+  } catch {
+    return "invalid";
+  }
+}
+
+function redactTestSecrets<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactTestSecrets(item)) as T;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "key" ? "***" : redactTestSecrets(entry),
+    ]),
+  ) as T;
+}
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
 
@@ -27,7 +59,29 @@ type AnthropicMessagesModel = Model<"anthropic-messages">;
 type AnthropicStreamFn = ReturnType<typeof createAnthropicMessagesTransportStreamFn>;
 type AnthropicStreamContext = Parameters<AnthropicStreamFn>[1];
 type AnthropicStreamOptions = Parameters<AnthropicStreamFn>[2];
-type RequestTransportConfig = Parameters<typeof attachModelProviderRequestTransport>[1];
+type RequestTransportConfig = {
+  proxy?: unknown;
+  tls?: unknown;
+  headers?: Record<string, string>;
+  allowPrivateNetwork?: boolean;
+};
+const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
+  "openclaw.modelProviderRequestTransport",
+);
+
+function attachModelProviderRequestTransport<TModel extends object>(
+  model: TModel,
+  request: RequestTransportConfig | undefined,
+): TModel {
+  if (!request) {
+    return model;
+  }
+  const next = { ...model } as TModel & {
+    [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]?: RequestTransportConfig;
+  };
+  next[MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL] = request;
+  return next;
+}
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
   const body = serializeSseEvents(events);
@@ -267,11 +321,32 @@ describe("anthropic transport stream", () => {
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
+    configureAiTransportHost({
+      ...coreTransportHost,
+      buildModelFetch: buildGuardedModelFetchMock,
+      redactSecrets: redactTestSecrets,
+      resolveProviderEndpointClass: resolveTestEndpointClass,
+      resolveProviderRequestCapabilities: (input) => {
+        const endpointClass = resolveTestEndpointClass(input.baseUrl);
+        return {
+          endpointClass,
+          knownProviderFamily: endpointClass === "xiaomi-native" ? "xiaomi" : "",
+          supportsNativeStreamingUsageCompat: false,
+          supportsOpenAICompletionsStreamingUsageCompat: false,
+          usesExplicitProxyLikeEndpoint: endpointClass === "custom" || endpointClass === "invalid",
+          allowsAnthropicServiceTier: endpointClass === "anthropic-public",
+        };
+      },
+    });
     guardedFetchMock.mockResolvedValue(createSseResponse());
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    configureAiTransportHost(coreTransportHost);
   });
 
   it("keeps aggregate cache billing buckets out of the context total", async () => {
@@ -3567,9 +3642,8 @@ describe("anthropic transport stream", () => {
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
     );
     const blocks = Array.isArray(toolResult.content) ? toolResult.content : [];
-    const imageBlocks = blocks.filter((b: Record<string, unknown>) => b.type === "image");
+    const imageBlocks = blocks.filter((block: Record<string, unknown>) => block.type === "image");
     expect(imageBlocks).toHaveLength(0);
-    // Text content is preserved as a plain string when images are dropped.
     expect(toolResult.content).toContain("captured screen");
     expect(toolResult.is_error).toBe(false);
   });

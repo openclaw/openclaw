@@ -1,8 +1,12 @@
+import type { Model } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type OpenAI from "openai";
+import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 // Terminal-outcome recording for the agent-side Responses stream.
 //
 // `response.completed` and `response.incomplete` are both terminal and both carry usage, so they
 // finalize through one path here. Splitting them is how incomplete turns silently recorded zero
-// usage. The mapping itself is owned by `@openclaw/ai/internal/openai`, shared with the
+// usage. The mapping itself is owned by the package provider helpers, shared with the
 // package-side processor; this module is the agent-specific adapter that adds reasoning-token
 // accounting on top and works off raw records rather than typed SDK events.
 import {
@@ -10,12 +14,8 @@ import {
   readResponsesReasoningTokens,
   resolveResponsesTerminalStopReason,
   type ResponsesTerminalUsagePayload,
-} from "@openclaw/ai/internal/openai";
-import { calculateCost } from "@openclaw/ai/internal/runtime";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type OpenAI from "openai";
-import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
-import type { Model } from "../llm/types.js";
+} from "../internal/openai.js";
+import { calculateCost } from "../internal/runtime.js";
 import type { MutableAssistantOutput } from "./openai-transport-shared.js";
 
 function readIncompleteReason(response: Record<string, unknown> | undefined): string | undefined {

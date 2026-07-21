@@ -84,6 +84,7 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
     [
       { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
       { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
+      { specifier: "@openclaw/ai/transports", entry: "dist/transports.mjs" },
       {
         specifier: "@openclaw/ai/internal/runtime",
         entry: "dist/internal/runtime.mjs",

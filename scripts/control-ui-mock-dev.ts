@@ -1053,6 +1053,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       status: "failed",
       lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
+    sessionRow("agent:main:work-openclaw", "OpenClaw work checkout", baseTime - 85_000, {
+      execCwd: "/Users/peter/Work/openclaw",
+    }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
       execCwd: "/Users/peter/Projects",
@@ -1131,6 +1134,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       "question.list",
       "sessions.diff",
       "sessions.files.set",
+      "system.info",
     ],
     historyMessages: buildScrollableChatHistory(baseTime),
     // Lights up the footer facepile and who's-online roster; the email-only
@@ -1142,6 +1146,20 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
+      "system.info": {
+        machineName: "Peters-Mac-Studio",
+        hostname: "peters-mac-studio.local",
+        platform: "darwin",
+        release: "25.0.0",
+        arch: "arm64",
+        osLabel: "macOS 26.5",
+        nodeVersion: "24.15.0",
+        pid: 4242,
+        uptimeMs: 86_400_000,
+        cpuCount: 16,
+        memoryTotalBytes: 68_719_476_736,
+        memoryFreeBytes: 34_359_738_368,
+      },
       "fs.listDir": {
         cases: [
           {
@@ -1404,6 +1422,9 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90",
             displayName: "Mac Studio",
             platform: "darwin",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac14,12",
+            remoteIp: "192.168.1.11",
             version: "2026.6.11",
             connected: true,
             paired: true,
@@ -1423,8 +1444,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
             nodeId: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
             displayName: "Mac Studio",
             platform: "darwin",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac15,14",
+            remoteIp: "192.168.1.12",
             version: "2026.6.10",
-            connected: false,
+            connected: true,
             paired: true,
             approvalState: "approved",
             lastSeenAtMs: baseTime - 82_800_000,

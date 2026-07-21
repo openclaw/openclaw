@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { Context, Model, StreamFn } from "@openclaw/llm-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import OpenAI from "openai";
+import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import {
   convertMessages,
   isOpenAIGpt54MiniModel,
@@ -10,7 +15,7 @@ import {
   reconcileOpenAICompletionsToolChoice,
   resolveOpenAIReasoningEffortForModel,
   type OpenAIReasoningEffort,
-} from "@openclaw/ai/internal/openai";
+} from "../internal/openai.js";
 import {
   applyProviderReportedUsageCost,
   calculateCost,
@@ -21,23 +26,16 @@ import {
   getFirstStreamEventTimeoutMs,
   parseStreamingJson,
   withFirstStreamEventTimeout,
-} from "@openclaw/ai/internal/runtime";
-import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import OpenAI from "openai";
-import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
-import type { Context, Model } from "../llm/types.js";
-import "../llm/ai-transport-host.js";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import {
-  isGoogleGemini3FlashModel,
-  isGoogleGemini3ProModel,
-} from "../plugin-sdk/provider-stream-shared.js";
-import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
+} from "../internal/runtime.js";
+import { stripSystemPromptCacheBoundary } from "../internal/shared.js";
+import { createAssistantMessageEventStream } from "../utils/event-stream.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import {
+  buildGuardedModelFetch,
+  resolveOpenAIStrictToolSetting,
+  resolveProviderEndpoint,
+} from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
-import { supportsModelTools } from "./model-tool-support.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
@@ -45,7 +43,6 @@ import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
 } from "./openai-completions-string-content.js";
-import { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -67,10 +64,14 @@ import {
   type OpenAICompletionsOptions,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import { resolveProviderEndpoint } from "./provider-attribution.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
-import type { StreamFn } from "./runtime/index.js";
 import { failTransportStream, finalizeTransportStream } from "./transport-stream-shared.js";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+  isGoogleGemini3FlashModel,
+  isGoogleGemini3ProModel,
+  supportsModelTools,
+} from "./transport-utils.js";
 
 function hasToolHistory(messages: Context["messages"]): boolean {
   return messages.some(
@@ -1721,8 +1722,7 @@ export function buildOpenAICompletionsParams(
     // canonical prompt_cache_retention value alongside the cache key so
     // OpenAI-compatible completions backends (oMLX, llama.cpp, official
     // OpenAI, etc.) can honor the 24h prefix-cache lifetime. Without this
-    // the key reaches the wire but the retention preference is silently
-    // dropped (issue #81281).
+    // the key reaches the wire but the retention preference is silently dropped.
     if (cacheRetention === "long" && compat.supportsLongCacheRetention) {
       params.prompt_cache_retention = "24h";
     }
@@ -1892,10 +1892,10 @@ function parseTransportChunkUsage(
   },
   model: Model,
 ): MutableAssistantOutput["usage"] {
-  const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
   // OpenRouter reports cache writes separately inside prompt totals. Keep read/write
   // buckets out of input so normalized prompt buckets stay disjoint.
   const cacheWriteTokens = rawUsage.prompt_tokens_details?.cache_write_tokens || 0;
+  const cachedTokens = rawUsage.prompt_tokens_details?.cached_tokens || 0;
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens - cacheWriteTokens);
   const outputTokens = rawUsage.completion_tokens || 0;

@@ -1,12 +1,10 @@
-import { createApiRegistry, type ApiRegistry } from "@openclaw/ai";
+import { createAssistantMessageEventStream } from "@openclaw/llm-core";
+import type { Api, Model, StreamFn } from "@openclaw/llm-core";
 // Simple completion transport tests cover provider-specific stream alias
 // selection before the generic completion helper invokes the LLM layer.
-import type { Model } from "openclaw/plugin-sdk/llm";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { createMoonshotThinkingWrapper } from "../llm/providers/stream-wrappers/moonshot-thinking.js";
-import { mintSecretSentinel } from "../secrets/sentinel.js";
-import type { StreamFn } from "./runtime/index.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiRegistry, type ApiRegistry } from "../api-registry.js";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 
 const createAnthropicVertexStreamFnForModel = vi.fn();
 const ensureCustomApiRegistered = vi.fn();
@@ -18,19 +16,11 @@ const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
 const prepareGoogleSimpleCompletionModel = vi.fn((_registry: unknown, model: unknown) => model);
+const inheritManagedTransport = vi.fn((_source: Model, target: Model) => target);
 const pluginStreamFn = vi.fn(() => "plugin-stream-result" as never);
-
-vi.mock("./anthropic-vertex-stream.js", () => ({
-  createAnthropicVertexStreamFnForModel,
-}));
-
-vi.mock("./custom-api-registry.js", () => ({
-  ensureCustomApiRegistered,
-}));
-
-vi.mock("./google-simple-completion-stream.js", () => ({
-  prepareGoogleSimpleCompletionModel,
-}));
+const TEST_SECRET = "ollama-provider-secret";
+const TEST_SECRET_SENTINEL = "test-secret-sentinel";
+const initialHost = getAiTransportHost();
 
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
@@ -39,17 +29,6 @@ vi.mock("./provider-transport-stream.js", () => ({
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 }));
-
-vi.mock("../plugins/provider-runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
-    "../plugins/provider-runtime.js",
-  );
-  return {
-    ...actual,
-    resolveProviderStreamFn,
-    wrapProviderSimpleCompletionStreamFn,
-  };
-});
 
 let prepareModelForSimpleCompletionImpl: typeof import("./simple-completion-transport.js").prepareModelForSimpleCompletion;
 let apiRegistry: ApiRegistry;
@@ -78,6 +57,16 @@ describe("prepareModelForSimpleCompletion", () => {
     apiRegistry = createApiRegistry();
     createAnthropicVertexStreamFnForModel.mockReset();
     ensureCustomApiRegistered.mockReset();
+    ensureCustomApiRegistered.mockImplementation(
+      (registry: ApiRegistry, api: Api, _streamFn: StreamFn) => {
+        if (registry.getApiProvider(api)) {
+          return false;
+        }
+        const stream = () => createAssistantMessageEventStream();
+        registry.registerApiProvider({ api, stream, streamSimple: stream });
+        return true;
+      },
+    );
     resolveProviderStreamFn.mockReset();
     pluginStreamFn.mockClear();
     wrapProviderSimpleCompletionStreamFn.mockReset();
@@ -87,6 +76,7 @@ describe("prepareModelForSimpleCompletion", () => {
     prepareTransportAwareSimpleModel.mockReset();
     resolveTransportAwareSimpleApi.mockReset();
     prepareGoogleSimpleCompletionModel.mockReset();
+    inheritManagedTransport.mockClear();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue(pluginStreamFn);
     wrapProviderSimpleCompletionStreamFn.mockReturnValue(undefined);
@@ -96,6 +86,25 @@ describe("prepareModelForSimpleCompletion", () => {
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
     resolveTransportAwareSimpleApi.mockReturnValue(undefined);
     prepareGoogleSimpleCompletionModel.mockImplementation((_registry, model) => model);
+    configureAiTransportHost({
+      plugin: {
+        resolveProviderStream: resolveProviderStreamFn,
+        resolveTransportTurnState: () => undefined,
+        wrapSimpleCompletionStream: wrapProviderSimpleCompletionStreamFn,
+        createAnthropicVertexStream: createAnthropicVertexStreamFnForModel,
+      },
+      registerCustomApi: ensureCustomApiRegistered,
+      inheritManagedTransport,
+      prepareGoogleSimpleCompletionModel: prepareGoogleSimpleCompletionModel as (
+        registry: ApiRegistry,
+        model: Model,
+      ) => Model,
+      resolveSecretSentinel: (value) => value.replaceAll(TEST_SECRET_SENTINEL, TEST_SECRET),
+    });
+  });
+
+  afterAll(() => {
+    configureAiTransportHost(initialHost);
   });
 
   it("routes provider-owned simple-completion wrappers through an internal API alias", () => {
@@ -113,8 +122,14 @@ describe("prepareModelForSimpleCompletion", () => {
       },
       SIMPLE_COMPLETION_SOURCE_ID,
     );
-    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(({ context }) =>
-      createMoonshotThinkingWrapper(context.streamFn),
+    wrapProviderSimpleCompletionStreamFn.mockImplementationOnce(
+      ({ context }) =>
+        (
+          model: Parameters<StreamFn>[0],
+          streamContext: Parameters<StreamFn>[1],
+          options: Parameters<StreamFn>[2],
+        ) =>
+          context.streamFn(model, streamContext, options),
     );
     const model: Model = {
       id: "kimi-k2.7-code",
@@ -136,6 +151,7 @@ describe("prepareModelForSimpleCompletion", () => {
     expect(result.api).toBe(
       "openclaw-provider-simple:moonshot:kimi-k2.7-code:moonshot-simple-source:https%3A%2F%2Fapi.moonshot.ai%2Fv1",
     );
+    expect(inheritManagedTransport).toHaveBeenCalledWith(model, result);
     expect(wrapProviderSimpleCompletionStreamFn).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "moonshot",
@@ -156,8 +172,8 @@ describe("prepareModelForSimpleCompletion", () => {
   });
 
   it("registers the configured Ollama transport and keeps the original api", () => {
-    const secret = "ollama-provider-secret";
-    const sentinel = mintSecretSentinel(secret, { label: "model-auth:ollama" });
+    const secret = TEST_SECRET;
+    const sentinel = TEST_SECRET_SENTINEL;
     const model: Model<"ollama"> = {
       id: "llama3",
       name: "Llama 3",
@@ -171,7 +187,7 @@ describe("prepareModelForSimpleCompletion", () => {
       maxTokens: 4096,
       headers: { Authorization: `Bearer ${sentinel}` },
     };
-    const cfg: OpenClawConfig = {
+    const cfg = {
       models: {
         providers: {
           ollama: {
@@ -250,6 +266,7 @@ describe("prepareModelForSimpleCompletion", () => {
       ...model,
       api: "openclaw-anthropic-vertex-simple:https%3A%2F%2Fus-central1-aiplatform.googleapis.com",
     });
+    expect(inheritManagedTransport).toHaveBeenCalledWith(model, result);
   });
 
   it("uses a transport-aware custom api alias when llm request transport overrides are present", () => {
@@ -383,7 +400,9 @@ describe("prepareModelForSimpleCompletion", () => {
 
       resolveProviderStreamFn.mockReturnValueOnce(undefined);
       createOpenClawTransportStreamFnForModel.mockReturnValueOnce("codex-transport-stream");
-      resolveTransportAwareSimpleApi.mockReturnValueOnce("openclaw-openai-responses-transport");
+      resolveTransportAwareSimpleApi.mockReturnValueOnce(
+        "openclaw-openai-chatgpt-responses-transport",
+      );
 
       const result = prepareModelForSimpleCompletion({ model });
 
@@ -398,15 +417,40 @@ describe("prepareModelForSimpleCompletion", () => {
       );
       expect(ensureCustomApiRegistered).toHaveBeenCalledWith(
         apiRegistry,
-        "openclaw-openai-responses-transport",
+        "openclaw-openai-chatgpt-responses-transport",
         "codex-transport-stream",
       );
       expect(result).toEqual({
         ...model,
         baseUrl: expectedBaseUrl,
-        api: "openclaw-openai-responses-transport",
+        api: "openclaw-openai-chatgpt-responses-transport",
       });
       expect(prepareTransportAwareSimpleModel).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    "https://proxy.example.test/openai?token=x",
+    "https://proxy.example.test/openai#route",
+    "https://proxy.example.test/openai?",
+    "https://proxy.example.test/openai#",
+  ])("rejects Codex proxy base URLs with query or fragment components: %s", (baseUrl) => {
+    const model: Model<"openai-chatgpt-responses"> = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl,
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    };
+    resolveProviderStreamFn.mockReturnValueOnce(undefined);
+
+    expect(() => prepareModelForSimpleCompletion({ model })).toThrow(
+      "OpenAI Codex Responses baseUrl must not include query parameters or fragments",
+    );
+  });
 });

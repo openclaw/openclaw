@@ -1,12 +1,11 @@
-import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 /**
  * OpenAI Responses payload policy.
  * Classifies endpoint capabilities and applies store, prompt-cache,
  * server-compaction, service-tier, and reasoning payload rules.
  */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
-import { asBoolean } from "../utils/boolean.js";
+import { supportsOpenAIReasoningEffort } from "../internal/openai.js";
 
 type OpenAIResponsesPayloadModel = {
   api?: unknown;
@@ -72,6 +71,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
 const LOCAL_ENDPOINT_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
@@ -221,7 +221,8 @@ function readCompatPayloadBoolean(
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  return asBoolean((compat as Record<string, unknown>)[key]);
+  const value = (compat as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function resolveOpenAIResponsesPayloadCapabilities(
@@ -257,12 +258,14 @@ function resolveOpenAIResponsesPayloadCapabilities(
         endpointClass === "openai-public") ||
       (isOpenAIProvider &&
         (api === "openai-chatgpt-responses" ||
+          api === "openclaw-openai-chatgpt-responses-transport" ||
           api === "openai-responses" ||
           api === "openclaw-openai-responses-transport") &&
         endpointClass === "openai"),
     allowsResponsesStore:
       supportsResponsesStoreField &&
       api !== "openai-chatgpt-responses" &&
+      api !== "openclaw-openai-chatgpt-responses-transport" &&
       provider !== undefined &&
       OPENAI_RESPONSES_PROVIDERS.has(provider) &&
       usesKnownNativeOpenAIEndpoint,

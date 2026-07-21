@@ -3,18 +3,14 @@
  *
  * Routes models that need OpenClaw-managed proxy/TLS/local-service semantics onto built-in transport implementations.
  */
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { Api, Model } from "../llm/types.js";
-import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
+import type { Api, Model, StreamFn } from "@openclaw/llm-core";
+import { getAiTransportHost } from "../host.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
+import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import {
   createAzureOpenAIResponsesTransportStreamFn,
-  createOpenAICompletionsTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
-} from "./openai-transport-stream.js";
-import { getModelProviderLocalService } from "./provider-local-service.js";
-import { getModelProviderRequestTransport } from "./provider-request-config.js";
-import type { StreamFn } from "./runtime/index.js";
+} from "./openai-responses-transport.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
@@ -27,7 +23,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
-  "openai-chatgpt-responses": "openclaw-openai-responses-transport",
+  "openai-chatgpt-responses": "openclaw-openai-chatgpt-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
@@ -35,7 +31,7 @@ const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
 };
 
 type ProviderTransportStreamContext = {
-  cfg?: OpenClawConfig;
+  cfg?: unknown;
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -46,7 +42,7 @@ function createProviderOwnedGoogleTransportStreamFn(
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
   return (
-    resolveProviderStreamFn({
+    getAiTransportHost().plugin.resolveProviderStream({
       provider: model.provider,
       config: ctx?.cfg,
       workspaceDir: ctx?.workspaceDir,
@@ -60,7 +56,7 @@ function createProviderOwnedGoogleTransportStreamFn(
         model,
       },
     }) ??
-    resolveProviderStreamFn({
+    getAiTransportHost().plugin.resolveProviderStream({
       provider: "google",
       config: ctx?.cfg,
       workspaceDir: ctx?.workspaceDir,
@@ -100,8 +96,7 @@ function createSupportedTransportStreamFn(
 }
 
 function hasOpenClawTransportRequirement(model: Model): boolean {
-  const request = getModelProviderRequestTransport(model);
-  return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
+  return getAiTransportHost().requiresManagedTransport(model);
 }
 
 /** Returns whether OpenClaw has a managed transport implementation for this API. */
@@ -127,7 +122,11 @@ export function createTransportAwareStreamFnForModel(
       `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
     );
   }
-  return createSupportedTransportStreamFn(model, ctx);
+  const streamFn = createSupportedTransportStreamFn(model, ctx);
+  if (!streamFn) {
+    throw new Error(`Managed transport stream is unavailable for api "${model.api}"`);
+  }
+  return streamFn;
 }
 
 /** Creates a managed OpenClaw transport stream for explicit fallback/runtime callers. */
@@ -166,10 +165,10 @@ export function prepareTransportAwareSimpleModel<TApi extends Api>(
   if (!streamFn || !alias) {
     return model;
   }
-  return {
+  return getAiTransportHost().inheritManagedTransport(model, {
     ...model,
     api: alias,
-  };
+  });
 }
 
 export function buildTransportAwareSimpleStreamFn(

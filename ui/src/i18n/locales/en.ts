@@ -484,6 +484,7 @@ export const en: TranslationMap = {
     agent: "Agent",
     where: "Where",
     gateway: "Gateway · local",
+    gatewayNamed: "Gateway · {name}",
     cloudWorker: "Cloud · {profile}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
     cloudRequiresWorktree: "Cloud workers require a managed worktree",

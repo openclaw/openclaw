@@ -1,12 +1,14 @@
 /** Lifecycle-owned auth/model discovery snapshots for agent runs. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { registerRuntimeAuthProfileStoreMutationListener } from "./auth-profiles/runtime-snapshots.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
   PreparedModelRuntimePublicationSupersededError,
   createPreparedModelRuntimeReplacement,
   effectiveEnvironmentFingerprint,
+  hasConfiguredOwnerMatching,
   hasSameLifecycleInput,
   listConfiguredOwnerInputs,
   normalizeOptionalDir,
@@ -281,13 +283,26 @@ async function acquirePreparedModelRuntimeLease(
       // Dynamic workspaces still inherit the committed agent/config generation. Only their
       // explicitly pinned workspace may differ from the configured owner. A stale leased owner
       // can share this key, so rebase its input before publishing a replacement generation.
-      input = rebindInputToCommittedConfiguredOwner(owners, input);
-      key = ownerKey(input);
-      existing = owners.get(key);
-      staleDynamicOwner =
-        existing?.needsRefresh &&
-        !existing.pending &&
-        (existing.provenance === "run" || existing.provenance === "ephemeral");
+      try {
+        input = rebindInputToCommittedConfiguredOwner(owners, input);
+        key = ownerKey(input);
+        existing = owners.get(key);
+        staleDynamicOwner =
+          existing?.needsRefresh &&
+          !existing.pending &&
+          (existing.provenance === "run" || existing.provenance === "ephemeral");
+      } catch (error) {
+        if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+          throw error;
+        }
+        const canActivateConfiglessSetup =
+          input.agentId !== undefined && isReservedSystemAgentId(input.agentId);
+        if (hasConfiguredOwnerMatching(owners, input) || !canActivateConfiglessSetup) {
+          throw error;
+        }
+        // First-run Model Setup uses the reserved system-agent identity before a configless gateway
+        // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
+      }
     }
     try {
       if (staleDynamicOwner) {

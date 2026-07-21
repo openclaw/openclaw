@@ -3,11 +3,13 @@
  *
  * Sanitizes provider payloads, merges metadata, and formats streamed assistant events.
  */
-import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
-import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { redactSensitiveText } from "../logging/redact.js";
-import { truncateErrorDetail } from "./provider-http-errors.js";
-import type { ContextUsage } from "./usage.js";
+import type { Usage } from "@openclaw/llm-core";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeSurrogates } from "../internal/shared.js";
+import { createAssistantMessageEventStream } from "../utils/event-stream.js";
+import { redactSensitiveText } from "./transport-utils.js";
+
+type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
 type TransportUsage = {
   input: number;
@@ -210,7 +212,8 @@ function normalizeTransportErrorBody(value: unknown): string | undefined {
   if (!text?.trim()) {
     return undefined;
   }
-  return truncateErrorDetail(redactSensitiveText(text), 500);
+  const redacted = redactSensitiveText(text);
+  return redacted.length > 500 ? `${truncateUtf16Safe(redacted, 499)}…` : redacted;
 }
 
 function extractTransportErrorDetails(error: unknown): TransportErrorDetails {

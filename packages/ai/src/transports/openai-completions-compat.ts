@@ -4,9 +4,12 @@
  * Provider transports use these helpers to derive OpenAI-compatible request
  * behavior from endpoint attribution without scattering provider-specific flags.
  */
-import type { Model } from "../llm/types.js";
-import type { ProviderEndpointClass, ProviderRequestCapabilities } from "./provider-attribution.js";
-import { resolveProviderRequestCapabilities } from "./provider-attribution.js";
+import type { Model } from "@openclaw/llm-core";
+import type { AiProviderRequestCapabilities, AiProviderRequestPolicyInput } from "../host.js";
+import { resolveProviderRequestCapabilities } from "./host-policy.js";
+
+type ProviderEndpointClass = string;
+type ProviderRequestCapabilities = AiProviderRequestCapabilities;
 
 type OpenAICompletionsCompatDefaultsInput = {
   provider?: string;
@@ -149,8 +152,11 @@ export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
     compat?: { supportsStore?: boolean } | null;
   },
+  resolveCapabilities: (
+    input: AiProviderRequestPolicyInput,
+  ) => ProviderRequestCapabilities = resolveProviderRequestCapabilities,
 ): DetectedOpenAICompletionsCompat {
-  const capabilities = resolveProviderRequestCapabilities({
+  const capabilities = resolveCapabilities({
     provider: model.provider,
     api: "openai-completions",
     baseUrl: model.baseUrl,

@@ -1,3 +1,20 @@
+import type {
+  AssistantMessageDiagnostic,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StreamFn,
+  ThinkingLevel,
+  Usage,
+} from "@openclaw/llm-core";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+/**
+ * Native Anthropic Messages streaming transport.
+ * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
+ * back into runtime output blocks, and applies provider request policy.
+ */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getAiTransportHost } from "../host.js";
 import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   ANTHROPIC_SERVER_SIDE_FALLBACK_BETA,
@@ -31,7 +48,7 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicThinkingDisplay,
   type AnthropicToolProjection,
-} from "@openclaw/ai/internal/anthropic";
+} from "../internal/anthropic.js";
 import {
   calculateCost,
   clampThinkingLevel,
@@ -39,43 +56,23 @@ import {
   getEnvApiKey,
   notifyLlmRequestActivity,
   parseStreamingJson,
-} from "@openclaw/ai/internal/runtime";
+} from "../internal/runtime.js";
 import {
   describeToolResultMediaPlaceholder,
   extractToolResultBlockText,
   extractToolResultText,
   isImageWithMediaPayload,
-} from "@openclaw/ai/internal/shared";
-/**
- * Native Anthropic Messages streaming transport.
- * Converts OpenClaw contexts/tools into Anthropic payloads, streams SSE events
- * back into runtime output blocks, and applies provider request policy.
- */
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
-import { toErrorObject } from "../infra/errors.js";
-import { readResponseTextSnippet } from "../infra/http-body.js";
-import type {
-  AssistantMessageDiagnostic,
-  Context,
-  Model,
-  SimpleStreamOptions,
-  ThinkingLevel,
-} from "../llm/types.js";
-import "../llm/ai-transport-host.js";
-import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
-import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
+} from "../internal/shared.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import {
+  buildGuardedModelFetch,
+  resolveProviderEndpoint,
+  transformTransportMessages,
+} from "./host-policy.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
-import { resolveProviderEndpoint } from "./provider-attribution.js";
-import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
-import { buildGuardedModelFetch, parseRetryAfterSeconds } from "./provider-transport-fetch.js";
-import type { StreamFn } from "./runtime/index.js";
-import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
@@ -87,7 +84,16 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
-import type { ContextUsage } from "./usage.js";
+import {
+  createAbortError as createNamedAbortError,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  parseRetryAfterSeconds,
+  readResponseTextSnippet,
+  resolveModelHeaderSentinels,
+  resolveSecretSentinel,
+} from "./transport-utils.js";
+
+type ContextUsage = NonNullable<Usage["contextUsage"]>;
 
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_BILLING_SYSTEM_BLOCK = `x-anthropic-billing-header: cc_version=${CLAUDE_CODE_VERSION}; cc_entrypoint=sdk-cli;`;
@@ -308,7 +314,7 @@ function adjustMaxTokensForThinking(params: {
 
 function isAnthropicOAuthToken(apiKey: string): boolean {
   // Auth routing may inspect the real shape, but guarded fetch still receives the sentinel.
-  const resolved = looksLikeSecretSentinel(apiKey) ? resolveSecretSentinel(apiKey) : apiKey;
+  const resolved = resolveSecretSentinel(apiKey);
   return (resolved ?? apiKey).includes("sk-ant-oat");
 }
 
@@ -926,10 +932,7 @@ function createAnthropicTransportClient(params: {
             ...(betaFeatures.length > 0 ? { "anthropic-beta": betaFeatures.join(",") } : {}),
           },
           model.headers,
-          buildCopilotDynamicHeaders({
-            messages: context.messages,
-            hasImages: hasCopilotVisionInput(context.messages),
-          }),
+          getAiTransportHost().buildCopilotDynamicHeaders(context.messages),
           options?.headers,
         ),
         fetch,
@@ -937,11 +940,7 @@ function createAnthropicTransportClient(params: {
       isOAuthToken: false,
     };
   }
-  if (
-    usesFoundryBearerAuth(
-      unwrapModelHeaderSentinelsForProviderEgress(model, "Anthropic Foundry auth routing"),
-    )
-  ) {
+  if (usesFoundryBearerAuth(resolveModelHeaderSentinels(model))) {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {
       client: createAnthropicMessagesClient({
