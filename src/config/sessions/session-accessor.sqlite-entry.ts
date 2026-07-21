@@ -139,16 +139,19 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const dbPath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
 
-  if (scope.light) {
-    return listSqliteSessionEntriesLight(scope);
-  }
-
+  // Cache hit: derive both light and full results from cached entries
   if (isSessionStoreCacheEnabled()) {
     const cached = readSessionStoreCache({ storePath: dbPath, clone: false });
     if (cached) {
       let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
-        .map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        .map(([sessionKey, entry]) => {
+          if (scope.light) {
+            const { systemPromptReport, skillsSnapshot, ...lightEntry } = entry;
+            return { sessionKey, entry: lightEntry as SessionEntry };
+          }
+          return { sessionKey, entry };
+        });
       if (scope.offset) {
         entries = entries.slice(scope.offset);
       }
@@ -159,6 +162,7 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
     }
   }
 
+  // Cache miss — query SQL
   const db = getSessionKysely(database.db);
   let query = db
     .selectFrom("session_entries")
@@ -173,59 +177,33 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
   }
 
   const rows = executeSqliteQuerySync(database.db, query).rows;
-  const result = rows
-    .map((row) => {
-      if (isInternalSessionEffectsKey(row.session_key)) {
-        return undefined;
-      }
-      const entry = parseSessionEntryRow(row);
-      return entry ? { sessionKey: row.session_key, entry } : undefined;
-    })
-    .filter((entry): entry is SessionEntrySummary => entry !== undefined);
+  const result: SessionEntrySummary[] = [];
+  const storeRecord: Record<string, SessionEntry> = {};
 
-  if (isSessionStoreCacheEnabled()) {
-    const storeRecord: Record<string, SessionEntry> = {};
-    for (const { sessionKey, entry } of result) {
-      storeRecord[sessionKey] = entry;
+  for (const row of rows) {
+    if (isInternalSessionEffectsKey(row.session_key)) {
+      continue;
     }
+    const entry = parseSessionEntryRow(row);
+    if (!entry) {
+      continue;
+    }
+    // Store full entry for cache; return stripped entry for light callers
+    storeRecord[row.session_key] = entry;
+    if (scope.light) {
+      const { systemPromptReport, skillsSnapshot, ...lightEntry } = entry;
+      result.push({ sessionKey: row.session_key, entry: lightEntry as SessionEntry });
+    } else {
+      result.push({ sessionKey: row.session_key, entry });
+    }
+  }
+
+  // Only cache unpaginated (complete) loads so the cache always has the full store
+  if (!scope.limit && !scope.offset && isSessionStoreCacheEnabled()) {
     writeSessionStoreCache({ storePath: dbPath, store: storeRecord, takeOwnership: true });
   }
 
   return result;
-}
-
-/** Lists session entries with only metadata fields — skips large blob fields.
- *  systemPromptReport (~62%) and skillsSnapshot (~33%) dominate the entry_json
- *  payload but are unused in list views. */
-function listSqliteSessionEntriesLight(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
-  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  const db = getSessionKysely(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json", "session_id", "updated_at"])
-      .orderBy("session_key", "asc"),
-  ).rows;
-  return rows
-    .map((row) => {
-      if (isInternalSessionEffectsKey(row.session_key)) {
-        return undefined;
-      }
-      const entry = parseSessionEntryRow(row);
-      if (!entry) {
-        return undefined;
-      }
-      // Strip blob fields — not needed for list views
-      const {
-        systemPromptReport: _systemPromptReport,
-        skillsSnapshot: _skillsSnapshot,
-        ...lightEntry
-      } = entry;
-      return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
-    })
-    .filter((entry): entry is SessionEntrySummary => entry !== undefined);
 }
 
 /**

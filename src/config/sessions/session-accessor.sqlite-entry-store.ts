@@ -396,6 +396,7 @@ export function deleteLegacySessionEntryRows(
       db.deleteFrom("session_entries").where("session_key", "=", legacyKey),
     );
   }
+  invalidateSessionStoreCache(database.path);
 }
 
 // session_members is an additive sharing surface with a lazy ensure, so a DB
