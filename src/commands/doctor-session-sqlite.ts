@@ -22,6 +22,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveStoredSessionOwnerAgentId } from "../gateway/session-store-key.js";
+import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { closeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { compactDoctorSessionSqliteTarget } from "./doctor-session-sqlite-compact.js";
@@ -353,25 +354,27 @@ function readLegacySessionRecords(
   // a writer; fstat on the descriptor then rejects non-regular files.
   const openFlags =
     process.platform === "win32" ? "r" : fs.constants.O_RDONLY | fs.constants.O_NONBLOCK;
-  let fd: number | undefined;
+  let fd: number;
   try {
     fd = fs.openSync(target.storePath, openFlags);
   } catch (err) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (options.allowMissingStore === true && nodeErr.code === "ENOENT") {
-      // Check the parent to distinguish genuine missing stores from corrupt paths.
-      let parentStat: fs.Stats | undefined;
       try {
-        parentStat = fs.statSync(path.dirname(target.storePath));
-      } catch {
-        // Parent is also inaccessible — treat as store_unreadable.
-      }
-      if (parentStat && !parentStat.isDirectory()) {
-        issues.push({
-          code: "store_unreadable",
-          message: `${target.storePath}: parent path is not a directory`,
-        });
-        return [];
+        const parentStat = fs.statSync(path.dirname(target.storePath));
+        if (!parentStat.isDirectory()) {
+          issues.push({
+            code: "store_unreadable",
+            message: `${target.storePath}: parent path is not a directory`,
+          });
+        }
+      } catch (parentErr) {
+        if ((parentErr as NodeJS.ErrnoException).code !== "ENOENT") {
+          issues.push({
+            code: "store_unreadable",
+            message: `${target.storePath}: ${String(parentErr)}`,
+          });
+        }
       }
       return [];
     }
@@ -393,18 +396,9 @@ function readLegacySessionRecords(
     }
     let parsed: unknown;
     try {
-      // Read at most the byte count validated by fstat through the opened
-      // descriptor so same-inode growth after validation cannot be consumed.
-      const buf = Buffer.alloc(storeStat.size);
-      let totalBytes = 0;
-      while (totalBytes < storeStat.size) {
-        const bytesRead = fs.readSync(fd, buf, totalBytes, storeStat.size - totalBytes, totalBytes);
-        if (bytesRead === 0) {
-          break;
-        }
-        totalBytes += bytesRead;
-      }
-      parsed = JSON.parse(buf.subarray(0, totalBytes).toString("utf-8"));
+      // Fail closed if the pinned file grows past the size validated above.
+      const raw = readFileDescriptorBoundedSync(fd, storeStat.size).toString("utf-8");
+      parsed = JSON.parse(raw);
     } catch (err) {
       issues.push({
         code: "store_unreadable",
