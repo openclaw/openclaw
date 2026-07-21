@@ -1,8 +1,8 @@
 // Tests create-only Claw workspace files and immediate per-file provenance.
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -13,6 +13,8 @@ import { buildClawAddPlan } from "./lifecycle.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawAddPlan, ClawSourceIdentity } from "./types.js";
 import { ClawWorkspaceWriteError, createClawWorkspaceFiles } from "./workspace.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -29,7 +31,7 @@ async function makePlan(params?: {
   createWorkspace?: boolean;
   mutateAfterPlan?: (plan: ClawAddPlan, root: string) => Promise<void>;
 }) {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-workspace-"));
+  const root = tempDirs.make("openclaw-claw-workspace-");
   const workspace = join(root, "workspace-agent");
   await writeSource(root, "content/AGENTS.md", "# Agent\n");
   await writeSource(root, "content/policy.md", "Policy\n");
@@ -171,7 +173,7 @@ describe("createClawWorkspaceFiles", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a source replaced by a symlink after planning",
     async () => {
-      const outside = await mkdtemp(join(tmpdir(), "openclaw-claw-outside-"));
+      const outside = tempDirs.make("openclaw-claw-outside-");
       await writeFile(join(outside, "outside.md"), "outside\n", "utf8");
       const { root, workspace, plan } = await makePlan({
         mutateAfterPlan: async (_plan, packageRoot) => {
