@@ -289,6 +289,46 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
+  it("does not discard the first clean line after a drop that ended at a newline", async () => {
+    vi.useFakeTimers();
+    const fake = fakeSupervisor();
+    const fireBatch = vi.fn(async (_job: CronJob, _batch: string) => "fired" as const);
+    const watchers = createWatchers({
+      getProcessSupervisor: () => fake.supervisor,
+      minIntervalMs: 1,
+      updateState: vi.fn(async () => {}),
+      recordFailure: vi.fn(async () => {}),
+      fireBatch,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    await watchers.start(
+      job({
+        schedule: {
+          kind: "stream",
+          command: ["stream-source"],
+          mode: "match",
+          match: "^keep$",
+          batchMs: 50,
+          maxBatchBytes: 1_024,
+        },
+      }),
+    );
+
+    // Synchronous burst exhausts the intake budget, then a whole chunk that
+    // ends at a newline is dropped. The drop closed its own broken line, so
+    // the very next accepted line is clean and must still fire.
+    fake.inputs[0]?.onStderr?.("Z".repeat(4_096));
+    fake.inputs[0]?.onStdout?.("lost\n");
+    await settle();
+    fake.inputs[0]?.onStdout?.("keep\n");
+    await settle();
+    await vi.advanceTimersByTimeAsync(100);
+    await settle();
+    expect(fireBatch).toHaveBeenCalledOnce();
+    expect(fireBatch.mock.calls[0]?.[1]).toBe("keep");
+    await watchers.stopAll("shutdown");
+  });
+
   it("buffers output emitted before the asynchronous spawn call resolves", async () => {
     vi.useFakeTimers();
     let resolveWait!: (exit: RunExit) => void;

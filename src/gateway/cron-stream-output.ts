@@ -25,6 +25,11 @@ type InFlightBatch = {
   handled: boolean;
 };
 
+// A drop severs the retained partial line, but only a "midline" drop leaves
+// the next fragment's head inside an unknown line; a drop that ended at a
+// newline boundary lets the next fragment start a clean line.
+type DroppedTail = false | "clean" | "midline";
+
 type BufferedOutput = {
   channel: StreamOutputChannel;
   chunk: string;
@@ -32,9 +37,8 @@ type BufferedOutput = {
   truncatedTail: boolean;
   truncatedTailContinuesLine: boolean;
   // Chunks for this channel were dropped between the previous accepted
-  // fragment and this one, so the retained partial line and this fragment's
-  // head are severed halves of unknown lines.
-  precededByDrop: boolean;
+  // fragment and this one; the retained partial line is severed either way.
+  precededByDrop: DroppedTail;
 };
 
 type FireDisposition = "fired" | "disabled" | "dropped" | "busy" | "error" | "not-run";
@@ -112,7 +116,7 @@ export class CronStreamOutput {
   private bufferedOutputBytes = 0;
   private readonly queuedOutputDrainGenerations = new Set<number>();
   private readonly outputOverflowGenerations = new Set<number>();
-  private droppedChunkTail: Record<StreamOutputChannel, boolean> = {
+  private droppedChunkTail: Record<StreamOutputChannel, DroppedTail> = {
     stdout: false,
     stderr: false,
   };
@@ -169,7 +173,9 @@ export class CronStreamOutput {
       remaining <= 0 ||
       this.bufferedOutput.length >= MAX_BUFFERED_OUTPUT_SEGMENTS
     ) {
-      this.droppedChunkTail[channel] = true;
+      // The last drop wins: a terminal newline in the dropped data closes the
+      // broken line, so the next accepted fragment starts a clean line.
+      this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
       this.outputOverflowGenerations.add(generation);
       this.queueOutputDrain(generation);
       return;
@@ -180,7 +186,7 @@ export class CronStreamOutput {
       truncatedTail && !chunk.slice(accepted.length).endsWith("\n");
     const acceptedBytes = Buffer.byteLength(accepted, "utf8");
     if (acceptedBytes === 0 && chunk.length > 0) {
-      this.droppedChunkTail[channel] = true;
+      this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
       this.outputOverflowGenerations.add(generation);
       this.queueOutputDrain(generation);
       return;
@@ -357,11 +363,11 @@ export class CronStreamOutput {
   private async acceptChunk(entry: BufferedOutput): Promise<void> {
     const { channel, chunk, truncatedTail, truncatedTailContinuesLine, generation } = entry;
     if (entry.precededByDrop) {
-      // The dropped gap severed both the retained partial line and this
-      // fragment's head; never synthesize a line across it. Resume at the
-      // next newline boundary inside this fragment.
+      // The dropped gap severed the retained partial line; never synthesize a
+      // line across it. Only a midline drop leaves this fragment's head inside
+      // an unknown line — after a clean drop it starts a fresh line.
       this.partialLines[channel] = "";
-      this.discardUntilNewline[channel] = true;
+      this.discardUntilNewline[channel] = entry.precededByDrop === "midline";
     }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
     // The per-line byte cap is the raw-intake bound, not the delivery cap, and
@@ -691,7 +697,7 @@ export class CronStreamOutput {
           if (entry.precededByDrop) {
             // Mirror acceptChunk: dropped gaps sever line assembly.
             text = "";
-            discardUntilNewline = true;
+            discardUntilNewline = entry.precededByDrop === "midline";
           }
           text += entry.chunk;
         }
