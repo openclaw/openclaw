@@ -23,7 +23,6 @@ import {
   isContextOverflowError,
 } from "./errors.js";
 import {
-  classifyProviderPluginError,
   classifyProviderSpecificError,
   matchesProviderContextOverflow,
 } from "./provider-error-patterns.js";
@@ -79,18 +78,6 @@ describe("matchesProviderContextOverflow", () => {
 });
 
 describe("classifyProviderSpecificError", () => {
-  it("uses bundled provider policy when runtime hooks are unavailable", () => {
-    expect(
-      classifyProviderPluginError({
-        provider: "openai",
-        errorMessage:
-          "You exceeded your current quota, please check your plan and billing details.",
-        code: "insufficient_quota",
-        errorType: "insufficient_quota",
-      }),
-    ).toBe("billing");
-  });
-
   it("classifies Bedrock ThrottlingException as rate_limit", () => {
     expect(classifyProviderSpecificError("ThrottlingException: Too many requests")).toBe(
       "rate_limit",

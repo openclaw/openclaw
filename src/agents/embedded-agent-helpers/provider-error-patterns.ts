@@ -7,7 +7,6 @@
  */
 
 import { resolveNodeRequireFromMeta } from "../../logging/node-require.js";
-import { resolveProviderPolicySurface } from "../../plugins/provider-public-artifacts.js";
 import type { FailoverReason } from "./types.js";
 
 type ProviderErrorPattern = {
@@ -164,17 +163,12 @@ export function classifyProviderPluginError(
 ): FailoverReason | null {
   const context = normalizeProviderSpecificErrorContext(input);
   const runtimeHooks = resolveProviderRuntimeHooks();
-  const runtimeReason = runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
-    provider: context.provider,
-    context,
-  });
-  if (runtimeReason) {
-    return runtimeReason;
-  }
-  if (!context.provider) {
-    return null;
-  }
-  return resolveProviderPolicySurface(context.provider)?.classifyFailoverReason?.(context) ?? null;
+  return (
+    runtimeHooks?.classifyProviderFailoverReasonWithPlugin({
+      provider: context.provider,
+      context,
+    }) ?? null
+  );
 }
 
 /**

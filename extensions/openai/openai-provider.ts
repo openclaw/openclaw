@@ -58,7 +58,6 @@ import {
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { classifyFailoverReason } from "./provider-policy-api.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -70,6 +69,17 @@ import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
 
+// OpenAI-native error codes stay with the OpenAI provider hook.
+function classifyOpenAiFailoverCode(code: string | undefined) {
+  switch (code?.trim().toUpperCase()) {
+    case "SERVER_ERROR":
+      return "server_error" as const;
+    case "INSUFFICIENT_QUOTA":
+      return "billing" as const;
+    default:
+      return undefined;
+  }
+}
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
@@ -1004,7 +1014,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     matchesContextOverflowError: ({ errorMessage }) =>
       /content_filter.*(?:prompt|input).*(?:too long|exceed)/i.test(errorMessage),
-    classifyFailoverReason,
+    classifyFailoverReason: ({ code }) => classifyOpenAiFailoverCode(code),
     resolveReasoningOutputMode: () => "native",
     resolveThinkingProfile: ({ provider, modelId, agentRuntime, api, compat }) =>
       normalizeProviderId(provider) === PROVIDER_ID

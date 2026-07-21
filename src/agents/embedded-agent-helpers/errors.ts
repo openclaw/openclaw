@@ -1161,6 +1161,12 @@ function mergeMessageAndDetailClassification(
   if (detailClassification.kind === "context_overflow") {
     return detailClassification;
   }
+  if (
+    classificationReason(detailClassification) === "billing" &&
+    classificationReason(messageClassification) === "rate_limit"
+  ) {
+    return detailClassification;
+  }
   return classificationReason(messageClassification) === "format"
     ? detailClassification
     : messageClassification;
