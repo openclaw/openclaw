@@ -1,5 +1,6 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
+import { connect, type Socket } from "node:net";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -59,6 +60,18 @@ function requestCallback(
       });
     });
     request.on("error", reject);
+  });
+}
+
+function connectIdleSocket(url: string): Promise<Socket> {
+  const callbackUrl = new URL(url);
+  const socket = connect({
+    host: resolveOpenAICallbackHost(),
+    port: Number(callbackUrl.port),
+  });
+  return new Promise((resolve, reject) => {
+    socket.once("connect", () => resolve(socket));
+    socket.once("error", reject);
   });
 }
 
@@ -167,7 +180,7 @@ describe("OpenAI Codex OAuth flow", () => {
     );
   });
 
-  it("disconnects a keep-alive callback and cancels stale manual input", async () => {
+  it("disconnects callback sockets and cancels stale manual input", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(null, { status: 302 })),
@@ -182,6 +195,7 @@ describe("OpenAI Codex OAuth flow", () => {
     });
     const agent = new Agent({ keepAlive: true });
     let callbackResponse: Promise<{ headers: IncomingHttpHeaders; body: string }> | undefined;
+    let idleSocket: Socket | undefined;
     let manualPromptAborted = false;
     let manualPrompt: Promise<string> | undefined;
     const prompter = {
@@ -211,6 +225,7 @@ describe("OpenAI Codex OAuth flow", () => {
             if (!redirectUri || !state) {
               throw new Error("OAuth URL missing callback parameters");
             }
+            idleSocket = await connectIdleSocket(redirectUri);
             manualPrompt = params.prompter.text({
               message: "Paste callback",
               signal: params.manualPromptSignal,
@@ -244,7 +259,9 @@ describe("OpenAI Codex OAuth flow", () => {
       expect(response.body).toContain("OpenAI authentication completed");
       await vi.waitFor(() => expect(manualPromptAborted).toBe(true));
       expect(Object.keys(agent.freeSockets)).toHaveLength(0);
+      await vi.waitFor(() => expect(idleSocket?.destroyed).toBe(true));
     } finally {
+      idleSocket?.destroy();
       agent.destroy();
     }
   });

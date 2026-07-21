@@ -510,7 +510,7 @@ describe("modelsAuthLoginCommand", () => {
       "Auth profile: openai:user@example.com (openai/oauth)",
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+      "Default model available: openai/gpt-5.5 (current default unchanged; run openclaw models set openai/gpt-5.5 to apply)",
     );
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
@@ -1150,7 +1150,7 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(lastUpdatedConfig?.auth).toBeUndefined();
     expect(runtime.log).toHaveBeenCalledWith(
-      "Default model available: openai/gpt-5.5 (use --set-default to apply)",
+      "Default model available: openai/gpt-5.5 (current default unchanged; run openclaw models set openai/gpt-5.5 to apply)",
     );
   });
 
