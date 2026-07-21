@@ -84,7 +84,7 @@ describe("ChatObserverHudState", () => {
 
 describe("observer hud run identity from row data", () => {
   it("shows a projected digest when attaching to an already-running session", () => {
-    const digest = {
+    const projectedDigest = {
       sessionKey: "agent:main:current",
       runId: "server-run",
       revision: 1,
@@ -95,7 +95,7 @@ describe("observer hud run identity from row data", () => {
     const activeRunId = resolveChatPaneObserverRunId({
       localRunId: null,
       session: { hasActiveRun: true, activeRunIds: ["server-run"] },
-      digest,
+      digest: projectedDigest,
     });
 
     expect(activeRunId).toBe("server-run");
@@ -103,7 +103,7 @@ describe("observer hud run identity from row data", () => {
       new ChatObserverHudState(false).mode({
         running: activeRunId !== null,
         activeRunId,
-        digest,
+        digest: projectedDigest,
         sideChatOpen: false,
       }),
     ).toBe("pill");

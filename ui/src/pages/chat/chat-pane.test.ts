@@ -24,7 +24,6 @@ import {
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
-import { ChatObserverHudState } from "./components/chat-observer-hud.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
