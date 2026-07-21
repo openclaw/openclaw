@@ -209,9 +209,9 @@ public enum DeviceIdentityStore {
         _ url: URL,
         operation: () async throws -> T) async rethrows -> T
     {
-        try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
-            url,
-            operation: operation)
+        try await DeviceIdentityPaths.$scopedStateDirURL.withValue(url) {
+            try await operation()
+        }
     }
     #else
     static func withStateDirectory<T>(
