@@ -243,8 +243,6 @@ export function createTelegramDraftStream(params: {
   onRetainedPage?: (page: RetainedTelegramDraftPage) => void;
   /** Called with Telegram's response after a new preview message becomes durable. */
   onProviderMessage?: (message: Message) => Promise<void> | void;
-  /** Called once when the active preview send reaches a terminal owner-known failure. */
-  onTerminalFailure?: (failure: { reason: "missing_message_id"; durationMs: number }) => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -462,7 +460,6 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     messageSendAttempted = true;
-    const sendStartedAt = Date.now();
     const sendMessageParams = reserveReplyTargetForSend(sendGeneration);
     let sent: Awaited<ReturnType<typeof sendPlannedMessage>>;
     try {
@@ -485,10 +482,6 @@ export function createTelegramDraftStream(params: {
     if (normalizedMessageId === undefined) {
       if (sendGeneration === generation) {
         streamState.stopped = true;
-        params.onTerminalFailure?.({
-          reason: "missing_message_id",
-          durationMs: Math.max(0, Date.now() - sendStartedAt),
-        });
         params.warn?.("telegram stream preview stopped (missing message id from sendMessage)");
         return false;
       }
