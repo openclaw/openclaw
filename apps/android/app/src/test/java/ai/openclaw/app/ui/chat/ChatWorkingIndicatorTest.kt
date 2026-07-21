@@ -60,9 +60,9 @@ class ChatWorkingIndicatorTest {
   }
 
   @Test
-  fun provisionalRunAdoptsAuthoritativeTimingWithoutChangingStanceKey() {
+  fun provisionalRunAdoptsAuthoritativeIdentityWithoutChangingLocalStart() {
     val tracker = ChatWorkingRunTracker("agent:main:main")
-    val provisional = requireNotNull(tracker.resolve(indicatorVisible = true, session = null, nowMs = 5_000L))
+    val provisional = requireNotNull(tracker.resolve(indicatorVisible = true, session = null, nowElapsedMs = 5_000L))
 
     val authoritative =
       requireNotNull(
@@ -76,13 +76,14 @@ class ChatWorkingIndicatorTest {
               startedAt = 4_000L,
               activeRunIds = listOf("run-1"),
             ),
-          nowMs = 6_000L,
+          nowElapsedMs = 6_000L,
         ),
       )
 
     assertEquals(provisional.key, authoritative.key)
-    assertEquals(4_000L, authoritative.startedAtMs)
+    assertEquals(5_000L, authoritative.observedAtElapsedMs)
     assertEquals("run-1", authoritative.authoritativeRunId)
+    assertEquals(4_000L, authoritative.authoritativeStartedAtMs)
   }
 
   @Test
@@ -100,7 +101,7 @@ class ChatWorkingIndicatorTest {
               startedAt = 1_000L,
               activeRunIds = listOf("run-1"),
             ),
-          nowMs = 1_000L,
+          nowElapsedMs = 7_000L,
         ),
       )
     val replacement =
@@ -115,12 +116,13 @@ class ChatWorkingIndicatorTest {
               startedAt = 2_000L,
               activeRunIds = listOf("run-2"),
             ),
-          nowMs = 2_000L,
+          nowElapsedMs = 9_000L,
         ),
       )
 
     assertEquals("run-1", first.key)
     assertEquals("run-2", replacement.key)
-    assertEquals(2_000L, replacement.startedAtMs)
+    assertEquals(9_000L, replacement.observedAtElapsedMs)
+    assertEquals(2_000L, replacement.authoritativeStartedAtMs)
   }
 }

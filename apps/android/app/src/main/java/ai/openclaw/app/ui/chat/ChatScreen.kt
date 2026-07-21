@@ -53,6 +53,7 @@ import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
 import ai.openclaw.app.ui.mobileCallout
+import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -1151,7 +1152,7 @@ private fun ChatMessageList(
   resolveInlineWidgetResource: suspend (String, ChatWidgetResource?) -> ChatWidgetResource?,
   modifier: Modifier = Modifier,
 ) {
-  val timeline =
+  val baseTimeline =
     remember(messages, pendingRunCount, pendingToolCalls, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
       buildChatTimeline(
         messages = messages,
@@ -1163,17 +1164,18 @@ private fun ChatMessageList(
         questions = questions,
       )
     }
+  val indicatorVisible = pendingRunCount > 0
+  val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
+  val workingRun = workingRunTracker.resolve(indicatorVisible, session, SystemClock.elapsedRealtime())
+  val turnRecapResolver = remember { TurnRecapResolver() }
+  val turnRecap = turnRecapResolver.resolve(sessionKey, indicatorVisible, session)
+  val timeline = remember(baseTimeline, turnRecap) { baseTimeline.withTurnRecap(turnRecap) }
   val readerScroll =
     rememberChatReaderScrollController(
       sessionKey = sessionKey,
       timeline = timeline,
       historyLoading = historyLoading,
     )
-  val indicatorVisible = pendingRunCount > 0
-  val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
-  val workingRun = workingRunTracker.resolve(indicatorVisible, session, System.currentTimeMillis())
-  val turnRecapResolver = remember { TurnRecapResolver() }
-  val turnRecap = turnRecapResolver.resolve(sessionKey, indicatorVisible, session)
   DisposableEffect(sessionKey, turnRecapResolver) {
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
   }
@@ -1186,9 +1188,6 @@ private fun ChatMessageList(
       verticalArrangement = Arrangement.spacedBy(5.dp),
       contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
     ) {
-      turnRecap?.let { recap ->
-        item(key = "turn-recap:$sessionKey") { ChatTurnRecapRow(recap) }
-      }
       itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
         when (item) {
           is ChatTimelineItem.Message ->
@@ -1229,6 +1228,7 @@ private fun ChatMessageList(
           is ChatTimelineItem.PendingTools -> ToolBubble(toolCalls = item.toolCalls)
           is ChatTimelineItem.QuestionPrompt ->
             ChatQuestionCard(prompt = item.prompt, onSubmit = onResolveQuestion, onSkip = onSkipQuestion)
+          is ChatTimelineItem.TurnRecapSummary -> ChatTurnRecapRow(item.recap)
           is ChatTimelineItem.StreamingAssistant ->
             ChatBubble(
               messageId = null,
@@ -1245,7 +1245,7 @@ private fun ChatMessageList(
           ChatTimelineItem.Thinking -> {
             val run = workingRun
             if (run != null) {
-              ChatTypingIndicatorBubble(runKey = run.key, startedAtMs = run.startedAtMs)
+              ChatTypingIndicatorBubble(runKey = run.key, observedAtElapsedMs = run.observedAtElapsedMs)
             }
           }
         }
@@ -1300,7 +1300,7 @@ private fun ChatMessageList(
 
 internal data class ChatWorkingRun(
   val key: String,
-  val startedAtMs: Long,
+  val observedAtElapsedMs: Long,
   val authoritativeRunId: String?,
   val authoritativeStartedAtMs: Long?,
 )
@@ -1313,7 +1313,7 @@ internal class ChatWorkingRunTracker(
   fun resolve(
     indicatorVisible: Boolean,
     session: ChatSessionEntry?,
-    nowMs: Long,
+    nowElapsedMs: Long,
   ): ChatWorkingRun? {
     if (!indicatorVisible) {
       current = null
@@ -1328,8 +1328,8 @@ internal class ChatWorkingRunTracker(
     val replacement = replacementByRunId || replacementByStart
     if (previous == null || replacement) {
       return ChatWorkingRun(
-        key = runId ?: "$sessionKey:${startedAt ?: nowMs}",
-        startedAtMs = startedAt ?: nowMs,
+        key = runId ?: "$sessionKey:${startedAt ?: nowElapsedMs}",
+        observedAtElapsedMs = nowElapsedMs,
         authoritativeRunId = runId,
         authoritativeStartedAtMs = startedAt,
       ).also { current = it }
@@ -1339,7 +1339,6 @@ internal class ChatWorkingRunTracker(
     if (adoptsRunId || adoptsStartedAt) {
       current =
         previous.copy(
-          startedAtMs = startedAt ?: previous.startedAtMs,
           authoritativeRunId = runId ?: previous.authoritativeRunId,
           authoritativeStartedAtMs = startedAt ?: previous.authoritativeStartedAtMs,
         )

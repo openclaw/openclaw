@@ -5,6 +5,7 @@ import ai.openclaw.app.i18n.nativeString
 import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.annotation.StringRes
 import androidx.compose.animation.core.CubicBezierEasing
@@ -285,15 +286,15 @@ private fun rememberSystemAnimationsEnabled(): Boolean {
 private fun readAnimatorDurationScale(resolver: android.content.ContentResolver): Float = Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
 
 @Composable
-internal fun rememberWorkingElapsedMs(startedAtMs: Long): Long {
-  var nowMs by remember(startedAtMs) { mutableLongStateOf(System.currentTimeMillis()) }
-  LaunchedEffect(startedAtMs) {
+internal fun rememberWorkingElapsedMs(observedAtElapsedMs: Long): Long {
+  var nowElapsedMs by remember(observedAtElapsedMs) { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+  LaunchedEffect(observedAtElapsedMs) {
     while (true) {
-      nowMs = System.currentTimeMillis()
+      nowElapsedMs = SystemClock.elapsedRealtime()
       delay(1_000L)
     }
   }
-  return (nowMs - startedAtMs).coerceAtLeast(0L)
+  return (nowElapsedMs - observedAtElapsedMs).coerceAtLeast(0L)
 }
 
 internal enum class ChatDurationUnit {

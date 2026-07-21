@@ -366,9 +366,9 @@ private fun linkPreviewDomain(url: String): String =
 @Composable
 fun ChatTypingIndicatorBubble(
   runKey: String,
-  startedAtMs: Long,
+  observedAtElapsedMs: Long,
 ) {
-  val elapsedMs = rememberWorkingElapsedMs(startedAtMs)
+  val elapsedMs = rememberWorkingElapsedMs(observedAtElapsedMs)
   val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
