@@ -202,6 +202,8 @@ describe("runSystemAgentTurn", () => {
         authProfileId: "openai:p2",
         authFingerprint,
         agentHarnessId: "openclaw",
+        modelId: executionRoute.model,
+        modelApi: "openai-responses",
       },
       deps: authDeps,
     });

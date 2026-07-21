@@ -603,6 +603,8 @@ export async function runPreparedEmbeddedLoop(
         startedAtMs: started,
         provider,
         modelId,
+        modelTransportId: effectiveModel.id ?? modelId,
+        modelTransportApi: effectiveModel.api ?? model.api,
         authProfileId: lastProfileId,
         profileFailureStore,
         attemptAuthProfileStore,

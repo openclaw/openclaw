@@ -119,15 +119,8 @@ beforeEach(() => {
   harnessRuntimeArtifactState.ownsAuthBootstrap = true;
 });
 
-function modelFactsDeps(model = { id: "gpt-5.5", provider: "openai", api: "openai-responses" }) {
-  return {
-    resolveModelAsync: vi.fn(async () => ({ model })) as never,
-  };
-}
-
 function authDeps(apiKey = "verified-key") {
   return {
-    ...modelFactsDeps(),
     ensureAuthProfileStore: vi.fn(() => ({
       version: 1,
       profiles: { "openai:verified": { ...profile, key: apiKey } },
@@ -223,6 +216,8 @@ async function bindingFor(
     auth: {
       authProfileId: "openai:verified",
       authFingerprint,
+      modelId: route.model,
+      modelApi: route.provider === "anthropic" ? "anthropic-messages" : "openai-responses",
       ...(agentHarnessId
         ? {
             agentHarnessId,
@@ -340,12 +335,10 @@ describe("verified OpenClaw inference binding", () => {
     ).rejects.toThrow("active secret unavailable");
   });
 
-  it("re-resolves the current owner under the route model's transport constraints", async () => {
-    // An env-credential run reports no auth profile. Owner re-resolution must
-    // carry the route model's id/api so credential discovery applies the same
-    // transport gate the run did — without it, profile-first discovery can
-    // select a transport-incompatible credential (e.g. a Codex-imported
-    // ChatGPT OAuth profile for a direct OpenAI platform model).
+  it("reuses the successful model transport facts for owner re-resolution", async () => {
+    // The successful run already resolved the model under its selected auth
+    // plan. Revalidation must carry that exact tuple forward instead of
+    // repeating catalog and provider discovery in the authority hot path.
     const envConfig = {
       agents: {
         defaults: {
@@ -371,10 +364,14 @@ describe("verified OpenClaw inference binding", () => {
     const binding = await createSystemAgentVerifiedInferenceBinding({
       configuredRoute: route,
       executionRoute: route,
-      auth: { authFingerprint, agentHarnessId: "openclaw" },
+      auth: {
+        authFingerprint,
+        agentHarnessId: "openclaw",
+        modelId: "gpt-5.6",
+        modelApi: "openai-responses",
+      },
       deps: {
         ...pluginArtifactDeps(),
-        ...modelFactsDeps({ id: "gpt-5.6", provider: "openai", api: "openai-responses" }),
         resolveApiKeyForProvider: resolveAuth as never,
       },
     });
@@ -385,7 +382,7 @@ describe("verified OpenClaw inference binding", () => {
     );
   });
 
-  it("fails closed when the route model cannot be resolved for owner re-derivation", async () => {
+  it("fails closed when a credential-backed run omits its model transport facts", async () => {
     const envConfig = {
       agents: {
         defaults: {
@@ -416,7 +413,6 @@ describe("verified OpenClaw inference binding", () => {
         auth: { authFingerprint, agentHarnessId: "openclaw" },
         deps: {
           ...pluginArtifactDeps(),
-          resolveModelAsync: vi.fn(async () => ({ model: undefined })) as never,
           resolveApiKeyForProvider: resolveAuth as never,
         },
       }),
@@ -929,6 +925,8 @@ describe("verified OpenClaw inference binding", () => {
         authProfileId: "openai:verified",
         authFingerprint,
         agentHarnessId: "openclaw",
+        modelId: configuredRoute.model,
+        modelApi: "openai-responses",
       },
       deps: { ...authDeps(), ...pluginArtifactDeps() },
     });
@@ -1081,7 +1079,6 @@ describe("verified OpenClaw inference binding", () => {
     }));
     const deps = {
       ...pluginArtifactDeps(),
-      ...modelFactsDeps(),
       ensureAuthProfileStore: vi.fn(() => ({
         version: 1,
         profiles: { "openai:verified": profile },
@@ -1095,6 +1092,8 @@ describe("verified OpenClaw inference binding", () => {
         authProfileId: "openai:verified",
         authFingerprint,
         agentHarnessId: "codex",
+        modelId: route.model,
+        modelApi: "openai-responses",
         runtimeOwnerKind: "plugin-harness",
         runtimeOwnerId: "codex",
         ...codexRuntimeArtifactAuth,
