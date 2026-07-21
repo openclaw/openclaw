@@ -50,6 +50,7 @@ type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 function createRunHandle(
   overrides: {
     abort?: () => void;
+    isAbortable?: boolean;
     isCompacting?: boolean;
     isStreaming?: boolean;
     supportsTranscriptCommitWait?: boolean;
@@ -60,6 +61,7 @@ function createRunHandle(
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
+    isAbortable: () => overrides.isAbortable !== false,
     isStreaming: () => overrides.isStreaming ?? true,
     isCompacting: () => overrides.isCompacting ?? false,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
@@ -122,6 +124,15 @@ describe("embedded-agent runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not abort a handle whose terminal outcome is finalizing", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-finalizing", createRunHandle({ abort, isAbortable: false }));
+
+    expect(abortEmbeddedAgentRun("session-finalizing")).toBe(false);
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all" })).toBe(false);
+    expect(abort).not.toHaveBeenCalled();
   });
 
   it("passes restart ownership to every aborted run", () => {

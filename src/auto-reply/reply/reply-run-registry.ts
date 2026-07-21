@@ -22,6 +22,7 @@ export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
+  isAbortable?: () => boolean;
   queueMessage?: (text: string) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
@@ -87,8 +88,8 @@ export type ReplyOperation = {
     timeout?: number | ReplyFollowupAdmissionBarrierTimeoutPolicy,
   ): void;
   fail(code: Exclude<ReplyOperationFailureCode, "aborted_by_user">, cause?: unknown): void;
-  abortByUser(): void;
-  abortForRestart(): void;
+  abortByUser(): boolean;
+  abortForRestart(): boolean;
 };
 
 export type ReplyRunRegistry = {
@@ -230,6 +231,21 @@ const afterClearCallbacksByOperation = new WeakMap<
 
 function getAttachedBackend(operation: ReplyOperation): ReplyBackendHandle | undefined {
   return attachedBackendByOperation.get(operation);
+}
+
+function isReplyOperationAbortable(operation: ReplyOperation): boolean {
+  if (operation.result) {
+    return false;
+  }
+  const backend = getAttachedBackend(operation);
+  if (!backend?.isAbortable) {
+    return true;
+  }
+  try {
+    return backend.isAbortable();
+  } catch {
+    return false;
+  }
 }
 
 /** Run work after an operation no longer owns its session lane. */
@@ -579,6 +595,9 @@ export function createReplyOperation(params: {
       }
     },
     abortByUser() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
       const phaseBeforeAbort = phase;
       abortWithReason("user_abort", createUserAbortError(), {
         abortedCode: "aborted_by_user",
@@ -586,8 +605,12 @@ export function createReplyOperation(params: {
       if (phaseBeforeAbort === "queued") {
         clearState();
       }
+      return true;
     },
     abortForRestart() {
+      if (!isReplyOperationAbortable(operation)) {
+        return false;
+      }
       const phaseBeforeAbort = phase;
       abortWithReason("restart", createAgentRunRestartAbortError(), {
         abortedCode: "aborted_for_restart",
@@ -595,6 +618,7 @@ export function createReplyOperation(params: {
       if (phaseBeforeAbort === "queued") {
         clearState();
       }
+      return true;
     },
   };
 
@@ -637,8 +661,7 @@ export const replyRunRegistry: ReplyRunRegistry = {
     if (!operation) {
       return false;
     }
-    operation.abortByUser();
-    return true;
+    return operation.abortByUser();
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
@@ -766,8 +789,7 @@ export function abortReplyRunBySessionId(sessionId: string): boolean {
   if (!operation) {
     return false;
   }
-  operation.abortByUser();
-  return true;
+  return operation.abortByUser();
 }
 
 export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown): boolean {
@@ -851,8 +873,7 @@ export function abortActiveReplyRuns(opts: { mode: "all" | "compacting" }): bool
     if (opts.mode === "compacting" && !isReplyRunCompacting(operation)) {
       continue;
     }
-    operation.abortForRestart();
-    aborted = true;
+    aborted = operation.abortForRestart() || aborted;
   }
   return aborted;
 }

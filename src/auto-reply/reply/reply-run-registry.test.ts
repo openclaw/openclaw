@@ -398,6 +398,33 @@ describe("reply run registry", () => {
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
   });
 
+  it("rejects aborts while the attached backend is finalizing", () => {
+    let abortable = false;
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:finalizing",
+      sessionId: "session-finalizing",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => false,
+      isAbortable: () => abortable,
+    });
+    operation.setPhase("running");
+
+    expect(replyRunRegistry.abort("agent:main:finalizing")).toBe(false);
+    expect(abortActiveReplyRuns({ mode: "all" })).toBe(false);
+    expect(operation.result).toBeNull();
+    expect(cancel).not.toHaveBeenCalled();
+
+    abortable = true;
+    expect(replyRunRegistry.abort("agent:main:finalizing")).toBe(true);
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+    expect(cancel).toHaveBeenCalledWith("user_abort");
+  });
+
   it("force-clears a running operation after abort without backend cleanup", async () => {
     vi.useFakeTimers();
     try {

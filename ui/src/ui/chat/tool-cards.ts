@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
+import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -182,6 +183,21 @@ function resolveToolCardId(
   return `${prefix}:${name}:${index}`;
 }
 
+function resolveToolCallId(
+  item: Record<string, unknown>,
+  message: Record<string, unknown>,
+): string | undefined {
+  return (
+    resolveToolUseId(item) ||
+    (typeof item.callId === "string" && item.callId.trim()) ||
+    (typeof message.toolCallId === "string" && message.toolCallId.trim()) ||
+    (typeof message.tool_call_id === "string" && message.tool_call_id.trim()) ||
+    (typeof message.toolUseId === "string" && message.toolUseId.trim()) ||
+    (typeof message.tool_use_id === "string" && message.tool_use_id.trim()) ||
+    undefined
+  );
+}
+
 function serializeToolInput(args: unknown): string | undefined {
   if (args === undefined || args === null) {
     return undefined;
@@ -280,8 +296,10 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
         (item.arguments != null || item.args != null || item.input != null));
     if (isToolCall) {
       const args = coerceArgs(item.arguments ?? item.args ?? item.input);
+      const callId = resolveToolCallId(item, m);
       cards.push({
         id: resolveToolCardId(item, m, index, prefix),
+        ...(callId ? { callId } : {}),
         name: typeof item.name === "string" ? item.name : "tool",
         args,
         inputText: serializeToolInput(args),
@@ -293,12 +311,14 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
     if (kind === "toolresult" || kind === "tool_result") {
       const name = typeof item.name === "string" ? item.name : "tool";
       const cardId = resolveToolCardId(item, m, index, prefix);
+      const callId = resolveToolCallId(item, m);
       const existing = findFirstUnmatchedCard(cards, cardId, name, fallbackMatchedCards);
       const text = extractToolText(item);
       const preview = extractToolPreview(text, name);
       const isError = readToolErrorFlag(item) ?? messageIsError;
       if (existing) {
         fallbackMatchedCards.add(existing);
+        existing.callId ??= callId;
         existing.outputText = text;
         existing.preview = preview;
         if (isError !== undefined) {
@@ -308,6 +328,7 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       }
       cards.push({
         id: cardId,
+        ...(callId ? { callId } : {}),
         name,
         outputText: text,
         messageId: transcriptMessageId,
@@ -331,8 +352,10 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
     const text = extractTextCached(message) ?? undefined;
+    const callId = resolveToolCallId({}, m);
     cards.push({
       id: resolveToolCardId({}, m, 0, prefix),
+      ...(callId ? { callId } : {}),
       name,
       outputText: text,
       messageId: transcriptMessageId,

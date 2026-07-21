@@ -511,6 +511,13 @@ export function abortEmbeddedAgentRun(
   sessionId?: string,
   opts?: { mode?: "all" | "compacting"; reason?: "restart" },
 ): boolean {
+  const isAbortable = (handle: EmbeddedAgentQueueHandle): boolean => {
+    try {
+      return handle.isAbortable?.() !== false;
+    } catch {
+      return false;
+    }
+  };
   if (typeof sessionId === "string" && sessionId.length > 0) {
     const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
     if (!handle) {
@@ -518,6 +525,10 @@ export function abortEmbeddedAgentRun(
         return true;
       }
       diag.debug(`abort failed: sessionId=${sessionId} reason=no_active_run`);
+      return false;
+    }
+    if (!isAbortable(handle)) {
+      diag.debug(`abort failed: sessionId=${sessionId} reason=not_abortable`);
       return false;
     }
     diag.debug(`aborting run: sessionId=${sessionId}`);
@@ -537,6 +548,9 @@ export function abortEmbeddedAgentRun(
     let aborted = false;
     for (const [id, handle] of ACTIVE_EMBEDDED_RUNS) {
       if (!params.shouldAbort(handle)) {
+        continue;
+      }
+      if (!isAbortable(handle)) {
         continue;
       }
       diag.debug(params.formatDebugMessage(id));
