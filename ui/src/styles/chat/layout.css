@@ -3699,10 +3699,20 @@ openclaw-chat-page {
 .chat-controls__model-browser {
   display: grid;
   grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
   min-height: 132px;
-  max-height: 220px;
-  flex: 1 1 220px;
+  max-height: 260px;
+  flex: 1 1 260px;
   overflow: hidden;
+}
+
+.chat-controls__model-browser .chat-controls__model-search {
+  grid-column: 1 / -1;
+}
+
+.chat-controls__model-browser .chat-controls__provider-list,
+.chat-controls__model-browser .chat-controls__provider-models--search-results {
+  grid-column: 1 / -1;
 }
 
 .chat-controls__locked-model {
@@ -3807,6 +3817,98 @@ openclaw-chat-page {
 
 .chat-controls__provider-model-group[hidden] {
   display: none;
+}
+
+/* Model search */
+.chat-controls__model-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+}
+
+.chat-controls__model-search-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-controls__model-search-icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-controls__model-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  padding: 2px 0;
+}
+
+.chat-controls__model-search-input::placeholder {
+  color: var(--muted);
+}
+
+.chat-controls__model-search-clear {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.chat-controls__model-search-clear:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-controls__model-search-clear svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-controls__model-search-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 60px;
+  padding: 12px 16px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+.chat-controls__model-search-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-controls__model-search-group-label .chat-controls__provider-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 
 .chat-controls__inline-select-section-label {
@@ -4416,6 +4518,7 @@ openclaw-chat-page {
 
   .chat-controls__model-browser {
     grid-template-columns: 120px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
     min-height: 180px;
   }
 

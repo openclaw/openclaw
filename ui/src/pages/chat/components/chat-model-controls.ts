@@ -29,6 +29,91 @@ import {
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import { selectChatModelProvider } from "./chat-model-provider-menu.ts";
 
+// Ephemeral search state persisted across re-renders, keyed by session key.
+const modelSearchQueries = new Map<string, string>();
+
+function getModelSearchQuery(sessionKey: string): string {
+  return modelSearchQueries.get(sessionKey) ?? "";
+}
+
+function setModelSearchQuery(sessionKey: string, query: string): void {
+  if (query) {
+    modelSearchQueries.set(sessionKey, query);
+  } else {
+    modelSearchQueries.delete(sessionKey);
+  }
+}
+
+type ChatModelFilterState = {
+  query: string;
+  filteredOptions: ChatModelProviderOption[];
+  activeProviderGroups: [string, ChatModelProviderOption[]][];
+};
+
+function normalizeModelFilterQuery(query: string): string {
+  return query.trim().toLowerCase();
+}
+
+function matchesModelFilter(
+  option: ChatModelProviderOption,
+  normalizedQuery: string,
+): boolean {
+  if (!normalizedQuery) {
+    return true;
+  }
+  const modelLabel = option.label.toLowerCase();
+  const modelValue = option.value.toLowerCase();
+  const providerLabel = providerDisplayLabel(option.provider).toLowerCase();
+  const rawProviderLabel = formatRawProviderLabel(option.provider).toLowerCase();
+  return (
+    modelLabel.includes(normalizedQuery) ||
+    modelValue.includes(normalizedQuery) ||
+    providerLabel.includes(normalizedQuery) ||
+    rawProviderLabel.includes(normalizedQuery)
+  );
+}
+
+function resolveModelFilterState(
+  modelOptions: ChatModelProviderOption[],
+  searchQuery: string,
+): ChatModelFilterState {
+  const normalizedQuery = normalizeModelFilterQuery(searchQuery);
+  if (!normalizedQuery) {
+    // No search — use normal provider-grouped view
+    const providerGroups = new Map<string, ChatModelProviderOption[]>();
+    for (const option of modelOptions) {
+      const existing = providerGroups.get(option.provider);
+      if (existing) {
+        existing.push(option);
+      } else {
+        providerGroups.set(option.provider, [option]);
+      }
+    }
+    return {
+      query: searchQuery,
+      filteredOptions: modelOptions,
+      activeProviderGroups: [...providerGroups],
+    };
+  }
+  // Search active — filter across all providers
+  const filtered = modelOptions.filter((option) => matchesModelFilter(option, normalizedQuery));
+  // Group filtered results by provider
+  const providerGroups = new Map<string, ChatModelProviderOption[]>();
+  for (const option of filtered) {
+    const existing = providerGroups.get(option.provider);
+    if (existing) {
+      existing.push(option);
+    } else {
+      providerGroups.set(option.provider, [option]);
+    }
+  }
+  return {
+    query: searchQuery,
+    filteredOptions: filtered,
+    activeProviderGroups: [...providerGroups],
+  };
+}
+
 export type ChatModelControlsProps = {
   activeRunId: string | null;
   agentDefaultModel?: string;
@@ -484,26 +569,22 @@ function renderChatModelReasoningSelect(params: {
   const effectiveThinkingValue = selectedThinkingValue || thinkingDefaultValue;
   const onlyStopSelected = onlyStop?.value === effectiveThinkingValue;
   const showReasoningPanel = showReasoning || showFastMode;
-  const providerGroups = new Map<string, ChatModelProviderOption[]>();
-  for (const option of modelOptions) {
-    const existing = providerGroups.get(option.provider);
-    if (existing) {
-      existing.push(option);
-    } else {
-      providerGroups.set(option.provider, [option]);
-    }
-  }
+  // Search/filter state (persisted per session across re-renders)
+  const modelSearchQuery = getModelSearchQuery(sessionKey);
+  const filterState = resolveModelFilterState(modelOptions, modelSearchQuery);
   const defaultModelOption = modelOptions.find((option) => option.isDefault);
-  const orderedProviderGroups = [...providerGroups];
-  const defaultProviderIndex = orderedProviderGroups.findIndex(
+  const orderedProviderGroups = filterState.activeProviderGroups;
+  // Sort: default provider first, then alphabetical
+  const defaultProviderIdx = orderedProviderGroups.findIndex(
     ([provider]) => provider === defaultModelOption?.provider,
   );
-  if (defaultProviderIndex > 0) {
-    const [defaultProviderGroup] = orderedProviderGroups.splice(defaultProviderIndex, 1);
-    if (defaultProviderGroup) {
-      orderedProviderGroups.unshift(defaultProviderGroup);
+  if (defaultProviderIdx > 0) {
+    const [defaultGroup] = orderedProviderGroups.splice(defaultProviderIdx, 1);
+    if (defaultGroup) {
+      orderedProviderGroups.unshift(defaultGroup);
     }
   }
+  const isSearching = modelSearchQuery.trim().length > 0;
   const selectedModelOption =
     (selectedModelValue === ""
       ? defaultModelOption
@@ -562,7 +643,18 @@ function renderChatModelReasoningSelect(params: {
     `;
   };
   return html`
-    <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+    <details class="chat-controls__session chat-controls__inline-select chat-controls__model" @toggle=${(event: Event) => {
+      const details = event.currentTarget as HTMLDetailsElement;
+      if (!details.open) {
+        setModelSearchQuery(sessionKey, "");
+      } else {
+        // Auto-focus search input when picker opens
+        requestAnimationFrame(() => {
+          const searchInput = details.querySelector<HTMLInputElement>(".chat-controls__model-search-input");
+          searchInput?.focus();
+        });
+      }
+    }}>
       <summary
         class="chat-controls__inline-select-trigger ${disabled
           ? "chat-controls__inline-select-trigger--disabled"
@@ -615,53 +707,136 @@ function renderChatModelReasoningSelect(params: {
                 onReset: () => commitModel(""),
               })}
               <div class="chat-controls__model-browser">
-                <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
-                  <div class="chat-controls__inline-select-section-label">
-                    ${t("sessionsView.provider")}
-                  </div>
-                  ${repeat(
-                    orderedProviderGroups,
-                    ([provider]) => provider,
-                    ([provider]) => {
-                      const active = provider === selectedProvider;
-                      return html`
+                <div class="chat-controls__model-search" role="search">
+                  <span class="chat-controls__model-search-icon" aria-hidden="true">
+                    ${icons.search}
+                  </span>
+                  <input
+                    class="chat-controls__model-search-input"
+                    type="text"
+                    placeholder=${t("chat.modelControls.searchModels")}
+                    aria-label=${t("chat.modelControls.searchModels")}
+                    .value=${modelSearchQuery}
+                    @input=${(event: Event) => {
+                      const input = event.currentTarget as HTMLInputElement;
+                      setModelSearchQuery(sessionKey, input.value);
+                      // Force re-render by triggering a state update
+                      onRequestUpdate?.();
+                    }}
+                    @keydown=${(event: KeyboardEvent) => {
+                      if (event.key === "Escape") {
+                        setModelSearchQuery(sessionKey, "");
+                        onRequestUpdate?.();
+                        event.stopPropagation();
+                      } else if (event.key === "Enter") {
+                        // Select first matching model
+                        const firstOption = filterState.filteredOptions[0];
+                        if (firstOption && !disabled && !modelSelectionLocked) {
+                          commitModel(firstOption.commitValue);
+                        }
+                        event.preventDefault();
+                      }
+                    }}
+                  />
+                  ${modelSearchQuery
+                    ? html`
                         <button
-                          class="chat-controls__provider-option"
-                          data-chat-model-provider=${provider}
+                          class="chat-controls__model-search-clear"
                           type="button"
-                          aria-pressed=${active ? "true" : "false"}
-                          @click=${(event: MouseEvent) => selectChatModelProvider(event, provider)}
+                          aria-label=${t("chat.modelControls.clearSearch")}
+                          @click=${() => {
+                            setModelSearchQuery(sessionKey, "");
+                            onRequestUpdate?.();
+                          }}
                         >
-                          ${renderChatModelProviderIcon(provider)}
-                          <span>${providerDisplayLabel(provider)}</span>
+                          ${icons.x}
                         </button>
-                      `;
-                    },
-                  )}
+                      `
+                    : ""}
                 </div>
+                ${!isSearching
+                  ? html`
+                      <div class="chat-controls__provider-list" aria-label=${t("sessionsView.provider")}>
+                        <div class="chat-controls__inline-select-section-label">
+                          ${t("sessionsView.provider")}
+                        </div>
+                        ${repeat(
+                          orderedProviderGroups,
+                          ([provider]) => provider,
+                          ([provider]) => {
+                            const active = provider === selectedProvider;
+                            return html`
+                              <button
+                                class="chat-controls__provider-option"
+                                data-chat-model-provider=${provider}
+                                type="button"
+                                aria-pressed=${active ? "true" : "false"}
+                                @click=${(event: MouseEvent) => selectChatModelProvider(event, provider)}
+                              >
+                                ${renderChatModelProviderIcon(provider)}
+                                <span>${providerDisplayLabel(provider)}</span>
+                              </button>
+                            `;
+                          },
+                        )}
+                      </div>
+                    `
+                  : ""}
                 <div
-                  class="chat-controls__provider-models"
+                  class="chat-controls__provider-models ${isSearching ? "chat-controls__provider-models--search-results" : ""}
                   role="listbox"
                   aria-label=${t("chat.selectors.model")}
                 >
-                  ${repeat(
-                    orderedProviderGroups,
-                    ([provider]) => provider,
-                    ([provider, options]) => html`
-                      <div
-                        class="chat-controls__provider-model-group"
-                        data-chat-model-provider-group=${provider}
-                        aria-label=${`${providerDisplayLabel(provider)} models`}
-                        ?hidden=${provider !== selectedProvider}
-                      >
-                        ${repeat(
-                          options,
-                          (entry) => entry.value,
-                          (entry) => renderModelOption(entry),
-                        )}
-                      </div>
-                    `,
-                  )}
+                  ${filterState.filteredOptions.length === 0 && isSearching
+                    ? html`
+                        <div class="chat-controls__model-search-empty">
+                          ${t("chat.modelControls.noModelsFound", { query: modelSearchQuery })}
+                        </div>
+                      `
+                    : isSearching
+                      ? html`
+                          ${repeat(
+                            orderedProviderGroups,
+                            ([provider]) => provider,
+                            ([provider, options]) => html`
+                              <div
+                                class="chat-controls__provider-model-group"
+                                data-chat-model-provider-group=${provider}
+                                aria-label=${`${providerDisplayLabel(provider)} models`}
+                              >
+                                <div class="chat-controls__model-search-group-label">
+                                  ${renderChatModelProviderIcon(provider)}
+                                  <span>${providerDisplayLabel(provider)}</span>
+                                </div>
+                                ${repeat(
+                                  options,
+                                  (entry) => entry.value,
+                                  (entry) => renderModelOption(entry),
+                                )}
+                              </div>
+                            `,
+                          )}
+                        `
+                      : html`
+                          ${repeat(
+                            orderedProviderGroups,
+                            ([provider]) => provider,
+                            ([provider, options]) => html`
+                              <div
+                                class="chat-controls__provider-model-group"
+                                data-chat-model-provider-group=${provider}
+                                aria-label=${`${providerDisplayLabel(provider)} models`}
+                                ?hidden=${provider !== selectedProvider}
+                              >
+                                ${repeat(
+                                  options,
+                                  (entry) => entry.value,
+                                  (entry) => renderModelOption(entry),
+                                )}
+                              </div>
+                            `,
+                          )}
+                        `}
                 </div>
               </div>
             `}

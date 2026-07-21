@@ -3956,6 +3956,9 @@ export const en: TranslationMap = {
       sessionOverride: "Thread override",
       usingDefault: "Using default from Settings",
       resetToDefault: "Reset to default ({model})",
+      searchModels: "Search models...",
+      clearSearch: "Clear search",
+      noModelsFound: "No models matching \"{query}\"",
     },
     sideChat: {
       title: "Side chat",
