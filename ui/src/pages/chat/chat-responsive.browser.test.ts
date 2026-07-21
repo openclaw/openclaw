@@ -96,6 +96,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/text.css",
     "ui/src/styles/chat/grouped.css",
     "ui/src/styles/chat/tool-cards.css",
+    "ui/src/styles/chat/question-card.css",
     "ui/src/styles/chat/sidebar.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
@@ -682,6 +683,168 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       }
       expect(configured.thread.width).toBeGreaterThan(defaults.thread.width);
       expect(configured.composer.width).toBeGreaterThan(defaults.composer.width);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+  it("keeps wrapped message footers inside measured virtual rows", async () => {
+    const page = await openBrowserPage(1366, 900);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" style="width: 220px; height: 400px;">
+            <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 220px;">
+              <div class="chat-virtual-sizer" style="height: 400px;">
+                <div class="chat-virtual-row" data-first-row style="transform: translateY(0px);">
+                  <div class="chat-group assistant" style="--chat-message-max-width: 120px;">
+                    <div class="chat-avatar assistant">A</div>
+                    <div class="chat-group-messages">
+                      <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
+                      <div class="chat-group-footer">
+                        <div class="chat-group-footer__meta">
+                          <span class="chat-sender-name">Assistant</span>
+                          <span class="chat-group-timestamp">9:41 PM</span>
+                        </div>
+                        <div class="chat-group-footer-actions">
+                          <button type="button">${iconSvg()}</button>
+                          <button type="button">${iconSvg()}</button>
+                          <button type="button">${iconSvg()}</button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="chat-virtual-row" data-second-row>
+                  <div class="chat-group user"><div class="chat-group-messages">Next row</div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const layout = await page.evaluate(() => {
+        const first = document.querySelector<HTMLElement>("[data-first-row]")!;
+        const second = document.querySelector<HTMLElement>("[data-second-row]")!;
+        const footer = first.querySelector<HTMLElement>(".chat-group-footer")!;
+        second.style.transform = `translateY(${first.getBoundingClientRect().height}px)`;
+        const firstRect = first.getBoundingClientRect();
+        const secondRect = second.getBoundingClientRect();
+        const footerRect = footer.getBoundingClientRect();
+        return {
+          firstBottom: firstRect.bottom,
+          footerBottom: footerRect.bottom,
+          footerHeight: footerRect.height,
+          secondTop: secondRect.top,
+        };
+      });
+
+      expect(layout.footerHeight).toBeGreaterThan(24);
+      expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
+      expect(layout.secondTop).toBeGreaterThanOrEqual(layout.firstBottom - 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("keeps attached images within narrow message lanes", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div data-image-lane style="width: 180px;">
+            <div class="chat-message-images">
+              <img
+                class="chat-message-image"
+                width="600"
+                height="100"
+                alt="Wide attachment"
+                src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='100'%3E%3C/svg%3E"
+              />
+            </div>
+          </div>
+        </body></html>`,
+      );
+      await page.locator(".chat-message-image").waitFor();
+
+      const lane = await getRect(page, "[data-image-lane]");
+      const image = await getRect(page, ".chat-message-image");
+      expect(image.width).toBeLessThanOrEqual(lane.width + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("wraps long question and approval metadata inside narrow cards", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      const longToken = `workspace${"x".repeat(240)}session`;
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div data-narrow-card style="width: 220px;">
+            <div class="chat-question-panel__heading">
+              <span class="chat-question-panel__progress">1/1</span>
+              <span class="chat-question-panel__prompt">${longToken}</span>
+            </div>
+            <div class="exec-approval-meta">
+              <div class="exec-approval-meta-row"><span>Session</span><span>${longToken}</span></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const metrics = await page.evaluate(() => {
+        const card = document.querySelector<HTMLElement>("[data-narrow-card]")!;
+        const heading = document.querySelector<HTMLElement>(".chat-question-panel__heading")!;
+        const row = document.querySelector<HTMLElement>(".exec-approval-meta-row")!;
+        return {
+          cardRight: card.getBoundingClientRect().right,
+          headingRight: heading.getBoundingClientRect().right,
+          promptRight: document
+            .querySelector<HTMLElement>(".chat-question-panel__prompt")!
+            .getBoundingClientRect().right,
+          rowRight: row.getBoundingClientRect().right,
+          valueRight: row.lastElementChild!.getBoundingClientRect().right,
+        };
+      });
+
+      expect(metrics.promptRight).toBeLessThanOrEqual(metrics.headingRight + 1);
+      expect(metrics.valueRight).toBeLessThanOrEqual(metrics.rowRight + 1);
+      expect(metrics.headingRight).toBeLessThanOrEqual(metrics.cardRight + 1);
+      expect(metrics.rowRight).toBeLessThanOrEqual(metrics.cardRight + 1);
+    } finally {
+      await closeBrowserPage(page);
+    }
+  });
+
+  it("reserves command text space for flush tool-card actions", async () => {
+    const page = await openBrowserPage(320, 568);
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-tool-card chat-tool-card--flush" style="width: 220px;">
+            <div class="chat-tool-card__actions">
+              <button class="chat-tool-card__action-btn" type="button">${iconSvg()}</button>
+            </div>
+            <div class="chat-tool-term">
+              <div class="chat-tool-term__cmd"><span class="chat-tool-term__prompt">$</span><code>command with a long first line</code></div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      const layout = await page.evaluate(() => {
+        const command = document.querySelector<HTMLElement>(".chat-tool-term__cmd")!;
+        const actions = document.querySelector<HTMLElement>(".chat-tool-card__actions")!;
+        const commandRect = command.getBoundingClientRect();
+        return {
+          actionLeft: actions.getBoundingClientRect().left,
+          commandContentRight:
+            commandRect.right - Number.parseFloat(getComputedStyle(command).paddingRight),
+        };
+      });
+
+      expect(layout.commandContentRight).toBeLessThanOrEqual(layout.actionLeft + 1);
     } finally {
       await closeBrowserPage(page);
     }

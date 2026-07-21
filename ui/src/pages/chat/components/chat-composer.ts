@@ -377,7 +377,16 @@ function observeTextareaOverflow(el: HTMLTextAreaElement) {
   if (typeof ResizeObserver !== "function" || composerTextareaResizeObservers.has(el)) {
     return;
   }
-  const observer = new ResizeObserver(() => updateTextareaOverflow(el));
+  let width = el.getBoundingClientRect().width;
+  const observer = new ResizeObserver(() => {
+    const nextWidth = el.getBoundingClientRect().width;
+    if (nextWidth !== width) {
+      width = nextWidth;
+      adjustTextareaHeight(el);
+      return;
+    }
+    updateTextareaOverflow(el);
+  });
   observer.observe(el);
   composerTextareaResizeObservers.set(el, observer);
 }

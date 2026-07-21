@@ -2890,7 +2890,7 @@ describe("chat composer sizing", () => {
     expect(textarea.style.overflowY).toBe("auto");
   });
 
-  it("rechecks overflow when responsive layout changes the textarea height", () => {
+  it("resizes the draft when responsive layout changes the textarea width", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
     class TestResizeObserver {
       constructor(callback: ResizeObserverCallback) {
@@ -2910,20 +2910,38 @@ describe("chat composer sizing", () => {
       ".agent-chat__composer-combobox > textarea",
       "composer textarea",
     ) as HTMLTextAreaElement;
+    let width = 320;
     let scrollHeight = 42;
     let clientHeight = 42;
     Object.defineProperties(textarea, {
       scrollHeight: { configurable: true, get: () => scrollHeight },
       clientHeight: { configurable: true, get: () => clientHeight },
+      getBoundingClientRect: {
+        configurable: true,
+        value: () => ({
+          bottom: 0,
+          height: clientHeight,
+          left: 0,
+          right: width,
+          top: 0,
+          width,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }),
+      },
     });
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(textarea.style.height).toBe("42px");
     expect(textarea.style.overflowY).toBe("hidden");
 
+    width = 180;
     scrollHeight = 120;
-    clientHeight = 56;
+    clientHeight = 120;
     resizeCallback?.([], {} as ResizeObserver);
 
-    expect(textarea.style.overflowY).toBe("auto");
+    expect(textarea.style.height).toBe("120px");
+    expect(textarea.style.overflowY).toBe("hidden");
   });
 });
 

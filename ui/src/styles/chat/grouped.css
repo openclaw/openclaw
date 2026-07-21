@@ -2,11 +2,9 @@
    GROUPED CHAT LAYOUT (Slack-style)
    ============================================= */
 
-/* Chat Group Layout - default (assistant/other on left). The bottom PADDING
-   is the thread's rhythm unit and doubles as the reveal zone for the
-   overlaid hover footer: padding (not margin) keeps the gap inside the
-   group's hover box so the pointer can travel to the footer without it
-   vanishing mid-way. */
+/* Chat Group Layout - default (assistant/other on left). Groups without a
+   footer keep the shared 26px rhythm directly; footer-bearing groups get the
+   same space from the message-column gap plus the footer's measured height. */
 .chat-group {
   display: flex;
   gap: 10px;
@@ -16,6 +14,10 @@
   margin-right: 16px;
 }
 
+.chat-group:has(> .chat-group-messages > .chat-group-footer) {
+  padding-bottom: 0;
+}
+
 /* User messages on right */
 .chat-group.user {
   flex-direction: row-reverse;
@@ -23,7 +25,7 @@
 }
 
 .chat-group-messages {
-  position: relative; /* anchors the overlaid hover footer */
+  position: relative; /* anchors message-local popovers */
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -47,26 +49,18 @@
   justify-content: flex-end;
 }
 
-/* Footer at bottom of message group (role + time). Hidden until the group is
-   hovered/focused so the thread reads as a clean stream; overlaid into the
-   group's bottom margin (no reserved flow height) so message rhythm stays
-   even. Touch devices restore the in-flow always-visible footer below. */
+/* Footer at bottom of a message group (role + time). It stays in flow while
+   visually hidden so wrapped controls contribute to virtual-row measurement
+   instead of painting over the next message. */
 .chat-group-footer {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  right: 0;
-  z-index: 1; /* revealed overlay paints above the next group's leading edge */
   display: flex;
-  /* Wrap instead of clipping in narrow lanes (extreme chatMessageMaxWidth,
-     slim split panes): a wrapped revealed footer may transiently overlap the
-     next group, but every control stays reachable. Hidden overlays must not
-     intercept pointer input, so hit-testing is gated on the reveal. */
+  align-self: stretch;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+  width: 100%;
   min-width: 0;
-  margin-top: 1px;
+  min-height: 24px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease-out;
@@ -111,8 +105,8 @@
   margin-top: 4px;
 }
 
-/* Single line, ellipsized: the footer overlays a fixed 26px rhythm gap, so
-   long configurable sender names must never wrap it taller than the gap. */
+/* Keep long configurable sender names compact while footer actions retain
+   their reachable wrapped layout in narrow panes. */
 .chat-sender-name {
   font-weight: 500;
   font-size: 12px;
@@ -499,17 +493,14 @@ img.chat-avatar {
 @media (hover: none),
   (max-width: 768px),
   (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  /* No hover to reveal an overlay: restore the in-flow always-visible footer
-     and the tighter rhythm that accounts for its height. */
+  /* No hover to reveal the footer: keep it always visible and add a little
+     more separation from the next group. */
   .chat-group {
     padding-bottom: 0;
     margin-bottom: 14px;
   }
 
   .chat-group-footer {
-    position: static;
-    flex-wrap: wrap;
-    width: 100%;
     margin-top: 4px;
     opacity: 1;
     pointer-events: auto;
