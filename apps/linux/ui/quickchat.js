@@ -1048,6 +1048,14 @@ function reveal() {
     .then((accepted) => {
       if (accepted !== true && visibilitySequence === operationGeneration) {
         document.body.classList.remove("shown");
+        return;
+      }
+      if (
+        accepted === true &&
+        visibilitySequence === operationGeneration &&
+        activeReply?.widgets.length
+      ) {
+        scheduleWidgetSync();
       }
     })
     .catch(() => {});

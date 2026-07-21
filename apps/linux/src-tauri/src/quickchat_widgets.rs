@@ -262,6 +262,12 @@ impl QuickChatWidgetState {
                 return Ok(false);
             }
         }
+        let labels = self.view_labels()?;
+        let (retained, cleanup_error) = Self::close_views(window.app_handle(), &labels, false);
+        self.store_view_labels(retained)?;
+        if let Some(error) = cleanup_error {
+            return Err(error);
+        }
         window
             .show()
             .map_err(|error| format!("Could not show Quick Chat: {error}"))?;
