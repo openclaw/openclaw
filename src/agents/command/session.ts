@@ -459,6 +459,8 @@ export function resolveSession(opts: {
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
+  // Behavior overrides belong to the logical session, not one transcript id.
+  // Carry them across every rollover; explicit `default` directives clear them.
   const persistedThinking = sessionEntry?.thinkingLevel
     ? normalizeThinkLevel(sessionEntry.thinkingLevel)
     : undefined;

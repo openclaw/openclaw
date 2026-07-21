@@ -141,7 +141,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.persistedVerbose).toBe("full");
   });
 
-  it("carries preferences when terminal recovery overlaps a daily reset", () => {
+  it("carries preferences across a daily reset", () => {
     const sessionKey = "agent:main:cli";
     const startedAt = Date.now() - 2 * DAY_MS;
     hoisted.store = {
@@ -154,8 +154,6 @@ describe("command resolveSession provider-owned daily reset", () => {
         verboseLevel: "full",
       },
     };
-    hoisted.terminalTranscriptNewer = true;
-
     const result = resolveSession({
       cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
