@@ -304,7 +304,7 @@ export function buildOllamaModelDefinition(
 }
 
 export function capLocalOllamaModelContext(model: ModelDefinitionConfig): ModelDefinitionConfig {
-  if (typeof model.contextWindow !== "number") {
+  if (model.id.trim().toLowerCase().endsWith(":cloud") || typeof model.contextWindow !== "number") {
     return model;
   }
   return {

@@ -30,13 +30,16 @@ describe("ollama provider models", () => {
       models: [
         buildOllamaModelDefinition("qwen3.5:4b", 262_144),
         buildOllamaModelDefinition("small", 16_384),
+        buildOllamaModelDefinition("glm-5.2:cloud", 1_000_000),
       ],
     });
 
     expect(provider.models).toEqual([
       expect.objectContaining({ contextWindow: 262_144, contextTokens: 32_768 }),
       expect.objectContaining({ contextWindow: 16_384, contextTokens: 16_384 }),
+      expect.objectContaining({ id: "glm-5.2:cloud", contextWindow: 1_000_000 }),
     ]);
+    expect(provider.models?.[2]).not.toHaveProperty("contextTokens");
   });
 
   it("sets discovered models with context windows from /api/show", async () => {
