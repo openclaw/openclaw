@@ -30,10 +30,11 @@ const PHRASE_KEYS = [
   "surfacing",
 ] as const;
 
-/** Quiet grace period before the first phrase appears. */
-export const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
+/** Quiet grace period before the first phrase appears. Mirrored as literals
+ * in working-phrase.test.ts (knip forbids test-only exports). */
+const WORKING_PHRASE_SHOW_AFTER_MS = 30_000;
 /** How long each phrase holds before rotating to the next. */
-export const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
+const WORKING_PHRASE_ROTATE_EVERY_MS = 45_000;
 
 // FNV-1a, matching the stance picker: deterministic per seed.
 function fnvHash(key: string): number {
