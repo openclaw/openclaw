@@ -322,7 +322,7 @@ export async function patchSqliteSessionEntry(
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    await finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
     kickSessionHistoryDiskBudgetMaintenance({
       ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
       storePath: resolveSessionStorePathForScope(scope),
@@ -397,7 +397,7 @@ export async function patchSqliteSessionEntryTarget(
       result = cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
     emitCommittedSessionIdentityDiff(previousIdentity, currentIdentity);
-    finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
+    await finalizeSqliteSessionEntryMaintenancePlansBestEffort(resolved, maintenancePlans);
     kickSessionHistoryDiskBudgetMaintenance({
       ...(resolved.agentId ? { agentId: resolved.agentId } : {}),
       storePath: resolveSessionStorePathForScope(scope),

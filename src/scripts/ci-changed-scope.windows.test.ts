@@ -7,6 +7,8 @@ describe("detectChangedScope Windows routing", () => {
   it("routes SQLite transcript archive changes to Windows", () => {
     for (const archivePath of [
       "src/config/sessions/session-accessor.sqlite-archive.ts",
+      "src/config/sessions/session-accessor.sqlite-archive.worker.test.ts",
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
       "src/config/sessions/store.session-lifecycle-mutation.test.ts",
     ]) {
       expect(detectChangedScope([archivePath]), archivePath).toMatchObject({

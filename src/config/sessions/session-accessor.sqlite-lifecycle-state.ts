@@ -4,15 +4,17 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type {
-  MaterializedSqliteSessionStateDeletePlan,
-  SqliteSessionStateDeletePlan,
+import {
+  sqliteSessionStateDeleteSnapshotsEqual,
+  type MaterializedSqliteSessionStateDeletePlan,
+  type SqliteSessionStateDeletePlan,
 } from "./session-accessor.sqlite-archive.js";
 import type {
   SessionEntryLifecycleRemoval,
   SessionEntryLifecycleUpsert,
   SessionLifecycleArchivedTranscript,
 } from "./session-accessor.sqlite-contract.js";
+import { readSqliteSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import {
   deleteSqliteSessionEntryRows,
   readExactSessionEntryRow,
@@ -28,7 +30,6 @@ import { normalizeSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSqliteSessionEntryJson as parseSessionEntryRow } from "./session-accessor.sqlite-status.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
-import { serializeJsonlLines } from "./transcript-jsonl.js";
 import type { SessionEntry } from "./types.js";
 
 // Transcript-state reclamation owner. Planning stays async-free; transactions revalidate before delete.
@@ -190,21 +191,6 @@ export function readReferencedSqliteSessionIdsAfterTargetMutation(
   return sessionIds;
 }
 
-function readSqliteTranscriptArchiveLines(
-  database: OpenClawAgentDatabase,
-  sessionId: string,
-): string[] {
-  const db = getSessionKysely(database.db);
-  return executeSqliteQuerySync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select("event_json")
-      .where("session_id", "=", sessionId)
-      .orderBy("seq", "asc"),
-  ).rows.map((row) => row.event_json);
-}
-
 export function planSqliteSessionStateDeleteIfUnreferenced(params: {
   archiveTranscript?: boolean;
   archiveDirectory: string;
@@ -216,15 +202,14 @@ export function planSqliteSessionStateDeleteIfUnreferenced(params: {
   if (params.referencedSessionIds.has(params.sessionId)) {
     return null;
   }
-  const lines = readSqliteTranscriptArchiveLines(params.database, params.sessionId);
   return {
+    agentId: params.database.agentId,
     archiveDirectory: params.archiveDirectory,
     archiveTranscript: params.archiveTranscript !== false,
-    content: serializeJsonlLines(lines),
-    hadTranscriptState:
-      readSessionTranscriptUpdatedAt(params.database, params.sessionId) !== undefined,
+    databasePath: params.database.path,
     reason: params.reason ?? "deleted",
     sessionId: params.sessionId,
+    snapshot: readSqliteSessionStateDeleteSnapshot(params.database.db, params.sessionId),
   };
 }
 
@@ -242,16 +227,12 @@ export function deleteMaterializedSqliteSessionStatePlans(
     if (referencedSessionIds.has(plan.sessionId)) {
       continue;
     }
-    if (plan.archiveTranscript) {
-      const currentContent = serializeJsonlLines(
-        readSqliteTranscriptArchiveLines(database, plan.sessionId),
-      );
-      if (currentContent !== plan.content) {
-        throw new Error(`SQLite transcript changed before archive deletion for ${plan.sessionId}`);
-      }
+    const currentSnapshot = readSqliteSessionStateDeleteSnapshot(database.db, plan.sessionId);
+    if (!sqliteSessionStateDeleteSnapshotsEqual(currentSnapshot, plan.snapshot)) {
+      throw new Error(`SQLite session state changed before deletion for ${plan.sessionId}`);
     }
     deleteSqliteSessionStateRows(database, plan.sessionId);
-    if (plan.hadTranscriptState && plan.archivedTranscript) {
+    if (plan.snapshot.lastSeq !== null && plan.archivedTranscript) {
       archivedTranscripts.push(plan.archivedTranscript);
     }
   }
