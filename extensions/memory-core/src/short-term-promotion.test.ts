@@ -761,6 +761,8 @@ describe("short-term promotion", () => {
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:01:00.000Z"),
+        minRecallCount: 0,
+        minUniqueQueries: 0,
       });
 
       expect(ranked).toHaveLength(1);
@@ -887,6 +889,8 @@ describe("short-term promotion", () => {
       const ranked = await rankShortTermPromotionCandidates({
         workspaceDir,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        minRecallCount: 0,
+        minUniqueQueries: 0,
       });
 
       expect(ranked).toHaveLength(1);
@@ -898,6 +902,8 @@ describe("short-term promotion", () => {
         workspaceDir,
         candidates: ranked,
         nowMs: Date.parse("2026-04-03T10:00:00.000Z"),
+        minRecallCount: 0,
+        minUniqueQueries: 0,
       });
 
       expect(applied.applied).toBe(1);
