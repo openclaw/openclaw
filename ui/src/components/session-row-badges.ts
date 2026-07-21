@@ -32,7 +32,7 @@ function pullRequestStateLabel(state: SessionCatalogPullRequestSummary["state"])
   }
 }
 
-export function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSummary): string {
+function formatSessionPullRequestSummary(summary: SessionCatalogPullRequestSummary): string {
   const numbers = summary.numbers.map((number) => `#${number}`).join(", ");
   return `${numbers} · ${pullRequestStateLabel(summary.state)}`;
 }

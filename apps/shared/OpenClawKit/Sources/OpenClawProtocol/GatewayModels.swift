@@ -4013,6 +4013,24 @@ public struct SessionCatalogDescriptor: Codable, Sendable {
     }
 }
 
+public struct SessionCatalogPullRequestSummary: Codable, Sendable {
+    public let numbers: [Int]
+    public let state: AnyCodable
+
+    public init(
+        numbers: [Int],
+        state: AnyCodable)
+    {
+        self.numbers = numbers
+        self.state = state
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case numbers
+        case state
+    }
+}
+
 public struct SessionCatalogSession: Codable, Sendable {
     public let threadid: String
     public let name: String?
@@ -4026,6 +4044,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let cliversion: String?
     public let gitbranch: String?
     public let customgroup: String?
+    public let pullrequest: SessionCatalogPullRequestSummary?
     public let archived: Bool
     public let sessionkey: String?
     public let cancontinue: Bool
@@ -4045,6 +4064,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         cliversion: String? = nil,
         gitbranch: String? = nil,
         customgroup: String? = nil,
+        pullrequest: SessionCatalogPullRequestSummary? = nil,
         archived: Bool,
         sessionkey: String? = nil,
         cancontinue: Bool,
@@ -4063,6 +4083,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.cliversion = cliversion
         self.gitbranch = gitbranch
         self.customgroup = customgroup
+        self.pullrequest = pullrequest
         self.archived = archived
         self.sessionkey = sessionkey
         self.cancontinue = cancontinue
@@ -4083,6 +4104,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case cliversion = "cliVersion"
         case gitbranch = "gitBranch"
         case customgroup = "customGroup"
+        case pullrequest = "pullRequest"
         case archived
         case sessionkey = "sessionKey"
         case cancontinue = "canContinue"
