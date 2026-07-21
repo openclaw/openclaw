@@ -28,11 +28,17 @@ async function listModels(params: {
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
 }) {
+  const config = params.cfg ?? ({} as OpenClawConfig);
   const context = {
-    getRuntimeConfig: () => params.cfg ?? ({} as OpenClawConfig),
+    getRuntimeConfig: () => config,
     loadGatewayModelCatalog: vi.fn(() => Promise.resolve(params.catalog)),
     loadGatewayModelCatalogSnapshot: vi.fn(() =>
-      Promise.resolve({ entries: params.catalog, routeVariants: params.catalog }),
+      Promise.resolve({
+        agentDir: "/tmp/models-list-openai-agent",
+        config,
+        entries: params.catalog,
+        routeVariants: params.catalog,
+      }),
     ),
     logGateway: { debug: vi.fn() },
   } as unknown as GatewayRequestContext;
@@ -45,17 +51,22 @@ async function listModels(params: {
 
 describe("models.list OpenAI routes", () => {
   it("does not reuse a preloaded catalog owned by another agent", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [{ id: "main", default: true }, { id: "worker" }],
+      },
+    } as OpenClawConfig;
     const loadGatewayModelCatalogSnapshot = vi.fn(() =>
-      Promise.resolve({ entries: [], routeVariants: [] }),
+      Promise.resolve({
+        agentDir: "/tmp/models-list-openai-agent",
+        config,
+        entries: [],
+        routeVariants: [],
+      }),
     );
     const context = {
-      getRuntimeConfig: () =>
-        ({
-          agents: {
-            defaults: {},
-            list: [{ id: "main", default: true }, { id: "worker" }],
-          },
-        }) as OpenClawConfig,
+      getRuntimeConfig: () => config,
       loadGatewayModelCatalogSnapshot,
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
@@ -69,12 +80,76 @@ describe("models.list OpenAI routes", () => {
         context,
         agentId: "worker",
         params: { view: "default" },
-        preloadedCatalog: { agentId: "main", snapshot: preloadedCatalog },
+        preloadedCatalog: { agentId: "main", config, snapshot: preloadedCatalog },
       }),
     ).resolves.toEqual({ models: [] });
     expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "worker" }),
     );
+  });
+
+  it("does not reuse a preloaded catalog from another config generation", async () => {
+    const config = {} as OpenClawConfig;
+    const loadGatewayModelCatalogSnapshot = vi.fn(() =>
+      Promise.resolve({
+        agentDir: "/tmp/models-list-openai-agent",
+        config,
+        entries: [],
+        routeVariants: [],
+      }),
+    );
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({
+        context,
+        params: { view: "default" },
+        preloadedCatalog: {
+          agentId: "main",
+          config: {} as OpenClawConfig,
+          snapshot: { entries: [catalogEntry("stale", "openai-responses")], routeVariants: [] },
+        },
+      }),
+    ).resolves.toEqual({ models: [] });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("does not reuse a preloaded projector after a full replacement-owner load", async () => {
+    const config = {} as OpenClawConfig;
+    const replacementConfig = {} as OpenClawConfig;
+    const loadGatewayModelCatalogSnapshot = vi.fn(() =>
+      Promise.resolve({
+        agentDir: "/tmp/models-list-openai-agent",
+        config: replacementConfig,
+        entries: [],
+        routeVariants: [],
+      }),
+    );
+    const evaluateEntry = vi.fn();
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot,
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    await expect(
+      buildModelsListResult({
+        context,
+        params: { view: "all" },
+        preloadedCatalog: {
+          agentId: "main",
+          config,
+          snapshot: { entries: [catalogEntry("stale", "openai-responses")], routeVariants: [] },
+        },
+        catalogProjector: { evaluateEntry } as never,
+      }),
+    ).resolves.toEqual({ models: [] });
+    expect(loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ readOnly: false });
+    expect(evaluateEntry).not.toHaveBeenCalled();
   });
 
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {

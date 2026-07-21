@@ -210,9 +210,13 @@ async function removeTempDir(dir: string): Promise<void> {
 }
 
 function createDirectChatContext(): GatewayRequestContext {
+  const config = {};
   return {
     loadGatewayModelCatalog: vi.fn().mockResolvedValue([]),
     loadGatewayModelCatalogSnapshot: vi.fn().mockResolvedValue({
+      agentId: "main",
+      agentDir: "/tmp/chat-model-catalog-agent",
+      config,
       entries: [],
       routeVariants: [],
     }),
@@ -240,7 +244,7 @@ function createDirectChatContext(): GatewayRequestContext {
     getSessionEventSubscriberConnIds: () => new Set(),
     nodeSendToSession: vi.fn(),
     registerToolEventRecipient: vi.fn(),
-    getRuntimeConfig: () => ({}),
+    getRuntimeConfig: () => config,
     recoveryRuntime: {
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
@@ -520,18 +524,28 @@ describe("gateway server chat", () => {
         },
       });
       const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const config = {
+        agents: { defaults: { model: { primary: "test-provider/catalog-model" } } },
+      };
+      const catalog = [
+        {
+          provider: "test-provider",
+          id: "catalog-model",
+          name: "Catalog Model",
+          reasoning: true,
+          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+        },
+      ];
       const context = {
-        loadGatewayModelCatalog: vi
-          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
-          .mockResolvedValue([
-            {
-              provider: "test-provider",
-              id: "catalog-model",
-              name: "Catalog Model",
-              reasoning: true,
-              compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
-            },
-          ]),
+        loadGatewayModelCatalogSnapshot: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
+          .mockResolvedValue({
+            agentId: "main",
+            agentDir: "/tmp/chat-history-agent",
+            config,
+            entries: catalog,
+            routeVariants: catalog,
+          }),
         logGateway: {
           info: vi.fn(),
           warn: vi.fn(),
@@ -560,7 +574,7 @@ describe("gateway server chat", () => {
         context,
       });
 
-      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(1);
       expect(responses[0]?.ok).toBe(true);
       const payload = responses[0]?.payload as
@@ -973,7 +987,12 @@ describe("gateway server chat", () => {
           const context = {
             loadGatewayModelCatalogSnapshot: vi
               .fn<GatewayRequestContext["loadGatewayModelCatalogSnapshot"]>()
-              .mockResolvedValue(catalogSnapshot),
+              .mockResolvedValue({
+                agentId: "work",
+                agentDir: "/tmp/chat-work-agent",
+                config,
+                ...catalogSnapshot,
+              }),
             logGateway: {
               info: vi.fn(),
               warn: vi.fn(),
@@ -1025,6 +1044,7 @@ describe("gateway server chat", () => {
           });
 
           expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledTimes(1);
+          expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
           expect(responses).toHaveLength(1);
           expect(responses[0]?.ok).toBe(true);
           const payload = responses[0]?.payload as
@@ -1215,7 +1235,13 @@ describe("gateway server chat", () => {
                 provider: "minimax",
               },
             ];
-            return { entries, routeVariants: entries };
+            return {
+              agentId: "work",
+              agentDir: "/tmp/chat-work-agent",
+              config,
+              entries,
+              routeVariants: entries,
+            };
           }),
         logGateway: {
           info: vi.fn(),

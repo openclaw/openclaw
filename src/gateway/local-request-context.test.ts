@@ -42,9 +42,13 @@ describe("local gateway request context", () => {
 
   it("defaults local model catalog snapshot reads to read-only", async () => {
     const cfg = {} as OpenClawConfig;
-    const loadSnapshot = vi
-      .spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot")
-      .mockResolvedValue({ entries: [], routeVariants: [] });
+    const loadOwner = vi
+      .spyOn(preparedModelCatalog, "loadPublishedPreparedModelCatalogOwnerSnapshot")
+      .mockResolvedValue({
+        agentDir: "/tmp/local-model-catalog-agent",
+        config: cfg,
+        modelCatalog: { entries: [], routeVariants: [] },
+      } as never);
 
     await withLocalGatewayRequestScope(
       {
@@ -60,8 +64,8 @@ describe("local gateway request context", () => {
       },
     );
 
-    expect(loadSnapshot).toHaveBeenCalledWith({ config: cfg, readOnly: true });
-    loadSnapshot.mockRestore();
+    expect(loadOwner).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+    loadOwner.mockRestore();
   });
 
   it("commits agent deletion through the canonical cron store", async () => {

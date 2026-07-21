@@ -47,6 +47,7 @@ import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalo
 import {
   getPreparedModelCatalogSnapshot,
   loadPreparedModelCatalogSnapshot,
+  loadPublishedPreparedModelCatalogOwnerSnapshot,
 } from "./prepared-model-catalog.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.js";
 
@@ -127,6 +128,22 @@ describe("prepared model catalog access", () => {
     );
     expect(mocks.loadSnapshot).not.toHaveBeenCalled();
   });
+
+  it.each([{ readOnly: true }, { readOnly: false }])(
+    "returns the published replacement owner for Gateway reads (readOnly=$readOnly)",
+    async ({ readOnly }) => {
+      const committedConfig = { agents: { defaults: { model: "openai/committed" } } };
+      const committedSnapshot = { ...fullSnapshot, config: committedConfig };
+      mocks.prepareSnapshot.mockResolvedValue(committedSnapshot);
+
+      await expect(loadPublishedPreparedModelCatalogOwnerSnapshot({ readOnly })).resolves.toBe(
+        committedSnapshot,
+      );
+      expect(mocks.loadSnapshot).not.toHaveBeenCalled();
+      expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+      expect(mocks.acquireSnapshot).not.toHaveBeenCalled();
+    },
+  );
 
   it("prefers the full published generation for read-only access", () => {
     mocks.getSnapshot.mockReturnValue(fullSnapshot);

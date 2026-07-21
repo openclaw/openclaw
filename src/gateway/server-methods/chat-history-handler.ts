@@ -58,7 +58,6 @@ import {
 import { resolveRequestedChatAgentId, validateChatSelectedAgent } from "./chat-origin-routing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import {
-  loadOptionalServerMethodModelCatalog,
   loadOptionalServerMethodModelCatalogSnapshot,
   startOptionalServerMethodModelCatalogSnapshotLoad,
 } from "./optional-model-catalog.js";
@@ -164,15 +163,21 @@ async function buildChatStartupMetadataResult(params: {
   }
   try {
     const { buildModelsListResult } = await import("./models-list-result.js");
+    const canUsePreloadedCatalog = params.modelCatalog.agentId === params.agentId;
     return await buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
-      preloadedCatalog: {
-        agentId: params.agentId,
-        snapshot: params.modelCatalog,
-      },
-      ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
+      ...(canUsePreloadedCatalog
+        ? {
+            preloadedCatalog: {
+              agentId: params.agentId,
+              config: params.cfg,
+              snapshot: params.modelCatalog,
+            },
+            ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
+          }
+        : {}),
     });
   } catch (err) {
     params.context.logGateway.debug(
@@ -393,7 +398,7 @@ async function handleChatHistoryRequest({
   }
   const startupModelCatalogLoad =
     method === "chat.startup"
-      ? startOptionalServerMethodModelCatalogSnapshotLoad(context)
+      ? startOptionalServerMethodModelCatalogSnapshotLoad(context, { agentId: sessionAgentId })
       : undefined;
   const modelCatalogPromise = measureDiagnosticsTimelineSpan(
     `gateway.${method}.model_catalog`,
@@ -404,9 +409,9 @@ async function handleChatHistoryRequest({
             startedLoad: startupModelCatalogLoad,
             timeoutMs: CHAT_STARTUP_OPTIONAL_MODEL_CATALOG_TIMEOUT_MS,
           })
-        : loadOptionalServerMethodModelCatalog(context, method).then((entries) =>
-            entries ? { entries, routeVariants: entries } : undefined,
-          ),
+        : loadOptionalServerMethodModelCatalogSnapshot(context, method, {
+            loadParams: { agentId: sessionAgentId },
+          }),
     {
       config: cfg,
       phase: method,
@@ -504,12 +509,13 @@ async function handleChatHistoryRequest({
     logDebug: (message) => context.logGateway.debug(message),
   });
   const modelCatalogSnapshot = await modelCatalogPromise;
+  const catalogConfig = modelCatalogSnapshot?.config ?? cfg;
   const modelCatalog = modelCatalogSnapshot?.entries;
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = resolveDefaultAgentId(catalogConfig);
   const startupCatalogProjection =
     method === "chat.startup" && modelCatalogSnapshot
       ? await buildChatStartupModelCatalogProjection({
-          cfg,
+          cfg: catalogConfig,
           snapshot: modelCatalogSnapshot,
           sessionAgentId,
           sessionEntry: entry,
@@ -523,7 +529,7 @@ async function handleChatHistoryRequest({
     modelCatalog;
   const startupMetadata = includeMetadata
     ? await buildChatStartupMetadataResult({
-        cfg,
+        cfg: catalogConfig,
         context,
         agentId: sessionAgentId,
         modelCatalog: modelCatalogSnapshot,
