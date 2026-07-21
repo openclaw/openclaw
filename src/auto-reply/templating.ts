@@ -139,6 +139,8 @@ export type MsgContext = {
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  /** Provider-native inbound message type when the channel exposes one. */
+  MessageType?: string;
   AmbientTranscriptWatermarkKey?: string;
   AmbientTranscriptBody?: string;
   AmbientTranscriptMessageId?: string;

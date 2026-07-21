@@ -675,6 +675,10 @@ has visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
 `replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these
 first-class fields before reading legacy metadata.
 
+`before_dispatch` receives the canonical inbound `messageId` in both its event
+and context. Channels may also provide an authoritative provider-native
+`messageType`; LINE reports values such as `text`, `image`, and `sticker`.
+
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
 

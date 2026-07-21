@@ -203,6 +203,7 @@ describe("buildLineMessageContext", () => {
       commandAuthorized: true,
     });
 
+    expect(context?.ctxPayload.MessageType).toBe("image");
     expect(context?.ctxPayload.RawBody).toBe("");
     expect(context?.ctxPayload.CommandBody).toBe("");
     expect(context?.ctxPayload.BodyForAgent).toBe("[line attachment unavailable]");
