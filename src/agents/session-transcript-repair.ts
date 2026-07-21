@@ -549,6 +549,75 @@ function shouldDropErroredAssistantResults(options?: ToolUseResultPairingOptions
   return options?.erroredAssistantResultPolicy === "drop";
 }
 
+const EMPTY_ANSWERED_TOOL_CALL_IDS: ReadonlySet<string> = new Set<string>();
+
+function rawToolCallBlockId(block: RawToolCallBlock): string {
+  for (const key of [
+    "id",
+    "call_id",
+    "toolCallId",
+    "toolUseId",
+    "tool_call_id",
+    "tool_use_id",
+  ] as const) {
+    const value = block[key];
+    if (typeof value === "string" && value.trim() !== "") {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function thinkingLikeBlockIsEmpty(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const candidate = (block as { thinking?: unknown; text?: unknown }).thinking;
+  const text = typeof candidate === "string" ? candidate : (block as { text?: unknown }).text;
+  return typeof text !== "string" || text.trim() === "";
+}
+
+// Stream-poison fix: an errored/aborted assistant turn can be persisted with
+// dangling tool calls (no matching tool result) and empty signed thinking blocks
+// that were partially streamed before the stream died. Replaying those blocks makes
+// providers reject the whole transcript (HTTP 400) and silently bricks the session.
+// Strip the unanswered tool calls and empty thinking-like blocks while keeping real
+// text and any other content so the error context survives. Returns the original
+// message when nothing needed stripping, a rewritten message when content was
+// trimmed, or null when the turn would become an empty-content assistant turn (which
+// providers also reject) and should be dropped entirely.
+function sanitizeErroredAssistantTurn(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+  answeredToolCallIds: ReadonlySet<string>,
+): Extract<AgentMessage, { role: "assistant" }> | null {
+  if (!Array.isArray(message.content)) {
+    return message;
+  }
+  let removed = false;
+  const safeContent = message.content.filter((block) => {
+    if (isRawToolCallBlock(block)) {
+      const id = rawToolCallBlockId(block);
+      const keep = id !== "" && answeredToolCallIds.has(id);
+      if (!keep) {
+        removed = true;
+      }
+      return keep;
+    }
+    if (isThinkingLikeBlock(block) && thinkingLikeBlockIsEmpty(block)) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  if (!removed) {
+    return message;
+  }
+  if (safeContent.length === 0) {
+    return null;
+  }
+  return { ...message, content: safeContent };
+}
+
 function assistantHasToolCalls(message: AgentMessage): boolean {
   if (!message || typeof message !== "object" || message.role !== "assistant") {
     return false;
@@ -753,6 +822,23 @@ export function repairToolUseResultPairing(
         droppedOrphanCount += 1;
         continue;
       }
+      if (message.role === "assistant") {
+        const stopReason = (message as { stopReason?: string }).stopReason;
+        if (stopReason === "error" || stopReason === "aborted") {
+          // Errored/aborted turns without tool calls never form a frame, so they
+          // reach here verbatim. They can still carry empty signed thinking blocks
+          // that brick replay; sanitize them the same way. No tool call in this turn
+          // is answerable here, so pass an empty answered set.
+          const safe = sanitizeErroredAssistantTurn(
+            message as Extract<AgentMessage, { role: "assistant" }>,
+            EMPTY_ANSWERED_TOOL_CALL_IDS,
+          );
+          if (safe) {
+            out.push(safe);
+          }
+          continue;
+        }
+      }
       out.push(message);
     }
   };
@@ -761,14 +847,34 @@ export function repairToolUseResultPairing(
     pushUnframedRange(frame.startIndex);
     cursor = frame.endIndex;
 
-    if (!(frame.failed && shouldDropErroredAssistantResults(options))) {
+    const dropErroredResults = frame.failed && shouldDropErroredAssistantResults(options);
+    if (frame.failed) {
+      // Replay-safe errored/aborted turn: strip unanswered tool calls and empty
+      // thinking blocks instead of pushing the turn verbatim (which 400s the
+      // provider) or dropping the whole turn (which loses error context/text).
+      const answeredToolCallIds = new Set<string>();
+      for (const occurrence of frame.occurrences) {
+        if (occurrence.result && occurrence.id) {
+          answeredToolCallIds.add(occurrence.id);
+        }
+      }
+      const safeAssistant = sanitizeErroredAssistantTurn(frame.assistant, answeredToolCallIds);
+      if (safeAssistant) {
+        out.push(safeAssistant);
+      }
+      // Keep matching results unless the caller asked to drop errored results.
+      if (!dropErroredResults) {
+        for (const occurrence of frame.occurrences) {
+          if (occurrence.result) {
+            out.push(occurrence.result);
+          }
+        }
+      }
+    } else {
       out.push(frame.assistant);
       for (const occurrence of frame.occurrences) {
         if (occurrence.result) {
           out.push(occurrence.result);
-          continue;
-        }
-        if (frame.failed) {
           continue;
         }
         const missing = makeMissingToolResult({
