@@ -80,10 +80,15 @@ export class OutputAccumulator {
     // Transformed output must spill exactly what callers see so sanitization
     // cannot be bypassed by reading the full-output file.
     const spillChunk = this.transformDecodedText ? Buffer.from(text, "utf-8") : data;
-    if (this.tempFileStream || this.shouldUseTempFile()) {
-      this.ensureTempFile();
+    try {
+      if (this.tempFileStream || this.shouldUseTempFile()) {
+        this.ensureTempFile();
+      }
+      this.appendSpillChunk(spillChunk);
+    } catch (err) {
+      void this.closeTempFile().catch(() => undefined);
+      throw err;
     }
-    this.appendSpillChunk(spillChunk);
     return text;
   }
 
@@ -254,4 +259,10 @@ export class OutputAccumulator {
     }
     this.spillChunks = [];
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.outputAccumulatorTestApi")] = {
+    OutputAccumulator,
+  };
 }
