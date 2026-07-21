@@ -225,6 +225,9 @@ function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedSched
     if (value === undefined) {
       return undefined;
     }
+    if (typeof value !== "string" && typeof value !== "number") {
+      throw new Error(`${flag} must be a positive integer`);
+    }
     const text = String(value).trim();
     if (!/^\d+$/u.test(text)) {
       throw new Error(`${flag} must be a positive integer`);

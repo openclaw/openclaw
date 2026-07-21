@@ -130,7 +130,6 @@ export async function fireOnExitJob(
 /** Fire one source batch through the normal trigger and payload pipeline. */
 export async function fireStreamJob(
   job: CronJob,
-  batch: string,
   deps: {
     // No payload override: cron.run snapshots the persisted payload under its
     // admission lock, so a batch never executes the owner's stale cache.
@@ -979,8 +978,11 @@ export function buildGatewayCronService(params: {
             evt.jobId,
             evt.job ?? cron.getJob(evt.jobId),
             evt.action,
-          ).catch((err) => {
-            cronLogger.warn({ err: String(err), jobId: evt.jobId }, "cron-stream: route failed");
+          ).catch((err: unknown) => {
+            cronLogger.warn(
+              { err: formatErrorMessage(err), jobId: evt.jobId },
+              "cron-stream: route failed",
+            );
           });
         }
       } else if (evt.action === "finished") {
@@ -990,9 +992,14 @@ export function buildGatewayCronService(params: {
         const finishedJob = evt.job ?? cron.getJob(evt.jobId);
         if (finishedJob?.enabled === false) {
           broadcastCronBoundSessionChanges(evt);
-          void routeStreamWatcherMutation(evt.jobId, finishedJob, "finished").catch((err) => {
-            cronLogger.warn({ err: String(err), jobId: evt.jobId }, "cron-stream: route failed");
-          });
+          void routeStreamWatcherMutation(evt.jobId, finishedJob, "finished").catch(
+            (err: unknown) => {
+              cronLogger.warn(
+                { err: formatErrorMessage(err), jobId: evt.jobId },
+                "cron-stream: route failed",
+              );
+            },
+          );
         }
       }
       if (evt.action === "finished") {
@@ -1043,7 +1050,7 @@ export function buildGatewayCronService(params: {
     },
     fireBatch: (job, batch, streamScheduleKey, streamSourceIdentity) =>
       runWithGatewayIndependentRootWorkAdmission(async () =>
-        fireStreamJob(job, batch, {
+        fireStreamJob(job, {
           run: async (jobId, onDisposition) => {
             const result = await cron.run(jobId, "force", {
               evaluateTrigger: true,
@@ -1224,8 +1231,8 @@ export function buildGatewayCronService(params: {
   cron.stop = () => {
     stopCron();
     stopExitWatchers();
-    void stopStreamWatchers().catch((err) => {
-      cronLogger.warn({ err: String(err) }, "cron-stream: asynchronous teardown failed");
+    void stopStreamWatchers().catch((err: unknown) => {
+      cronLogger.warn({ err: formatErrorMessage(err) }, "cron-stream: asynchronous teardown failed");
     });
     // Session rows must stop reporting automation from a stopped scheduler,
     // but a reload's replacement service may already own the registration.

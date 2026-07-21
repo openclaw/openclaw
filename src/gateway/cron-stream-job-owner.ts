@@ -1,4 +1,6 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { errorBackoffMs } from "../cron/service/jobs.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import type { CronJob, CronJobState } from "../cron/types.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -168,9 +170,9 @@ export class CronStreamJobOwner {
       recordLoss: async (reason) => await this.recordLoss(reason),
       enqueue: (label, operation) => this.enqueue(label, operation),
       requestTriggerDisabledStop: () => {
-        void this.stop("trigger-disabled").catch((error) => {
+        void this.stop("trigger-disabled").catch((error: unknown) => {
           this.params.logger.warn(
-            { jobId: this.job.id, err: String(error) },
+            { jobId: this.job.id, err: formatErrorMessage(error) },
             "cron-stream: trigger-disabled stop failed",
           );
         });
@@ -328,9 +330,9 @@ export class CronStreamJobOwner {
 
   private enqueue(label: string, operation: () => Promise<void>): Promise<void> {
     const result = this.opTail.then(operation, operation);
-    this.opTail = result.catch((error) => {
+    this.opTail = result.catch((error: unknown) => {
       this.params.logger.warn(
-        { jobId: this.job.id, operation: label, err: String(error) },
+        { jobId: this.job.id, operation: label, err: formatErrorMessage(error) },
         "cron-stream: owner operation failed",
       );
     });
@@ -468,9 +470,9 @@ export class CronStreamJobOwner {
     this.output.schedulePendingIfNeeded(generation);
     void run.wait().then(
       (exit) => this.processExited(exit, generation),
-      (error) => {
+      (error: unknown) => {
         this.params.logger.warn(
-          { jobId: this.job.id, err: String(error) },
+          { jobId: this.job.id, err: formatErrorMessage(error) },
           "cron-stream: supervised wait failed",
         );
         return this.processExited(
@@ -547,7 +549,7 @@ export class CronStreamJobOwner {
       // Keep ownership while the child is still retryable; do not claim stopped.
       this.state = "stopping";
       this.restartExhausted = true;
-      const message = `stream source failed to stop: ${String(stopError)}`;
+      const message = `stream source failed to stop: ${formatErrorMessage(stopError)}`;
       await this.persistFailure(message, {
         streamStatus: "error",
         streamError: message,
@@ -559,7 +561,7 @@ export class CronStreamJobOwner {
           "stream source retirement and stop both failed",
         );
       }
-      throw stopError;
+      throw toErrorObject(stopError, "stream source failed to stop");
     }
     this.state = "stopped";
     await this.persistState(
@@ -575,7 +577,7 @@ export class CronStreamJobOwner {
             : { streamStatus: "stopped", streamError: undefined },
     );
     if (retirementError !== undefined) {
-      throw retirementError;
+      throw toErrorObject(retirementError, "stream source retirement failed");
     }
   }
 

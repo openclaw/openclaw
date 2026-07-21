@@ -48,7 +48,7 @@ export type CronStreamLossReason = "gate-drop" | "coalesced" | "not-running" | "
 export type CronStreamOwnerState = OwnerState;
 export type CronStreamLogger = { info: Log; warn: Log };
 
-export type CronStreamOutputParams = {
+type CronStreamOutputParams = {
   job: CronStreamJob;
   scheduleKey: string;
   sourceIdentity: string;
@@ -523,7 +523,7 @@ export class CronStreamOutput {
     this.firing = firing;
     void firing.promise.then(
       (disposition) => this.fireCompleted(firing, disposition),
-      (error) => this.fireRejected(firing, error),
+      (error: unknown) => this.fireRejected(firing, error),
     );
   }
 

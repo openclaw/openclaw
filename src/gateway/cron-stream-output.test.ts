@@ -182,7 +182,7 @@ describe("cron stream output", () => {
     // "^keep" only proves a prefix.
     fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(1_500)}`);
     await settle();
-    fake.inputs[0]?.onStdout?.(`${"x".repeat(1_500)}`);
+    fake.inputs[0]?.onStdout?.("x".repeat(1_500));
     await settle();
     fake.inputs[0]?.onStdout?.(`${"x".repeat(1_500)}\n`);
     await settle();
