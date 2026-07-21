@@ -285,6 +285,14 @@ fun ChatScreen(
       fallbackSupported = thinkingSupportedForSelection(selectedModelRef, modelCatalog),
     )
   val contextUsage = resolveChatContextUsage(sessionKey = sessionKey, mainSessionKey = mainSessionKey, sessions = sessions)
+  val activeSession =
+    sessions.firstOrNull {
+      isActiveSessionChoice(
+        choiceKey = it.key,
+        sessionKey = sessionKey,
+        mainSessionKey = mainSessionKey,
+      )
+    }
   val gatewayAddress = gatewayDiagnosticsEndpoint(remoteAddress = remoteAddress, manualHost = manualHost, manualPort = manualPort, manualTls = manualTls)
   val gatewayProblemMessage = gatewayConnectionDisplay.problem?.message?.takeIf { it.isNotBlank() }
   val offlineStatus = gatewayStatusForDisplay(gatewayProblemMessage ?: gatewayConnectionDisplay.statusText)
@@ -632,6 +640,7 @@ fun ChatScreen(
 
     ChatMessageList(
       sessionKey = sessionKey,
+      session = activeSession,
       messages = messages,
       historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
@@ -1120,6 +1129,7 @@ private fun HeaderIcon(
 @Composable
 private fun ChatMessageList(
   sessionKey: String,
+  session: ChatSessionEntry?,
   messages: List<ChatMessage>,
   historyLoading: Boolean,
   pendingRunCount: Int,
@@ -1159,6 +1169,9 @@ private fun ChatMessageList(
       timeline = timeline,
       historyLoading = historyLoading,
     )
+  val indicatorVisible = pendingRunCount > 0
+  val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
+  val workingRun = workingRunTracker.resolve(indicatorVisible, session, System.currentTimeMillis())
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
@@ -1221,7 +1234,12 @@ private fun ChatMessageList(
               inlineWidgetResolverReady = healthOk,
               resolveInlineWidgetResource = resolveInlineWidgetResource,
             )
-          ChatTimelineItem.Thinking -> ChatThinkingBubble()
+          ChatTimelineItem.Thinking -> {
+            val run = workingRun
+            if (run != null) {
+              ChatTypingIndicatorBubble(runKey = run.key, startedAtMs = run.startedAtMs)
+            }
+          }
         }
       }
     }
@@ -1269,6 +1287,56 @@ private fun ChatMessageList(
         }
       }
     }
+  }
+}
+
+internal data class ChatWorkingRun(
+  val key: String,
+  val startedAtMs: Long,
+  val authoritativeRunId: String?,
+  val authoritativeStartedAtMs: Long?,
+)
+
+internal class ChatWorkingRunTracker(
+  private val sessionKey: String,
+) {
+  private var current: ChatWorkingRun? = null
+
+  fun resolve(
+    indicatorVisible: Boolean,
+    session: ChatSessionEntry?,
+    nowMs: Long,
+  ): ChatWorkingRun? {
+    if (!indicatorVisible) {
+      current = null
+      return null
+    }
+    val runId = session?.activeRunIds?.lastOrNull()
+    val startedAt = session?.startedAt?.takeIf { session.endedAt == null }
+    val previous = current
+    val replacementByRunId = previous?.authoritativeRunId != null && runId != null && previous.authoritativeRunId != runId
+    val replacementByStart =
+      previous?.authoritativeStartedAtMs != null && startedAt != null && previous.authoritativeStartedAtMs != startedAt
+    val replacement = replacementByRunId || replacementByStart
+    if (previous == null || replacement) {
+      return ChatWorkingRun(
+        key = runId ?: "$sessionKey:${startedAt ?: nowMs}",
+        startedAtMs = startedAt ?: nowMs,
+        authoritativeRunId = runId,
+        authoritativeStartedAtMs = startedAt,
+      ).also { current = it }
+    }
+    val adoptsRunId = previous.authoritativeRunId == null && runId != null
+    val adoptsStartedAt = previous.authoritativeStartedAtMs == null && startedAt != null
+    if (adoptsRunId || adoptsStartedAt) {
+      current =
+        previous.copy(
+          startedAtMs = startedAt ?: previous.startedAtMs,
+          authoritativeRunId = runId ?: previous.authoritativeRunId,
+          authoritativeStartedAtMs = startedAt ?: previous.authoritativeStartedAtMs,
+        )
+    }
+    return current
   }
 }
 
@@ -1616,16 +1684,6 @@ private fun ToolBubble(toolCalls: List<ChatPendingToolCall>) {
       if (toolCalls.size > 4) {
         Text(text = nativeString("+\${toolCalls.size - 4} more", toolCalls.size - 4), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       }
-    }
-  }
-}
-
-@Composable
-private fun ChatThinkingBubble() {
-  ClawPanel {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-      ClawStatusPill(text = nativeString("Thinking"), status = ClawStatus.Warning)
-      Text(text = nativeString("OpenClaw is preparing a response."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
   }
 }

@@ -63,7 +63,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -71,6 +70,8 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -363,17 +364,29 @@ private fun linkPreviewDomain(url: String): String =
 
 /** Assistant placeholder shown while a run is active but no text has streamed yet. */
 @Composable
-fun ChatTypingIndicatorBubble() {
+fun ChatTypingIndicatorBubble(
+  runKey: String,
+  startedAtMs: Long,
+) {
+  val elapsedMs = rememberWorkingElapsedMs(startedAtMs)
+  val phrase = workingPhraseText(seed = runKey, elapsedMs = elapsedMs)
   ChatBubbleContainer(
     style = bubbleStyle("assistant"),
     roleLabel = roleLabel("assistant"),
   ) {
     Row(
+      modifier = Modifier.clearAndSetSemantics { contentDescription = nativeString("Working") },
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      DotPulse(color = mobileTextSecondary)
-      Text(nativeString("Thinking..."), style = mobileCallout, color = mobileTextSecondary)
+      WorkingClawIcon(runKey = runKey, color = mobileAccent)
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        Text(formatLocalizedChatDurationCompact(elapsedMs), style = mobileCallout, color = mobileTextSecondary)
+        phrase?.let { Text("· $it", style = mobileCallout, color = mobileTextSecondary) }
+      }
     }
   }
 }
@@ -623,27 +636,6 @@ internal fun ChatBase64Image(
   } else if (imageState.failed) {
     Text(nativeString("Unsupported attachment"), style = mobileCaption1, color = mobileTextSecondary)
   }
-}
-
-@Composable
-private fun DotPulse(color: Color) {
-  Row(horizontalArrangement = Arrangement.spacedBy(5.dp), verticalAlignment = Alignment.CenterVertically) {
-    PulseDot(alpha = 0.38f, color = color)
-    PulseDot(alpha = 0.62f, color = color)
-    PulseDot(alpha = 0.90f, color = color)
-  }
-}
-
-@Composable
-private fun PulseDot(
-  alpha: Float,
-  color: Color,
-) {
-  Surface(
-    modifier = Modifier.size(6.dp).alpha(alpha),
-    shape = CircleShape,
-    color = color,
-  ) {}
 }
 
 /** Shared code block renderer used by chat Markdown. */
