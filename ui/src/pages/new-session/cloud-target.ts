@@ -432,6 +432,7 @@ export async function startCloudInitialTurn(
 type SessionMenuItemOptions = {
   value: string;
   label: string;
+  sub?: string;
   checked: boolean;
   disabled?: boolean;
   title?: string;
@@ -455,6 +456,7 @@ export function renderSessionMenuItem(params: SessionMenuItemOptions, submitting
         >${params.checked ? icons.check : nothing}</span
       >
       <span class="session-menu__text">${params.label}</span>
+      ${params.sub ? html`<span class="session-menu__sub">${params.sub}</span>` : nothing}
     </button>
   `;
 }
