@@ -6,7 +6,7 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
+import { pathForRoute, pathForWorkboardBoard } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -27,6 +27,8 @@ import { sessionHasBoard } from "../lib/board/provider.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { workboardBoardLabel } from "../lib/workboard/board-presentation.ts";
+import type { WorkboardBoardSummary } from "../lib/workboard/index.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import {
   renderSidebarPluginTab,
@@ -43,6 +45,7 @@ import {
   resolveLobsterRunOutcome,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
+import { renderWorkboardBoardGlyph } from "./workboard-board-glyph.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -419,8 +422,12 @@ class AppSidebar extends AppSidebarSessionListElement {
   private renderSidebarZoneEntry(
     entry: SidebarZoneEntry,
     sessionRows: ReadonlyMap<string, SidebarRecentSession>,
+    workboardRows: ReadonlyMap<string, WorkboardBoardSummary>,
   ) {
-    if (entry.type === "route" && !this.isRouteEnabled(entry.route)) {
+    if (
+      (entry.type === "route" && !this.isRouteEnabled(entry.route)) ||
+      (entry.type === "workboard" && !this.isRouteEnabled("workboard"))
+    ) {
       return nothing;
     }
     const serialized = serializeSidebarEntry(entry);
@@ -429,20 +436,27 @@ class AppSidebar extends AppSidebarSessionListElement {
     const content =
       entry.type === "route"
         ? this.renderRoute(entry.route)
-        : sessionRows.has(entry.key)
-          ? this.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
-          : nothing;
+        : entry.type === "workboard"
+          ? workboardRows.has(entry.boardId)
+            ? this.renderWorkboardBoard(workboardRows.get(entry.boardId)!)
+            : nothing
+          : sessionRows.has(entry.key)
+            ? this.renderPinnedSidebarSession(sessionRows.get(entry.key)!)
+            : nothing;
+    const draggable = entry.type === "route" || entry.type === "workboard";
     return html`
       <div
         class="sidebar-zone-entry ${dropPosition
           ? `sidebar-zone-entry--drop-${dropPosition}`
           : ""} ${this.draggingSidebarEntry === serialized ? "sidebar-zone-entry--dragging" : ""}"
         data-sidebar-entry=${serialized}
-        draggable=${entry.type === "route" ? "true" : "false"}
+        draggable=${draggable ? "true" : "false"}
         @dragstart=${entry.type === "route"
           ? (event: DragEvent) => this.startSidebarRouteDrag(event, entry.route)
-          : nothing}
-        @dragend=${entry.type === "route" ? () => this.finishSidebarEntryDrag() : nothing}
+          : entry.type === "workboard"
+            ? (event: DragEvent) => this.startSidebarWorkboardDrag(event, entry.boardId)
+            : nothing}
+        @dragend=${draggable ? () => this.finishSidebarEntryDrag() : nothing}
         @dragover=${(event: DragEvent) => this.handleSidebarZoneDragOver(event, serialized)}
         @drop=${(event: DragEvent) => this.handleSidebarZoneDrop(event, serialized)}
       >
@@ -463,6 +477,31 @@ class AppSidebar extends AppSidebarSessionListElement {
           onNavigate: (search) => this.onNavigate?.("plugin", { search }),
         })}
       </div>
+    `;
+  }
+
+  private renderWorkboardBoard(board: WorkboardBoardSummary) {
+    const active = this.activeRouteId === "workboard" && this.activeWorkboardBoardId === board.id;
+    return html`
+      <a
+        href=${pathForWorkboardBoard(board.id, this.basePath)}
+        class="nav-item nav-item--workboard-board ${active ? "nav-item--active" : ""}"
+        aria-current=${active ? "page" : nothing}
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.onNavigate?.("workboard", {
+            pathname: pathForWorkboardBoard(board.id, this.basePath),
+          });
+        }}
+      >
+        <span class="nav-item__icon" aria-hidden="true"
+          >${renderWorkboardBoardGlyph(board, "workboard-board-glyph--sidebar")}</span
+        >
+        <span class="nav-item__text">${workboardBoardLabel(board)}</span>
+      </a>
     `;
   }
 
@@ -487,7 +526,11 @@ class AppSidebar extends AppSidebarSessionListElement {
               >
                 ${this.renderHomeRow()}
                 ${sidebarZone.entries.map((entry) =>
-                  this.renderSidebarZoneEntry(entry, sidebarZone.sessionRows),
+                  this.renderSidebarZoneEntry(
+                    entry,
+                    sidebarZone.sessionRows,
+                    sidebarZone.workboardRows,
+                  ),
                 )}
                 ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
                   (tab) => this.renderPluginTabEntry(tab),

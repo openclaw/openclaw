@@ -22,6 +22,7 @@ import "../components/sidebar-update-card.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
 import { isSettingsNavigationRoute } from "../app-navigation.ts";
+import { workboardBoardIdFromPath } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS, isRouteId, type RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
@@ -48,6 +49,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { WORKBOARD_CHANGED_EVENT } from "../lib/workboard/index.ts";
 import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
@@ -117,6 +119,7 @@ type AppSidebarElement = HTMLElement & {
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+const WORKBOARD_BOARDS_RETRY_MS = 2_000;
 
 function diffAgentRoster(
   previous: readonly GatewayAgentRow[],
@@ -494,6 +497,11 @@ class OpenClawShell extends OpenClawLightDomElement {
   private sessionKeyClient: GatewayBrowserClient | null = null;
   private runtimeConfigClient: GatewayBrowserClient | null = null;
   private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private workboardBoardsRetryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private workboardBoardsConnectedClient: GatewayBrowserClient | null = null;
+  // Teardown advances the epoch so an in-flight failure cannot recreate its
+  // retry timer after the shell or its application context has been replaced.
+  private workboardBoardsEpoch = 0;
   private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private lastNativeNavState: NativeNavState | undefined;
   private didConsiderNativeRouteRestore = false;
@@ -577,6 +585,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         (runtimeConfig, notify) =>
           runtimeConfig.subscribe(() => {
             this.reconcileServerUiPrefs(runtimeConfig);
+            this.syncWorkboardBoards();
             notify();
           }),
         (runtimeConfig) => {
@@ -585,7 +594,12 @@ class OpenClawShell extends OpenClawLightDomElement {
             this.ensureRuntimeConfig(snapshot, runtimeConfig);
           }
           this.reconcileServerUiPrefs(runtimeConfig);
+          this.syncWorkboardBoards();
         },
+      )
+      .watch(
+        () => this.context?.workboard,
+        (workboard, notify) => workboard.subscribe(notify),
       );
   }
 
@@ -681,6 +695,9 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.sessionKeyClient = null;
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
+    this.workboardBoardsConnectedClient = null;
+    this.workboardBoardsEpoch += 1;
+    this.clearWorkboardBoardsRetry();
     if (this.agentRosterRefreshTimer !== null) {
       globalThis.clearTimeout(this.agentRosterRefreshTimer);
       this.agentRosterRefreshTimer = null;
@@ -702,6 +719,10 @@ class OpenClawShell extends OpenClawLightDomElement {
         void runtimeConfig.refresh();
       }
       this.scheduleAgentRosterRefresh();
+      return;
+    }
+    if (event.event === WORKBOARD_CHANGED_EVENT) {
+      this.syncWorkboardBoards(true);
       return;
     }
     if (event.event !== "ui.command" || !event.payload) {
@@ -1240,6 +1261,62 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.updateGatewaySessionKey(snapshot);
     this.ensureAgentsList(snapshot);
     this.ensureRuntimeConfig(snapshot);
+    this.syncWorkboardBoards();
+  }
+
+  private syncWorkboardBoards(force = false) {
+    const context = this.context;
+    const snapshot = context?.gateway.snapshot;
+    const configSnapshot = context?.runtimeConfig.state.configSnapshot;
+    if (!context || !snapshot?.connected || !snapshot.client || !configSnapshot) {
+      if (!snapshot?.connected) {
+        this.workboardBoardsConnectedClient = null;
+      }
+      this.clearWorkboardBoardsRetry();
+      return;
+    }
+    if (!isWorkboardEnabledInConfigSnapshot(configSnapshot)) {
+      this.clearWorkboardBoardsRetry();
+      context.workboard.clearBoards();
+      return;
+    }
+    const client = snapshot.client;
+    const reconnectingLoadedCatalog =
+      this.workboardBoardsConnectedClient !== client && context.workboard.boardsReady;
+    this.workboardBoardsConnectedClient = client;
+    const effectiveForce = force || reconnectingLoadedCatalog;
+    const epoch = this.workboardBoardsEpoch;
+    void context.workboard.ensureBoards(client, effectiveForce).then((loaded) => {
+      if (
+        this.workboardBoardsEpoch !== epoch ||
+        this.context !== context ||
+        context.gateway.snapshot.client !== client ||
+        !context.gateway.snapshot.connected ||
+        !isWorkboardEnabledInConfigSnapshot(context.runtimeConfig.state.configSnapshot)
+      ) {
+        return;
+      }
+      if (loaded) {
+        this.clearWorkboardBoardsRetry();
+        return;
+      }
+      if (!effectiveForce && context.workboard.boardsReady) {
+        return;
+      }
+      if (this.workboardBoardsRetryTimer === null) {
+        this.workboardBoardsRetryTimer = globalThis.setTimeout(() => {
+          this.workboardBoardsRetryTimer = null;
+          this.syncWorkboardBoards(true);
+        }, WORKBOARD_BOARDS_RETRY_MS);
+      }
+    });
+  }
+
+  private clearWorkboardBoardsRetry() {
+    if (this.workboardBoardsRetryTimer !== null) {
+      globalThis.clearTimeout(this.workboardBoardsRetryTimer);
+      this.workboardBoardsRetryTimer = null;
+    }
   }
 
   private ensureRuntimeConfig(
@@ -1521,6 +1598,10 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .activeRouteId=${activeRoute}
                 .activePluginTabId=${activePluginTabId}
                 .enabledRouteIds=${this.enabledRouteIds()}
+                .activeWorkboardBoardId=${workboardBoardIdFromPath(
+                  this.routeState.location?.pathname ?? "",
+                  context.basePath,
+                ) ?? ""}
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
                 .terminalAvailable=${terminalAvailable}
@@ -1528,6 +1609,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .canPairDevice=${gatewaySnapshot.connected &&
                 hasOperatorAdminAccess(gatewaySnapshot.hello?.auth ?? null)}
                 .sidebarEntries=${navigationSnapshot.sidebarEntries}
+                .workboardBoards=${context.workboard.state.boards}
+                .workboardBoardsReady=${context.workboard.boardsReady}
                 .sidebarLiveActivity=${uiSettings.sidebarLiveActivity !== false}
                 .pinnedAgentIds=${navigationSnapshot.pinnedAgentIds}
                 .themeMode=${context.theme.mode}
