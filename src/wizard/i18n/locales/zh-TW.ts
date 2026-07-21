@@ -164,6 +164,9 @@ export const zh_TW = {
       scanDisclosure:
         "應用程式名稱會使用你設定的模型和 ClawHub 搜尋進行比對（可透過 wizard.appRecommendations 停用）。",
       scanning: "正在掃描已安裝的應用程式…",
+      scanningCandidate: "找到 1 個應用程式 — 正在為 {sample} 搜尋插件和技能…",
+      scanningCandidates: "找到 {count} 個應用程式 — 正在為 {sample} 搜尋插件和技能…",
+      scanningMatch: "正在請你的模型挑選最佳配對…",
       select: "安裝推薦的插件和技能",
       skillTrust: "信任並安裝 ClawHub 技能 {name}？",
       skipped: "已略過應用程式推薦：{reason}",
