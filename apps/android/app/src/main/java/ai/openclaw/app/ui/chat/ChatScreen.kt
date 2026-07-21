@@ -2258,7 +2258,7 @@ private fun BranchSwitcherSheet(
   }
 }
 
-internal fun branchMessageCountText(count: Int): String = if (count == 1) nativeString("1 message") else nativeString("\$count messages", count)
+internal fun branchMessageCountText(count: Int): String = nativeString("Messages: \$count", count)
 
 internal fun branchMetadataText(branch: SessionBranch): String {
   val count = branchMessageCountText(branch.messageCount)
