@@ -29,7 +29,7 @@ function context() {
   };
 }
 
-function voiceProvider(sendAudio: ReturnType<typeof vi.fn>): RealtimeVoiceProviderPlugin {
+function voiceProvider(sendAudio: (audio: Buffer) => void): RealtimeVoiceProviderPlugin {
   return {
     id: "test",
     label: "Test",
@@ -48,7 +48,7 @@ function voiceProvider(sendAudio: ReturnType<typeof vi.fn>): RealtimeVoiceProvid
 }
 
 function transcriptionProvider(
-  sendAudio: ReturnType<typeof vi.fn>,
+  sendAudio: (audio: Buffer) => void,
 ): RealtimeTranscriptionProviderPlugin {
   return {
     id: "test",
