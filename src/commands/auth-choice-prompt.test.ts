@@ -315,4 +315,46 @@ describe("promptAuthChoiceGrouped", () => {
     ]);
     expect(result).toBe("minimax-cn-api");
   });
+
+  it("features caller-supplied groups first and excludes them from More", async () => {
+    buildAuthChoiceGroups.mockReturnValue({
+      groups: [
+        openAIGroup(),
+        authChoiceGroup("anthropic", "Anthropic", [["apiKey", "Anthropic API key"]], true),
+        authChoiceGroup("minimax", "MiniMax", [["minimax-api", "MiniMax API key"]]),
+      ],
+      skipOption: { value: "skip", label: "Skip for now" },
+    });
+    const providerPrompts: Array<Array<{ value: unknown; label: string }>> = [];
+    const prompter = createPromptHarness(async (params) => {
+      if (params.message !== "Model/auth provider") {
+        throw new Error(`unexpected prompt ${params.message}`);
+      }
+      providerPrompts.push(params.options);
+      return providerPrompts.length === 1 ? "__more" : "minimax";
+    });
+
+    const result = await promptAuthChoiceGrouped({
+      prompter,
+      store: EMPTY_STORE,
+      includeSkip: true,
+      additionalGroups: [
+        authChoiceGroup("detected-ai", "Detected AI", [["candidate:codex-cli", "Codex CLI"]]),
+        authChoiceGroup("recommended-ai", "Recommended AI", [
+          ["candidate:openai-api-key", "OpenAI API key"],
+        ]),
+      ],
+    });
+
+    expect(providerPrompts[0]?.map((option) => option.value)).toEqual([
+      "detected-ai",
+      "recommended-ai",
+      "anthropic",
+      "openai",
+      "__more",
+      "skip",
+    ]);
+    expect(providerPrompts[1]?.map((option) => option.value)).toEqual(["minimax", "__back"]);
+    expect(result).toBe("minimax-api");
+  });
 });
