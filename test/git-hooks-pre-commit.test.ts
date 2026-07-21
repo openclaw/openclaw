@@ -350,6 +350,31 @@ printf 'args=%s\n' "$*" >> ${JSON.stringify(logPath)}
     expect(failure.stderr).toContain("https://github.com/trufflesecurity/trufflehog#installation");
   });
 
+  it("blocks the commit when TruffleHog reports a finding", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-finding-");
+    run(dir, "git", ["init", "-q", "--initial-branch=main"]);
+    const fakeBinDir = installPreCommitFixture(dir);
+    // TruffleHog exits 183 under `--fail` when it reports results.
+    writeExecutable(
+      fakeBinDir,
+      "trufflehog",
+      `#!/usr/bin/env bash
+printf 'Found verified result 🐷🔑\n' >&2
+exit 183
+`,
+    );
+
+    writeFileSync(path.join(dir, "changed.txt"), "staged content\n", "utf8");
+    run(dir, "git", ["add", "--", "changed.txt"]);
+
+    const failure = runFailure(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+
+    expect(failure.status).toBe(183);
+    expect(failure.stderr).toContain("Found verified result");
+  });
+
   it("does not run the changed-scope check for non-doc staged changes", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-no-check-changed-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
