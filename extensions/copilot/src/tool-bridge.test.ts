@@ -552,11 +552,12 @@ describe("createCopilotToolBridge", () => {
       expect(getOpts().messageProvider).toBe("telegram");
     });
 
-    it("forwards authProfileStore, runId, config, and run hooks (onToolOutcome) from attemptParams", async () => {
+    it("forwards authProfileStore, runId, config, and run hooks from attemptParams", async () => {
       const { createOpenClawCodingTools, getOpts } = captureCall();
       const authProfileStore = { kind: "fake-store" } as never;
       const config = { agents: {} } as never;
       const onToolOutcome = vi.fn();
+      const onCriticalToolLoop = vi.fn();
 
       await createCopilotToolBridge({
         agentId: "agent-1",
@@ -565,6 +566,7 @@ describe("createCopilotToolBridge", () => {
           runId: "run-1",
           config,
           onToolOutcome,
+          onCriticalToolLoop,
           messageActionTurnCapability: "turn-capability-1",
         } as never,
         createOpenClawCodingTools,
@@ -578,6 +580,7 @@ describe("createCopilotToolBridge", () => {
       expect(opts.runId).toBe("run-1");
       expect(opts.config).toBe(config);
       expect(opts.onToolOutcome).toBe(onToolOutcome);
+      expect(opts.onCriticalToolLoop).toBe(onCriticalToolLoop);
       expect(opts.messageActionTurnCapability).toBe("turn-capability-1");
     });
 

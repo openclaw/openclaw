@@ -18,6 +18,7 @@ import {
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ToolLoopDetectionConfig } from "../../config/types.tools.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -29,9 +30,11 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import {
   cancelDeferredPluginToolApproval,
   hasBeforeToolCallPolicy,
+  recordToolCallLoopOutcome,
   requestDeferredPluginToolApproval,
   runBeforeToolCallHook,
   type BeforeToolCallFailureDisposition,
+  type CriticalToolLoopObserver,
   type DeferredPluginToolApproval,
 } from "../agent-tools.before-tool-call.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -110,6 +113,7 @@ type NativeHookRelayRegistration = {
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
   signal?: AbortSignal;
+  onCriticalToolLoop?: CriticalToolLoopObserver;
   onPreToolUseFailure?: (failure: {
     toolName: string;
     toolCallId: string;
@@ -147,6 +151,7 @@ type RegisterNativeHookRelayParams = {
   ttlMs?: number;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
+  onCriticalToolLoop?: CriticalToolLoopObserver;
   onPreToolUseFailure?: NativeHookRelayRegistration["onPreToolUseFailure"];
 };
 
@@ -262,6 +267,7 @@ type NativeHookRelaySharedState = {
 type ActiveNativeHookRelayRegistration = NativeHookRelayRegistration & {
   generation: string;
   preToolUseLoopDetection: boolean;
+  loopDetection?: ToolLoopDetectionConfig;
   preToolUseFailureProjections: Map<string, { promise: Promise<void>; settled: boolean }>;
 };
 
@@ -431,6 +437,13 @@ export function registerNativeHookRelay(
     throw new Error("Native hook relay expiry is outside the supported Date range");
   }
   const allowedEvents = normalizeAllowedEvents(params.allowedEvents);
+  const preToolUseLoopDetection = params.preToolUseLoopDetection !== false;
+  // The Codex opt-out has always controlled only PreToolUse. PostToolUse must
+  // still observe native outcomes when loop detection is enabled elsewhere.
+  const loopDetection = resolveToolLoopDetectionConfig({
+    cfg: params.config,
+    agentId: params.agentId,
+  });
   const stateDbPath = resolveOpenClawStateSqlitePath();
   unregisterNativeHookRelay(relayId, undefined, {
     deferBridgeRecordRemovalMs: NATIVE_HOOK_BRIDGE_REPLACEMENT_RECORD_GRACE_MS,
@@ -450,10 +463,12 @@ export function registerNativeHookRelay(
     ...(params.channelId ? { channelId: params.channelId } : {}),
     ...(params.requester ? { requester: params.requester } : {}),
     allowedEvents,
-    preToolUseLoopDetection: params.preToolUseLoopDetection !== false,
+    preToolUseLoopDetection,
     expiresAtMs,
     preToolUseFailureProjections: new Map(),
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(loopDetection ? { loopDetection } : {}),
+    ...(params.onCriticalToolLoop ? { onCriticalToolLoop: params.onCriticalToolLoop } : {}),
     ...(params.onPreToolUseFailure ? { onPreToolUseFailure: params.onPreToolUseFailure } : {}),
   };
   relays.set(relayId, registration);
@@ -649,6 +664,14 @@ function nativePreToolUseMayRunLoopDetection(
   return loopDetection?.enabled !== false;
 }
 
+function nativePostToolUseMayRecordLoopOutcome(
+  registration: ActiveNativeHookRelayRegistration,
+): boolean {
+  // Outcome recording has no effect without the matching PreToolUse call
+  // record. Keep the user opt-out fan-out-free for the whole loop pair.
+  return registration.preToolUseLoopDetection && registration.loopDetection?.enabled === true;
+}
+
 function nativeHookRelayEventHasLocalWork(
   registration: ActiveNativeHookRelayRegistration,
   event: NativeHookRelayEvent,
@@ -659,7 +682,13 @@ function nativeHookRelayEventHasLocalWork(
     return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
   }
   if (event === "post_tool_use") {
-    return hasGlobalHooks("after_tool_call") || listAgentToolResultMiddlewares("codex").length > 0;
+    // Critical no-progress detection needs the native result paired with the
+    // call recorded by PreToolUse; independent plugin work stays enabled.
+    return (
+      nativePostToolUseMayRecordLoopOutcome(registration) ||
+      hasGlobalHooks("after_tool_call") ||
+      listAgentToolResultMiddlewares("codex").length > 0
+    );
   }
   if (event === "before_agent_finalize") {
     return hasGlobalHooks("before_agent_finalize");
@@ -1403,7 +1432,7 @@ function delay(ms: number): Promise<void> {
 }
 
 async function processNativeHookRelayInvocation(params: {
-  registration: NativeHookRelayRegistration;
+  registration: ActiveNativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -1420,7 +1449,7 @@ async function processNativeHookRelayInvocation(params: {
 }
 
 async function runNativeHookRelayPreToolUse(params: {
-  registration: NativeHookRelayRegistration;
+  registration: ActiveNativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -1442,6 +1471,12 @@ async function runNativeHookRelayPreToolUse(params: {
       runId: params.registration.runId,
       ...(params.registration.channelId ? { channelId: params.registration.channelId } : {}),
       ...(params.registration.requester ? { requester: params.registration.requester } : {}),
+      ...(params.registration.loopDetection
+        ? { loopDetection: params.registration.loopDetection }
+        : {}),
+      ...(params.registration.onCriticalToolLoop
+        ? { onCriticalToolLoop: params.registration.onCriticalToolLoop }
+        : {}),
       ...(params.invocation.cwd
         ? { cwd: params.invocation.cwd, workspaceDir: params.invocation.cwd }
         : {}),
@@ -1482,7 +1517,7 @@ async function runNativeHookRelayPreToolUse(params: {
 }
 
 async function runNativeHookRelayPostToolUse(params: {
-  registration: NativeHookRelayRegistration;
+  registration: ActiveNativeHookRelayRegistration;
   invocation: NativeHookRelayInvocation;
   adapter: NativeHookRelayProviderAdapter;
 }): Promise<NativeHookRelayProcessResponse> {
@@ -1491,6 +1526,23 @@ async function runNativeHookRelayPostToolUse(params: {
     params.invocation.toolUseId ?? `${params.invocation.event}:${params.invocation.receivedAt}`;
   const startArgs = params.adapter.readToolInput(params.invocation.rawPayload);
   const rawResult = params.adapter.readToolResponse(params.invocation.rawPayload);
+  // PreToolUse records the call; attach Codex's model-visible result only
+  // when its matching loop relay is installed, otherwise this is inert work.
+  if (nativePostToolUseMayRecordLoopOutcome(params.registration)) {
+    await recordToolCallLoopOutcome({
+      ctx: {
+        ...(params.registration.agentId ? { agentId: params.registration.agentId } : {}),
+        sessionId: params.registration.sessionId,
+        ...(params.registration.sessionKey ? { sessionKey: params.registration.sessionKey } : {}),
+        runId: params.registration.runId,
+        loopDetection: params.registration.loopDetection,
+      },
+      toolName,
+      toolParams: startArgs,
+      toolCallId,
+      result: payloadTextResult(rawResult),
+    });
+  }
   // Native results are observe-only for middleware: codex-rs PostToolUse hooks
   // cannot replace tool_response (PostToolUseOutcome has no result field), so a
   // transformed result reaches only after_tool_call observers, never the model.

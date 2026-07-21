@@ -17,7 +17,7 @@ import { stableStringify } from "./stable-stringify.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
 
-type LoopDetectorKind =
+export type ToolLoopDetectorKind =
   | "generic_repeat"
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
@@ -29,7 +29,7 @@ type LoopDetectionResult =
   | {
       stuck: true;
       level: "warning" | "critical";
-      detector: LoopDetectorKind;
+      detector: ToolLoopDetectorKind;
       count: number;
       message: string;
       pairedToolName?: string;
@@ -694,10 +694,25 @@ export function recordToolCall(
   if (!state.toolCallHistory) {
     state.toolCallHistory = [];
   }
+  const argsHash = hashToolCall(toolName, params);
+  // Codex native hooks and the managed dynamic-tool wrapper can observe the
+  // same call id. Keep one detector record per real call across both paths.
+  if (
+    toolCallId &&
+    state.toolCallHistory.some(
+      (call) =>
+        call.toolCallId === toolCallId &&
+        normalizeRunId(call.runId) === runId &&
+        call.toolName === toolName &&
+        call.argsHash === argsHash,
+    )
+  ) {
+    return;
+  }
 
   state.toolCallHistory.push({
     toolName,
-    argsHash: hashToolCall(toolName, params),
+    argsHash,
     toolCallId,
     ...(runId && { runId }),
     timestamp: Date.now(),
@@ -752,8 +767,13 @@ export function recordToolCallOutcome(
     if (call.toolName !== params.toolName || call.argsHash !== argsHash) {
       continue;
     }
+    // Completed outcomes are first-wins for a call id. Native PostToolUse and
+    // managed wrappers may report the same real call in either order.
     if (call.resultHash !== undefined) {
-      continue;
+      if (!params.toolCallId) {
+        continue;
+      }
+      return call;
     }
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;

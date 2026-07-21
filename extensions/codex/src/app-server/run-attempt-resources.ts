@@ -217,6 +217,7 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
       turnStartTimeoutMs: params.timeoutMs,
       loopDetectionPreToolUseRelay: appServer.loopDetectionPreToolUseRelay,
       signal: runAbortController.signal,
+      onCriticalToolLoop: params.onCriticalToolLoop,
       onPreToolUseFailure: (failure) => {
         const projector = projectorRef.current;
         if (projector) {

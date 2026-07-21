@@ -117,6 +117,7 @@ import {
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { ToolLoopDetectorKind } from "./tool-loop-detection.js";
 import { normalizeToolName } from "./tool-policy.js";
 import {
   formatToolExecutionErrorMessage,
@@ -140,6 +141,15 @@ export type ToolOutcomeObservation = {
 };
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
+
+export type CriticalToolLoopSignal = {
+  detector: ToolLoopDetectorKind;
+  count: number;
+  toolName: string;
+  message: string;
+};
+
+export type CriticalToolLoopObserver = (signal: CriticalToolLoopSignal) => void;
 
 export type HookContext = {
   agentId?: string;
@@ -165,6 +175,8 @@ export type HookContext = {
   turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  /** Trusted terminal signal emitted when loop detection blocks at the critical threshold. */
+  onCriticalToolLoop?: CriticalToolLoopObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   skillsSnapshot?: SkillSnapshot;
   skillUsagePaths?: SkillUsagePath[];
@@ -1401,7 +1413,8 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
   return true;
 }
 
-async function recordLoopOutcome(args: {
+/** Attach a completed tool result to the matching loop-detector call record. */
+export async function recordToolCallLoopOutcome(args: {
   ctx?: HookContext;
   toolName: string;
   toolParams: unknown;
@@ -1492,6 +1505,12 @@ export async function runBeforeToolCallHook(args: {
             count: loopResult.count,
             message: loopResult.message,
             pairedToolName: loopResult.pairedToolName,
+          });
+          args.ctx.onCriticalToolLoop?.({
+            detector: loopResult.detector,
+            count: loopResult.count,
+            toolName,
+            message: loopResult.message,
           });
           return {
             blocked: true,
@@ -1932,7 +1951,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           runId: ctx?.runId,
         });
-        await recordLoopOutcome({
+        await recordToolCallLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: outcome.params ?? hookParams,
@@ -1979,7 +1998,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           result,
         });
-        await recordLoopOutcome({
+        await recordToolCallLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: executeParams,
@@ -2038,7 +2057,7 @@ export function wrapToolWithBeforeToolCallHook(
             }),
           );
         }
-        await recordLoopOutcome({
+        await recordToolCallLoopOutcome({
           ctx,
           toolName: normalizedToolName,
           toolParams: executeParams,

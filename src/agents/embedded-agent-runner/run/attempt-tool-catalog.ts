@@ -80,6 +80,7 @@ export function prepareEmbeddedAttemptToolCatalog(input: {
       agentId: input.sessionAgentId,
     }),
     onToolOutcome: attempt.onToolOutcome,
+    onCriticalToolLoop: attempt.onCriticalToolLoop,
     allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
   };
   const codeModeTools = codeModeControlsEnabledForRun

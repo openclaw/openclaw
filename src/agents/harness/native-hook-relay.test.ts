@@ -620,6 +620,35 @@ describe("native hook relay registry", () => {
     expect(relay.shouldRelayEvent("pre_tool_use")).toBe(false);
   });
 
+  it("omits the loop-detection post-tool relay when its pre-tool relay is disabled", () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: true } } } as never,
+      preToolUseLoopDetection: false,
+    });
+
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(false);
+  });
+
+  it("keeps independent post-tool plugin relays when loop detection is disabled", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: vi.fn() }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      config: { tools: { loopDetection: { enabled: true } } } as never,
+      preToolUseLoopDetection: false,
+    });
+
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
+  });
+
   it("builds relay commands only for native events with matching local hooks", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "after_tool_call", handler: vi.fn() }]),
@@ -1323,6 +1352,82 @@ describe("native hook relay registry", () => {
     });
     expect(readRecordField(invocation, "rawPayload", "invocation raw payload").tool_input).toEqual({
       command: "pnpm test",
+    });
+  });
+
+  it("forwards a critical native tool loop through the relay observer", async () => {
+    const onCriticalToolLoop = vi.fn();
+    const sessionKey = `agent:main:native-critical-${randomUUID()}`;
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-native-critical",
+      sessionKey,
+      runId: "run-native-critical",
+      allowedEvents: ["pre_tool_use", "post_tool_use"],
+      config: {
+        tools: {
+          loopDetection: {
+            enabled: true,
+          },
+        },
+      },
+      onCriticalToolLoop,
+    });
+    expect(relay.shouldRelayEvent("post_tool_use")).toBe(true);
+    const invokeRepeatedTool = async (toolUseId: string) =>
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+        },
+      });
+    const recordRepeatedOutcome = async (toolUseId: string) =>
+      await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "post_tool_use",
+        rawPayload: {
+          hook_event_name: "PostToolUse",
+          tool_name: "Bash",
+          tool_use_id: toolUseId,
+          tool_input: { command: "pnpm test" },
+          tool_response: { output: "still running", exit_code: 0 },
+        },
+      });
+
+    for (let count = 1; count <= 20; count += 1) {
+      const toolUseId = `native-critical-${count}`;
+      expect(await invokeRepeatedTool(toolUseId)).toEqual({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      });
+      expect(await invokeRepeatedTool(toolUseId)).toEqual({
+        stdout: "",
+        stderr: "",
+        exitCode: 0,
+      });
+      await recordRepeatedOutcome(toolUseId);
+    }
+    const response = await invokeRepeatedTool("native-critical-21");
+
+    expect(onCriticalToolLoop).toHaveBeenCalledOnce();
+    expect(onCriticalToolLoop).toHaveBeenCalledWith({
+      detector: "generic_repeat",
+      count: 20,
+      toolName: "exec",
+      message: expect.stringContaining("CRITICAL"),
+    });
+    expect(JSON.parse(response.stdout)).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: "deny",
+        permissionDecisionReason: expect.stringContaining("CRITICAL"),
+      },
     });
   });
 

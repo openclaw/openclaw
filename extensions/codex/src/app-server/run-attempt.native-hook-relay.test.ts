@@ -168,7 +168,37 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
-  it("omits the loop-detection PreToolUse subprocess when Codex config disables it", async () => {
+  it("forwards native relay critical-loop signals to the attempt owner", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const onCriticalToolLoop = vi.fn();
+    params.onCriticalToolLoop = onCriticalToolLoop;
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+    });
+    await harness.waitForMethod("turn/start");
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    const signal = {
+      detector: "generic_repeat",
+      count: 20,
+      toolName: "exec",
+      message: "CRITICAL: repeated native tool outcomes",
+    } as const;
+
+    registration?.onCriticalToolLoop?.(signal);
+    expect(onCriticalToolLoop).toHaveBeenCalledOnce();
+    expect(onCriticalToolLoop).toHaveBeenCalledWith(signal);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("omits the loop-detection hook subprocess pair when disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const harness = createStartedThreadHarness();
@@ -179,10 +209,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       pluginConfig: {
         appServer: { loopDetectionPreToolUseRelay: false },
       },
-      nativeHookRelay: {
-        enabled: true,
-        events: ["pre_tool_use"],
-      },
+      nativeHookRelay: { enabled: true },
     });
     await harness.waitForMethod("turn/start");
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
@@ -193,6 +220,7 @@ describe("runCodexAppServerAttempt native hook relay", () => {
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
     expect(startConfig?.["hooks.PreToolUse"]).toEqual([]);
+    expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
   });
 
   it("forwards command approval requests through the active native hook relay", async () => {

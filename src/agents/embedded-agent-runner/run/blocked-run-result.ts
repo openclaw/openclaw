@@ -1,4 +1,5 @@
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
+import type { CriticalToolLoopError } from "./terminal-abort.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export function buildEmbeddedRunBlockedResult(input: {
@@ -7,7 +8,7 @@ export function buildEmbeddedRunBlockedResult(input: {
   errorMessage: string;
   durationMs: number;
   agentMeta: EmbeddedAgentMeta;
-  attempt: EmbeddedRunAttemptResult;
+  attempt?: EmbeddedRunAttemptResult;
   replayInvalid: boolean;
   finalPromptText?: string;
 }): EmbeddedAgentRunResult {
@@ -16,7 +17,7 @@ export function buildEmbeddedRunBlockedResult(input: {
     meta: {
       durationMs: input.durationMs,
       agentMeta: input.agentMeta,
-      systemPromptReport: input.attempt.systemPromptReport,
+      systemPromptReport: input.attempt?.systemPromptReport,
       finalAssistantVisibleText: input.text,
       finalAssistantRawText: input.text,
       finalPromptText: input.finalPromptText,
@@ -25,4 +26,20 @@ export function buildEmbeddedRunBlockedResult(input: {
       error: { kind: input.errorKind, message: input.errorMessage },
     },
   };
+}
+
+export function buildCriticalToolLoopBlockedResult(input: {
+  error: CriticalToolLoopError;
+  durationMs: number;
+  agentMeta: EmbeddedAgentMeta;
+  attempt?: EmbeddedRunAttemptResult;
+  finalPromptText?: string;
+}): EmbeddedAgentRunResult {
+  return buildEmbeddedRunBlockedResult({
+    ...input,
+    text: input.error.message,
+    errorKind: "hook_block",
+    errorMessage: input.error.message,
+    replayInvalid: true,
+  });
 }

@@ -15,6 +15,7 @@ import {
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
+import type { CriticalToolLoopTerminalAbort, EmbeddedRunTerminalAbort } from "./terminal-abort.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type InternalRunParams = RunEmbeddedAgentParams & {
@@ -74,6 +75,7 @@ type AttemptControl = {
   laneTaskReleaseController: AbortController;
   noteLaneTaskProgress: () => void;
   onToolOutcome: ToolOutcomeObserver;
+  onCriticalToolLoop: NonNullable<EmbeddedRunAttemptParams["onCriticalToolLoop"]>;
   allocateToolOutcomeOrdinal: (toolCallId?: string) => number;
   onToolStreamBoundary: NonNullable<EmbeddedRunAttemptParams["onToolStreamBoundary"]>;
   onRunProgress: NonNullable<EmbeddedRunAttemptParams["onRunProgress"]>;
@@ -83,9 +85,9 @@ type AttemptControl = {
   onUserMessagePersistenceInvalidated: NonNullable<
     EmbeddedRunAttemptParams["onUserMessagePersistenceInvalidated"]
   >;
-  getPostCompactionAbortError: () => Error | undefined;
-  setPostCompactionAbortController: (controller: AbortController | undefined) => void;
-  clearPostCompactionAbortController: (controller: AbortController) => void;
+  getTerminalAbort: () => EmbeddedRunTerminalAbort | undefined;
+  setTerminalAbortController: (controller: AbortController | undefined) => void;
+  clearTerminalAbortController: (controller: AbortController) => void;
 };
 
 export async function dispatchEmbeddedRunAttempt(input: {
@@ -99,11 +101,12 @@ export async function dispatchEmbeddedRunAttempt(input: {
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
   cancellationRequested: boolean;
+  terminalAbort?: CriticalToolLoopTerminalAbort;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
   const attemptAbortController = new AbortController();
-  control.setPostCompactionAbortController(attemptAbortController);
+  control.setTerminalAbortController(attemptAbortController);
   const parentAbortSignal = params.abortSignal;
   const relayParentAbort = (): void => {
     control.laneTaskAbortController.abort(parentAbortSignal?.reason);
@@ -267,6 +270,11 @@ export async function dispatchEmbeddedRunAttempt(input: {
     agentId: runtime.agentId,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
+    onCriticalToolLoop: (signal) => {
+      if (!cancellationRequested) {
+        control.onCriticalToolLoop(signal);
+      }
+    },
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
     onToolStreamBoundary: control.onToolStreamBoundary,
     onRunProgress: control.onRunProgress,
@@ -295,6 +303,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
       : startLaneProgressHeartbeat,
     onAttemptTimeout: control.pluginHarnessOwnsTransport ? undefined : armAttemptTimeoutRelease,
     onAttemptAbort: () => {
+      if (control.getTerminalAbort()) {
+        stopLaneProgressHeartbeat();
+        return;
+      }
       cancellationRequested = true;
       if (!params.abortSignal?.aborted) {
         params.replyOperation?.abortByUser();
@@ -365,18 +377,29 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   })
     .catch((err: unknown): never => {
-      throw control.getPostCompactionAbortError() ?? err;
+      if (parentAbortSignal?.aborted) {
+        parentAbortSignal.throwIfAborted();
+      }
+      throw control.getTerminalAbort()?.error ?? err;
     })
     .finally(() => {
       clearAttemptTimeoutRelease();
       stopLaneProgressHeartbeat();
       parentAbortSignal?.removeEventListener?.("abort", relayParentAbort);
-      control.clearPostCompactionAbortController(attemptAbortController);
+      control.clearTerminalAbortController(attemptAbortController);
     });
 
-  const postCompactionAbortError = control.getPostCompactionAbortError();
-  if (postCompactionAbortError) {
-    throw postCompactionAbortError;
+  // Leave parent cancellation to canonical terminal-outcome normalization;
+  // detector projection here would overwrite its established precedence.
+  if (parentAbortSignal?.aborted) {
+    return { rawAttempt, cancellationRequested };
+  }
+  const terminalAbort = control.getTerminalAbort();
+  if (terminalAbort) {
+    if (terminalAbort.kind === "critical_tool_loop") {
+      return { rawAttempt, cancellationRequested, terminalAbort };
+    }
+    throw terminalAbort.error;
   }
   return { rawAttempt, cancellationRequested };
 }

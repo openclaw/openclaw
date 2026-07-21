@@ -127,6 +127,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
           runId: params.attempt.runId,
           loopDetection: clientToolLoopDetection,
           onToolOutcome: params.attempt.onToolOutcome,
+          onCriticalToolLoop: params.attempt.onCriticalToolLoop,
           allocateToolOutcomeOrdinal: params.attempt.allocateToolOutcomeOrdinal,
         },
       )

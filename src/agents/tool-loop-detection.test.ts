@@ -796,6 +796,38 @@ describe("tool-loop-detection", () => {
       expect(state.toolCallHistory?.[0]?.resultHash).toBeTypeOf("string");
     });
 
+    it("deduplicates native and managed observations of the same tool call id", () => {
+      const state = createState();
+      const params = { command: "pnpm test" };
+
+      recordToolCall(state, "exec", params, "shared-call", enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+      recordToolCall(state, "exec", params, "shared-call", enabledLoopDetectionConfig, {
+        runId: "run-1",
+      });
+      const managedOutcome = recordToolCallOutcome(state, {
+        toolName: "exec",
+        toolParams: params,
+        toolCallId: "shared-call",
+        result: { content: [{ type: "text", text: "managed result" }] },
+        config: enabledLoopDetectionConfig,
+        runId: "run-1",
+      });
+      const nativeOutcome = recordToolCallOutcome(state, {
+        toolName: "exec",
+        toolParams: params,
+        toolCallId: "shared-call",
+        result: { content: [{ type: "text", text: "different native envelope" }] },
+        config: enabledLoopDetectionConfig,
+        runId: "run-1",
+      });
+
+      expect(state.toolCallHistory).toHaveLength(1);
+      expect(nativeOutcome).toBe(managedOutcome);
+      expect(state.toolCallHistory?.[0]?.resultHash).toBe(managedOutcome?.resultHash);
+    });
+
     it("returns the recorded call while trimming production call/outcome records", () => {
       const state = createState();
       let lastRecordedToolCallId: string | undefined;

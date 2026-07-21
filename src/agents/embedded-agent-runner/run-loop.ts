@@ -31,6 +31,7 @@ import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-pre
 import { normalizeEmbeddedRunAttempt } from "./run/attempt-normalization.js";
 import { recoverEmbeddedRunAttempt } from "./run/attempt-recovery.js";
 import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.js";
+import { buildCriticalToolLoopBlockedResult } from "./run/blocked-run-result.js";
 import { hasCodexAppServerRecoveryRetryBudget } from "./run/codex-app-server-recovery.js";
 import { createEmbeddedRunCompactionRuntime } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
@@ -46,6 +47,10 @@ import {
 import { handleRetryLimitExhaustion } from "./run/retry-limit.js";
 import { prepareEmbeddedRunRuntime } from "./run/runtime-preparation.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
+import {
+  createEmbeddedRunTerminalAbortOwner,
+  CriticalToolLoopError,
+} from "./run/terminal-abort.js";
 import { prepareEmbeddedRunTerminal } from "./run/terminal-preparation.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
@@ -195,8 +200,10 @@ export async function runPreparedEmbeddedLoop(
   const postCompactionGuard = createPostCompactionLoopGuard({
     enabled: resolvedLoopDetectionConfig?.enabled !== false,
   });
-  let postCompactionAbortController: AbortController | undefined;
-  let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
+  const terminalAbortOwner = createEmbeddedRunTerminalAbortOwner({
+    parentAbortSignal: params.abortSignal,
+    laneTaskAbortController,
+  });
   const attemptTerminalToolPresentation = {
     ordinal: -1,
     value: undefined as string | undefined,
@@ -217,9 +224,9 @@ export async function runPreparedEmbeddedLoop(
     }
     const verdict = postCompactionGuard.observe(observation);
     if (verdict.shouldAbort) {
-      postCompactionAbortError ??= PostCompactionLoopPersistedError.fromVerdict(verdict);
-      laneTaskAbortController.abort(postCompactionAbortError);
-      postCompactionAbortController?.abort(postCompactionAbortError);
+      terminalAbortOwner.requestPostCompactionAbort(
+        PostCompactionLoopPersistedError.fromVerdict(verdict),
+      );
     }
   };
   let lastRetryFailoverReason: FailoverReason | null = null;
@@ -317,30 +324,49 @@ export async function runPreparedEmbeddedLoop(
         runLoopIterations,
         maxRunLoopIterations: MAX_RUN_LOOP_ITERATIONS,
       });
-      const dispatch = await prepareAndDispatchEmbeddedRunAttempt({
-        runInput: input,
-        preparedRuntime,
-        contextEngine,
-        sessionPromptState,
-        terminalRetryState,
-        replayState: accumulatedReplayState,
-        provider,
-        modelId,
-        startupStagesEmitted,
-        bootstrapPromptWarningSignaturesSeen,
-        resolveRuntimeFallbackReason,
-        observeToolOutcome,
-        allocateToolOutcomeOrdinal,
-        getPostCompactionAbortError: () => postCompactionAbortError,
-        setPostCompactionAbortController: (controller) => {
-          postCompactionAbortController = controller;
-        },
-        clearPostCompactionAbortController: (controller) => {
-          if (postCompactionAbortController === controller) {
-            postCompactionAbortController = undefined;
-          }
-        },
-      });
+      let dispatch: Awaited<ReturnType<typeof prepareAndDispatchEmbeddedRunAttempt>>;
+      try {
+        dispatch = await prepareAndDispatchEmbeddedRunAttempt({
+          runInput: input,
+          preparedRuntime,
+          contextEngine,
+          sessionPromptState,
+          terminalRetryState,
+          replayState: accumulatedReplayState,
+          provider,
+          modelId,
+          startupStagesEmitted,
+          bootstrapPromptWarningSignaturesSeen,
+          resolveRuntimeFallbackReason,
+          observeToolOutcome,
+          onCriticalToolLoop: terminalAbortOwner.onCriticalToolLoop,
+          allocateToolOutcomeOrdinal,
+          getTerminalAbort: terminalAbortOwner.getTerminalAbort,
+          setTerminalAbortController: terminalAbortOwner.setTerminalAbortController,
+          clearTerminalAbortController: terminalAbortOwner.clearTerminalAbortController,
+        });
+      } catch (error) {
+        if (!(error instanceof CriticalToolLoopError)) {
+          throw error;
+        }
+        await sessionPromptState.waitForCurrentUserMessagePersistence();
+        sessionPromptState.suppressNextUserMessagePersistence =
+          sessionPromptState.activePrompt.persisted;
+        return buildCriticalToolLoopBlockedResult({
+          error,
+          durationMs: Date.now() - started,
+          agentMeta: buildErrorAgentMeta({
+            sessionId: sessionPromptState.sessionId,
+            sessionFile: sessionPromptState.sessionFile,
+            provider,
+            model: model.id,
+            ...outerContextTokenMeta,
+            usageAccumulator,
+            lastRunPromptUsage,
+            lastTurnTotal,
+          }),
+        });
+      }
       startupStagesEmitted = dispatch.startupStagesEmitted;
       const { dispatchedAttempt, runtimePlan } = dispatch;
       const normalizedAttempt = await normalizeEmbeddedRunAttempt({
@@ -359,6 +385,34 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         lastRetryFailoverReason,
       });
+      if (normalizedAttempt.action === "terminal_abort") {
+        bootstrapPromptWarningSignaturesSeen =
+          normalizedAttempt.bootstrapPromptWarningSignaturesSeen;
+        lastRunPromptUsage = normalizedAttempt.lastRunPromptUsage;
+        lastTurnTotal = normalizedAttempt.lastTurnTotal;
+        accumulatedReplayState = normalizedAttempt.replayState;
+        normalizedAttempt.setTerminalLifecycleMeta({
+          replayInvalid: true,
+          livenessState: "blocked",
+        });
+        const error = normalizedAttempt.terminalAbort.error;
+        return buildCriticalToolLoopBlockedResult({
+          error,
+          durationMs: Date.now() - started,
+          agentMeta: buildErrorAgentMeta({
+            sessionId: sessionPromptState.sessionId,
+            sessionFile: sessionPromptState.sessionFile,
+            provider,
+            model: model.id,
+            ...outerContextTokenMeta,
+            usageAccumulator,
+            lastRunPromptUsage,
+            lastTurnTotal,
+          }),
+          attempt: normalizedAttempt.attempt,
+          finalPromptText: normalizedAttempt.attempt.finalPromptText,
+        });
+      }
       if (normalizedAttempt.action === "complete") {
         return normalizedAttempt.result;
       }

@@ -86,6 +86,7 @@ type CodexDynamicToolHookContext = {
   hasRepliedRef?: { value: boolean };
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   onToolOutcome?: EmbeddedRunAttemptParams["onToolOutcome"];
+  onCriticalToolLoop?: EmbeddedRunAttemptParams["onCriticalToolLoop"];
   allocateToolOutcomeOrdinal?: EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"];
 };
 

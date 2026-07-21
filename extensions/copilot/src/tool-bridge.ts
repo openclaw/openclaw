@@ -430,6 +430,7 @@ function buildOpenClawCodingToolsOptions(
     // recordToolPrepStage intentionally omitted: copilot does not
     // surface attempt-stage telemetry yet. Codex omits this too.
     onToolOutcome: a.onToolOutcome,
+    onCriticalToolLoop: a.onCriticalToolLoop,
     onYield: (message) => {
       // Notify the caller first so the final attempt result can carry
       // yieldDetected even if the abort below races a concurrent
