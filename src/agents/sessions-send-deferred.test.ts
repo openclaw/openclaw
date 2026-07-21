@@ -1,7 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   armSessionsSendDeferredCompletion,
@@ -14,13 +12,14 @@ const targetRunId = "target-run-1";
 const targetSessionKey = "agent:research:main";
 const requesterSessionKey = "agent:main:telegram:dm:123";
 const requesterSessionId = "requester-session-1";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("sessions_send deferred completion", () => {
   let stateDir: string;
   let options: { env: NodeJS.ProcessEnv };
 
   beforeEach(() => {
-    stateDir = mkdtempSync(join(tmpdir(), "openclaw-sessions-send-deferred-"));
+    stateDir = tempDirs.make("openclaw-sessions-send-deferred-");
     options = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
     testing.resetPendingRunIds();
   });
@@ -28,7 +27,6 @@ describe("sessions_send deferred completion", () => {
   afterEach(() => {
     testing.resetPendingRunIds();
     closeOpenClawStateDatabase();
-    rmSync(stateDir, { recursive: true, force: true });
   });
 
   function arm(overrides: Partial<Parameters<typeof armSessionsSendDeferredCompletion>[0]> = {}) {
