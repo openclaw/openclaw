@@ -342,7 +342,7 @@ struct ChatWorkingStatusText: View {
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text("·")
                         .font(OpenClawChatTypography.caption)
-                    Text(String(localized: ChatWorkingPhrase.resources[index]) + "…")
+                    Text(ChatWorkingPhrase.resources[index] + "…")
                         .font(OpenClawChatTypography.caption)
                 }
                 .accessibilityHidden(true)

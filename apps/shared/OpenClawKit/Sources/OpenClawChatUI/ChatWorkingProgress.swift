@@ -34,26 +34,28 @@ enum ChatWorkingPhrase {
     static let showAfterMilliseconds = 30000
     static let rotateEveryMilliseconds = 45000
 
-    static let resources: [LocalizedStringResource] = [
-        LocalizedStringResource("Shelling"),
-        LocalizedStringResource("Scuttling"),
-        LocalizedStringResource("Clawing"),
-        LocalizedStringResource("Pinching"),
-        LocalizedStringResource("Molting"),
-        LocalizedStringResource("Bubbling"),
-        LocalizedStringResource("Tiding"),
-        LocalizedStringResource("Reefing"),
-        LocalizedStringResource("Cracking"),
-        LocalizedStringResource("Sifting"),
-        LocalizedStringResource("Brining"),
-        LocalizedStringResource("Nautiling"),
-        LocalizedStringResource("Krilling"),
-        LocalizedStringResource("Barnacling"),
-        LocalizedStringResource("Lobstering"),
-        LocalizedStringResource("Tidepooling"),
-        LocalizedStringResource("Pearling"),
-        LocalizedStringResource("Snapping"),
-        LocalizedStringResource("Surfacing"),
+    // Keep source phrases localizable; the post-merge native locale refresh
+    // owns the generated catalog entries.
+    static let resources: [String] = [
+        String(localized: "Shelling"),
+        String(localized: "Scuttling"),
+        String(localized: "Clawing"),
+        String(localized: "Pinching"),
+        String(localized: "Molting"),
+        String(localized: "Bubbling"),
+        String(localized: "Tiding"),
+        String(localized: "Reefing"),
+        String(localized: "Cracking"),
+        String(localized: "Sifting"),
+        String(localized: "Brining"),
+        String(localized: "Nautiling"),
+        String(localized: "Krilling"),
+        String(localized: "Barnacling"),
+        String(localized: "Lobstering"),
+        String(localized: "Tidepooling"),
+        String(localized: "Pearling"),
+        String(localized: "Snapping"),
+        String(localized: "Surfacing"),
     ]
 
     /// A constant-time stride walk keeps adjacent phrases distinct. The prime

@@ -59,6 +59,30 @@ struct ChatWorkingProgressTests {
         #expect(ChatWorkingPhrase.index(seed: "run-phrase-seed", elapsedMilliseconds: 75000) == indices[1])
     }
 
+    @Test func `working phrases keep English defaults without a generated catalog`() {
+        #expect(ChatWorkingPhrase.resources == [
+            "Shelling",
+            "Scuttling",
+            "Clawing",
+            "Pinching",
+            "Molting",
+            "Bubbling",
+            "Tiding",
+            "Reefing",
+            "Cracking",
+            "Sifting",
+            "Brining",
+            "Nautiling",
+            "Krilling",
+            "Barnacling",
+            "Lobstering",
+            "Tidepooling",
+            "Pearling",
+            "Snapping",
+            "Surfacing",
+        ])
+    }
+
     @Test func `compact duration clamps and keeps two meaningful units`() {
         #expect(ChatWorkingDurationFormatter.compact(milliseconds: 0) == "1s")
         #expect(ChatWorkingDurationFormatter.compact(milliseconds: 51000) == "51s")
