@@ -1955,7 +1955,7 @@ function resolveAssistantAttachmentAvailability(
 }
 
 function renderAssistantAttachmentStatusCard(params: {
-  kind: "image" | "audio" | "video" | "document";
+  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   badge: string;
   reason?: string;
