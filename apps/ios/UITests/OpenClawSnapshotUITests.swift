@@ -610,11 +610,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "settings",
             initialDestination: "settings",
-            name: "appearance-compact"), appearance: nil, screenshotMode: false)
+            name: "appearance-compact"), appearance: nil)
 
-        if self.app?.buttons["Close"].waitForExistence(timeout: 2) == true {
-            self.app?.buttons["Close"].tap()
-        }
         let row = try XCTUnwrap(self.app?.buttons["settings-appearance-row"])
         XCTAssertTrue(row.waitForExistence(timeout: 8))
         XCTAssertFalse(self.app?.buttons["settings-appearance-menu"].exists == true)
