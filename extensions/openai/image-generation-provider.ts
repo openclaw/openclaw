@@ -31,6 +31,7 @@ import {
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -512,13 +513,42 @@ function inferImageUploadFileName(params: {
   return `image-${params.index + 1}.${ext}`;
 }
 
+const CODEX_IMAGE_NO_BODY_STREAM_ERROR =
+  "OpenAI Codex image generation response missing readable body stream";
+const CODEX_IMAGE_SIZE_LIMIT_ERROR = "OpenAI Codex image generation response exceeded size limit";
+
+function parseCodexImageContentLength(response: Response): number | null {
+  const header = response.headers.get("content-length");
+  // Reject missing or non-digit Content-Length values (e.g. "1e3", "1.5",
+  // "0x10") so a malformed or hostile header cannot bypass the size gate on
+  // the no-readable-body path. HTTP Content-Length must be a decimal integer.
+  if (!header || !/^\d+$/.test(header.trim())) {
+    return null;
+  }
+  const parsed = Number(header);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
+export function assertCodexImageNoBodyResponseWithinLimit(response: Response): void {
+  const contentLength = parseCodexImageContentLength(response);
+  if (contentLength === null) {
+    throw new Error(CODEX_IMAGE_NO_BODY_STREAM_ERROR);
+  }
+  if (contentLength > MAX_CODEX_IMAGE_SSE_BYTES) {
+    throw new Error(CODEX_IMAGE_SIZE_LIMIT_ERROR);
+  }
+}
+
 async function readResponseBodyText(response: Response): Promise<string> {
   if (!response.body) {
-    const text = await response.text();
-    if (Buffer.byteLength(text, "utf8") > MAX_CODEX_IMAGE_SSE_BYTES) {
-      throw new Error("OpenAI Codex image generation response exceeded size limit");
-    }
-    return text;
+    assertCodexImageNoBodyResponseWithinLimit(response);
+    const buffer = await readResponseWithLimit(response, MAX_CODEX_IMAGE_SSE_BYTES, {
+      onOverflow: () => new Error(CODEX_IMAGE_SIZE_LIMIT_ERROR),
+    });
+    return buffer.toString("utf8");
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -531,7 +561,7 @@ async function readResponseBodyText(response: Response): Promise<string> {
         byteLength += value.byteLength;
         if (byteLength > MAX_CODEX_IMAGE_SSE_BYTES) {
           await reader.cancel().catch(() => undefined);
-          throw new Error("OpenAI Codex image generation response exceeded size limit");
+          throw new Error(CODEX_IMAGE_SIZE_LIMIT_ERROR);
         }
         chunks.push(decoder.decode(value, { stream: !done }));
       }

@@ -159,6 +159,20 @@ function mockCodexRawStream(body: string) {
   }));
 }
 
+function mockCodexNoBodyStream(body: string, params?: { contentLength?: number | "omit" }) {
+  const headers = new Headers({ "Content-Type": "text/event-stream" });
+  if (params?.contentLength !== "omit") {
+    headers.set("Content-Length", String(params?.contentLength ?? Buffer.byteLength(body, "utf8")));
+  }
+  const response = new Response(body, { headers });
+  Object.defineProperty(response, "body", { value: null });
+  postJsonRequestMock.mockImplementation(async () => ({
+    response,
+    release: vi.fn(async () => {}),
+  }));
+  return response;
+}
+
 function mockCodexAuthOnly() {
   resolveApiKeyForProviderMock.mockImplementation(async (params?: { provider?: string }) => {
     if (params?.provider === "openai") {
@@ -1161,6 +1175,79 @@ describe("openai image generation provider", () => {
     ).rejects.toThrow("OpenAI Codex image generation response exceeded size limit");
     expect(canceled).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized Codex OAuth image responses without a readable body stream", async () => {
+    mockCodexAuthOnly();
+    const response = mockCodexNoBodyStream("x".repeat(64 * 1024 * 1024 + 1));
+    let arrayBufferCalled = false;
+    const originalArrayBuffer = response.arrayBuffer.bind(response);
+    vi.spyOn(response, "arrayBuffer").mockImplementation(async () => {
+      arrayBufferCalled = true;
+      return originalArrayBuffer();
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw an oversized Codex lighthouse without a stream",
+        cfg: {},
+        authStore: createCodexOAuthAuthStore(),
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation response exceeded size limit");
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("rejects no-body Codex OAuth image responses without Content-Length", async () => {
+    mockCodexAuthOnly();
+    const response = mockCodexNoBodyStream("small", { contentLength: "omit" });
+    response.headers.delete("content-length");
+    let arrayBufferCalled = false;
+    const originalArrayBuffer = response.arrayBuffer.bind(response);
+    vi.spyOn(response, "arrayBuffer").mockImplementation(async () => {
+      arrayBufferCalled = true;
+      return originalArrayBuffer();
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "Draw a Codex lighthouse without a stream or length",
+        cfg: {},
+        authStore: createCodexOAuthAuthStore(),
+      }),
+    ).rejects.toThrow("OpenAI Codex image generation response missing readable body stream");
+    expect(arrayBufferCalled).toBe(false);
+  });
+
+  it("rejects no-body Codex OAuth image responses with a malformed Content-Length", async () => {
+    mockCodexAuthOnly();
+    for (const malformed of ["1e3", "1.5", "0x10"]) {
+      const response = mockCodexNoBodyStream("small", { contentLength: "omit" });
+      response.headers.set("Content-Length", malformed);
+      let arrayBufferCalled = false;
+      const originalArrayBuffer = response.arrayBuffer.bind(response);
+      vi.spyOn(response, "arrayBuffer").mockImplementation(async () => {
+        arrayBufferCalled = true;
+        return originalArrayBuffer();
+      });
+
+      const provider = buildOpenAIImageGenerationProvider();
+      await expect(
+        provider.generateImage({
+          provider: "openai",
+          model: "gpt-image-2",
+          prompt: "Draw a Codex lighthouse with a malformed length",
+          cfg: {},
+          authStore: createCodexOAuthAuthStore(),
+        }),
+      ).rejects.toThrow("OpenAI Codex image generation response missing readable body stream");
+      expect(arrayBufferCalled).toBe(false);
+    }
   });
 
   it("does not treat Codex API key profiles as configured Codex OAuth image auth", async () => {
