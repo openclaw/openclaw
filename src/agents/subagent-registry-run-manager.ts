@@ -876,18 +876,11 @@ export function createSubagentRunManager(params: {
     }
     try {
       if (registerParams.externalTaskLifecycle) {
-        const updated = startTaskRunByRunId({
-          runId: entry.taskRunId ?? runId,
-          runtime: "subagent",
-          childSessionKey,
-          startedAt: now,
-          lastEventAt: now,
-          progressSummary: "Reviewer child launched.",
-          eventSummary: "Reviewer child launched.",
-        });
-        if (updated.length === 0) {
-          throw new Error("external task binding was not found");
-        }
+        // The external lifecycle owner must bind its child only after validating
+        // the exact claim that originated this launch. Registration happens
+        // before spawn returns, so mutating the task here would let a late,
+        // non-owning launch overwrite the canonical child session before that
+        // claim CAS can reject it.
         params.ensureListener();
         params.persist();
         params.startSweeper();

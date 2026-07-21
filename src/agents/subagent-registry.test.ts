@@ -26,6 +26,16 @@ import {
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime.js";
+import { reloadTaskRuntimeStateFromStore } from "../tasks/runtime-internal.js";
+import { createManagedTaskFlow } from "../tasks/task-flow-registry.js";
+import { listTasksForFlowId } from "../tasks/task-registry.js";
+import {
+  dispatchTaskReview,
+  parseTaskReviewDetail,
+  reconcileTaskReviewRuntime,
+  type TaskReviewRequest,
+  type TaskReviewerRuntime,
+} from "../tasks/task-review-lifecycle.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskFlowRegistryForTests,
@@ -33,6 +43,7 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "../tasks/task-runtime.test-helpers.js";
 import { findTaskByRunIdForStatus } from "../tasks/task-status-access.js";
+import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -542,7 +553,7 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("binds an externally owned task without duplicate creation or generic terminalization", async () => {
+  it("registers an externally owned run without preempting its lifecycle authority", async () => {
     const taskRunId = "task-review:external-owner";
     expect(
       createQueuedTaskRun({
@@ -567,13 +578,182 @@ describe("subagent registry seam flow", () => {
     });
 
     expect(findTaskByRunIdForStatus(taskRunId)).toMatchObject({
-      status: "running",
-      childSessionKey: "agent:reviewer:subagent:external-owner",
+      status: "queued",
+      childSessionKey: undefined,
     });
     await waitForFast(() =>
       expect(mod.getSubagentRunByRunId("reviewer-run-external-owner")?.endedAt).toBeDefined(),
     );
-    expect(findTaskByRunIdForStatus(taskRunId)?.status).toBe("running");
+    expect(findTaskByRunIdForStatus(taskRunId)?.status).toBe("queued");
+  });
+
+  it("preserves the owning reviewer binding when a stale external launch registers late", async () => {
+    await withStateDirEnv("openclaw-review-registry-race-", async () => {
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      mod.resetSubagentRegistryForTests({ persist: false });
+
+      const ownerKey = "agent:main:main";
+      const request = {
+        reviewerAgentId: "reviewer",
+        staleAfterMs: 1_000,
+        maxRecoveryAttempts: 2,
+        proofBundle: {
+          commit: "1".repeat(40),
+          baseCommit: "2".repeat(40),
+          diff: {
+            sha256: "3".repeat(64),
+            summary: "Verify the production registry binding race.",
+            files: ["src/agents/subagent-registry-run-manager.ts"],
+          },
+          tests: [
+            {
+              name: "registry race",
+              command: "vitest subagent-registry.test.ts",
+              status: "passed" as const,
+              evidence: "Owning binding survives a late registration and reload.",
+            },
+          ],
+          screenshots: [],
+          criteria: [
+            {
+              id: "registry-binding-authority",
+              description: "Only the exact originating claim binds the reviewer child.",
+            },
+          ],
+        },
+      } satisfies TaskReviewRequest;
+      const flow = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/registry-review-race",
+        goal: "Preserve exact reviewer binding",
+        stateJson: { reviewRequest: request },
+      });
+      expect(flow).toBeTruthy();
+      if (!flow) {
+        return;
+      }
+
+      let releaseInitial: (() => void) | undefined;
+      let releaseAttemptOne: (() => void) | undefined;
+      const launches: number[] = [];
+      const settledNonOwners = new Set<string>();
+      const registerAcceptedLaunch = (params: {
+        taskRunId: string;
+        reviewerRunId: string;
+        childSessionKey: string;
+      }) => {
+        mod.registerSubagentRun({
+          runId: params.reviewerRunId,
+          taskRunId: params.taskRunId,
+          externalTaskLifecycle: true,
+          childSessionKey: params.childSessionKey,
+          requesterSessionKey: ownerKey,
+          requesterDisplayKey: "main",
+          task: "Review exact proof",
+          cleanup: "keep",
+          expectsCompletionMessage: false,
+        });
+        return {
+          ok: true as const,
+          reviewerRunId: params.reviewerRunId,
+          childSessionKey: params.childSessionKey,
+        };
+      };
+      const runtime: TaskReviewerRuntime = {
+        async launch({ task, recoveryAttempt }) {
+          launches.push(recoveryAttempt);
+          if (!task.runId) {
+            return { ok: false, reason: "missing stable task run id" };
+          }
+          if (launches.length === 1) {
+            return await new Promise((resolve) => {
+              releaseInitial = () =>
+                resolve(
+                  registerAcceptedLaunch({
+                    taskRunId: task.runId!,
+                    reviewerRunId: "late-run-0",
+                    childSessionKey: "agent:reviewer:subagent:late-attempt-0",
+                  }),
+                );
+            });
+          }
+          if (launches.length === 2) {
+            return { ok: false, reason: "attempt zero was not found during recovery" };
+          }
+          return await new Promise((resolve) => {
+            releaseAttemptOne = () =>
+              resolve(
+                registerAcceptedLaunch({
+                  taskRunId: task.runId!,
+                  reviewerRunId: "run-1",
+                  childSessionKey: "agent:reviewer:subagent:attempt-1",
+                }),
+              );
+          });
+        },
+        async inspect() {
+          return { state: "live" };
+        },
+        async settleNonOwningLaunch({ reviewerRunId, childSessionKey }) {
+          expect(mod.getSubagentRunByRunId(reviewerRunId)).toMatchObject({ childSessionKey });
+          await mod.finalizeInterruptedSubagentRun({
+            runId: reviewerRunId,
+            error: "non-owning reviewer launch",
+            endedAt: Date.now(),
+          });
+          settledNonOwners.add(childSessionKey);
+        },
+      };
+
+      const dispatching = dispatchTaskReview({
+        flowId: flow.flowId,
+        callerOwnerKey: ownerKey,
+        request,
+        continuity: { ownerKey, sessionKey: ownerKey },
+        now: 10_000,
+        runtime,
+      });
+      await waitForFast(() => expect(launches).toEqual([0]));
+      const claimed = listTasksForFlowId(flow.flowId)[0]!;
+      const recovering = reconcileTaskReviewRuntime({
+        taskId: claimed.taskId,
+        runtime,
+        now: 11_001,
+      });
+      await waitForFast(() => expect(launches).toEqual([0, 0, 1]));
+
+      releaseAttemptOne?.();
+      const recovered = await recovering;
+      expect(recovered.state).toBe("recovered");
+      expect(recovered.task.childSessionKey).toBe("agent:reviewer:subagent:attempt-1");
+      expect(parseTaskReviewDetail(recovered.task)?.launch).toMatchObject({
+        phase: "bound",
+        attempt: 1,
+        reviewerRunId: "run-1",
+        childSessionKey: "agent:reviewer:subagent:attempt-1",
+      });
+
+      releaseInitial?.();
+      const stale = await dispatching;
+      expect(stale.ok).toBe(true);
+      if (stale.ok) {
+        expect(stale.task.childSessionKey).toBe("agent:reviewer:subagent:attempt-1");
+      }
+      expect(settledNonOwners).toEqual(new Set(["agent:reviewer:subagent:late-attempt-0"]));
+      expect(mod.getSubagentRunByRunId("late-run-0")?.endedAt).toBeTypeOf("number");
+
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      reloadTaskRuntimeStateFromStore();
+      const reloaded = listTasksForFlowId(flow.flowId)[0]!;
+      expect(reloaded.childSessionKey).toBe("agent:reviewer:subagent:attempt-1");
+      expect(parseTaskReviewDetail(reloaded)?.launch).toMatchObject({
+        phase: "bound",
+        attempt: 1,
+        childSessionKey: "agent:reviewer:subagent:attempt-1",
+      });
+    });
   });
 
   it("tracks missing-entry lifecycle result refresh until capture and persistence settle", async () => {
