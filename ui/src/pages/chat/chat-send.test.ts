@@ -5042,16 +5042,16 @@ describe("handleSendChat", () => {
       await retryQueuedChatMessage(latePeer, item.id);
       expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
 
+      // Panes share gateway sessionStorage; dismiss from a stale pane clears the
+      // durable head for every subscriber (same contract as delete-before-ack).
       removeQueuedMessage(stalePeer, item.id);
-      expect(listStoredChatOutboxes(host)[0]?.queue[0]?.id).toBe(item.id);
-      expect(stalePeer.chatQueue[0]?.sendState).toBe("sending");
-      expect(latePeer.chatQueue[0]?.sendState).toBe("sending");
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      expect(stalePeer.chatQueue).toStrictEqual([]);
+      expect(latePeer.chatQueue).toStrictEqual([]);
 
       sent.resolve({ runId, status: "started" });
       await send;
-      expect(latePeer.chatQueue[0]?.sendState).toBe("sending");
-
-      expect(removeDeliveredQueuedChatSendForRun(host, runId)).toMatchObject({ id: item.id });
+      expect(removeDeliveredQueuedChatSendForRun(host, runId)).toBeNull();
       expect(latePeer.chatQueue).toStrictEqual([]);
     } finally {
       stopLatePeer();
@@ -6552,6 +6552,119 @@ describe("handleSendChat", () => {
     expect(listStoredChatOutboxes(host)[0]?.queue.map((item) => item.id)).toEqual([
       "queued-after-stale",
     ]);
+  });
+
+  it("retires Needs review when gateway history proves delivery via top-level idempotencyKey", async () => {
+    // Live chat.history keeps idempotencyKey on the message root; __openclaw only
+    // has id/seq. Local synthetic turns put the key under __openclaw instead.
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [
+            {
+              role: "user",
+              content: "Use Cursor ACP to create scratch/test_cursor_final.py",
+              idempotencyKey: "gateway-shaped-run:user",
+              __openclaw: { id: "msg-1", seq: 10 },
+            },
+            {
+              role: "assistant",
+              content: "**Cursor ACP completed successfully.**",
+            },
+          ],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "failed" }),
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "gateway-shaped-unconfirmed",
+          text: "Use Cursor ACP to create scratch/test_cursor_final.py",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "gateway-shaped-run",
+          sendState: "unconfirmed",
+          sendError:
+            "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(0);
+    expect(host.chatQueue).toEqual([]);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+  });
+
+  it("retires Needs review by exact user text when idempotency keys are missing after rebuild", async () => {
+    const request = vi.fn((method: string, params?: { idempotencyKey?: string }) => {
+      if (method === "chat.history") {
+        return Promise.resolve({
+          messages: [
+            {
+              role: "user",
+              content:
+                "Delegate this to your dedicated local-coder agent using ollama/qwen2.5-coder:7b.",
+            },
+            {
+              role: "assistant",
+              content: "你好，我无法给到相关内容。",
+            },
+          ],
+          sessionInfo: row("agent:main", { hasActiveRun: false, status: "failed" }),
+        });
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({
+          runId: params?.idempotencyKey,
+          status: "started",
+        });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatQueue: [
+        {
+          id: "text-proof-unconfirmed",
+          text: "Delegate this to your dedicated local-coder agent using ollama/qwen2.5-coder:7b.",
+          createdAt: 1,
+          sendAttempts: 1,
+          sendRunId: "text-proof-run",
+          sendState: "unconfirmed",
+          sendError:
+            "Delivery could not be confirmed after reconnect. Check the conversation before retrying.",
+          sessionKey: "agent:main",
+        },
+        {
+          id: "follow-up-after-text-proof",
+          text: "next prompt after completed local-coder turn",
+          createdAt: 2,
+          sendState: "waiting-idle",
+          sessionKey: "agent:main",
+        },
+      ],
+    });
+    admitHostQueueItems(host);
+
+    await retryReconnectableQueuedChatSends(host);
+
+    const sendCalls = request.mock.calls.filter(([method]) => method === "chat.send");
+    expect(sendCalls).toHaveLength(1);
+    expect(sendCalls[0]?.[1]).toMatchObject({
+      message: "next prompt after completed local-coder turn",
+    });
+    expect(
+      listStoredChatOutboxes(host)
+        .flatMap((outbox) => outbox.queue)
+        .some((item) => item.id === "text-proof-unconfirmed"),
+    ).toBe(false);
   });
 
   it("keeps an ambiguous unconfirmed row reviewable without auto-retrying it", async () => {

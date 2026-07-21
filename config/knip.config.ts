@@ -361,6 +361,9 @@ const config = {
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
     "ui/src/lib/board/provider.ts": ["exports"],
+    // Public local-coder artifact helpers are asserted by focused unit tests and
+    // consumed by runtime completion paths that knip's production graph misses.
+    "src/agents/local-coder-artifacts.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {

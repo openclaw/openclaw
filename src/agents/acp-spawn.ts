@@ -32,6 +32,7 @@ import {
 } from "../channels/thread-bindings-policy.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import {
   listSessionEntries,
@@ -754,11 +755,62 @@ type AcpSpawnRuntimeOptions = {
   timeoutSeconds?: number;
 };
 
+/** Default Cursor CLI/SDK model ids for Lisa ACP coding (no-fast preferred). */
+const CURSOR_ACP_GROK_MODEL_CANDIDATES = [
+  "cursor-grok-4.5-medium",
+  "cursor-grok-4.5-high",
+  "cursor-grok-4.5-high-fast",
+] as const;
+
 function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
   if (!runTimeoutSeconds) {
     return undefined;
   }
   return Math.min(runTimeoutSeconds, ACP_RUNTIME_TIMEOUT_MAX_SECONDS);
+}
+
+function resolveAcpSpawnModelCandidates(params: {
+  cfg: OpenClawConfig;
+  policyAgentId: string;
+  modelOverride?: string;
+  targetAgentId: string;
+}): string[] {
+  const primary = resolveConfiguredSubagentSpawnModelSelection({
+    cfg: params.cfg,
+    agentId: params.policyAgentId,
+    modelOverride: params.modelOverride,
+  });
+  const targetAgentConfig = resolveAgentConfig(params.cfg, params.policyAgentId);
+  const configuredFallbacks = [
+    ...resolveAgentModelFallbackValues(targetAgentConfig?.subagents?.model),
+    ...resolveAgentModelFallbackValues(targetAgentConfig?.model),
+  ];
+  const harnessDefaults =
+    normalizeOptionalAgentId(params.targetAgentId) === "cursor" ||
+    normalizeOptionalAgentId(params.policyAgentId) === "cursor"
+      ? [...CURSOR_ACP_GROK_MODEL_CANDIDATES]
+      : [];
+  const candidates: string[] = [];
+  for (const candidate of [primary, ...configuredFallbacks, ...harnessDefaults]) {
+    const normalized = normalizeOptionalString(candidate);
+    if (normalized && !candidates.includes(normalized)) {
+      candidates.push(normalized);
+    }
+  }
+  return candidates;
+}
+
+function isAcpModelSelectionError(error: unknown): boolean {
+  const message = summarizeError(error).toLowerCase();
+  return (
+    message.includes("did not advertise") ||
+    message.includes("unadvertised-model") ||
+    message.includes("missing-capability") ||
+    message.includes("model-not-found") ||
+    message.includes("unknown model") ||
+    message.includes("unsupported model") ||
+    message.includes("acp_invalid_runtime_option")
+  );
 }
 
 function resolveAcpSpawnRuntimeOptions(params: {
@@ -769,15 +821,22 @@ function resolveAcpSpawnRuntimeOptions(params: {
   thinking?: string;
   runTimeoutSeconds?: number;
 }):
-  | { ok: true; runtimeOptions?: AcpSpawnRuntimeOptions; modelExplicit: boolean }
+  | {
+      ok: true;
+      runtimeOptions?: AcpSpawnRuntimeOptions;
+      modelExplicit: boolean;
+      modelCandidates: string[];
+    }
   | { ok: false; error: string } {
   const policyAgentId = params.configAgentId ?? params.targetAgentId;
   const modelExplicit = normalizeOptionalString(params.model) !== undefined;
-  const model = resolveConfiguredSubagentSpawnModelSelection({
+  const modelCandidates = resolveAcpSpawnModelCandidates({
     cfg: params.cfg,
-    agentId: policyAgentId,
+    policyAgentId,
     modelOverride: params.model,
+    targetAgentId: params.targetAgentId,
   });
+  const model = modelCandidates[0];
   const targetAgentConfig = resolveAgentConfig(params.cfg, policyAgentId);
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,
@@ -813,7 +872,7 @@ function resolveAcpSpawnRuntimeOptions(params: {
           ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
-  return { ok: true, runtimeOptions, modelExplicit };
+  return { ok: true, runtimeOptions, modelExplicit, modelCandidates };
 }
 
 async function initializeAcpSpawnRuntime(params: {
@@ -1297,16 +1356,50 @@ export async function spawnAcpDirect(
         timeoutMs: 10_000,
       });
       sessionCreated = true;
-      const initializedSession = await initializeAcpSpawnRuntime({
-        cfg,
-        sessionKey,
-        targetAgentId,
-        runtimeMode,
-        resumeSessionId: params.resumeSessionId,
-        runtimeOptions: runtimeOptionsResult.runtimeOptions,
-        modelExplicit: runtimeOptionsResult.modelExplicit,
-        cwd: runtimeCwd,
-      });
+      const baseRuntimeOptions = runtimeOptionsResult.runtimeOptions;
+      const modelCandidates = runtimeOptionsResult.modelCandidates;
+      const tryModels =
+        modelCandidates.length > 0
+          ? modelCandidates
+          : [baseRuntimeOptions?.model].filter((value): value is string => Boolean(value));
+      let initializedSession: AcpSpawnInitializedRuntime | undefined;
+      let lastModelError: unknown;
+      const attemptModels = tryModels.length > 0 ? tryModels : [undefined];
+      for (let index = 0; index < attemptModels.length; index += 1) {
+        const candidate = attemptModels[index];
+        const runtimeOptions =
+          candidate || baseRuntimeOptions
+            ? {
+                ...baseRuntimeOptions,
+                ...(candidate ? { model: candidate } : {}),
+              }
+            : undefined;
+        try {
+          initializedSession = await initializeAcpSpawnRuntime({
+            cfg,
+            sessionKey,
+            targetAgentId,
+            runtimeMode,
+            resumeSessionId: params.resumeSessionId,
+            runtimeOptions,
+            modelExplicit: runtimeOptionsResult.modelExplicit || Boolean(candidate),
+            cwd: runtimeCwd,
+          });
+          break;
+        } catch (error) {
+          lastModelError = error;
+          const hasNext = index < attemptModels.length - 1;
+          if (!hasNext || !candidate || !isAcpModelSelectionError(error)) {
+            throw error;
+          }
+        }
+      }
+      if (!initializedSession) {
+        if (lastModelError instanceof Error) {
+          throw lastModelError;
+        }
+        throw new Error("ACP session initialization failed");
+      }
       initializedRuntime = initializedSession.runtimeCloseHandle;
       const binding = preparedBinding
         ? (

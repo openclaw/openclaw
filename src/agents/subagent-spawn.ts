@@ -1217,6 +1217,13 @@ export async function spawnSubagentDirect(
       explicitWorkspaceDir: inheritedWorkspaceDir,
     });
     if (targetAgentId === "local-coder") {
+      if (!spawnedWorkspaceDir) {
+        return {
+          status: "error",
+          error:
+            "local-coder shared scratch setup failed: workspace directory could not be resolved",
+        };
+      }
       try {
         const mainWorkspaceDir = resolveAgentWorkspaceDir(cfg, requesterAgentId);
         await ensureSharedLocalCoderScratch(

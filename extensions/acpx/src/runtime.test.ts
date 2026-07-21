@@ -944,6 +944,53 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });
 
+  it("injects Cursor ACP model via CLI --model and omits sessionOptions model", async () => {
+    expect(testing.isCursorAcpCommand("cursor-agent acp")).toBe(true);
+    expect(testing.isCursorAcpCommand("agent acp")).toBe(true);
+    expect(testing.appendCursorAcpModelFlag("cursor-agent acp", "cursor-grok-4.5-medium")).toBe(
+      "cursor-agent --model cursor-grok-4.5-medium acp",
+    );
+    expect(
+      testing.appendCursorAcpModelFlag(
+        "cursor-agent --model cursor-grok-4.5-high-fast acp",
+        "cursor-grok-4.5-medium",
+      ),
+    ).toBe("cursor-agent --model cursor-grok-4.5-medium acp");
+
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "cursor" ? "cursor-agent acp" : agentName),
+        list: () => ["cursor"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:cursor:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "cursor",
+    });
+
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:cursor:acp:test",
+      agent: "cursor",
+      mode: "persistent",
+      model: "cursor-grok-4.5-medium",
+    });
+
+    expect(handle).toMatchObject({
+      appliedModel: { kind: "applied", model: "cursor-grok-4.5-medium" },
+    });
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:cursor:acp:test",
+      agent: "cursor",
+      mode: "persistent",
+    });
+    expect(readFirstEnsureSessionInput(ensure)).not.toHaveProperty("sessionOptions");
+  });
+
   it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
