@@ -165,7 +165,6 @@ function resolveDoctorSessionSqliteMaintenancePaths(
 ): string[] {
   const protectedPaths = new Set<string>();
   for (const target of targets) {
-    protectedPaths.add(target.storePath);
     for (const databasePath of resolveSqliteDatabaseFilePaths(resolveTargetSqlitePath(target))) {
       protectedPaths.add(databasePath);
     }
