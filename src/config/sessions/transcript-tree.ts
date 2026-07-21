@@ -263,11 +263,12 @@ export function scanSessionTranscriptTree<T>(entries: readonly T[]): SessionTran
 
 export function selectSessionTranscriptActiveEntries<T, R>(params: {
   entries: readonly T[];
-  records: readonly R[];
+  recordOf: (entry: T) => R;
   tree?: SessionTranscriptTree<R>;
   failClosedOnInvalidLeafControl?: boolean;
 }): T[] {
-  const tree = params.tree ?? scanSessionTranscriptTree(params.records);
+  const records = params.entries.map(params.recordOf);
+  const tree = params.tree ?? scanSessionTranscriptTree(records);
   if (params.failClosedOnInvalidLeafControl === true && tree.hasInvalidLeafControl) {
     return [];
   }
@@ -281,7 +282,7 @@ export function selectSessionTranscriptActiveEntries<T, R>(params: {
   });
   const firstActiveNode = activePath[0];
   for (let index = (firstActiveNode?.index ?? 0) - 1; index >= 0; index -= 1) {
-    const record = params.records[index];
+    const record = records[index];
     if (
       typeof record === "object" &&
       record !== null &&

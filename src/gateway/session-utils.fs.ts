@@ -15,10 +15,7 @@ import {
   type ContextUsage,
 } from "../agents/usage.js";
 import { materializeSessionArchiveForRead } from "../config/sessions/archive-compression.js";
-import {
-  scanSessionTranscriptTree,
-  selectSessionTranscriptActiveEntries,
-} from "../config/sessions/transcript-tree.js";
+import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { readFileWindowFully, readFileWindowFullySync } from "../infra/file-read.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
@@ -376,10 +373,9 @@ function selectBoundedActiveTailRecords(
   entries: TailTranscriptRecord[],
   opts?: { failClosedOnInvalidLeafControl?: boolean },
 ): TailTranscriptRecord[] {
-  const records = entries.map((entry) => entry.record);
   return selectSessionTranscriptActiveEntries({
     entries,
-    records,
+    recordOf: (entry) => entry.record,
     failClosedOnInvalidLeafControl: opts?.failClosedOnInvalidLeafControl,
   });
 }

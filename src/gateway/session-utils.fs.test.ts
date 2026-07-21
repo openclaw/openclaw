@@ -1369,8 +1369,6 @@ describe("readSessionMessages", () => {
       },
       { type: "leaf", id: "active-leaf", parentId: "side-branch", targetId: "active-assistant" },
     ]);
-    clearSessionTranscriptIndexCache();
-
     const newest = await readSessionMessagesPageWithStatsAsync(sessionId, storePath, sessionFile, {
       offset: 0,
       maxMessages: 2,
