@@ -593,83 +593,84 @@ export function createSessionMcpRuntime(params: {
           ({ serverName, rawServer, resolved, safeServerName, launchDescription }) =>
             async (): Promise<ServerResult> => {
               failIfDisposed();
-
-              let session = sessions.get(serverName);
-              while (
-                session &&
-                !session.retiring &&
-                !session.connected &&
-                !session.connectPromise
-              ) {
-                // A closed SDK client cannot reconnect cleanly on the same transport.
-                await retireSessionIfCurrent(serverName, session);
-                // Retirement yields while closing. Preserve any replacement that a
-                // newer catalog generation installed during that await.
+              let session: BundleMcpSession | undefined;
+              let reusedSession = false;
+              try {
                 session = sessions.get(serverName);
-              }
-              if (session?.retiring) {
-                session = undefined;
-              }
-              const reusedSession = Boolean(session);
-              if (!session) {
-                const client = new Client(
-                  {
-                    name: "openclaw-bundle-mcp",
-                    version: "0.0.0",
-                  },
-                  {
-                    ...buildMcpClientOptions(mcpAppsEnabled),
-                    jsonSchemaValidator: createMcpJsonSchemaValidator(),
-                    listChanged: {
-                      tools: {
-                        autoRefresh: false,
-                        debounceMs: 0,
-                        onChanged: (error) => {
-                          if (error) {
-                            logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
-                            );
-                          }
-                          catalogInvalidationGeneration += 1;
-                          catalog = null;
-                          catalogInFlight = undefined;
+                while (
+                  session &&
+                  !session.retiring &&
+                  !session.connected &&
+                  !session.connectPromise
+                ) {
+                  // A closed SDK client cannot reconnect cleanly on the same transport.
+                  await retireSessionIfCurrent(serverName, session);
+                  // Retirement yields while closing. Preserve any replacement that a
+                  // newer catalog generation installed during that await.
+                  session = sessions.get(serverName);
+                }
+                if (session?.retiring) {
+                  session = undefined;
+                }
+                reusedSession = Boolean(session);
+                if (!session) {
+                  const client = new Client(
+                    {
+                      name: "openclaw-bundle-mcp",
+                      version: "0.0.0",
+                    },
+                    {
+                      ...buildMcpClientOptions(mcpAppsEnabled),
+                      jsonSchemaValidator: createMcpJsonSchemaValidator(),
+                      listChanged: {
+                        tools: {
+                          autoRefresh: false,
+                          debounceMs: 0,
+                          onChanged: (error) => {
+                            if (error) {
+                              logWarn(
+                                `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                              );
+                            }
+                            catalogInvalidationGeneration += 1;
+                            catalog = null;
+                            catalogInFlight = undefined;
+                          },
                         },
                       },
                     },
-                  },
-                );
-                const createdSession: BundleMcpSession = {
-                  serverName,
-                  client,
-                  transport: resolved.transport,
-                  transportType: resolved.transportType,
-                  requestTimeoutMs: resolved.requestTimeoutMs,
-                  supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-                  connected: false,
-                  retiring: false,
-                  catalogUseCount: 0,
-                  sharedAcrossCatalogGenerations: false,
-                  detachStderr: resolved.detachStderr,
-                };
-                // The SDK exposes lifecycle hooks as callback properties. A close is
-                // terminal for this client/transport pair.
-                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
-                client.onclose = () => {
-                  createdSession.connected = false;
-                  createdSession.disconnectReason = "mcp transport closed";
-                };
-                session = createdSession;
-                sessions.set(serverName, session);
-              }
+                  );
+                  const createdSession: BundleMcpSession = {
+                    serverName,
+                    client,
+                    transport: resolved.transport,
+                    transportType: resolved.transportType,
+                    requestTimeoutMs: resolved.requestTimeoutMs,
+                    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+                    connected: false,
+                    retiring: false,
+                    catalogUseCount: 0,
+                    sharedAcrossCatalogGenerations: false,
+                    detachStderr: resolved.detachStderr,
+                  };
+                  // The SDK exposes lifecycle hooks as callback properties. A close is
+                  // terminal for this client/transport pair.
+                  // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP Client is not an EventTarget.
+                  client.onclose = () => {
+                    createdSession.connected = false;
+                    createdSession.disconnectReason = "mcp transport closed";
+                  };
+                  session = createdSession;
+                  sessions.set(serverName, session);
+                }
 
-              if (session.catalogUseCount === 0) {
-                session.sharedAcrossCatalogGenerations = false;
-              }
-              if (reusedSession && session.catalogUseCount > 0) {
-                session.sharedAcrossCatalogGenerations = true;
-              }
-              session.catalogUseCount += 1;
-              try {
+                if (session.catalogUseCount === 0) {
+                  session.sharedAcrossCatalogGenerations = false;
+                }
+                if (reusedSession && session.catalogUseCount > 0) {
+                  session.sharedAcrossCatalogGenerations = true;
+                }
+                session.catalogUseCount += 1;
                 failIfDisposed();
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
                 failIfDisposed();
@@ -752,6 +753,7 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
               } catch (error) {
+                failIfDisposed();
                 const message = redactErrorUrls(error);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
@@ -767,16 +769,18 @@ export function createSessionMcpRuntime(params: {
                     message,
                   },
                 ];
-                const sharedWithNewerGeneration =
-                  session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!session.connected) {
-                  // A close is terminal for every catalog generation sharing this
-                  // session. The identity guard preserves any newer replacement.
-                  await retireSessionIfCurrent(serverName, session);
-                } else if (!reusedSession && !sharedWithNewerGeneration) {
-                  // Catalog invalidation can overlap generations; an older failed
-                  // generation must not dispose a session a newer one already reused.
-                  await retireSessionIfCurrent(serverName, session);
+                if (session) {
+                  const sharedWithNewerGeneration =
+                    session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
+                  if (!session.connected) {
+                    // A close is terminal for every catalog generation sharing this
+                    // session. The identity guard preserves any newer replacement.
+                    await retireSessionIfCurrent(serverName, session);
+                  } else if (!reusedSession && !sharedWithNewerGeneration) {
+                    // Catalog invalidation can overlap generations; an older failed
+                    // generation must not dispose a session a newer one already reused.
+                    await retireSessionIfCurrent(serverName, session);
+                  }
                 }
                 failIfDisposed();
                 return {
@@ -786,9 +790,11 @@ export function createSessionMcpRuntime(params: {
                   diagnostics: diags,
                 } as ServerResult;
               } finally {
-                session.catalogUseCount -= 1;
-                if (session.catalogUseCount === 0) {
-                  session.sharedAcrossCatalogGenerations = false;
+                if (session) {
+                  session.catalogUseCount -= 1;
+                  if (session.catalogUseCount === 0) {
+                    session.sharedAcrossCatalogGenerations = false;
+                  }
                 }
               }
             },

@@ -990,6 +990,50 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("isolates a broken MCP server so healthy servers still materialize tools", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-isolate-fail-"));
+    const goodPath = path.join(tempDir, "healthy.mjs");
+    const brokenPath = path.join(tempDir, "broken.mjs");
+    await writeListToolsMcpServer({
+      filePath: goodPath,
+      logPath: path.join(tempDir, "good.log"),
+      tools: [{ name: "healthy_tool", inputSchema: { type: "object", properties: {} } }],
+    });
+    // broken server exits immediately — MCP connect will fail
+    await writeExecutable(brokenPath, "#!/usr/bin/env node\nprocess.exit(1);\n");
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-isolate-fail",
+      sessionKey: "agent:test:session-isolate-fail",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            healthy: { command: process.execPath, args: [goodPath] },
+            broken: { command: process.execPath, args: [brokenPath] },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      // Healthy server: tools materialized
+      expect(catalog.servers.healthy).toBeDefined();
+      expect(catalog.tools.map((t) => t.toolName)).toContain("healthy_tool");
+
+      // Broken server: no server entry, only diagnostic
+      expect(catalog.servers.broken).toBeUndefined();
+      expect(
+        catalog.diagnostics?.some((d) => d.serverName === "broken" && d.message.length > 0),
+      ).toBe(true);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("filters listed MCP tools with per-server include and exclude rules", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tool-filter-"));
     const serverPath = path.join(tempDir, "tool-filter.mjs");
