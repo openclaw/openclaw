@@ -481,6 +481,16 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     finalizeInboundContext,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
   } = params;
+  const readReceiptMode = accountConfig?.readReceiptMode ?? "immediate";
+  const sendInboundReadReceipt = async (roomId: string, messageId: string) => {
+    await loadMatrixSendModule()
+      .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, messageId, client))
+      .catch((err: unknown) => {
+        logVerboseMessage(
+          `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
+        );
+      });
+  };
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "matrix",
@@ -1709,14 +1719,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
       }
 
-      if (messageId) {
-        loadMatrixSendModule()
-          .then(({ sendReadReceiptMatrix }) => sendReadReceiptMatrix(roomId, messageId, client))
-          .catch((err: unknown) => {
-            logVerboseMessage(
-              `matrix: read receipt failed room=${roomId} id=${messageId}: ${String(err)}`,
-            );
-          });
+      if (messageId && readReceiptMode === "immediate") {
+        void sendInboundReadReceipt(roomId, messageId);
       }
 
       const tableMode = core.channel.text.resolveMarkdownTableMode({
@@ -1727,6 +1731,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, _route.agentId);
       let finalReplyDeliveryFailed = false;
       let nonFinalReplyDeliveryFailed = false;
+      let visibleFinalReplyDelivered = false;
       const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
         cfg,
         agentId: _route.agentId,
@@ -2105,6 +2110,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ...prefixOptions,
         humanDelay: resolveHumanDelayConfigImpl(cfg, _route.agentId),
         deliver: async (payload: ReplyPayload, info: { kind: string }) => {
+          let deliveredVisibleReply: boolean;
           if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             const ttsSupplement = getReplyPayloadTtsSupplement(payload);
@@ -2117,7 +2123,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
 
             if (draftConsumed) {
               await draftStream.discardPending();
-              await deliverMatrixReplies({
+              deliveredVisibleReply = await deliverMatrixReplies({
                 cfg,
                 replies: [fallbackPayload],
                 roomId,
@@ -2131,6 +2137,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 mediaLocalRoots,
                 tableMode,
               });
+              if (info.kind === "final" && deliveredVisibleReply) {
+                visibleFinalReplyDelivered = true;
+              }
               return;
             }
 
@@ -2170,6 +2179,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               !draftFinalTextNeedsNormalMentionDelivery
             ) {
               const finalPreviewText = payload.text;
+              let finalizedPreviewDelivered = false;
               await deliverWithFinalizableLivePreviewAdapter<
                 ReplyPayload,
                 string,
@@ -2202,6 +2212,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       if (!(await draftStream.finalizeLive())) {
                         throw new Error("Matrix draft live finalize failed");
                       }
+                      finalizedPreviewDelivered = true;
                       return;
                     }
                     const { editMessageMatrix } = await loadMatrixSendModule();
@@ -2212,6 +2223,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                       accountId: _route.accountId,
                       extraContent: edit.extraContent,
                     });
+                    finalizedPreviewDelivered = true;
                   },
                   createPreviewReceipt: (id): MessageReceipt =>
                     createPreviewMessageReceipt({
@@ -2225,7 +2237,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 }),
                 deliverNormally: async () => {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
-                  await deliverMatrixReplies({
+                  finalizedPreviewDelivered = await deliverMatrixReplies({
                     cfg,
                     replies: [fallbackPayload],
                     roomId,
@@ -2241,6 +2253,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                   });
                 },
               });
+              deliveredVisibleReply = finalizedPreviewDelivered;
               draftConsumed = true;
             } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
               let textEditOk = !mustDeliverFinalNormally;
@@ -2293,7 +2306,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                             ? undefined
                             : ttsSupplement?.spokenText)),
                     };
-              await deliverMatrixReplies({
+              const deliveredMedia = await deliverMatrixReplies({
                 cfg,
                 replies: [mediaPayload],
                 roomId,
@@ -2307,6 +2320,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 mediaLocalRoots,
                 tableMode,
               });
+              deliveredVisibleReply = reusesDraftAsFinalText || deliveredMedia;
               draftConsumed = true;
             } else {
               const draftRedacted =
@@ -2332,6 +2346,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 mediaLocalRoots,
                 tableMode,
               });
+              deliveredVisibleReply = deliveredFallback;
               if (draftRedacted || deliveredFallback) {
                 draftConsumed = true;
               }
@@ -2350,7 +2365,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               await sendTypingMatrix(roomId, true, undefined, client).catch(() => {});
             }
           } else {
-            await deliverMatrixReplies({
+            deliveredVisibleReply = await deliverMatrixReplies({
               cfg,
               replies: [payload],
               roomId,
@@ -2364,6 +2379,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               mediaLocalRoots,
               tableMode,
             });
+          }
+          if (info.kind === "final" && deliveredVisibleReply) {
+            visibleFinalReplyDelivered = true;
           }
         },
         onError: (err: unknown, info: { kind: "tool" | "block" | "final" }) => {
@@ -2577,6 +2595,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       logVerboseMessage(
         `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
+      if (messageId && readReceiptMode === "on-reply" && visibleFinalReplyDelivered) {
+        await sendInboundReadReceipt(roomId, messageId);
+      }
       await commitInboundEventIfClaimed();
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);

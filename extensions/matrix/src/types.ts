@@ -12,6 +12,7 @@ import type {
 } from "./runtime-api.js";
 
 export type ReplyToMode = "off" | "first" | "all" | "batched";
+type MatrixReadReceiptMode = "immediate" | "on-reply" | "off";
 
 type MatrixDmConfig = {
   /** If false, ignore all incoming Matrix DMs. Default: true. */
@@ -165,6 +166,8 @@ export type MatrixConfig = {
   groupAllowFrom?: Array<string | number>;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** When to send read receipts for inbound messages. Default: immediate. */
+  readReceiptMode?: MatrixReadReceiptMode;
   /** How to handle thread replies (off|inbound|always). */
   threadReplies?: "off" | "inbound" | "always";
   /** Outbound text chunk size (chars). Default: 4000. */

@@ -156,3 +156,35 @@ describe("MatrixConfigSchema SecretInput", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("MatrixConfigSchema readReceiptMode", () => {
+  it.each(["immediate", "on-reply", "off"])("accepts %s", (readReceiptMode) => {
+    expect(MatrixConfigSchema.safeParse({ readReceiptMode }).success).toBe(true);
+  });
+
+  it("rejects unknown modes", () => {
+    expect(MatrixConfigSchema.safeParse({ readReceiptMode: "after-processing" }).success).toBe(
+      false,
+    );
+  });
+
+  it("accepts per-account overrides", () => {
+    expect(
+      MatrixConfigSchema.safeParse({
+        readReceiptMode: "on-reply",
+        accounts: {
+          immediate: { readReceiptMode: "immediate" },
+          disabled: { readReceiptMode: "off" },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rejects unknown per-account modes", () => {
+    expect(
+      MatrixConfigSchema.safeParse({
+        accounts: { ops: { readReceiptMode: "after-processing" } },
+      }).success,
+    ).toBe(false);
+  });
+});

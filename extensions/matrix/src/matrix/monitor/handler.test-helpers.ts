@@ -81,6 +81,7 @@ type MatrixHandlerTestHarnessOptions = {
   formatAgentEnvelope?: ({ body }: { body: string }) => string;
   finalizeInboundContext?: (ctx: unknown) => unknown;
   createReplyDispatcherWithTyping?: (params?: {
+    deliver?: (payload: { text?: string }, info: { kind: string }) => Promise<void>;
     onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
   }) => {
     dispatcher: Record<string, unknown>;

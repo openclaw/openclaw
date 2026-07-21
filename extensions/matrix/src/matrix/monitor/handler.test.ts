@@ -47,6 +47,7 @@ const resolveMatrixMentionsForBodyMock = vi.hoisted(() =>
     };
   }),
 );
+const sendReadReceiptMatrixMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../send.js", () => ({
   editMessageMatrix: editMessageMatrixMock,
@@ -55,7 +56,7 @@ vi.mock("../send.js", () => ({
   resolveMatrixMentionsForBody: resolveMatrixMentionsForBodyMock,
   sendMessageMatrix: sendMessageMatrixMock,
   sendSingleTextMessageMatrix: sendSingleTextMessageMatrixMock,
-  sendReadReceiptMatrix: vi.fn(async () => {}),
+  sendReadReceiptMatrix: sendReadReceiptMatrixMock,
   sendTypingMatrix: vi.fn(async () => {}),
 }));
 
@@ -120,6 +121,7 @@ beforeEach(() => {
     };
   });
   resolveMatrixMentionsForBodyMock.mockClear();
+  sendReadReceiptMatrixMock.mockClear();
 });
 
 afterEach(() => {
@@ -4320,6 +4322,150 @@ describe("matrix monitor handler draft streaming", () => {
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     await finish();
+  });
+});
+
+describe("matrix monitor handler read receipts", () => {
+  it("sends immediately by default", async () => {
+    const { handler } = createMatrixHandlerTestHarness();
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$immediate", body: "hello" }),
+    );
+
+    await waitForMatrixState(() => {
+      expect(sendReadReceiptMatrixMock).toHaveBeenCalledWith(
+        "!room:example.org",
+        "$immediate",
+        expect.anything(),
+      );
+    });
+  });
+
+  it("waits for a successful visible final reply in on-reply mode", async () => {
+    let deliverFinal:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: { readReceiptMode: "on-reply" },
+      createReplyDispatcherWithTyping: (params) => {
+        deliverFinal = params?.deliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      dispatchInboundMessage: vi.fn(async () => {
+        await deliverFinal?.({ text: "visible reply" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { final: 1, block: 0, tool: 0 },
+        };
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$on-reply", body: "hello" }),
+    );
+
+    expect(sendReadReceiptMatrixMock).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$on-reply",
+      expect.anything(),
+    );
+  });
+
+  it("leaves suppressed final replies unread in on-reply mode", async () => {
+    let deliverFinal:
+      | ((payload: { text?: string }, info: { kind: string }) => Promise<void>)
+      | undefined;
+    deliverMatrixRepliesMock.mockResolvedValueOnce(false);
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: { readReceiptMode: "on-reply" },
+      createReplyDispatcherWithTyping: (params) => {
+        deliverFinal = params?.deliver;
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      dispatchInboundMessage: vi.fn(async () => {
+        await deliverFinal?.({ text: "reasoning only" }, { kind: "final" });
+        return {
+          queuedFinal: true,
+          counts: { final: 1, block: 0, tool: 0 },
+        };
+      }),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$suppressed", body: "hello" }),
+    );
+
+    expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves no-reply turns unread in on-reply mode", async () => {
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: { readReceiptMode: "on-reply" },
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$no-reply", body: "hello" }),
+    );
+
+    expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
+  });
+
+  it("leaves failed final deliveries unread in on-reply mode", async () => {
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: { readReceiptMode: "on-reply" },
+      createReplyDispatcherWithTyping: (params) => {
+        params?.onError?.(new Error("delivery failed"), { kind: "final" });
+        return {
+          dispatcher: {},
+          replyOptions: {},
+          markDispatchIdle: () => {},
+          markRunComplete: () => {},
+        };
+      },
+      dispatchInboundMessage: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$failed", body: "hello" }),
+    );
+
+    expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
+  });
+
+  it("never sends read receipts when disabled", async () => {
+    const { handler } = createMatrixHandlerTestHarness({
+      accountConfig: { readReceiptMode: "off" },
+      dispatchInboundMessage: vi.fn(async () => ({
+        queuedFinal: true,
+        counts: { final: 1, block: 0, tool: 0 },
+      })),
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({ eventId: "$off", body: "hello" }),
+    );
+
+    expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
   });
 });
 
