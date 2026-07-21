@@ -1,6 +1,6 @@
 import type { Model, OpenAICompletionsCompat } from "../types.js";
 
-export type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
+type OpenAICompletionsSessionAffinity = "none" | "openai" | "openrouter";
 
 export type ResolvedOpenAICompletionsCompat = Omit<
   Required<OpenAICompletionsCompat>,
@@ -230,7 +230,7 @@ function matchesModelCompatRule(
 }
 
 /** Detects request compatibility from the provider, endpoint, and model family matrices. */
-export function detectOpenAICompletionsCompat(
+function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id">,
 ): DetectedOpenAICompletionsCompat {
   const compat: DetectedOpenAICompletionsCompat = { ...DEFAULT_OPENAI_COMPLETIONS_COMPAT };
