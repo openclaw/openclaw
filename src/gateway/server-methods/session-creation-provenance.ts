@@ -2,15 +2,23 @@ import type {
   SessionCreatedActor,
   SessionCreatedVia,
 } from "../../config/sessions/session-entry-provenance.js";
-import type { GatewayClient } from "./shared-types.js";
 
 export type TrustedSessionCreation = {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
 };
 
+/**
+ * Structural subset of GatewayClient; a leaf contract so shared-types.ts can
+ * import TrustedSessionCreation without a type cycle back through this module.
+ */
+type SessionCreationClient = {
+  authenticatedUserProfile?: { profileId?: string } | null;
+  internal?: { syntheticClient?: true; sessionCreation?: TrustedSessionCreation };
+};
+
 export function resolveOperatorSessionCreation(
-  client: GatewayClient | null,
+  client: SessionCreationClient | null | undefined,
   options: { allowTrustedHint?: boolean } = {},
 ): TrustedSessionCreation {
   if (options.allowTrustedHint && client?.internal?.sessionCreation) {

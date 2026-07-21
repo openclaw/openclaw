@@ -1,9 +1,7 @@
 import type { HookExternalContentSource } from "../../security/external-content.js";
-import type { SessionEntry } from "./types.js";
 
 /** Kept aligned with SessionStateActorType (src/sessions/session-state-event-kinds.ts); not imported to avoid layering config/sessions onto src/sessions. */
-export type SessionCreatedActorType = "human" | "agent" | "system";
-export type SessionCreatedActor = { type: SessionCreatedActorType; id?: string };
+export type SessionCreatedActor = { type: "human" | "agent" | "system"; id?: string };
 export type SessionCreatedVia =
   | "operator" // gateway sessions.create (Control UI / operator clients)
   | "spawn" // sessions_spawn native or ACP subagent spawn
@@ -14,11 +12,13 @@ export type SessionCreatedVia =
   | "plugin" // trusted plugin runtime creation
   | "internal"; // internal/hidden sessions (internal-session-effects, voice bare rows)
 
+// Return shape mirrors the SessionEntry creation fields as a leaf contract;
+// types.ts imports from here, never the reverse (madge cycle guard).
 export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   now?: number;
-}): Pick<SessionEntry, "createdVia" | "createdActor" | "createdAt"> {
+}): { createdVia: SessionCreatedVia; createdActor?: SessionCreatedActor; createdAt: number } {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),

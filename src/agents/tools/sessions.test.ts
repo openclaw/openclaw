@@ -10,7 +10,9 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
-const inProcessCreationMock = vi.fn(async (): Promise<unknown> => ({}));
+const inProcessCreationMock = vi.fn(
+  async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
+);
 // Default false mirrors running outside a gateway process; the trusted-creation
 // regression test flips it on and restores it.
 let inProcessGatewayContextAvailable = false;

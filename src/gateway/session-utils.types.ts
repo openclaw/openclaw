@@ -156,12 +156,15 @@ export type GatewaySessionRow = {
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
-type AssertTrue<T extends true> = T;
-
-/** Keeps the Gateway projection assignable to the protocol schema's documented row fields. */
-export type GatewaySessionRowSchemaDriftGuard = AssertTrue<
-  Pick<GatewaySessionRow, keyof SessionRow> extends SessionRow ? true : false
->;
+/**
+ * Compile-time drift guard: fails typecheck when the Gateway projection stops
+ * matching the protocol schema's documented row fields. Value-level so the
+ * unused-export scan sees a consumer.
+ */
+const sessionRowSchemaDriftGuard: Pick<GatewaySessionRow, keyof SessionRow> extends SessionRow
+  ? true
+  : false = true;
+void sessionRowSchemaDriftGuard;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
