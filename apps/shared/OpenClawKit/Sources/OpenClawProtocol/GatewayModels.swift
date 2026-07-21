@@ -244,6 +244,8 @@ public struct BoardWidget: Codable, Sendable {
     public let tabid: String
     public let title: String?
     public let contentkind: AnyCodable
+    public let presentation: AnyCodable?
+    public let heightmode: AnyCodable?
     public let sizew: Int
     public let sizeh: Int
     public let position: Int
@@ -265,6 +267,8 @@ public struct BoardWidget: Codable, Sendable {
         tabid: String,
         title: String? = nil,
         contentkind: AnyCodable,
+        presentation: AnyCodable? = nil,
+        heightmode: AnyCodable? = nil,
         sizew: Int,
         sizeh: Int,
         position: Int,
@@ -285,6 +289,8 @@ public struct BoardWidget: Codable, Sendable {
         self.tabid = tabid
         self.title = title
         self.contentkind = contentkind
+        self.presentation = presentation
+        self.heightmode = heightmode
         self.sizew = sizew
         self.sizeh = sizeh
         self.position = position
@@ -307,6 +313,8 @@ public struct BoardWidget: Codable, Sendable {
         case tabid = "tabId"
         case title
         case contentkind = "contentKind"
+        case presentation
+        case heightmode = "heightMode"
         case sizew = "sizeW"
         case sizeh = "sizeH"
         case position
@@ -496,17 +504,20 @@ public struct BoardWidgetResizeOp: Codable, Sendable {
     public let name: String
     public let sizew: Int
     public let sizeh: Int
+    public let heightmode: AnyCodable?
 
     public init(
         kind: String,
         name: String,
         sizew: Int,
-        sizeh: Int)
+        sizeh: Int,
+        heightmode: AnyCodable? = nil)
     {
         self.kind = kind
         self.name = name
         self.sizew = sizew
         self.sizeh = sizeh
+        self.heightmode = heightmode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -514,6 +525,7 @@ public struct BoardWidgetResizeOp: Codable, Sendable {
         case name
         case sizew = "sizeW"
         case sizeh = "sizeH"
+        case heightmode = "heightMode"
     }
 }
 
@@ -670,6 +682,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
     public let name: String
     public let title: String?
     public let content: BoardWidgetPutContent
+    public let presentation: AnyCodable?
+    public let heightmode: AnyCodable?
     public let placement: [String: AnyCodable]?
     public let declared: BoardWidgetDeclared?
 
@@ -678,6 +692,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         name: String,
         title: String? = nil,
         content: BoardWidgetPutContent,
+        presentation: AnyCodable? = nil,
+        heightmode: AnyCodable? = nil,
         placement: [String: AnyCodable]? = nil,
         declared: BoardWidgetDeclared? = nil)
     {
@@ -685,6 +701,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         self.name = name
         self.title = title
         self.content = content
+        self.presentation = presentation
+        self.heightmode = heightmode
         self.placement = placement
         self.declared = declared
     }
@@ -694,6 +712,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         case name
         case title
         case content
+        case presentation
+        case heightmode = "heightMode"
         case placement
         case declared
     }
