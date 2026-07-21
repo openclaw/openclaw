@@ -37,7 +37,11 @@ import {
 } from "../run-diagnostics.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
+import {
+  appendCronPayloadText,
+  createCronStreamSourceIdentity,
+  cronStreamScheduleKey,
+} from "../stream-schedule.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -213,14 +217,10 @@ type ExecuteJobCoreOptions = {
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
   streamBatch?: string;
-  // Schedule key of the stream source that produced streamBatch. Guards against
-  // an ABA race: a batch emitted by an old stream schedule must not fire after
-  // the job was disabled and re-enabled (or edited) with a different schedule.
+  // Source definition and logical identity are an inseparable admission claim.
+  // The key catches edits; the identity catches disable→re-enable and A→B→A.
   streamScheduleKey?: string;
-  // Epoch token of the firing source. Rejects a batch whose source was retired
-  // even when the schedule key is unchanged (disable→re-enable, A→B→A), which
-  // the schedule key alone cannot detect.
-  streamSourceGeneration?: string;
+  streamSourceIdentity?: string;
 };
 
 /** Script payloads run headlessly even when their notifications target main. */
@@ -263,7 +263,7 @@ export async function executeJobCoreWithTimeout(
     owningCronLaneTaskMarker?: CommandLaneTaskMarker;
     streamBatch?: string;
     streamScheduleKey?: string;
-    streamSourceGeneration?: string;
+    streamSourceIdentity?: string;
   },
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
@@ -312,7 +312,7 @@ export async function executeJobCoreWithTimeout(
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
         streamBatch: opts?.streamBatch,
         streamScheduleKey: opts?.streamScheduleKey,
-        streamSourceGeneration: opts?.streamSourceGeneration,
+        streamSourceIdentity: opts?.streamSourceIdentity,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -370,7 +370,7 @@ export async function executeJobCoreWithTimeout(
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
       streamScheduleKey: opts?.streamScheduleKey,
-      streamSourceGeneration: opts?.streamSourceGeneration,
+      streamSourceIdentity: opts?.streamSourceIdentity,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -1144,6 +1144,11 @@ export function applyTriggerRunResult(
   // A once trigger disarms only after the fired payload succeeds. Errors keep
   // it armed so the normal backoff path can evaluate and retry later.
   if (result.triggerEval.fired && job.trigger?.once === true && result.status === "ok") {
+    if (job.schedule.kind === "stream") {
+      // Auto-disable is a source retirement just like an explicit disable. Rotate
+      // in the same persisted result so queued sibling batches cannot gain admission.
+      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+    }
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
   }
@@ -2510,20 +2515,17 @@ async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
-  if (options?.streamScheduleKey !== undefined) {
-    // Defense in depth over the watcher's per-owner generation guards: refuse a
-    // stream batch whose originating schedule is no longer the job's current
-    // schedule (disable→re-enable-as-different, or in-place edit).
+  if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
+    // Defense in depth over the locked admission checks: stream-origin work must
+    // carry both the source definition and logical identity, and both must still
+    // match the execution snapshot.
     const currentKey =
       job.schedule.kind === "stream" ? cronStreamScheduleKey(job.schedule) : undefined;
-    if (currentKey !== options.streamScheduleKey) {
-      return { status: "skipped", error: "stream batch schedule no longer current" };
-    }
-    // A stable schedule key cannot see an ABA (disable→re-enable, A→B→A): the
-    // source epoch token does. A batch whose epoch was retired must not fire.
     if (
-      options.streamSourceGeneration !== undefined &&
-      job.state.streamSourceGeneration !== options.streamSourceGeneration
+      options.streamScheduleKey === undefined ||
+      options.streamSourceIdentity === undefined ||
+      currentKey !== options.streamScheduleKey ||
+      job.state.streamSourceIdentity !== options.streamSourceIdentity
     ) {
       return { status: "skipped", error: "stream batch source no longer current" };
     }

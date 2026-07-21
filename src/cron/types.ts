@@ -388,12 +388,10 @@ export type CronJobState = {
   streamError?: string;
   streamConsecutiveFailures?: number;
   streamRestartExhausted?: boolean;
-  // Identity of the live source epoch that currently owns this job's stream
-  // batches. Advances on every owner spawn/backoff/stop, so a batch already
-  // handed to cron.run under a prior epoch fails admission after a
-  // disable→re-enable or A→B→A schedule edit that leaves the schedule key
-  // unchanged (the schedule-key check alone cannot see that ABA).
-  streamSourceGeneration?: string;
+  // Identity of the logical stream source that owns this job's batches. It is
+  // stable across child-process restarts and rotates atomically when the source
+  // is disabled, removed, or replaced, closing same-schedule ABA admission.
+  streamSourceIdentity?: string;
   streamDroppedBatches?: number;
   streamCoalescedBatches?: number;
   streamLastStartedAtMs?: number;
@@ -464,11 +462,13 @@ export type CronStoreFile = {
   jobs: CronJob[];
 };
 
+type CronJobStateInput = Partial<Omit<CronJobState, "streamSourceIdentity">>;
+
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
-  state?: Partial<CronJobState>;
+  state?: CronJobStateInput;
 };
 
 /** Patch input accepted by cron APIs without allowing immutable identity fields. */
@@ -493,5 +493,5 @@ export type CronJobPatch = Partial<
   payload?: CronPayloadPatch;
   delivery?: CronDeliveryPatch;
   failureAlert?: CronFailureAlertPatch | false | null;
-  state?: Partial<CronJobState>;
+  state?: CronJobStateInput;
 };

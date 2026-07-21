@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CronPayload, CronSchedule } from "./types.js";
 
@@ -10,6 +11,11 @@ const MAX_CRON_STREAM_MAX_BATCH_BYTES = 65_536;
 const CRON_STREAM_TRUNCATED_MARKER = "[truncated]";
 
 export type CronStreamSchedule = Extract<CronSchedule, { kind: "stream" }>;
+
+/** Opaque identity for one logical stream source across child-process restarts. */
+export function createCronStreamSourceIdentity(): string {
+  return randomUUID();
+}
 
 function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
   if (value === undefined) {
@@ -42,7 +48,7 @@ export function resolveCronStreamBatching(schedule: CronStreamSchedule): {
   };
 }
 
-/** Stable identity for the source process fields, with omitted defaults resolved. */
+/** Stable key for the source definition, with omitted defaults resolved. */
 export function cronStreamScheduleKey(schedule: CronStreamSchedule): string {
   const batching = resolveCronStreamBatching(schedule);
   return JSON.stringify({
@@ -84,11 +90,7 @@ export function normalizeCronStreamBatching(schedule: Record<string, unknown>): 
   }
 }
 
-/** Keep a UTF-8 batch inside its byte budget and reserve room for the marker. */
-export function truncateCronStreamBatch(text: string, maxBytes: number): string {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
+function renderTruncatedCronStreamBatch(text: string, maxBytes: number): string {
   const markerBytes = Buffer.byteLength(CRON_STREAM_TRUNCATED_MARKER, "utf8");
   const contentBudget = Math.max(0, maxBytes - markerBytes);
   let low = 0;
@@ -103,6 +105,18 @@ export function truncateCronStreamBatch(text: string, maxBytes: number): string 
     }
   }
   return `${truncateUtf16Safe(text, low)}${CRON_STREAM_TRUNCATED_MARKER}`;
+}
+
+/** Render known-truncated source text without exposing the marker to match filters. */
+export function markCronStreamBatchTruncated(text: string, maxBytes: number): string {
+  return renderTruncatedCronStreamBatch(text, maxBytes);
+}
+
+/** Keep a UTF-8 batch inside its byte budget and reserve room for the marker. */
+export function truncateCronStreamBatch(text: string, maxBytes: number): string {
+  return Buffer.byteLength(text, "utf8") <= maxBytes
+    ? text
+    : renderTruncatedCronStreamBatch(text, maxBytes);
 }
 
 /** Append event text through the same payload seam used by trigger messages. */

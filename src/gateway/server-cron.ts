@@ -1026,17 +1026,21 @@ export function buildGatewayCronService(params: {
   const updateCron = cron.update.bind(cron);
   streamWatchersRef.current = createCronStreamWatchers({
     getProcessSupervisor,
-    cronConfig: params.cfg.cron,
-    updateState: async (jobId, patch, streamScheduleKey) => {
-      return await cron.updateExternalState(jobId, streamScheduleKey, patch);
+    updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
+      return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
     },
+    retireSource: async (jobId, streamScheduleKey, streamSourceIdentity) =>
+      await cron.retireExternalStreamSource(jobId, streamScheduleKey, streamSourceIdentity),
     updateCounters: async (jobId, counters) => {
       await cron.updateExternalCounters(jobId, counters);
     },
-    recordFailure: async (jobId, error, patch, streamScheduleKey) => {
-      await cron.recordExternalFailure(jobId, error, patch, streamScheduleKey);
+    recordFailure: async (jobId, error, patch, streamScheduleKey, streamSourceIdentity) => {
+      await cron.recordExternalFailure(jobId, error, patch, {
+        scheduleKey: streamScheduleKey,
+        identity: streamSourceIdentity,
+      });
     },
-    fireBatch: (job, batch, streamScheduleKey, streamSourceGeneration) =>
+    fireBatch: (job, batch, streamScheduleKey, streamSourceIdentity) =>
       runWithGatewayIndependentRootWorkAdmission(async () =>
         fireStreamJob(job, batch, {
           run: async (jobId, payload, onDisposition) => {
@@ -1045,7 +1049,7 @@ export function buildGatewayCronService(params: {
               evaluateTrigger: true,
               streamBatch: batch,
               streamScheduleKey,
-              streamSourceGeneration,
+              streamSourceIdentity,
               onTriggerDisposition: onDisposition,
             });
             return { ...result, enabled: cron.getJob(jobId)?.enabled };
@@ -1105,6 +1109,35 @@ export function buildGatewayCronService(params: {
     await routeCurrentStreamJob(addedJob.id, addedJob, "added");
     return result;
   };
+  const settleStopAfterCommittedUpdate = async (
+    jobId: string,
+    lifecycleStop: Promise<void> | undefined,
+  ) => {
+    try {
+      await lifecycleStop;
+    } catch (error) {
+      // The durable update already committed and the owner persisted its own
+      // terminal stream diagnostic. Failing the caller here would claim a
+      // rollback that never happened; routeLiveStreamJob below retries teardown.
+      cronLogger.warn(
+        { jobId, err: String(error) },
+        "cron-stream: source teardown failed after committed update",
+      );
+    }
+  };
+  // Watcher routing after a committed mutation is lifecycle repair, not part
+  // of the mutation result: a stubborn child failing again must not turn an
+  // already-persisted change into a caller-visible error.
+  const routeLiveStreamJobLogged = async (jobId: string) => {
+    try {
+      await routeLiveStreamJob(jobId);
+    } catch (error) {
+      cronLogger.warn(
+        { jobId, err: String(error) },
+        "cron-stream: post-commit lifecycle routing failed",
+      );
+    }
+  };
   const updateCronWithPrecondition = cron.updateWithPrecondition.bind(cron);
   cron.update = async (jobId, patch) => {
     let lifecycleStop: Promise<void> | undefined;
@@ -1112,13 +1145,13 @@ export function buildGatewayCronService(params: {
       const result = await updateCronWithPrecondition(jobId, patch, (current, nowMs) => {
         lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
       });
-      await lifecycleStop;
-      await routeLiveStreamJob(jobId);
+      await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
+      await routeLiveStreamJobLogged(jobId);
       return result;
     } catch (error) {
       await lifecycleStop?.catch(() => undefined);
       if (lifecycleStop) {
-        await routeLiveStreamJob(jobId);
+        await routeLiveStreamJobLogged(jobId);
       }
       throw error;
     }
@@ -1130,13 +1163,13 @@ export function buildGatewayCronService(params: {
         await precondition(current, nowMs);
         lifecycleStop = queueStreamStopAfterValidation(current, patch, nowMs);
       });
-      await lifecycleStop;
-      await routeLiveStreamJob(jobId);
+      await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
+      await routeLiveStreamJobLogged(jobId);
       return result;
     } catch (error) {
       await lifecycleStop?.catch(() => undefined);
       if (lifecycleStop) {
-        await routeLiveStreamJob(jobId);
+        await routeLiveStreamJobLogged(jobId);
       }
       throw error;
     }
@@ -1146,15 +1179,16 @@ export function buildGatewayCronService(params: {
     const previous = cron.getJob(jobId);
     try {
       if (previous?.schedule.kind === "stream") {
-        await streamWatchersRef.current?.stop(jobId, "removed");
+        await streamWatchersRef.current?.stop(jobId, "removed", previous);
       }
       const result = await removeCron(jobId);
       if (!result.removed) {
-        await routeLiveStreamJob(jobId);
+        await routeLiveStreamJobLogged(jobId);
       }
       return result;
     } catch (error) {
-      await routeLiveStreamJob(jobId);
+      // Preserve the original stop/removal error; recovery routing is advisory.
+      await routeLiveStreamJobLogged(jobId);
       throw error;
     }
   };

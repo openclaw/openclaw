@@ -28,8 +28,8 @@ export type CronServiceRunOptions = {
   streamBatch?: string;
   /** Source schedule identity checked under the cron store lock before admission. */
   streamScheduleKey?: string;
-  /** Firing source epoch token; rejects a retired epoch's batch under an ABA (same schedule key). */
-  streamSourceGeneration?: string;
+  /** Logical source identity; rejects retired batches under same-schedule ABA. */
+  streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
 

@@ -448,10 +448,10 @@ export const CronJobStateSchema = closedObject({
   streamError: Type.Optional(Type.String()),
   streamConsecutiveFailures: Type.Optional(Type.Integer({ minimum: 0 })),
   streamRestartExhausted: Type.Optional(Type.Boolean()),
-  // Internal source-epoch token used only for cron.run admission fencing. It is
-  // reported (a running stream job persists it) but intentionally absent from
-  // the writable patch schema so external callers cannot spoof source identity.
-  streamSourceGeneration: Type.Optional(Type.String()),
+  // Internal logical-source identity used for cron.run admission fencing. It is
+  // reported for diagnostics but intentionally absent from the writable patch
+  // schema so external callers cannot spoof source ownership.
+  streamSourceIdentity: Type.Optional(Type.String()),
   streamDroppedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

@@ -160,17 +160,37 @@ export class CronService implements CronServiceContract {
     id: string,
     error: string,
     statePatch: Partial<CronJob["state"]>,
-    streamScheduleKey?: string,
+    source?: { scheduleKey: string; identity: string },
   ): Promise<void> {
-    await ops.recordExternalFailure(this.state, id, error, statePatch, streamScheduleKey);
+    await ops.recordExternalFailure(this.state, id, error, statePatch, source);
   }
 
   async updateExternalState(
     id: string,
     streamScheduleKey: string,
+    streamSourceIdentity: string,
     statePatch: Partial<CronJob["state"]>,
   ): Promise<boolean> {
-    return await ops.updateExternalState(this.state, id, streamScheduleKey, statePatch);
+    return await ops.updateExternalState(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+      statePatch,
+    );
+  }
+
+  async retireExternalStreamSource(
+    id: string,
+    streamScheduleKey: string,
+    streamSourceIdentity: string,
+  ): Promise<string | undefined> {
+    return await ops.retireExternalStreamSource(
+      this.state,
+      id,
+      streamScheduleKey,
+      streamSourceIdentity,
+    );
   }
 
   async updateExternalCounters(

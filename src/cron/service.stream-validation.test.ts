@@ -177,19 +177,60 @@ describe("cron stream schedule validation", () => {
     }
   });
 
-  it("ignores a terminal source failure from a replaced stream schedule", async () => {
+  it("rotates logical source identity only when source ownership changes", async () => {
+    const cron = await createCron(true);
+    try {
+      const created = await cron.add(streamJob());
+      const initialIdentity = created.state.streamSourceIdentity;
+      expect(initialIdentity).toEqual(expect.any(String));
+
+      const equivalent = await cron.update(created.id, {
+        schedule: structuredClone(created.schedule),
+      });
+      expect(equivalent.state.streamSourceIdentity).toBe(initialIdentity);
+
+      const replaced = await cron.update(created.id, {
+        schedule: { kind: "stream", command: ["replacement-source"] },
+      });
+      expect(replaced.state.streamSourceIdentity).not.toBe(initialIdentity);
+
+      const disabled = await cron.update(created.id, { enabled: false });
+      expect(disabled.state.streamSourceIdentity).not.toBe(replaced.state.streamSourceIdentity);
+
+      const reenabled = await cron.update(created.id, { enabled: true });
+      expect(reenabled.state.streamSourceIdentity).not.toBe(disabled.state.streamSourceIdentity);
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("ignores stale owner writes after an A-to-B-to-A source replacement", async () => {
     const cron = await createCron(true);
     try {
       const created = await cron.add(streamJob());
       if (created.schedule.kind !== "stream") {
         throw new Error("expected stream schedule");
       }
-      const oldScheduleKey = cronStreamScheduleKey(created.schedule);
+      const oldSchedule = structuredClone(created.schedule);
+      const oldScheduleKey = cronStreamScheduleKey(oldSchedule);
+      const oldSourceIdentity = created.state.streamSourceIdentity;
+      if (!oldSourceIdentity) {
+        throw new Error("expected stream source identity");
+      }
       await cron.update(created.id, {
         schedule: { kind: "stream", command: ["replacement-source"] },
       });
+      const restored = await cron.update(created.id, { schedule: oldSchedule });
+      if (restored.schedule.kind !== "stream") {
+        throw new Error("expected restored stream schedule");
+      }
+      expect(cronStreamScheduleKey(restored.schedule)).toBe(oldScheduleKey);
+      expect(restored.state.streamSourceIdentity).not.toBe(oldSourceIdentity);
+
       await expect(
-        cron.updateExternalState(created.id, oldScheduleKey, { streamStatus: "stopped" }),
+        cron.updateExternalState(created.id, oldScheduleKey, oldSourceIdentity, {
+          streamStatus: "stopped",
+        }),
       ).resolves.toBe(false);
       await cron.updateExternalCounters(created.id, {
         streamDroppedBatches: 1,
@@ -202,7 +243,7 @@ describe("cron stream schedule validation", () => {
           streamStatus: "error",
           streamRestartExhausted: true,
         },
-        oldScheduleKey,
+        { scheduleKey: oldScheduleKey, identity: oldSourceIdentity },
       );
 
       expect(cron.getJob(created.id)?.state).not.toMatchObject({

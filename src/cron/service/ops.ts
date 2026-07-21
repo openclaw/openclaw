@@ -23,7 +23,7 @@ import {
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
-import { cronStreamScheduleKey } from "../stream-schedule.js";
+import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
@@ -361,17 +361,19 @@ export async function recordExternalFailure(
   id: string,
   error: string,
   statePatch: Partial<CronJob["state"]>,
-  streamScheduleKey?: string,
+  source?: { scheduleKey: string; identity: string },
 ) {
   await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
-    if (streamScheduleKey !== undefined && !ownsStreamSchedule(job, streamScheduleKey)) {
+    if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
       return;
     }
     const snapshot = snapshotStoreForRollback(state);
     const now = state.deps.nowMs();
+    const sourceIdentity = job.state.streamSourceIdentity;
     Object.assign(job.state, statePatch);
+    job.state.streamSourceIdentity = sourceIdentity;
     // Source restarts are counted separately, but terminal exhaustion should
     // enter the same alert/history path as a fifth consecutive payload error.
     job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
@@ -400,21 +402,43 @@ export async function recordExternalFailure(
   });
 }
 
-/** Atomically persist owner state only while its stream schedule still matches. */
+/** Atomically persist owner state only while its logical stream source still matches. */
 export async function updateExternalState(
   state: CronServiceState,
   id: string,
   streamScheduleKey: string,
+  streamSourceIdentity: string,
   statePatch: Partial<CronJob["state"]>,
 ): Promise<boolean> {
   return await locked(state, async () => {
     await ensureLoaded(state, { skipRecompute: true });
     const job = state.store?.jobs.find((entry) => entry.id === id);
-    if (!job || !ownsStreamSchedule(job, streamScheduleKey)) {
+    if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
       return false;
     }
     await updateLoadedJob({ state, id, patch: { state: statePatch } });
     return true;
+  });
+}
+
+/** Retire a logical stream source before teardown that has no job-definition mutation. */
+export async function retireExternalStreamSource(
+  state: CronServiceState,
+  id: string,
+  streamScheduleKey: string,
+  streamSourceIdentity: string,
+): Promise<string | undefined> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
+      return undefined;
+    }
+    const snapshot = snapshotStoreForRollback(state);
+    const nextIdentity = createCronStreamSourceIdentity();
+    job.state.streamSourceIdentity = nextIdentity;
+    await persistOrRestore(state, snapshot);
+    return nextIdentity;
   });
 }
 
@@ -567,6 +591,21 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
+function reconcileStreamSourceIdentity(job: CronJob, nextJob: CronJob): void {
+  if (nextJob.schedule.kind !== "stream") {
+    nextJob.state.streamSourceIdentity = undefined;
+    return;
+  }
+  const sourceChanged =
+    job.schedule.kind !== "stream" ||
+    cronStreamScheduleKey(job.schedule) !== cronStreamScheduleKey(nextJob.schedule) ||
+    isJobEnabled(job) !== isJobEnabled(nextJob);
+  const currentIdentity =
+    job.schedule.kind === "stream" ? job.state.streamSourceIdentity : undefined;
+  nextJob.state.streamSourceIdentity =
+    sourceChanged || !currentIdentity ? createCronStreamSourceIdentity() : currentIdentity;
+}
+
 function finalizeUpdatedJob(params: {
   job: CronJob;
   nextJob: CronJob;
@@ -604,6 +643,11 @@ function finalizeUpdatedJob(params: {
       };
     }
   }
+  // Source identity belongs to the durable job mutation, not the process
+  // watcher. Equivalent resaves preserve it; disable/enable and source changes
+  // rotate it in the same write that changes the public job definition.
+  reconcileStreamSourceIdentity(job, nextJob);
+
   // Only advance a recurring job's next run when the schedule/enabled inputs
   // actually changed. An idempotent re-save (same schedule, or re-enabling an
   // already-enabled job) must preserve a still-due slot, matching the
@@ -946,7 +990,7 @@ type PreparedManualRun =
       evaluateTrigger?: boolean;
       streamBatch?: string;
       streamScheduleKey?: string;
-      streamSourceGeneration?: string;
+      streamSourceIdentity?: string;
       onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
     }
   | { ok: false };
@@ -966,7 +1010,7 @@ type ManualRunOptions = {
   evaluateTrigger?: boolean;
   streamBatch?: string;
   streamScheduleKey?: string;
-  streamSourceGeneration?: string;
+  streamSourceIdentity?: string;
   onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
 
@@ -1009,24 +1053,32 @@ type ManualRunPreflightResult =
 
 let nextManualRunId = 1;
 
-function ownsStreamSchedule(
+function ownsStreamSource(
   job: CronJob,
   streamScheduleKey: string,
-  streamSourceGeneration?: string,
+  streamSourceIdentity: string,
 ): boolean {
-  if (job.schedule.kind !== "stream" || cronStreamScheduleKey(job.schedule) !== streamScheduleKey) {
-    return false;
+  return (
+    job.schedule.kind === "stream" &&
+    cronStreamScheduleKey(job.schedule) === streamScheduleKey &&
+    job.state.streamSourceIdentity === streamSourceIdentity
+  );
+}
+
+function admitsStreamSourceRun(
+  job: CronJob,
+  streamScheduleKey?: string,
+  streamSourceIdentity?: string,
+): boolean {
+  if (streamScheduleKey === undefined && streamSourceIdentity === undefined) {
+    return true;
   }
-  // Batch admission carries the firing source's epoch token; a retired epoch's
-  // batch (disable→re-enable, or A→B→A) is stale even though the schedule key
-  // matches. Owner state persists pass no token and remain schedule-scoped.
-  if (
-    streamSourceGeneration !== undefined &&
-    job.state.streamSourceGeneration !== streamSourceGeneration
-  ) {
-    return false;
-  }
-  return true;
+  return (
+    streamScheduleKey !== undefined &&
+    streamSourceIdentity !== undefined &&
+    isJobEnabled(job) &&
+    ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)
+  );
 }
 
 async function skipInvalidPersistedManualRun(params: {
@@ -1096,7 +1148,7 @@ async function inspectManualRunPreflight(
   runId?: string,
   terminalTracker?: ManualRunTerminalTracker,
   streamScheduleKey?: string,
-  streamSourceGeneration?: string,
+  streamSourceIdentity?: string,
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -1115,10 +1167,7 @@ async function inspectManualRunPreflight(
       mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
     );
     const job = findJobOrThrow(state, id);
-    if (
-      streamScheduleKey !== undefined &&
-      (!ownsStreamSchedule(job, streamScheduleKey, streamSourceGeneration) || !isJobEnabled(job))
-    ) {
+    if (!admitsStreamSourceRun(job, streamScheduleKey, streamSourceIdentity)) {
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
     try {
@@ -1169,7 +1218,7 @@ async function prepareManualRun(
     opts?.runId,
     opts?.terminalTracker,
     opts?.streamScheduleKey,
-    opts?.streamSourceGeneration,
+    opts?.streamSourceIdentity,
   );
   if (!preflight.ok) {
     return preflight;
@@ -1198,11 +1247,7 @@ async function prepareManualRun(
       mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
     );
     const job = findJobOrThrow(state, id);
-    if (
-      opts?.streamScheduleKey !== undefined &&
-      (!ownsStreamSchedule(job, opts.streamScheduleKey, opts.streamSourceGeneration) ||
-        !isJobEnabled(job))
-    ) {
+    if (!admitsStreamSourceRun(job, opts?.streamScheduleKey, opts?.streamSourceIdentity)) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
     try {
@@ -1284,8 +1329,8 @@ async function prepareManualRun(
       ...(opts?.streamScheduleKey !== undefined
         ? { streamScheduleKey: opts.streamScheduleKey }
         : {}),
-      ...(opts?.streamSourceGeneration !== undefined
-        ? { streamSourceGeneration: opts.streamSourceGeneration }
+      ...(opts?.streamSourceIdentity !== undefined
+        ? { streamSourceIdentity: opts.streamSourceIdentity }
         : {}),
       ...(opts?.onTriggerDisposition ? { onTriggerDisposition: opts.onTriggerDisposition } : {}),
     } as const;
@@ -1321,15 +1366,11 @@ async function activatePreparedManualRun(
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
-    if (
-      prepared.streamScheduleKey !== undefined &&
-      (!ownsStreamSchedule(job, prepared.streamScheduleKey, prepared.streamSourceGeneration) ||
-        !isJobEnabled(job))
-    ) {
+    if (!admitsStreamSourceRun(job, prepared.streamScheduleKey, prepared.streamSourceIdentity)) {
       // This is reservation identity, not watcher ownership: a force run can
       // wait behind cron admission after its owner has stopped for replacement.
-      // The source-generation token rejects a batch whose epoch was retired even
-      // when the schedule key is unchanged (disable→re-enable, A→B→A).
+      // The logical source identity rejects retired batches even when the
+      // schedule key is unchanged (disable→re-enable, A→B→A).
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
@@ -1505,7 +1546,7 @@ async function finishPreparedManualRun(
         owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
         streamBatch: prepared.streamBatch,
         streamScheduleKey: prepared.streamScheduleKey,
-        streamSourceGeneration: prepared.streamSourceGeneration,
+        streamSourceIdentity: prepared.streamSourceIdentity,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };

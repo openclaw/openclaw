@@ -25,7 +25,7 @@ import {
   resolveCronStaggerMs,
   resolveDefaultCronStaggerMs,
 } from "../stagger.js";
-import { resolveCronStreamBatching } from "../stream-schedule.js";
+import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type {
   CronDelivery,
   CronDeliveryPatch,
@@ -710,6 +710,15 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
+  if (job.schedule.kind === "stream" && !job.state.streamSourceIdentity?.trim()) {
+    // Identity is store-owned state. A hand-imported or pre-identity row must
+    // not reach the watcher (which fails closed on a missing identity) or
+    // admission (which would reject every batch); assign one like any other
+    // repairable tick state.
+    job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+    changed = true;
+  }
+
   if (job.schedule.kind === "every") {
     const normalizedAnchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
@@ -1116,6 +1125,9 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
       ...input.state,
+      ...(schedule.kind === "stream"
+        ? { streamSourceIdentity: createCronStreamSourceIdentity() }
+        : {}),
     },
   };
   assertSupportedJobSpec(job);
@@ -1282,6 +1294,7 @@ export function applyJobPatch(
     job.state.streamError = undefined;
     job.state.streamConsecutiveFailures = undefined;
     job.state.streamRestartExhausted = undefined;
+    job.state.streamSourceIdentity = undefined;
     job.state.streamDroppedBatches = undefined;
     job.state.streamCoalescedBatches = undefined;
     job.state.streamLastStartedAtMs = undefined;

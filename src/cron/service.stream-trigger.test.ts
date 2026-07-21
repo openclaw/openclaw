@@ -18,7 +18,7 @@ async function createHarness(fire: boolean) {
   const cron = new CronService({
     storePath,
     cronEnabled: true,
-    cronConfig: { triggers: { enabled: true, minIntervalMs: 1 } },
+    cronConfig: { triggers: { enabled: true } },
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
@@ -73,13 +73,36 @@ describe("cron stream trigger composition", () => {
     }
   });
 
+  it("rotates source identity when a once trigger auto-disables the stream", async () => {
+    const harness = await createHarness(true);
+    try {
+      const configured = await harness.cron.update(harness.job.id, {
+        trigger: { script: "json({ fire: true })", once: true },
+      });
+      const sourceIdentity = configured.state.streamSourceIdentity;
+      expect(sourceIdentity).toEqual(expect.any(String));
+
+      await harness.cron.run(harness.job.id, "force", {
+        evaluateTrigger: true,
+        streamBatch: "final batch",
+        payload: { kind: "agentTurn", message: "base" },
+      });
+
+      const stored = harness.cron.getJob(harness.job.id);
+      expect(stored?.enabled).toBe(false);
+      expect(stored?.state.streamSourceIdentity).not.toBe(sourceIdentity);
+    } finally {
+      harness.cron.stop();
+    }
+  });
+
   it("appends the gate message and batch to a main-session system event", async () => {
     const { storePath } = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const cron = new CronService({
       storePath,
       cronEnabled: true,
-      cronConfig: { triggers: { enabled: true, minIntervalMs: 1 } },
+      cronConfig: { triggers: { enabled: true } },
       log: logger,
       enqueueSystemEvent,
       requestHeartbeat: vi.fn(),
@@ -121,7 +144,7 @@ describe("cron stream trigger composition", () => {
     const cron = new CronService({
       storePath,
       cronEnabled: true,
-      cronConfig: { triggers: { enabled: true, minIntervalMs: 1 } },
+      cronConfig: { triggers: { enabled: true } },
       log: logger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
@@ -176,7 +199,7 @@ describe("cron stream trigger composition", () => {
       storePath,
       cronEnabled: true,
       cronConfig: {
-        triggers: { enabled: true, minIntervalMs: 1 },
+        triggers: { enabled: true },
         failureAlert: { enabled: true, after: 1, cooldownMs: 0 },
       },
       log: logger,
@@ -229,7 +252,7 @@ describe("cron stream trigger composition", () => {
     const cron = new CronService({
       storePath,
       cronEnabled: true,
-      cronConfig: { triggers: { enabled: true, minIntervalMs: 1 } },
+      cronConfig: { triggers: { enabled: true } },
       log: logger,
       enqueueSystemEvent: vi.fn(),
       requestHeartbeat: vi.fn(),
