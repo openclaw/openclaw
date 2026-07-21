@@ -223,6 +223,13 @@ public enum QuestionStatus: String, Codable, Sendable {
     case expired = "expired"
 }
 
+public enum ChatRunStartupPhase: String, Codable, Sendable {
+    case preparingWorkspace = "preparing_workspace"
+    case provisioningEnvironment = "provisioning_environment"
+    case preparingContext = "preparing_context"
+    case startingModel = "starting_model"
+}
+
 public struct BoardTab: Codable, Sendable {
     public let tabid: String
     public let title: String
@@ -15724,6 +15731,44 @@ public struct ChatInjectParams: Codable, Sendable {
     }
 }
 
+public struct ChatStatusEvent: Codable, Sendable {
+    public let runid: String
+    public let sessionkey: String
+    public let agentid: String?
+    public let spawnedby: String?
+    public let seq: Int
+    public let state: String
+    public let phase: ChatRunStartupPhase
+
+    public init(
+        runid: String,
+        sessionkey: String,
+        agentid: String? = nil,
+        spawnedby: String? = nil,
+        seq: Int,
+        state: String,
+        phase: ChatRunStartupPhase)
+    {
+        self.runid = runid
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.spawnedby = spawnedby
+        self.seq = seq
+        self.state = state
+        self.phase = phase
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case spawnedby = "spawnedBy"
+        case seq
+        case state
+        case phase
+    }
+}
+
 public struct ChatDeltaEvent: Codable, Sendable {
     public let runid: String
     public let sessionkey: String
@@ -16598,6 +16643,7 @@ public enum PluginsSessionActionResult: Codable, Sendable {
 }
 
 public enum ChatEvent: Codable, Sendable {
+    case status(ChatStatusEvent)
     case delta(ChatDeltaEvent)
     case final(ChatFinalEvent)
     case aborted(ChatAbortedEvent)
@@ -16611,6 +16657,7 @@ public enum ChatEvent: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let discriminator = try container.decode(String.self, forKey: .discriminator)
         switch discriminator {
+        case "status": self = try .status(ChatStatusEvent(from: decoder))
         case "delta": self = try .delta(ChatDeltaEvent(from: decoder))
         case "final": self = try .final(ChatFinalEvent(from: decoder))
         case "aborted": self = try .aborted(ChatAbortedEvent(from: decoder))
@@ -16626,6 +16673,7 @@ public enum ChatEvent: Codable, Sendable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
+        case .status(let value): try value.encode(to: encoder)
         case .delta(let value): try value.encode(to: encoder)
         case .final(let value): try value.encode(to: encoder)
         case .aborted(let value): try value.encode(to: encoder)
