@@ -49,9 +49,6 @@ function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
   return redactSensitiveText(value, redactTranscriptOptions(cfg));
 }
 
-// Preserve unambiguous pagination state in transcripts; global logs still redact it.
-const TRANSCRIPT_PAGINATION_CURSOR_KEY_RE = /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i;
-
 function redactTranscriptStructuredFieldValue(
   key: string,
   value: string,
@@ -60,11 +57,10 @@ function redactTranscriptStructuredFieldValue(
   if (cfg?.logging?.redactSensitive === "off") {
     return value;
   }
-  if (TRANSCRIPT_PAGINATION_CURSOR_KEY_RE.test(key)) {
-    // Value-pattern redaction still masks embedded secrets.
-    return redactTranscriptText(value, cfg);
-  }
-  return redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
+  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
+    ? redactTranscriptText(value, cfg)
+    : redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
@@ -72,13 +68,11 @@ function isPlainTranscriptObject(value: object): value is Record<string, unknown
   return prototype === Object.prototype || prototype === null;
 }
 
-function isImageMimeType(value: unknown): value is string {
-  return typeof value === "string" && /^image\//iu.test(value.trim());
-}
+const isImageMimeType = (value: unknown): value is string =>
+  typeof value === "string" && /^image\//iu.test(value.trim());
 
-function normalizeImageMimeType(value: unknown): string | undefined {
-  return isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
-}
+const normalizeImageMimeType = (value: unknown): string | undefined =>
+  isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
 
 function imageMimeTypeForRecord(value: Record<string, unknown>): string | undefined {
   return (
