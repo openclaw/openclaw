@@ -29,6 +29,13 @@ function compareChannels(left: PluginPackageChannel, right: PluginPackageChannel
     : leftOrder - rightOrder;
 }
 
+function matchesChannel(channel: PluginPackageChannel, normalizedChannelId: string): boolean {
+  return (
+    channel.id?.toLowerCase() === normalizedChannelId ||
+    Boolean(channel.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId))
+  );
+}
+
 export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
   const bundledChannels = listBundledPackageChannelMetadata().toSorted(compareChannels);
   const catalogChannels = listRawChannelPluginCatalogEntries({
@@ -37,7 +44,17 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
   })
     .flatMap((entry) => (entry.channel ? [entry.channel] : []))
     .toSorted(compareChannels);
-  const channels = [...bundledChannels, ...catalogChannels];
+  const orderedChannels = [...bundledChannels, ...catalogChannels];
+  const normalizedChannelId = channelId?.trim().toLowerCase();
+  // The selected channel's declarations win switch-identity dedupe so another
+  // channel's same-named option cannot control parsing arity or defaults for
+  // this invocation.
+  const channels = normalizedChannelId
+    ? [
+        ...orderedChannels.filter((channel) => matchesChannel(channel, normalizedChannelId)),
+        ...orderedChannels.filter((channel) => !matchesChannel(channel, normalizedChannelId)),
+      ]
+    : orderedChannels;
   const seenSwitches = new Set<string>();
   const options = channels
     .flatMap((channel) => channel.cliAddOptions ?? [])
@@ -50,13 +67,8 @@ export function resolveChannelSetupCliOptionMetadata(channelId?: string) {
       return true;
     });
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
-  const normalizedChannelId = channelId?.trim().toLowerCase();
   for (const channel of normalizedChannelId
-    ? channels.filter(
-        (candidate) =>
-          candidate.id?.toLowerCase() === normalizedChannelId ||
-          candidate.aliases?.some((alias) => alias.toLowerCase() === normalizedChannelId),
-      )
+    ? channels.filter((candidate) => matchesChannel(candidate, normalizedChannelId))
     : []) {
     for (const option of channel.cliAddOptions ?? []) {
       if (!option.valueType) {

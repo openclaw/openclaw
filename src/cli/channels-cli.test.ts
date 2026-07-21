@@ -193,6 +193,61 @@ describe("registerChannelsCli", () => {
     expect(flags).not.toContain("--token <payload>");
   });
 
+  it("prefers the selected channel's declaration for a shared switch", async () => {
+    listRawChannelPluginCatalogEntriesMock.mockReturnValueOnce([
+      {
+        id: "chat-a",
+        pluginId: "chat-a",
+        origin: "global",
+        channel: {
+          id: "chat-a",
+          label: "Chat A",
+          cliAddOptions: [{ flags: "--url <url>", description: "Chat A URL" }],
+        },
+        meta: {
+          id: "chat-a",
+          label: "Chat A",
+          selectionLabel: "Chat A",
+          docsPath: "/channels/chat-a",
+          blurb: "Chat A test channel.",
+        },
+        install: { npmSpec: "@openclaw/chat-a" },
+      },
+      {
+        id: "chat-b",
+        pluginId: "chat-b",
+        origin: "global",
+        channel: {
+          id: "chat-b",
+          label: "Chat B",
+          cliAddOptions: [{ flags: "--url <server>", description: "Chat B server URL" }],
+        },
+        meta: {
+          id: "chat-b",
+          label: "Chat B",
+          selectionLabel: "Chat B",
+          docsPath: "/channels/chat-b",
+          blurb: "Chat B test channel.",
+        },
+        install: { npmSpec: "@openclaw/chat-b" },
+      },
+    ]);
+    const program = new Command().name("openclaw");
+
+    await registerChannelsCli(program, [
+      "node",
+      "openclaw",
+      "channels",
+      "add",
+      "--channel",
+      "chat-b",
+    ]);
+
+    const flags = getChannelAddOptionFlags(program);
+    expect(flags).toContain("--url <server>");
+    expect(flags).not.toContain("--url <url>");
+  });
+
   it("uses caller argv instead of raw process argv for channel-specific add options", async () => {
     process.argv = ["node", "openclaw", "channels"];
 

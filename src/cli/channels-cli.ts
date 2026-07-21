@@ -72,7 +72,30 @@ function shouldRegisterChannelSetupOptions(
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
-async function addChannelSetupOptions(command: Command): Promise<Command> {
+// Best-effort pre-parse sniff of the selected channel so its option
+// declarations win registration. Misses only the unusual `add --flag value
+// <channel>` shape, which falls back to first-declaration ordering.
+function resolveChannelsAddArgvChannel(argv: string[]): string | undefined {
+  const tokens = normalizeWindowsArgv(argv);
+  const addIndex = tokens.indexOf("add");
+  if (addIndex === -1) {
+    return undefined;
+  }
+  const rest = tokens.slice(addIndex + 1);
+  const channelFlagIndex = rest.indexOf("--channel");
+  if (channelFlagIndex !== -1) {
+    const value = rest[channelFlagIndex + 1];
+    return value && !value.startsWith("-") ? value : undefined;
+  }
+  const inline = rest.find((token) => token.startsWith("--channel="));
+  if (inline) {
+    return inline.slice("--channel=".length) || undefined;
+  }
+  const positional = rest[0];
+  return positional && !positional.startsWith("-") ? positional : undefined;
+}
+
+async function addChannelSetupOptions(command: Command, channelId?: string): Promise<Command> {
   const { channelCliOptionSwitchKey, resolveChannelSetupCliOptionMetadata } =
     await channelSetupCliOptionsLoader.load();
   // Seed with switch identities, not raw flags strings: Commander throws on a
@@ -81,7 +104,7 @@ async function addChannelSetupOptions(command: Command): Promise<Command> {
   const seenSwitches = new Set(
     command.options.map((option) => option.long ?? option.short ?? option.flags),
   );
-  const { options } = resolveChannelSetupCliOptionMetadata();
+  const { options } = resolveChannelSetupCliOptionMetadata(channelId);
   for (const option of options) {
     const key = channelCliOptionSwitchKey(option.flags);
     if (seenSwitches.has(key)) {
@@ -263,7 +286,7 @@ export async function registerChannelsCli(
     .option("--use-env", "Use env-backed credentials when supported", false);
 
   if (shouldRegisterChannelSetupOptions(argv, options)) {
-    await addChannelSetupOptions(addCommand);
+    await addChannelSetupOptions(addCommand, resolveChannelsAddArgvChannel(argv));
   }
 
   addCommand.action(async (channelArg: string | undefined, opts, command) => {
