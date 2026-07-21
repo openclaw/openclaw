@@ -113,8 +113,17 @@ function isMultipartFormRequest(opts: Lark.HttpRequestOptions<unknown>): boolean
   return /^multipart\/form-data(?:;|$)/i.test(readHeader(opts.headers, "content-type") ?? "");
 }
 
-function hasFeishuUploadPart(data: Record<string, unknown>): boolean {
-  return Buffer.isBuffer(data.file) || Buffer.isBuffer(data.image);
+const FEISHU_MESSAGE_MEDIA_UPLOAD_PATH_RE = /\/open-apis\/im\/v1\/(?:files|images)(?:[?#]|$)/;
+
+function isFeishuMessageMediaUploadRequest(
+  opts: Lark.HttpRequestOptions<unknown>,
+  data: Record<string, unknown>,
+): boolean {
+  return (
+    typeof opts.url === "string" &&
+    FEISHU_MESSAGE_MEDIA_UPLOAD_PATH_RE.test(opts.url) &&
+    (Buffer.isBuffer(data.file) || Buffer.isBuffer(data.image))
+  );
 }
 
 function stringifyMultipartFieldValue(value: unknown): string | undefined {
@@ -139,7 +148,11 @@ function bufferToBlobPart(value: Buffer): Uint8Array<ArrayBuffer> {
 function normalizeMultipartUploadData<D>(
   opts: Lark.HttpRequestOptions<D>,
 ): Lark.HttpRequestOptions<D> {
-  if (!isMultipartFormRequest(opts) || !isRecord(opts.data) || !hasFeishuUploadPart(opts.data)) {
+  if (
+    !isMultipartFormRequest(opts) ||
+    !isRecord(opts.data) ||
+    !isFeishuMessageMediaUploadRequest(opts, opts.data)
+  ) {
     return opts;
   }
 

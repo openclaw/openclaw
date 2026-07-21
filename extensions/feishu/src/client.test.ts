@@ -325,24 +325,40 @@ describe("createFeishuClient HTTP timeout", () => {
     });
   });
 
-  it("normalizes Feishu SDK multipart uploads to explicit FormData", async () => {
+  it.each([
+    {
+      kind: "file",
+      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      data: { file_type: "stream", file_name: "tiny.txt", file: Buffer.from("tiny") },
+      mediaField: "file",
+      mediaBytes: Buffer.from("tiny"),
+      fileName: "tiny.txt",
+      scalarField: "file_type",
+      scalarValue: "stream",
+    },
+    {
+      kind: "image",
+      url: "https://open.feishu.cn/open-apis/im/v1/images",
+      data: { image_type: "message", image: Buffer.from("pixels") },
+      mediaField: "image",
+      mediaBytes: Buffer.from("pixels"),
+      fileName: "image.bin",
+      scalarField: "image_type",
+      scalarValue: "message",
+    },
+  ])("normalizes Feishu SDK $kind uploads to explicit FormData", async (testCase) => {
     createFeishuClient({
-      appId: "app_upload",
-      appSecret: "secret_upload", // pragma: allowlist secret
-      accountId: "multipart-upload",
+      appId: `app_upload_${testCase.kind}`,
+      appSecret: "test-secret", // pragma: allowlist secret
+      accountId: `multipart-upload-${testCase.kind}`,
     });
-
     const httpInstance = readLastClientHttpInstance();
 
     await httpInstance.request({
-      url: "https://open.feishu.cn/open-apis/im/v1/files",
+      url: testCase.url,
       method: "POST",
       headers: { "Content-Type": "multipart/form-data", Authorization: "Bearer token" },
-      data: {
-        file_type: "stream",
-        file_name: "tiny.txt",
-        file: Buffer.from("tiny"),
-      },
+      data: testCase.data,
     });
 
     const delegated = readCallOptions(mockBaseHttpInstance.request);
@@ -351,12 +367,32 @@ describe("createFeishuClient HTTP timeout", () => {
       "Content-Type": "multipart/form-data",
       Authorization: "Bearer token",
     });
-    expect(delegated.data).toBeInstanceOf(FormData);
-    expect(delegated.data).not.toEqual({
-      file_type: "stream",
-      file_name: "tiny.txt",
-      file: Buffer.from("tiny"),
+    const form = delegated.data as FormData;
+    expect(form).toBeInstanceOf(FormData);
+    expect(form.get(testCase.scalarField)).toBe(testCase.scalarValue);
+    const media = form.get(testCase.mediaField) as File;
+    expect(media).toBeInstanceOf(Blob);
+    expect(media.name).toBe(testCase.fileName);
+    expect(Buffer.from(await media.arrayBuffer())).toEqual(testCase.mediaBytes);
+  });
+
+  it("leaves unrelated SDK multipart uploads on the SDK serialization path", async () => {
+    createFeishuClient({
+      appId: "app_upload_other",
+      appSecret: "test-secret", // pragma: allowlist secret
+      accountId: "multipart-upload-other",
     });
+    const httpInstance = readLastClientHttpInstance();
+    const data = { file_name: "drive.txt", file: Buffer.from("drive") };
+
+    await httpInstance.request({
+      url: "https://open.feishu.cn/open-apis/drive/v1/files/upload_all",
+      method: "POST",
+      headers: { "Content-Type": "multipart/form-data" },
+      data,
+    });
+
+    expect(readCallOptions(mockBaseHttpInstance.request).data).toBe(data);
   });
 
   it("uses config-configured default timeout when provided", async () => {
