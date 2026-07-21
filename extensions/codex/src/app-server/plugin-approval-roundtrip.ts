@@ -93,7 +93,7 @@ export async function waitForPluginApprovalDecision(params: {
     "plugin.approval.waitDecision",
     { timeoutMs: resolveCodexGatewayTimeoutWithGraceMs(timeoutMs) },
     { id: params.approvalId },
-  ).catch((error) => {
+  ).catch((error: unknown) => {
     if (isApprovalNotFoundError(error)) {
       return null;
     }

@@ -2139,7 +2139,7 @@ async function waitForNativeHookRelayApprovalDecision(params: {
       "plugin.approval.waitDecision",
       { timeoutMs: params.timeoutMs + 10_000 },
       { id: params.approvalId },
-    ).catch((error) => {
+    ).catch((error: unknown) => {
       if (isApprovalNotFoundError(error)) {
         return undefined;
       }
