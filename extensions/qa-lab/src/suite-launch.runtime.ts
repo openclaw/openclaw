@@ -87,7 +87,8 @@ type QaUnifiedPartitionResult = {
 };
 
 type QaUnifiedPartitionTask = {
-  exclusiveKey?: string;
+  resourceCapacity?: number;
+  resourceKey?: string;
   run: () => Promise<QaUnifiedPartitionResult>;
   weight: number;
 };
@@ -96,6 +97,7 @@ type QaFlowChannelGroup = {
   channel: string | undefined;
   channelId: string | undefined;
   channelDriverSelection: QaSuiteRunParams["channelDriverSelection"];
+  driverFactory: NonNullable<QaSuiteRunParams["adapterFactories"]>[number] | undefined;
   scenarios: QaSeedScenarioWithSource[];
 };
 
@@ -135,6 +137,12 @@ async function resolveQaFlowChannelGroups(
   scenarios: readonly QaSeedScenarioWithSource[],
 ): Promise<QaFlowChannelGroup[]> {
   if (runParams?.adapterFactories) {
+    const resolveDriverFactory = (channelId: string | undefined) =>
+      channelId
+        ? runParams.adapterFactories?.find((factory) =>
+            factory.matches({ channelId, driver: runParams.channelDriver ?? "live" }),
+          )
+        : undefined;
     const explicitChannel = runParams.channelId?.trim().toLowerCase();
     if (explicitChannel) {
       return [
@@ -142,6 +150,7 @@ async function resolveQaFlowChannelGroups(
           channel: explicitChannel,
           channelId: explicitChannel,
           channelDriverSelection: runParams.channelDriverSelection,
+          driverFactory: resolveDriverFactory(explicitChannel),
           scenarios: [...scenarios],
         },
       ];
@@ -157,6 +166,7 @@ async function resolveQaFlowChannelGroups(
       channel,
       channelId: channel,
       channelDriverSelection: runParams.channelDriverSelection,
+      driverFactory: resolveDriverFactory(channel),
       scenarios: groupedScenarios,
     }));
   }
@@ -166,6 +176,7 @@ async function resolveQaFlowChannelGroups(
         channel: runParams?.channelId ?? runParams?.channelDriverSelection?.channel,
         channelId: runParams?.channelId,
         channelDriverSelection: runParams?.channelDriverSelection,
+        driverFactory: undefined,
         scenarios: [...scenarios],
       },
     ];
@@ -188,6 +199,7 @@ async function resolveQaFlowChannelGroups(
         channelDriverSelection:
           runParams.channelDriverSelection ??
           resolveOpenClawCrablineChannelDriverSelection({ channel: singleChannel }),
+        driverFactory: undefined,
         scenarios: [...scenarios],
       },
     ];
@@ -198,6 +210,7 @@ async function resolveQaFlowChannelGroups(
     channel,
     channelId: undefined,
     channelDriverSelection: resolveOpenClawCrablineChannelDriverSelection({ channel }),
+    driverFactory: undefined,
     scenarios: scenarios.filter(
       (scenario) =>
         (normalizeQaSuiteScenarioChannel(scenario) ?? OPENCLAW_CRABLINE_DEFAULT_CHANNEL) ===
@@ -325,7 +338,7 @@ async function runWeightedUnifiedPartitionTasks(
   const limit = Math.max(1, Math.floor(maxWeight));
   const results: QaUnifiedPartitionResult[] = [];
   const pending = tasks.map((task, index) => ({ index, task }));
-  const activeExclusiveKeys = new Set<string>();
+  const activeResourceCounts = new Map<string, number>();
   let activeWeight = 0;
   return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
     let firstError: Error | undefined;
@@ -351,7 +364,9 @@ async function runWeightedUnifiedPartitionTasks(
           const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
           return (
             (activeWeight === 0 || activeWeight + taskWeight <= limit) &&
-            (!task.exclusiveKey || !activeExclusiveKeys.has(task.exclusiveKey))
+            (!task.resourceKey ||
+              (activeResourceCounts.get(task.resourceKey) ?? 0) <
+                Math.max(1, Math.floor(task.resourceCapacity ?? 1)))
           );
         });
         if (pendingIndex === -1) {
@@ -364,16 +379,28 @@ async function runWeightedUnifiedPartitionTasks(
         const { index, task } = pendingTask;
         const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
         activeWeight += taskWeight;
-        if (task.exclusiveKey) {
-          activeExclusiveKeys.add(task.exclusiveKey);
+        if (task.resourceKey) {
+          activeResourceCounts.set(
+            task.resourceKey,
+            (activeResourceCounts.get(task.resourceKey) ?? 0) + 1,
+          );
         }
+        const releaseResource = () => {
+          if (!task.resourceKey) {
+            return;
+          }
+          const remaining = (activeResourceCounts.get(task.resourceKey) ?? 1) - 1;
+          if (remaining > 0) {
+            activeResourceCounts.set(task.resourceKey, remaining);
+          } else {
+            activeResourceCounts.delete(task.resourceKey);
+          }
+        };
         task.run().then(
           (result) => {
             results[index] = result;
             activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
+            releaseResource();
             if (pending.length === 0 && activeWeight === 0) {
               finishIfSettled();
               return;
@@ -383,9 +410,7 @@ async function runWeightedUnifiedPartitionTasks(
           (error: unknown) => {
             firstError = error instanceof Error ? error : new Error(String(error));
             activeWeight -= taskWeight;
-            if (task.exclusiveKey) {
-              activeExclusiveKeys.delete(task.exclusiveKey);
-            }
+            releaseResource();
             finishIfSettled();
           },
         );
@@ -610,9 +635,12 @@ async function runUnifiedQaSuite(params: {
       const usesContributedChannelDriver = Boolean(
         channelGroup.channelId && params.runParams?.adapterFactories,
       );
+      const driverParallelism = usesContributedChannelDriver
+        ? Math.max(1, Math.floor(channelGroup.driverFactory?.maxParallelismPerChannel ?? 1))
+        : 1;
       const sharedFlowPartitions = partitionSharedFlowScenarios(
         sharedFlowScenarios,
-        usesContributedChannelDriver ? 1 : concurrency,
+        usesContributedChannelDriver ? Math.min(concurrency, driverParallelism) : concurrency,
       );
       // Channel-driver flow workers each launch a gateway plus transport harness.
       // Serializing their isolated workers keeps state-mutating smoke checks from
@@ -665,10 +693,13 @@ async function runUnifiedQaSuite(params: {
           .filter((part): part is string => Boolean(part))
           .join("-");
         const task = {
-          // One channel's credential and gateway state stay serial. Distinct channels own
-          // separate adapters, leases, and artifact directories, so they may run together.
-          exclusiveKey: channelDriverFlowRequiresExclusiveWorkers
-            ? `channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
+          // Drivers default to one same-channel partition because credentials and Gateway
+          // state are often exclusive. A driver may raise this only when create() fully isolates them.
+          resourceCapacity: channelDriverFlowRequiresExclusiveWorkers
+            ? driverParallelism
+            : undefined,
+          resourceKey: channelDriverFlowRequiresExclusiveWorkers
+            ? `driver:${channelGroup.driverFactory?.id ?? params.runParams?.channelDriver ?? "default"}:channel:${channelGroup.channel ?? channelGroup.channelId ?? "default"}`
             : undefined,
           weight: partition.concurrency,
           run: async () => {

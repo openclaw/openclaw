@@ -296,6 +296,57 @@ describe("qa suite runtime launcher", () => {
     expect(maxActiveChannels).toBe(2);
   });
 
+  it("uses driver-declared parallelism for same-channel partitions", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-pluggable-same-channel-concurrency-");
+    const defaultFlowImplementation = runQaFlowSuite.getMockImplementation();
+    if (!defaultFlowImplementation) {
+      throw new Error("expected default QA flow suite mock implementation");
+    }
+    let activePartitions = 0;
+    let maxActivePartitions = 0;
+    runQaFlowSuite.mockImplementation(async (params) => {
+      activePartitions += 1;
+      maxActivePartitions = Math.max(maxActivePartitions, activePartitions);
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 1);
+      });
+      try {
+        return await defaultFlowImplementation(params);
+      } finally {
+        activePartitions -= 1;
+      }
+    });
+
+    await runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/pluggable-same-channel-concurrency",
+      providerMode: "mock-openai",
+      channelDriver: "live",
+      adapterFactories: [
+        {
+          id: "matrix",
+          maxParallelismPerChannel: 2,
+          matches: ({ channelId, driver }) => driver === "live" && channelId === "matrix",
+          create: vi.fn(),
+        },
+      ],
+      concurrency: 2,
+      scenarioIds: [
+        "matrix-approval-channel-target-both",
+        "matrix-approval-deny-reaction",
+        "matrix-approval-exec-metadata-chunked",
+        "matrix-approval-exec-metadata-single-event",
+      ],
+    });
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
+    expect(runQaFlowSuite.mock.calls.map(([params]) => params?.scenarioIds)).toEqual([
+      ["matrix-approval-channel-target-both", "matrix-approval-exec-metadata-chunked"],
+      ["matrix-approval-deny-reaction", "matrix-approval-exec-metadata-single-event"],
+    ]);
+    expect(maxActivePartitions).toBe(2);
+  });
+
   it("binds one portable channel scenario without an explicit channel override", async () => {
     const adapterFactories = [
       {

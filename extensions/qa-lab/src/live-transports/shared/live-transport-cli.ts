@@ -165,9 +165,13 @@ export function createLiveTransportQaCliRegistration(
 export function createLiveTransportQaAdapterFactory(params: {
   create: NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]>["create"];
   id: string;
+  maxParallelismPerChannel?: number;
 }): NonNullable<LiveTransportQaCliRegistrationOptions["adapterFactory"]> {
   return {
     id: params.id,
+    ...(params.maxParallelismPerChannel === undefined
+      ? {}
+      : { maxParallelismPerChannel: params.maxParallelismPerChannel }),
     matches: ({ channelId, driver }) => driver === "live" && channelId === params.id,
     create: params.create,
   };
