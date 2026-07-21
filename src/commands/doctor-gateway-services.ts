@@ -108,8 +108,14 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+// Bound the teardown probes so a stuck launchd cannot hang doctor/repair
+// indefinitely; the failures are already ignored below (matches #109115).
+const LAUNCHCTL_TEARDOWN_TIMEOUT_MS = 5_000;
 const runLaunchctlQuietly = (args: string[]) =>
-  runExec("launchctl", args, { logOutput: false }).catch(() => undefined);
+  runExec("launchctl", args, {
+    logOutput: false,
+    timeoutMs: LAUNCHCTL_TEARDOWN_TIMEOUT_MS,
+  }).catch(() => undefined);
 const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
