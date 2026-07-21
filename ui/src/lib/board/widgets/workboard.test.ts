@@ -193,4 +193,66 @@ describe("Workboard plugin widgets", () => {
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
   });
+
+  it("restarts loading after reconnecting while the previous request is pending", async () => {
+    const firstList = deferred<unknown>();
+    const request = vi.fn(async (method: string) => {
+      if (method !== "workboard.cards.list") {
+        throw new Error(`Unexpected method: ${method}`);
+      }
+      return request.mock.calls.length === 1
+        ? await firstList.promise
+        : { cards, statuses: ["ready", "running", "done"] };
+    });
+    const element = document.createElement("openclaw-workboard-mini-widget");
+    element.widget = pluginWidget("workboard:mini", { boardId: "ops" });
+    const provider = createApplicationContextProvider(createContext(request));
+    provider.append(element);
+    document.body.append(provider);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    element.remove();
+    provider.append(element);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(element.textContent).toContain("Running card"));
+    firstList.resolve({ cards: [], statuses: ["ready", "running", "done"] });
+  });
+
+  it("keeps a queued refresh owned by the current gateway generation", async () => {
+    const staleList = deferred<unknown>();
+    const currentList = deferred<unknown>();
+    const staleRequest = vi.fn(async () => await staleList.promise);
+    const currentRequest = vi.fn(async (method: string) => {
+      if (method !== "workboard.cards.list") {
+        throw new Error(`Unexpected method: ${method}`);
+      }
+      return currentRequest.mock.calls.length === 1
+        ? await currentList.promise
+        : { cards, statuses: ["ready", "running", "done"] };
+    });
+    const currentEvents: {
+      listener?: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0];
+    } = {};
+    const element = document.createElement("openclaw-workboard-mini-widget");
+    element.widget = pluginWidget("workboard:mini", { boardId: "ops" });
+    const provider = createApplicationContextProvider(createContext(staleRequest));
+    provider.append(element);
+    document.body.append(provider);
+    await vi.waitFor(() => expect(staleRequest).toHaveBeenCalledTimes(1));
+
+    provider.setContext(createContext(currentRequest, currentEvents));
+    await vi.waitFor(() => expect(currentRequest).toHaveBeenCalledTimes(1));
+    currentEvents.listener?.({
+      type: "event",
+      event: "plugin.workboard.changed",
+      payload: { epoch: "epoch-current", revision: 2 },
+    });
+    staleList.resolve({ cards: [], statuses: ["ready", "running", "done"] });
+    await Promise.resolve();
+    currentList.resolve({ cards: [], statuses: ["ready", "running", "done"] });
+
+    await vi.waitFor(() => expect(currentRequest).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(element.textContent).toContain("Running card"));
+  });
 });

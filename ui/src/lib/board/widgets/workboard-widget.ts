@@ -67,6 +67,11 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     this.refreshGeneration += 1;
     this.refreshPromise = null;
     this.refreshPending = false;
+    this.client = null;
+    this.loaded = false;
+    this.loadAttempted = false;
+    this.loading = false;
+    this.error = "";
     this.subscriptions.clear();
     super.disconnectedCallback();
   }
@@ -169,10 +174,12 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     try {
       await refresh;
     } finally {
-      if (this.refreshPromise === refresh) {
-        this.refreshPromise = null;
+      if (this.refreshPromise !== refresh) {
+        return;
       }
-      const shouldRefreshAgain = this.refreshPending && client === this.client;
+      this.refreshPromise = null;
+      const shouldRefreshAgain =
+        this.refreshPending && generation === this.refreshGeneration && client === this.client;
       this.refreshPending = false;
       if (shouldRefreshAgain) {
         await this.refresh(true);
