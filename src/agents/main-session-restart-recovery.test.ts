@@ -5648,8 +5648,10 @@ describe("main-session-restart-recovery", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
-    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    const entry = store["agent:openclaw:telegram:group:-100:topic:2"];
+    const entry = loadSessionEntry({
+      sessionKey: "agent:openclaw:telegram:group:-100:topic:2",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
     expect(entry?.status).not.toBe("running");
     expect(entry?.abortedLastRun).toBe(false);
     expect(entry?.restartRecoveryRuns).toBeUndefined();
@@ -5679,8 +5681,10 @@ describe("main-session-restart-recovery", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
-    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
-    const entry = store["agent:openclaw:telegram:group:-100:topic:8893"];
+    const entry = loadSessionEntry({
+      sessionKey: "agent:openclaw:telegram:group:-100:topic:8893",
+      storePath: path.join(sessionsDir, "sessions.json"),
+    });
     expect(entry?.status).not.toBe("running");
     expect(entry?.announceLastRun).toBeUndefined();
   });

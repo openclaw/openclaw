@@ -443,8 +443,10 @@ async function reconcileAnnounceInterruptedSession(params: {
   storePath: string;
   sessionKey: string;
 }): Promise<void> {
-  await applyRestartRecoveryLifecycle({
+  await applySessionEntryReplacements({
     storePath: params.storePath,
+    sessionKeys: [params.sessionKey],
+    statuses: ["running"],
     update: (entries) => {
       const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
       const entry = current?.entry;
