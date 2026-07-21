@@ -1,20 +1,14 @@
 // Live Docker Stage tests cover live docker stage script behavior.
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("live Docker state staging", () => {
   it("keeps repo-local generated artifacts out of the source copy", () => {
@@ -25,8 +19,7 @@ describe("live Docker state staging", () => {
   });
 
   it("adds private SDK source exports only to the disposable source stage", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-stage-sdk-"));
-    tempDirs.push(root);
+    const root = tempDirs.make("openclaw-live-stage-sdk-");
     mkdirSync(path.join(root, "scripts", "lib"), { recursive: true });
     mkdirSync(path.join(root, "src", "plugin-sdk"), { recursive: true });
     writeFileSync(
