@@ -1403,7 +1403,7 @@
 .callout--dismissible,
 .callout--action {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
 }
 
@@ -5247,6 +5247,10 @@ td.data-table-key-col {
   [data-placement-state="reconciling"]
 ) {
   color: var(--accent);
+}
+
+.session-row-badge--cloud[data-workspace-conflicts] {
+  color: var(--warn);
 }
 
 .session-row-badge svg {

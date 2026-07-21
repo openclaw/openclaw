@@ -824,7 +824,13 @@
 }
 
 .chat-tool-card__preview-panel {
-  padding: 12px;
+  padding: var(--widget-frame-inset);
+}
+
+/* Full-bleed and frameless pins render edge-to-edge here too, so the same
+   authored document meets identical geometry in chat and on the board. */
+.chat-tool-card__preview-panel[data-bleed] {
+  padding: 0;
 }
 
 .chat-tool-card__preview-frame {
@@ -970,7 +976,7 @@
 /* Keep the activity summary, call bubbles, and flat result rows on one width.
    Include the role classes so this wins over the generic tool-group rule. */
 .chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: min(760px, 100%);
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group {

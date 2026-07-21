@@ -769,13 +769,19 @@ export async function readLocalClaudeTranscriptPage(
       );
       position -= size;
       const chunk = Buffer.allocUnsafe(size);
-      const { bytesRead } = await handle.read(chunk, 0, size, position);
-      if (bytesRead !== size) {
-        throw new Error("Claude transcript changed while it was being read");
+      // Positional reads may return short, so complete the bounded window.
+      // A zero-byte read before it fills means the file changed after stat.
+      let filled = 0;
+      while (filled < size) {
+        const { bytesRead } = await handle.read(chunk, filled, size - filled, position + filled);
+        if (bytesRead === 0) {
+          throw new Error("Claude transcript changed while it was being read");
+        }
+        filled += bytesRead;
       }
-      scanned += bytesRead;
-      let right = bytesRead;
-      for (let index = bytesRead - 1; index >= 0; index -= 1) {
+      scanned += filled;
+      let right = filled;
+      for (let index = filled - 1; index >= 0; index -= 1) {
         if (chunk[index] !== 0x0a) {
           continue;
         }

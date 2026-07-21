@@ -244,6 +244,8 @@ public struct BoardWidget: Codable, Sendable {
     public let tabid: String
     public let title: String?
     public let contentkind: AnyCodable
+    public let presentation: AnyCodable?
+    public let heightmode: AnyCodable?
     public let sizew: Int
     public let sizeh: Int
     public let position: Int
@@ -265,6 +267,8 @@ public struct BoardWidget: Codable, Sendable {
         tabid: String,
         title: String? = nil,
         contentkind: AnyCodable,
+        presentation: AnyCodable? = nil,
+        heightmode: AnyCodable? = nil,
         sizew: Int,
         sizeh: Int,
         position: Int,
@@ -285,6 +289,8 @@ public struct BoardWidget: Codable, Sendable {
         self.tabid = tabid
         self.title = title
         self.contentkind = contentkind
+        self.presentation = presentation
+        self.heightmode = heightmode
         self.sizew = sizew
         self.sizeh = sizeh
         self.position = position
@@ -307,6 +313,8 @@ public struct BoardWidget: Codable, Sendable {
         case tabid = "tabId"
         case title
         case contentkind = "contentKind"
+        case presentation
+        case heightmode = "heightMode"
         case sizew = "sizeW"
         case sizeh = "sizeH"
         case position
@@ -496,17 +504,20 @@ public struct BoardWidgetResizeOp: Codable, Sendable {
     public let name: String
     public let sizew: Int
     public let sizeh: Int
+    public let heightmode: AnyCodable?
 
     public init(
         kind: String,
         name: String,
         sizew: Int,
-        sizeh: Int)
+        sizeh: Int,
+        heightmode: AnyCodable? = nil)
     {
         self.kind = kind
         self.name = name
         self.sizew = sizew
         self.sizeh = sizeh
+        self.heightmode = heightmode
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -514,6 +525,7 @@ public struct BoardWidgetResizeOp: Codable, Sendable {
         case name
         case sizew = "sizeW"
         case sizeh = "sizeH"
+        case heightmode = "heightMode"
     }
 }
 
@@ -670,6 +682,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
     public let name: String
     public let title: String?
     public let content: BoardWidgetPutContent
+    public let presentation: AnyCodable?
+    public let heightmode: AnyCodable?
     public let placement: [String: AnyCodable]?
     public let declared: BoardWidgetDeclared?
 
@@ -678,6 +692,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         name: String,
         title: String? = nil,
         content: BoardWidgetPutContent,
+        presentation: AnyCodable? = nil,
+        heightmode: AnyCodable? = nil,
         placement: [String: AnyCodable]? = nil,
         declared: BoardWidgetDeclared? = nil)
     {
@@ -685,6 +701,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         self.name = name
         self.title = title
         self.content = content
+        self.presentation = presentation
+        self.heightmode = heightmode
         self.placement = placement
         self.declared = declared
     }
@@ -694,6 +712,8 @@ public struct BoardWidgetPutParams: Codable, Sendable {
         case name
         case title
         case content
+        case presentation
+        case heightmode = "heightMode"
         case placement
         case declared
     }
@@ -846,28 +866,6 @@ public struct BoardDataReadParams: Codable, Sendable {
         case ticket
         case bindingid = "bindingId"
         case params
-    }
-}
-
-public struct BoardActionParams: Codable, Sendable {
-    public let ticket: String
-    public let action: String
-    public let jobid: String
-
-    public init(
-        ticket: String,
-        action: String,
-        jobid: String)
-    {
-        self.ticket = ticket
-        self.action = action
-        self.jobid = jobid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case ticket
-        case action
-        case jobid = "jobId"
     }
 }
 
@@ -6314,11 +6312,13 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
+    public let completionownersessionkey: AnyCodable?
     public let spawnedworkspacedir: AnyCodable?
     public let spawnedcwd: AnyCodable?
     public let spawndepth: AnyCodable?
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
+    public let inheritedtoolpolicyversion: AnyCodable?
     public let inheritedtoolallow: AnyCodable?
     public let inheritedtooldeny: AnyCodable?
     public let sendpolicy: AnyCodable?
@@ -6349,11 +6349,13 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable? = nil,
         model: AnyCodable? = nil,
         spawnedby: AnyCodable? = nil,
+        completionownersessionkey: AnyCodable? = nil,
         spawnedworkspacedir: AnyCodable? = nil,
         spawnedcwd: AnyCodable? = nil,
         spawndepth: AnyCodable? = nil,
         subagentrole: AnyCodable? = nil,
         subagentcontrolscope: AnyCodable? = nil,
+        inheritedtoolpolicyversion: AnyCodable? = nil,
         inheritedtoolallow: AnyCodable? = nil,
         inheritedtooldeny: AnyCodable? = nil,
         sendpolicy: AnyCodable? = nil,
@@ -6383,11 +6385,13 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.model = model
         self.spawnedby = spawnedby
+        self.completionownersessionkey = completionownersessionkey
         self.spawnedworkspacedir = spawnedworkspacedir
         self.spawnedcwd = spawnedcwd
         self.spawndepth = spawndepth
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
+        self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
         self.inheritedtoolallow = inheritedtoolallow
         self.inheritedtooldeny = inheritedtooldeny
         self.sendpolicy = sendpolicy
@@ -6419,11 +6423,13 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case model
         case spawnedby = "spawnedBy"
+        case completionownersessionkey = "completionOwnerSessionKey"
         case spawnedworkspacedir = "spawnedWorkspaceDir"
         case spawnedcwd = "spawnedCwd"
         case spawndepth = "spawnDepth"
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
+        case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
         case inheritedtoolallow = "inheritedToolAllow"
         case inheritedtooldeny = "inheritedToolDeny"
         case sendpolicy = "sendPolicy"

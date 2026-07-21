@@ -780,7 +780,12 @@ class MainViewModel private constructor(
       gatewayConfigOperationMutex.withLock {
         if (operation != gatewayConfigOperationSeq.get()) return@withLock
         val config = plan.config
-        val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+        val endpoint =
+          GatewayEndpoint.manual(
+            host = config.host,
+            port = config.port,
+            tlsEnabled = config.tls,
+          )
         val targetAlreadyPaired =
           prefs.gatewayRegistry.entries.value
             .any { it.stableId == endpoint.stableId }

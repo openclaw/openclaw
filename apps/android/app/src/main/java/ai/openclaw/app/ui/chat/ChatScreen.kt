@@ -52,6 +52,7 @@ import ai.openclaw.app.ui.design.agentAvatarSource
 import ai.openclaw.app.ui.gatewayDiagnosticsEndpoint
 import ai.openclaw.app.ui.gatewayStatusForDisplay
 import ai.openclaw.app.ui.localizedUppercase
+import ai.openclaw.app.ui.mobileCallout
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.LinearEasing
@@ -93,6 +94,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -195,6 +197,38 @@ internal fun resolveChatComposerTrailingAction(
     else -> ChatComposerTrailingAction.StartTalk
   }
 
+internal object ChatUserMessageDisclosurePolicy {
+  const val collapsedLineLimit = 12
+  const val collapsedCharacterLimit = 700
+
+  fun collapsedPreview(text: String): String? {
+    var end = minOf(text.length, collapsedCharacterLimit)
+    if (end in 1 until text.length && text[end - 1].isHighSurrogate() && text[end].isLowSurrogate()) {
+      end -= 1
+    }
+    var lineCount = 1
+    for (index in 0 until end) {
+      if (text[index] != '\n') continue
+      if (lineCount == collapsedLineLimit) {
+        end = index
+        break
+      }
+      lineCount += 1
+    }
+    if (end == text.length) return null
+    return text.substring(0, end).trimEnd() + "…"
+  }
+}
+
+internal fun shouldUseUserMessageDisclosure(
+  isUser: Boolean,
+  content: List<ChatMessageContent>,
+): Boolean =
+  isUser &&
+    content.isNotEmpty() &&
+    content.all { it.type == "text" } &&
+    ChatUserMessageDisclosurePolicy.collapsedPreview(chatMessagePlainText(content)) != null
+
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
 fun ChatScreen(
@@ -202,6 +236,7 @@ fun ChatScreen(
   talkActive: Boolean,
   onToggleTalk: () -> Unit,
   onOpenSessions: () -> Unit,
+  onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
@@ -567,6 +602,7 @@ fun ChatScreen(
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
       },
+      onOpenDashboard = { onOpenDashboard(sessionKey) },
       onOpenBackgroundTasks = { showBackgroundTasks = true },
     )
 
@@ -935,6 +971,7 @@ private fun ChatHeader(
   onNewChat: () -> Unit,
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
+  onOpenDashboard: () -> Unit,
   onOpenBackgroundTasks: () -> Unit,
 ) {
   var actionsMenuExpanded by remember { mutableStateOf(false) }
@@ -982,6 +1019,14 @@ private fun ChatHeader(
             onClick = {
               actionsMenuExpanded = false
               onRefresh()
+            },
+          )
+          DropdownMenuItem(
+            text = { Text(nativeString("Dashboard")) },
+            leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
+            onClick = {
+              actionsMenuExpanded = false
+              onOpenDashboard()
             },
           )
           DropdownMenuItem(
@@ -1382,6 +1427,8 @@ private fun ChatBubble(
   if (displayableContent.isEmpty()) return
 
   val messageText = chatMessagePlainText(displayableContent)
+  val collapsibleUserText = shouldUseUserMessageDisclosure(isUser, displayableContent)
+  var userMessageExpanded by rememberSaveable(messageId, messageText) { mutableStateOf(false) }
   val messageSpeech = speechState?.takeIf { it.messageId == messageId }
   val canListen = !live && messageId != null && normalizedRole == "assistant" && messageText.isNotBlank()
   val toggleListen: (() -> Unit)? =
@@ -1424,9 +1471,18 @@ private fun ChatBubble(
             style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
             color = ClawTheme.colors.text,
           )
+          if (collapsibleUserText && messageText.isNotBlank()) {
+            ChatUserMessageText(
+              textParts = displayableContent.mapNotNull { it.text },
+              plainText = messageText,
+              expanded = userMessageExpanded,
+              onToggleExpanded = { userMessageExpanded = !userMessageExpanded },
+            )
+          }
           displayableContent.forEach { part ->
             when {
-              part.type == "text" -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              part.type == "text" && !collapsibleUserText -> ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text, isStreaming = live)
+              part.type == "text" -> Unit
               part.isAudioAttachment() -> VoiceNoteMessageRow(durationMs = part.durationMs)
               part.type == "image" ->
                 ChatBase64Image(
@@ -1495,6 +1551,46 @@ private fun FullChatSpeechIndicator(
         text = if (phase == MessageSpeechPhase.Preparing) nativeString("Preparing audio…") else nativeString("Speaking…"),
         style = ClawTheme.type.caption,
         color = ClawTheme.colors.textMuted,
+      )
+    }
+  }
+}
+
+@Composable
+private fun ChatUserMessageText(
+  textParts: List<String>,
+  plainText: String,
+  expanded: Boolean,
+  onToggleExpanded: () -> Unit,
+) {
+  val preview = ChatUserMessageDisclosurePolicy.collapsedPreview(plainText)
+  if (preview != null && !expanded) {
+    Text(
+      text = preview,
+      style = mobileCallout,
+      color = ClawTheme.colors.text,
+    )
+  } else {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      textParts.forEach { text ->
+        ChatMarkdown(text = text, textColor = ClawTheme.colors.text, isStreaming = false)
+      }
+    }
+  }
+
+  if (preview != null) {
+    val toggleLabel = if (expanded) nativeString("Close") else nativeString("View all")
+    Surface(
+      onClick = onToggleExpanded,
+      shape = RoundedCornerShape(8.dp),
+      color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+      contentColor = ClawTheme.colors.textMuted,
+      border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.6f)),
+    ) {
+      Text(
+        text = toggleLabel,
+        style = mobileCallout.copy(fontSize = 12.sp, lineHeight = 16.sp, fontWeight = FontWeight.SemiBold),
+        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
       )
     }
   }

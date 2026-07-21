@@ -82,33 +82,47 @@ export class PreparedModelRuntimeOwnerNotPublishedError extends Error {}
 
 export class PreparedModelRuntimePublicationSupersededError extends PreparedModelRuntimeOwnerNotPublishedError {}
 
+function findConfiguredOwnerCandidates(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  rawInput: PreparedModelRuntimeInput,
+): PreparedModelRuntimeOwner[] {
+  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const configured = [...owners.values()].filter((owner) => owner.provenance === "configured");
+  const identityCandidates =
+    input.agentId === undefined
+      ? []
+      : configured.filter((owner) => owner.input.agentId === input.agentId);
+  const exactCandidates = identityCandidates.filter(
+    (owner) => owner.input.agentDir === input.agentDir,
+  );
+  const directoryCandidates = configured.filter((owner) => owner.input.agentDir === input.agentDir);
+  // Unbound inputs and reserved setup identities derive ownership from the configured directory.
+  // Ordinary agent runs stay bound to their explicit identity, even when handed a stale directory.
+  const canRebindByDirectory =
+    input.agentId === undefined || isReservedSystemAgentId(input.agentId);
+  return exactCandidates.length > 0
+    ? exactCandidates
+    : canRebindByDirectory && directoryCandidates.length > 0
+      ? directoryCandidates
+      : identityCandidates;
+}
+
+/** Whether a configured owner matches the requesting runtime's identity/directory. */
+export function hasConfiguredOwnerMatching(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  rawInput: PreparedModelRuntimeInput,
+): boolean {
+  return findConfiguredOwnerCandidates(owners, rawInput).length > 0;
+}
+
 export function rebindInputToCommittedConfiguredOwner(
   owners: Map<string, PreparedModelRuntimeOwner>,
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeInput {
   const input = normalizePreparedModelRuntimeInput(rawInput);
-  const committed = [...owners.values()].filter(
-    (owner) =>
-      owner.provenance === "configured" && owner.snapshot && !owner.needsRefresh && !owner.pending,
+  const candidates = findConfiguredOwnerCandidates(owners, rawInput).filter(
+    (owner) => owner.snapshot && !owner.needsRefresh && !owner.pending,
   );
-  const identityCandidates =
-    input.agentId === undefined
-      ? []
-      : committed.filter((owner) => owner.input.agentId === input.agentId);
-  const exactCandidates = identityCandidates.filter(
-    (owner) => owner.input.agentDir === input.agentDir,
-  );
-  const directoryCandidates = committed.filter((owner) => owner.input.agentDir === input.agentDir);
-  // Unbound inputs and reserved setup identities derive ownership from the configured directory.
-  // Ordinary agent runs stay bound to their explicit identity, even when handed a stale directory.
-  const canRebindByDirectory =
-    input.agentId === undefined || isReservedSystemAgentId(input.agentId);
-  const candidates =
-    exactCandidates.length > 0
-      ? exactCandidates
-      : canRebindByDirectory && directoryCandidates.length > 0
-        ? directoryCandidates
-        : identityCandidates;
   if (candidates.length !== 1) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
       `prepared model runtime owner was not committed after replacement for ${input.agentDir}`,

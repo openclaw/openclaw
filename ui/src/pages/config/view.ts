@@ -35,6 +35,7 @@ import {
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -1130,6 +1131,11 @@ function renderLobsterPetSection(props: ConfigProps) {
             : t("quickSettings.appearance.lobsterSoundsOff"),
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onAct: (enabled) => {
+            if (enabled) {
+              previewLobsterChirp();
+            }
+          },
         })}
         ${renderSettingsRow({
           title: t("quickSettings.appearance.lobsterdex"),
@@ -1143,6 +1149,7 @@ function renderLobsterPetSection(props: ConfigProps) {
               ${LOBSTER_PET_PALETTES.map((palette) => {
                 const entry = getLobsterdexEntries().get(palette.id);
                 const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
                 const title = !seen
                   ? "?"
                   : entry.firstSeenAt !== null
@@ -1157,9 +1164,12 @@ function renderLobsterPetSection(props: ConfigProps) {
                       ? ""
                       : "lobsterdex__mini--unseen"}"
                     style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                    title=${title}
+                    title=${shinySeen ? `${title} ✦` : title}
                   >
                     ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
                   </span>
                 `;
               })}

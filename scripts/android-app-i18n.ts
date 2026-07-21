@@ -1231,14 +1231,55 @@ function formatProblems(problems: Array<readonly [string, string[]]>): string {
   ].join("\n");
 }
 
-export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
+/**
+ * Managed rows (native_*) are owned end-to-end by the post-merge locale
+ * refresh workflow, so a source PR may legitimately be missing (or still
+ * carrying) managed rows the workflow will reconcile. Every other delta —
+ * manual strings, attribute changes, value edits — is real drift.
+ */
+function onlyManagedRowsPending(current: string, expected: string): boolean {
+  const currentRows = new Map(parseStrings(current).map((entry) => [entry.key, entry]));
+  const expectedRows = new Map(parseStrings(expected).map((entry) => [entry.key, entry]));
+  for (const [key, entry] of currentRows) {
+    const expectedEntry = expectedRows.get(key);
+    if (!expectedEntry) {
+      if (!key.startsWith(MANAGED_PREFIX)) {
+        return false;
+      }
+      continue;
+    }
+    if (expectedEntry.attrs !== entry.attrs || expectedEntry.rawValue !== entry.rawValue) {
+      return false;
+    }
+  }
+  for (const key of expectedRows.keys()) {
+    if (!currentRows.has(key) && !key.startsWith(MANAGED_PREFIX)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export async function syncAndroidAppI18n(
+  options: { check?: boolean; tolerateManagedPending?: boolean } = {},
+) {
   const catalog = await buildCatalog();
   const drift: string[] = [];
+  let sawUnmanagedDrift = false;
   for (const [filePath, expected] of catalog.resources) {
     const current = await readFile(filePath, "utf8").catch(() => "");
     if (current === expected) {
       continue;
     }
+    if (
+      options.check &&
+      options.tolerateManagedPending &&
+      filePath.endsWith("strings.xml") &&
+      onlyManagedRowsPending(current, expected)
+    ) {
+      continue;
+    }
+    sawUnmanagedDrift = true;
     drift.push(path.relative(ROOT, filePath).split(path.sep).join("/"));
     if (!options.check) {
       await writeFile(filePath, expected);
@@ -1246,9 +1287,13 @@ export async function syncAndroidAppI18n(options: { check?: boolean } = {}) {
   }
   const currentKotlin = await readFile(GENERATED_KOTLIN_PATH, "utf8").catch(() => "");
   if (currentKotlin !== catalog.kotlin) {
-    drift.push(path.relative(ROOT, GENERATED_KOTLIN_PATH).split(path.sep).join("/"));
-    if (!options.check) {
-      await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);
+    // The Kotlin map derives 1:1 from the same managed catalog: tolerate it
+    // exactly when every resource delta above was managed-pending.
+    if (!(options.check && options.tolerateManagedPending && !sawUnmanagedDrift)) {
+      drift.push(path.relative(ROOT, GENERATED_KOTLIN_PATH).split(path.sep).join("/"));
+      if (!options.check) {
+        await writeFile(GENERATED_KOTLIN_PATH, catalog.kotlin);
+      }
     }
   }
   if (options.check && drift.length > 0) {
@@ -1298,9 +1343,9 @@ export async function verifyAndroidAppI18n() {
   process.stdout.write(`android-app-i18n: sourceKeys=${baseKeys.size}\n`);
 }
 
-export async function checkAndroidAppI18n() {
+export async function checkAndroidAppI18n(options: { tolerateManagedPending?: boolean } = {}) {
   await verifyAndroidAppI18n();
-  await syncAndroidAppI18n({ check: true });
+  await syncAndroidAppI18n({ check: true, ...options });
   const localeStrings = await Promise.all(LOCALES.map(readStrings));
   const base = expectDefined(localeStrings[0], "English Android string resources");
   const translations = localeStrings.slice(1);

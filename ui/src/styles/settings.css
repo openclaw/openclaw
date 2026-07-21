@@ -76,12 +76,23 @@
   gap: var(--space-8);
 }
 
+/* An intro belongs to the first section rather than forming a separate block.
+   Keep later sections at the normal --space-8 separation. */
+.settings-page:has(> .settings-page__intro) {
+  gap: var(--space-5);
+}
+
+.settings-page:has(> .settings-page__intro) > .settings-section + .settings-section {
+  margin-top: calc(var(--space-8) - var(--space-5));
+}
+
 /* Table/list-heavy pages (sessions, automations, plugins) need more width. */
 .settings-page--wide {
   max-width: 1120px;
 }
 
 .settings-page__intro {
+  margin: 0;
   font-size: var(--control-ui-text-sm);
   line-height: 1.5;
   color: var(--muted);

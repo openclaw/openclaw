@@ -12,7 +12,9 @@ import {
 
 describe("Android app i18n resources", () => {
   it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
-    await expect(checkAndroidAppI18n()).resolves.toBeUndefined();
+    // Managed native_* rows are reconciled by the post-merge locale refresh
+    // workflow (#111557); source PRs are validated with those rows pending.
+    await expect(checkAndroidAppI18n({ tolerateManagedPending: true })).resolves.toBeUndefined();
     const base = await readFile("apps/android/app/src/main/res/values/strings.xml", "utf8");
     expect(base).toContain('xmlns:tools="http://schemas.android.com/tools"');
     expect(base).toMatch(
