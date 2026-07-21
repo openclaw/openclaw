@@ -15,7 +15,11 @@ struct ExecApprovalsIntegratedProofTests {
             return
         }
 
-        _ = NSApplication.shared
+        Self.emitProofStage("test-start")
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.finishLaunching()
+        Self.emitProofStage("app-ready")
         let root = try Self.makeShortSocketRoot()
         defer { try? FileManager().removeItem(at: root) }
 
@@ -35,11 +39,13 @@ struct ExecApprovalsIntegratedProofTests {
                 resolveSocketCredentials: { (socketPath, token) })
             defer { _ = server.stop() }
             server.start()
+            Self.emitProofStage("server-started")
 
             guard await self.waitForSocket(socketPath) else {
                 Issue.record("exec approvals socket did not become ready")
                 return
             }
+            Self.emitProofStage("socket-ready")
 
             let command = [
                 "/bin/sh",
@@ -63,9 +69,18 @@ struct ExecApprovalsIntegratedProofTests {
             let promptResponder = Self.scheduleAllowOnceResponse(recorder: promptObservation)
             defer { promptResponder.invalidate() }
 
-            let initialResponse = try await Self.sendEnvelope(
-                socketPath: socketPath,
-                payload: initialEnvelope)
+            let initialResponse: TestExecResponse
+            do {
+                initialResponse = try await Self.sendEnvelope(
+                    socketPath: socketPath,
+                    payload: initialEnvelope)
+            } catch {
+                Self.emitProofStage("initial-response-error type=\(type(of: error))")
+                throw error
+            }
+            Self.emitProofStage(
+                "initial-response ok=\(initialResponse.ok) " +
+                    "reason=\(initialResponse.error?.reason ?? "none")")
             let observedPrompt = try #require(promptObservation.value)
             let initialPayload = try #require(initialResponse.payload)
 
@@ -290,6 +305,13 @@ struct ExecApprovalsIntegratedProofTests {
         return try String(contentsOf: url, encoding: .utf8)
             .split(separator: "\n")
             .count
+    }
+
+    private nonisolated static func emitProofStage(_ stage: String) {
+        guard let data = "MACOS_EXEC_APPROVALS_PROOF stage=\(stage)\n".data(using: .utf8) else {
+            return
+        }
+        try? FileHandle.standardError.write(contentsOf: data)
     }
 
     private static let policySnapshot = OpenClawSystemRunApprovalPolicySnapshot(

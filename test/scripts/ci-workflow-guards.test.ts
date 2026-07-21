@@ -3438,6 +3438,12 @@ describe("ci workflow guards", () => {
     expect(proofStep.run).toContain('[[ "$tested_sha" == "$PROOF_HEAD_SHA" ]]');
     expect(proofStep.run).toContain('tee "$proof_log"');
     expect(proofStep.run).toContain("--filter ExecApprovalsIntegratedProofTests");
+    expect(proofStep.run).toContain('proof_status="${PIPESTATUS[0]}"');
+    expect(proofStep.run).toContain('if [[ "$proof_status" -ne 0 ]]');
+    expect(proofStep.run).toContain("log show --last 10m --style compact");
+    expect(proofStep.run).toContain("Library/Logs/DiagnosticReports/*OpenClawPackageTests*");
+    expect(proofStep.run).toContain('tail -200 "$report" || true');
+    expect(proofStep.run).toContain('exit "$proof_status"');
     for (const receipt of [
       "native-prompt=observed",
       "allow-once=accepted marker-count=1",

@@ -3140,8 +3140,23 @@ jobs:
           printf 'MACOS_EXEC_APPROVALS_PROOF candidate-head=%s tested-sha=%s macos=%s arch=%s\n' \
             "$PROOF_HEAD_SHA" "$tested_sha" \
             "$(sw_vers -productVersion)" "$(uname -m)" | tee "$proof_log"
+          set +e
           swift test --package-path apps/macos \
             --filter ExecApprovalsIntegratedProofTests 2>&1 | tee -a "$proof_log"
+          proof_status="${PIPESTATUS[0]}"
+          set -e
+          if [[ "$proof_status" -ne 0 ]]; then
+            echo "::group::macOS proof diagnostics"
+            log show --last 10m --style compact \
+              --predicate 'process CONTAINS[c] "OpenClawPackageTests"' | tail -200 || true
+            for report in "$HOME"/Library/Logs/DiagnosticReports/*OpenClawPackageTests*; do
+              [[ -f "$report" ]] || continue
+              echo "--- $(basename "$report") ---"
+              tail -200 "$report" || true
+            done
+            echo "::endgroup::"
+            exit "$proof_status"
+          fi
           for receipt in \
             'native-prompt=observed' \
             'allow-once=accepted marker-count=1' \
