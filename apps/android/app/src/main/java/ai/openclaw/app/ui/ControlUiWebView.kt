@@ -1,8 +1,12 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import android.annotation.SuppressLint
+import android.net.http.SslCertificate
+import android.net.http.SslError
 import android.view.View
+import android.webkit.SslErrorHandler
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -18,6 +22,10 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.security.MessageDigest
+import java.util.Locale
+
+private const val X509_CERTIFICATE_BUNDLE_KEY = "x509-certificate"
 
 /** Authenticated, hardened WebView host for gateway-served Control UI pages. */
 @SuppressLint("SetJavaScriptEnabled")
@@ -61,10 +69,7 @@ internal fun ControlUiWebView(
         WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
       }
       webView.overScrollMode = View.OVER_SCROLL_NEVER
-      // System trust only, matching the terminal host this was extracted from:
-      // fingerprint-pinned (self-signed) gateways render natively but not here.
-      // Tracked follow-up: verified SSL handling shared with the native pin.
-      webView.webViewClient = WebViewClient()
+      webView.webViewClient = ControlUiWebViewClient(page)
       installControlUiAuthScript(webView, page)
       webView.loadUrl(url)
       webViewRef[0] = webView
@@ -116,4 +121,73 @@ internal fun controlUiOriginRule(baseUrl: String): String? {
   val hostPart = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host
   val port = if (uri.port != -1) ":${uri.port}" else ""
   return "$scheme://$hostPart$port"
+}
+
+private class ControlUiWebViewClient(
+  private val page: NodeRuntime.GatewayControlPage,
+) : WebViewClient() {
+  // Android lint cannot infer the exact pin and origin checks below; every other path cancels.
+  @SuppressLint("WebViewClientOnReceivedSslError")
+  override fun onReceivedSslError(
+    view: WebView,
+    handler: SslErrorHandler,
+    error: SslError,
+  ) {
+    // SslCertificate exposes the encoded leaf only through its AOSP saveState bundle.
+    val encodedCertificate =
+      SslCertificate
+        .saveState(error.certificate)
+        ?.getByteArray(X509_CERTIFICATE_BUNDLE_KEY)
+    if (
+      shouldProceedForPinnedControlUiSslError(
+        pageBaseUrl = page.baseUrl,
+        expectedFingerprint = page.tlsFingerprintSha256,
+        errorUrl = error.url,
+        encodedCertificate = encodedCertificate,
+      )
+    ) {
+      // The native gateway connection already accepted this exact certificate.
+      // Never extend the exception to another origin or a different certificate.
+      handler.proceed()
+    } else {
+      handler.cancel()
+    }
+  }
+}
+
+internal fun shouldProceedForPinnedControlUiSslError(
+  pageBaseUrl: String,
+  expectedFingerprint: String?,
+  errorUrl: String?,
+  encodedCertificate: ByteArray?,
+): Boolean {
+  val expected = expectedFingerprint?.let(::normalizeGatewayTlsFingerprintInput) ?: return false
+  val certificate = encodedCertificate ?: return false
+  if (!sameHttpsOrigin(pageBaseUrl, errorUrl)) return false
+  return MessageDigest
+    .getInstance("SHA-256")
+    .digest(certificate)
+    .joinToString(separator = "") { byte -> "%02x".format(Locale.US, byte.toInt() and 0xff) } == expected
+}
+
+private fun sameHttpsOrigin(
+  pageBaseUrl: String,
+  errorUrl: String?,
+): Boolean {
+  val pageOrigin = parsedHttpsOrigin(pageBaseUrl) ?: return false
+  val errorOrigin = errorUrl?.let(::parsedHttpsOrigin) ?: return false
+  return pageOrigin == errorOrigin
+}
+
+private data class HttpsOrigin(
+  val host: String,
+  val port: Int,
+)
+
+private fun parsedHttpsOrigin(rawUrl: String): HttpsOrigin? {
+  val uri = rawUrl.toUri()
+  if (!uri.scheme.equals("https", ignoreCase = true)) return null
+  val host = uri.host?.lowercase(Locale.US) ?: return null
+  val port = uri.port.takeIf { it >= 0 } ?: 443
+  return HttpsOrigin(host = host, port = port)
 }
