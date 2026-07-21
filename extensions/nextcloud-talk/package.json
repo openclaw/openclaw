@@ -46,8 +46,14 @@
       "order": 65,
       "quickstartAllowFrom": true,
       "cliAddOptions": [
-        { "flags": "--base-url <url>", "description": "Channel base URL" },
-        { "flags": "--secret <secret>", "description": "Channel shared secret" },
+        {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        },
+        {
+          "flags": "--secret <secret>",
+          "description": "Channel shared secret"
+        },
         {
           "flags": "--secret-file <path>",
           "description": "Read channel shared secret from file"

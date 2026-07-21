@@ -47,7 +47,10 @@
         "docs": false
       },
       "cliAddOptions": [
-        { "flags": "--base-url <url>", "description": "Channel base URL" }
+        {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        }
       ]
     }
   }

@@ -45,8 +45,14 @@
       "blurb": "self-hosted Slack-style chat; install the plugin to enable.",
       "order": 65,
       "cliAddOptions": [
-        { "flags": "--bot-token <token>", "description": "Bot token" },
-        { "flags": "--http-url <url>", "description": "Channel HTTP service URL" }
+        {
+          "flags": "--bot-token <token>",
+          "description": "Bot token"
+        },
+        {
+          "flags": "--http-url <url>",
+          "description": "Channel HTTP service URL"
+        }
       ]
     },
     "install": {
