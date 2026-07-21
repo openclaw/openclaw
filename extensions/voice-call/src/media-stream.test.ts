@@ -369,6 +369,58 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("normalizes partial, native-start, and lone-final signals to one speech start per utterance", async () => {
+    let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
+    const onSpeechStart = vi.fn();
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: (request) => {
+          callbacks = request;
+          return createStubSession();
+        },
+        id: "elevenlabs",
+        label: "ElevenLabs",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+      onSpeechStart,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-utterances",
+          start: { callSid: "CA-utterances" },
+        }),
+      );
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+
+      callbacks?.onPartial?.("hel");
+      callbacks?.onPartial?.("hello");
+      callbacks?.onSpeechStart?.();
+      expect(onSpeechStart).toHaveBeenCalledTimes(1);
+
+      callbacks?.onTranscript?.("hello there");
+      expect(onSpeechStart).toHaveBeenCalledTimes(1);
+
+      callbacks?.onTranscript?.("lone final");
+      expect(onSpeechStart).toHaveBeenCalledTimes(2);
+
+      callbacks?.onSpeechStart?.();
+      callbacks?.onPartial?.("next utterance");
+      expect(onSpeechStart).toHaveBeenCalledTimes(3);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),

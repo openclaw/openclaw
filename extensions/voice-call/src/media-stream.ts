@@ -73,6 +73,7 @@ interface StreamSession {
   ws: WebSocket;
   sttSession: RealtimeTranscriptionSession;
   talk: TalkSessionController;
+  callerSpeechActive: boolean;
 }
 
 type TtsQueueEntry = {
@@ -340,6 +341,7 @@ export class MediaStreamHandler {
       onPartial: (partial) => {
         const session = this.sessions.get(streamSid);
         if (session) {
+          this.beginCallerSpeech(session);
           this.emitTalkEvent(session, {
             type: "transcript.delta",
             turnId: this.ensureActiveTurn(session),
@@ -351,6 +353,8 @@ export class MediaStreamHandler {
       onTranscript: (transcript) => {
         const session = this.sessions.get(streamSid);
         if (session) {
+          this.beginCallerSpeech(session);
+          session.callerSpeechActive = false;
           const turnId = this.ensureActiveTurn(session);
           this.emitTalkEvent(session, {
             type: "input.audio.committed",
@@ -370,9 +374,8 @@ export class MediaStreamHandler {
       onSpeechStart: () => {
         const session = this.sessions.get(streamSid);
         if (session) {
-          this.ensureActiveTurn(session);
+          this.beginCallerSpeech(session);
         }
-        this.config.onSpeechStart?.(callSid);
       },
       onError: (error) => {
         console.warn("[MediaStream] Transcription session error:", error.message);
@@ -393,6 +396,7 @@ export class MediaStreamHandler {
       ws,
       sttSession,
       talk: this.createTalkEvents(callSid, streamSid),
+      callerSpeechActive: false,
     };
 
     this.sessions.set(streamSid, session);
@@ -796,6 +800,17 @@ export class MediaStreamHandler {
   private emitTalkEvent(session: StreamSession, input: TalkEventInput): void {
     const event = session.talk.emit(input);
     this.config.onTalkEvent?.(session.callId, session.streamSid, event);
+  }
+
+  private beginCallerSpeech(session: StreamSession): void {
+    this.ensureActiveTurn(session);
+    if (session.callerSpeechActive) {
+      return;
+    }
+    // Providers expose different VAD signals. Normalize the first partial, native
+    // speech-start, or lone final into one barge-in callback per utterance.
+    session.callerSpeechActive = true;
+    this.config.onSpeechStart?.(session.callId);
   }
 
   private ensureActiveTurn(session: StreamSession): string {

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig, VoiceCallCoreSessionConfig } from "./config.js";
+import { CallerTurnState } from "./manager/caller-turn.js";
 import type { CallManagerContext, StreamSessionIssuer } from "./manager/context.js";
 import { processEvent as processManagerEvent, type ProcessEventResult } from "./manager/events.js";
 import { getCallByProviderCallId as getCallByProviderCallIdFromMaps } from "./manager/lookup.js";
@@ -68,6 +69,7 @@ function resolveDefaultStoreBase(config: VoiceCallConfig, storePath?: string): s
  */
 export class CallManager {
   private activeCalls = new Map<CallId, CallRecord>();
+  readonly callerTurns = new CallerTurnState((callId) => this.activeCalls.has(callId));
   private providerCallIdMap = new Map<string, CallId>();
   private processedEventIds = new Set<string>();
   private rejectedProviderCallIds = new Set<string>();
@@ -358,6 +360,7 @@ export class CallManager {
       storePath: this.storePath,
       webhookUrl: this.webhookUrl,
       activeTurnCalls: this.activeTurnCalls,
+      callerTurns: this.callerTurns,
       transcriptWaiters: this.transcriptWaiters,
       maxDurationTimers: this.maxDurationTimers,
       initialMessageInFlight: this.initialMessageInFlight,
