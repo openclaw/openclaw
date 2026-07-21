@@ -17,7 +17,6 @@ import { GatewayConfigSchema } from "./zod-schema.gateway.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { BrowserSnapshotDefaultsSchema } from "./zod-schema.node-host.js";
 import { ProxyConfigSchema } from "./zod-schema.proxy.js";
-import { RuntimeContextConfigSchema } from "./zod-schema.runtime-context.js";
 import {
   AccessGroupsSchema,
   CommitmentsSchema,
@@ -32,6 +31,7 @@ import {
   SystemAgentSchema,
   TalkSchema,
 } from "./zod-schema.root-support.js";
+import { RuntimeContextConfigSchema } from "./zod-schema.runtime-context.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
