@@ -125,10 +125,7 @@ export function createCustodianTranscriptMessages(
   return { messages, nextMessageId };
 }
 
-function renderCustodianEarlierDivider(
-  message: CustodianMessage,
-  boundaryAfterId: number | null,
-) {
+function renderCustodianEarlierDivider(message: CustodianMessage, boundaryAfterId: number | null) {
   return message.id === boundaryAfterId
     ? renderChatDivider({
         kind: "divider",
