@@ -24,21 +24,21 @@
       }
     },
     "node_modules/@azure/abort-controller": {
-      "version": "2.2.0",
-      "resolved": "https://registry.npmjs.org/@azure/abort-controller/-/abort-controller-2.2.0.tgz",
-      "integrity": "sha512-fNAjWnA/nZ2jz31kxR/AqRaUT8ewHBw/WuBIosK0moMy1C9e5ValbDfFdIxJzVOOYaYkV/b2F1S4H/aHiqfVQg==",
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/@azure/abort-controller/-/abort-controller-2.1.2.tgz",
+      "integrity": "sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==",
       "license": "MIT",
       "dependencies": {
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=18.0.0"
       }
     },
     "node_modules/@azure/core-auth": {
-      "version": "1.11.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-auth/-/core-auth-1.11.0.tgz",
-      "integrity": "sha512-IUZydyTUkDnYdstOW9pFOOUQlBjAepK5teihDE3x6yxsPJs/hsAaaYpeGxdxrgtOiJbBKSjKW7MDk7AEhb4LRg==",
+      "version": "1.10.1",
+      "resolved": "https://registry.npmjs.org/@azure/core-auth/-/core-auth-1.10.1.tgz",
+      "integrity": "sha512-ykRMW8PjVAn+RS6ww5cmK9U2CyH9p4Q88YJwvUslfuMmN98w/2rdGRLPqJYObapBCdzBVeDgYWdJnFPFb7qzpg==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -46,13 +46,13 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/@azure/core-client": {
-      "version": "1.11.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-client/-/core-client-1.11.0.tgz",
-      "integrity": "sha512-JjQWO6akOck45PH/XBrxzsQGAiKrfFl4m5iggJ0ItMIz5omRufOXWpqCPpdjKN3vKDzlSUvFjaMb7Zwf0gvAdA==",
+      "version": "1.10.2",
+      "resolved": "https://registry.npmjs.org/@azure/core-client/-/core-client-1.10.2.tgz",
+      "integrity": "sha512-1D2LpsU7y9xrqKjdIbsB7PlrRePw0xsVV8p+AKTlzITrWmscajryfJCdDJB/oGwvDI5HmRo04eMMADB67uwAwQ==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -64,13 +64,13 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/@azure/core-rest-pipeline": {
-      "version": "1.25.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-rest-pipeline/-/core-rest-pipeline-1.25.0.tgz",
-      "integrity": "sha512-bMs8ekJLjX8wPV+9IPBges1SLPyuDtE9g5gLDWOpxzKcoOFQnpLGkbcT1tdw3FaAmDS1gnPmMmJ6y/T5B96kIA==",
+      "version": "1.24.0",
+      "resolved": "https://registry.npmjs.org/@azure/core-rest-pipeline/-/core-rest-pipeline-1.24.0.tgz",
+      "integrity": "sha512-PpLsoDQ3AMmKZ0VU+0GrmqMxgp/sExjlVm4R+nLWngeoEGAzOIPVifaxKGU5gMv+nWELUoHfvrolWD+ZS/nFJg==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -82,25 +82,25 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/@azure/core-tracing": {
-      "version": "1.4.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-tracing/-/core-tracing-1.4.0.tgz",
-      "integrity": "sha512-eGwxD0AtncrxeBM4tG8R55Pc3rdX1hNW2WibJAgYpCVA6E93mvvVH+LcssoVjOBrSKWS55yEIHsk0X8ctHmfOQ==",
+      "version": "1.3.1",
+      "resolved": "https://registry.npmjs.org/@azure/core-tracing/-/core-tracing-1.3.1.tgz",
+      "integrity": "sha512-9MWKevR7Hz8kNzzPLfX4EAtGM2b8mr50HPDBvio96bURP/9C+HjdH3sBlLSNNrvRAr5/k/svoH457gB5IKpmwQ==",
       "license": "MIT",
       "dependencies": {
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/@azure/core-util": {
-      "version": "1.14.0",
-      "resolved": "https://registry.npmjs.org/@azure/core-util/-/core-util-1.14.0.tgz",
-      "integrity": "sha512-9n2pWK61veAuN0V20t9lOuoV4CFMdyAZ1ygZzvBGk/pBBJRib/PjL9PLXa/aI2CcPpyHfqVsxxqLCYl6uZlfDw==",
+      "version": "1.13.1",
+      "resolved": "https://registry.npmjs.org/@azure/core-util/-/core-util-1.13.1.tgz",
+      "integrity": "sha512-XPArKLzsvl0Hf0CaGyKHUyVgF7oDnhKoP85Xv6M4StF/1AhfORhZudHtOyf2s+FcbuQ9dPRAjB8J2KvRRMUK2A==",
       "license": "MIT",
       "dependencies": {
         "@azure/abort-controller": "^2.1.2",
@@ -108,7 +108,7 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/@azure/identity": {
@@ -134,46 +134,46 @@
       }
     },
     "node_modules/@azure/logger": {
-      "version": "1.4.0",
-      "resolved": "https://registry.npmjs.org/@azure/logger/-/logger-1.4.0.tgz",
-      "integrity": "sha512-rbAE25KUfjU/s3XHUdJgceoCP5dEOpMx85J04kF+QMdta73XkuG9JGHHinch+XIoKpBdqljin+KqURpJriSzLA==",
+      "version": "1.3.0",
+      "resolved": "https://registry.npmjs.org/@azure/logger/-/logger-1.3.0.tgz",
+      "integrity": "sha512-fCqPIfOcLE+CGqGPd66c8bZpwAji98tZ4JI9i/mlTNTlsIWslCfpg48s/ypyLxZTump5sypjrKn2/kY7q8oAbA==",
       "license": "MIT",
       "dependencies": {
         "@typespec/ts-http-runtime": "^0.3.0",
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/@azure/msal-browser": {
-      "version": "5.17.1",
-      "resolved": "https://registry.npmjs.org/@azure/msal-browser/-/msal-browser-5.17.1.tgz",
-      "integrity": "sha512-zBhRGzABKSI7hfWh5EaZmril5ybZ7imBN1qEZl5sDTaelr+l8SnPjZO50Q4dnKnm347YPIlBMSnXKZyh3Yu5DQ==",
+      "version": "5.16.0",
+      "resolved": "https://registry.npmjs.org/@azure/msal-browser/-/msal-browser-5.16.0.tgz",
+      "integrity": "sha512-Wc75FGnQgYpsm5jsOqn1H8AXsh8vXruA6vwip1nhjrJxwby7juxKAIVLr7csepmHiwdZGr6EwI5BlSc3PizEtQ==",
       "license": "MIT",
       "dependencies": {
-        "@azure/msal-common": "16.11.2"
+        "@azure/msal-common": "16.11.0"
       },
       "engines": {
         "node": ">=0.8.0"
       }
     },
     "node_modules/@azure/msal-common": {
-      "version": "16.11.2",
-      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-16.11.2.tgz",
-      "integrity": "sha512-yDhtBOGDCdK9ipQ9g3+wmlMEPnZx2pXaDicDd9jYyR1L+7lEbvEohTDmF5qejZDutZY3m9pWPxeYxzNC701A2w==",
+      "version": "16.11.0",
+      "resolved": "https://registry.npmjs.org/@azure/msal-common/-/msal-common-16.11.0.tgz",
+      "integrity": "sha512-UikJOtMwkFpZNzTH6Dqk8UTUPbow15zH3e0UjGYZy69lYENW/S05gMLhbxI2eonz66uALhIljvhsSMEb6+O30g==",
       "license": "MIT",
       "engines": {
         "node": ">=0.8.0"
       }
     },
     "node_modules/@azure/msal-node": {
-      "version": "5.4.1",
-      "resolved": "https://registry.npmjs.org/@azure/msal-node/-/msal-node-5.4.1.tgz",
-      "integrity": "sha512-yqgoyOIMCH7TNaSLMBTP+4LUlbMMf1zgC8nzOFG95lmW82CmsAEtUT0J93e4BdqDcnX5qle/9X+yb7A8Mw9M0g==",
+      "version": "5.3.1",
+      "resolved": "https://registry.npmjs.org/@azure/msal-node/-/msal-node-5.3.1.tgz",
+      "integrity": "sha512-sqqv3L1UOI4KDXonNtbxPYUgbSWVXqxvmmb6BUw9n4P/UXgG+cVur3dLWQN4Cz7qQ+UJROCCxMXlksm7gIq0Sw==",
       "license": "MIT",
       "dependencies": {
-        "@azure/msal-common": "16.11.2",
+        "@azure/msal-common": "16.11.0",
         "jsonwebtoken": "^9.0.0"
       },
       "engines": {
@@ -267,18 +267,18 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "26.1.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.1.tgz",
-      "integrity": "sha512-nxAkRSVkN1Y0JC1W8ky/fTfkGsMmcrRsbx+3XoZE+rMOX71kLYTV7fLXpqud1GpbpP5TuffXFqfX7fH2GgZREw==",
+      "version": "26.1.0",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-26.1.0.tgz",
+      "integrity": "sha512-O0A1G3xPGy4w7AgQdAQYUlQ+BKk2Oovw8eRpofyp5KdBZULnbe+WqaOVNrm705SHphCiG4XHsACrSmPu1f+Kgw==",
       "license": "MIT",
       "dependencies": {
         "undici-types": "~8.3.0"
       }
     },
     "node_modules/@typespec/ts-http-runtime": {
-      "version": "0.3.7",
-      "resolved": "https://registry.npmjs.org/@typespec/ts-http-runtime/-/ts-http-runtime-0.3.7.tgz",
-      "integrity": "sha512-JVUD8X2tfDMWjcjLs4yVxxVrS8yR5vnh386GAXT9Qj79nBxxXSaHFQZg5FweLmT8HlPQ3kii6noUB+Z9RN7DvQ==",
+      "version": "0.3.6",
+      "resolved": "https://registry.npmjs.org/@typespec/ts-http-runtime/-/ts-http-runtime-0.3.6.tgz",
+      "integrity": "sha512-jIXhD0eWQ1JA6ln/5Dltyx22UxWNrw0hZmhy2rlv6m6KgF7kplHx3g0fzi09lNmTJQRR91OlemYp3xFnvDK9og==",
       "license": "MIT",
       "dependencies": {
         "http-proxy-agent": "^7.0.0",
@@ -286,7 +286,7 @@
         "tslib": "^2.6.2"
       },
       "engines": {
-        "node": ">=22.0.0"
+        "node": ">=20.0.0"
       }
     },
     "node_modules/accepts": {
