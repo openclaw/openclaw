@@ -829,7 +829,6 @@ export const zh_CN: TranslationMap = {
       agentJobsSubtitle: "面向此代理的计划任务。",
       noJobs: "未分配任务。",
       runNow: "立即运行",
-      jobId: "ID",
     },
     files: {
       emptyDraft: "空草稿",
@@ -4063,7 +4062,6 @@ export const zh_CN: TranslationMap = {
       unknown: "无法启动此自动化任务。",
     },
     jobs: {
-      id: "ID",
       schedule: "计划",
       lastRun: "上次运行",
       all: "全部",
@@ -4227,8 +4225,6 @@ export const zh_CN: TranslationMap = {
     },
     jobState: {
       next: "下次",
-      running: "运行中",
-      notRunning: "未运行",
     },
     runEntry: {
       noSummary: "无摘要。",
