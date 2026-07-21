@@ -95,6 +95,34 @@ describe("applyModelDefaults", () => {
     } satisfies OpenClawConfig;
   }
 
+  function buildProviderTokenDefaultsConfig(params: {
+    provider: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
+    model?: { contextWindow?: number; contextTokens?: number; maxTokens?: number };
+  }) {
+    return {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            apiKey: "sk-test",
+            api: "openai-completions",
+            ...params.provider,
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                ...params.model,
+              },
+            ],
+          },
+        },
+      },
+    } as never;
+  }
+
   function buildCustomProviderManifestRegistry() {
     return {
       plugins: [
@@ -437,6 +465,38 @@ describe("applyModelDefaults", () => {
 
     expect(model?.contextWindow).toBe(32768);
     expect(model?.maxTokens).toBe(32768);
+  });
+
+  it.each([
+    {
+      name: "inherits provider defaults",
+      provider: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      model: undefined,
+      expected: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+    },
+    {
+      name: "keeps model overrides",
+      provider: { contextWindow: 50_000, contextTokens: 32_000, maxTokens: 4_096 },
+      model: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
+      expected: { contextWindow: 10_000, contextTokens: 8_000, maxTokens: 2_048 },
+    },
+    {
+      name: "clamps inherited maxTokens to the inherited contextWindow",
+      provider: { contextWindow: 4_096, maxTokens: 8_192 },
+      model: undefined,
+      expected: { contextWindow: 4_096, contextTokens: undefined, maxTokens: 4_096 },
+    },
+  ])("$name", ({ provider, model, expected }) => {
+    const cfg = buildProviderTokenDefaultsConfig({ provider, model });
+
+    const next = applyModelDefaults(cfg);
+    const resolved = next.models?.providers?.myproxy?.models?.[0];
+
+    expect({
+      contextWindow: resolved?.contextWindow,
+      contextTokens: resolved?.contextTokens,
+      maxTokens: resolved?.maxTokens,
+    }).toEqual(expected);
   });
 
   it("normalizes stale mistral maxTokens that matched the full context window", () => {
