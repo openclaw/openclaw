@@ -178,14 +178,25 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
   };
 }
 
-function buildCronFailureChatMessage(params: { evt: CronEvent; job: CronJob }): string {
+function buildCronFailureChatMessage(params: {
+  evt: CronEvent;
+  job: CronJob;
+  failureMessage: string;
+}): string {
   const eventTime = formatCronAlertEventTime({
     job: params.job,
     eventTimeMs: params.evt.runAtMs,
   });
-  return `Cron job "${params.job.name}" failed${eventTime ? ` at ${eventTime}` : ""}: ${
-    params.evt.error ?? "unknown error"
-  }`;
+  if (!eventTime) {
+    return params.failureMessage;
+  }
+  // Keep chat alerts based on the legacy webhook message so both surfaces
+  // share its content policy while only chat receives the display timestamp.
+  const failurePrefix = `Cron job "${params.job.name}" failed`;
+  if (!params.failureMessage.startsWith(`${failurePrefix}:`)) {
+    return params.failureMessage;
+  }
+  return `${failurePrefix} at ${eventTime}${params.failureMessage.slice(failurePrefix.length)}`;
 }
 
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
@@ -446,7 +457,11 @@ function dispatchCronFailureDestinationNotifications(params: {
   const failureDest = resolveFailureDestination(job, params.globalFailureDestination);
   const deliverySessionKey = resolveCronDeliverySessionKey(job);
   const failurePayload = buildCronFailureWebhookPayload({ evt: params.evt, job });
-  const failureChatMessage = buildCronFailureChatMessage({ evt: params.evt, job });
+  const failureChatMessage = buildCronFailureChatMessage({
+    evt: params.evt,
+    job,
+    failureMessage: failurePayload.message,
+  });
 
   if (failureDest) {
     if (failureDest.mode === "webhook" && failureDest.to) {
