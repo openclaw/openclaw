@@ -179,16 +179,28 @@ export async function azLoginDeviceCodeWithOptions(params: {
       }
       return total;
     };
-    child.stdout?.on("data", (chunk) => {
-      const text = String(chunk);
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (text: string) => {
       stdoutLen = appendBoundedChunk(stdoutChunks, text, stdoutLen);
       process.stdout.write(text);
     });
-    child.stderr?.on("data", (chunk) => {
-      const text = String(chunk);
+    child.stderr?.on("data", (text: string) => {
       stderrLen = appendBoundedChunk(stderrChunks, text, stderrLen);
       process.stderr.write(text);
     });
+    // Both pipes can fail before close; keep child termination one-shot.
+    let streamFailed = false;
+    const rejectStreamError = (error: Error) => {
+      if (streamFailed) {
+        return;
+      }
+      streamFailed = true;
+      child.kill();
+      reject(error);
+    };
+    child.stdout?.on("error", rejectStreamError);
+    child.stderr?.on("error", rejectStreamError);
     child.on("close", (code) => {
       if (code === 0) {
         resolve();
