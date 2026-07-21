@@ -381,7 +381,10 @@ function cleanSchemaForGeminiWithDefs(
       value.every((entry) => typeof entry === "string")
     ) {
       const types = value.filter((entry) => entry !== "null");
-      cleaned.type = types.length === 1 ? types[0] : types;
+      const representativeType = types[0];
+      if (representativeType) {
+        cleaned.type = representativeType;
+      }
       continue;
     }
 
