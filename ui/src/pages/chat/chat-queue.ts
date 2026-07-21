@@ -574,7 +574,9 @@ export function removeQueuedMessageWithoutReleasing(
   id: string,
   sessionKey = host.sessionKey,
   agentId?: string,
+  options?: { allowIdOnlyFallback?: boolean },
 ): ChatQueueItem | null {
+  const allowIdOnlyFallback = options?.allowIdOnlyFallback !== false;
   const location = locateChatQueueItem(host, id);
   const stored = storedOutboxContainingItem(host, id);
   const scope: StoredChatOutboxScope =
@@ -598,7 +600,10 @@ export function removeQueuedMessageWithoutReleasing(
     // User dismiss / exact-id removal must not fail closed on a stale version.
     // Fall back to id-only deletion so a sibling waiting-idle row is never
     // wiped by a version-mismatch sync of the durable head.
+    // Automatic delivery-proof retirement opts out so a storage blip cannot
+    // drop an in-flight/Needs-review head via the id-only path.
     if (
+      allowIdOnlyFallback &&
       !removeStoredChatComposerQueueItem(
         host,
         stored.sessionKey,
@@ -607,6 +612,12 @@ export function removeQueuedMessageWithoutReleasing(
         stored.agentId ?? item.agentId,
       )
     ) {
+      const persisted = outboxAfterMutation(host, stored);
+      syncChatQueueFromStoredOutbox(host, persisted);
+      publishStoredOutbox(host, persisted);
+      return null;
+    }
+    if (!allowIdOnlyFallback) {
       const persisted = outboxAfterMutation(host, stored);
       syncChatQueueFromStoredOutbox(host, persisted);
       publishStoredOutbox(host, persisted);

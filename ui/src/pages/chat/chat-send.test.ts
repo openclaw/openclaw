@@ -5042,16 +5042,16 @@ describe("handleSendChat", () => {
       await retryQueuedChatMessage(latePeer, item.id);
       expect(request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
 
+      // Panes share gateway sessionStorage; dismiss from a stale pane clears the
+      // durable head for every subscriber (same contract as delete-before-ack).
       removeQueuedMessage(stalePeer, item.id);
-      expect(listStoredChatOutboxes(host)[0]?.queue[0]?.id).toBe(item.id);
-      expect(stalePeer.chatQueue[0]?.sendState).toBe("sending");
-      expect(latePeer.chatQueue[0]?.sendState).toBe("sending");
+      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
+      expect(stalePeer.chatQueue).toStrictEqual([]);
+      expect(latePeer.chatQueue).toStrictEqual([]);
 
       sent.resolve({ runId, status: "started" });
       await send;
-      expect(latePeer.chatQueue[0]?.sendState).toBe("sending");
-
-      expect(removeDeliveredQueuedChatSendForRun(host, runId)).toMatchObject({ id: item.id });
+      expect(removeDeliveredQueuedChatSendForRun(host, runId)).toBeNull();
       expect(latePeer.chatQueue).toStrictEqual([]);
     } finally {
       stopLatePeer();

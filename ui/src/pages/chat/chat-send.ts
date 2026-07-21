@@ -1701,7 +1701,17 @@ function removeHistoryProvenQueuedSend(
   outbox: StoredChatOutbox,
   item: ChatQueueItem,
 ): boolean {
-  const removed = removeQueuedMessageWithoutReleasing(host, item.id, outbox.sessionKey);
+  const removed = removeQueuedMessageWithoutReleasing(
+    host,
+    item.id,
+    outbox.sessionKey,
+    outbox.agentId,
+    {
+      // Fail closed on durable storage errors so Needs-review retirement cannot
+      // drop a queue head via the user-dismiss id-only fallback path.
+      allowIdOnlyFallback: false,
+    },
+  );
   if (!removed) {
     return false;
   }
