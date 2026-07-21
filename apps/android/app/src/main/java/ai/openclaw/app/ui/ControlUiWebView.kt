@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui
 
 import ai.openclaw.app.NodeRuntime
+import androidx.core.net.toUri
 import android.annotation.SuppressLint
 import android.view.View
 import android.webkit.WebSettings
@@ -109,7 +110,7 @@ private fun installControlUiAuthScript(
 
 /** scheme://host[:port] origin for WebView script rules; brackets IPv6 hosts. */
 internal fun controlUiOriginRule(baseUrl: String): String? {
-  val uri = android.net.Uri.parse(baseUrl)
+  val uri = baseUrl.toUri()
   val scheme = uri.scheme ?: return null
   val host = uri.host ?: return null
   val hostPart = if (host.contains(":") && !host.startsWith("[")) "[$host]" else host

@@ -5,7 +5,7 @@ import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawTheme
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -107,8 +107,9 @@ internal fun sessionDashboardUrl(
   baseUrl: String,
   sessionKey: String,
 ): String =
-  Uri
-    .parse(baseUrl.trimEnd('/'))
+  baseUrl
+    .trimEnd('/')
+    .toUri()
     .buildUpon()
     .appendPath("chat")
     .clearQuery()

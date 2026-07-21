@@ -2499,7 +2499,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 116,
+      "line": 117,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ControlUiWebView.kt",
       "source": ":${uri.port}",
       "surface": "android",
@@ -14035,7 +14035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 35,
+      "line": 37,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Done",
       "surface": "apple",
@@ -14043,7 +14043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 45,
+      "line": 47,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Dashboard needs a connected gateway",
       "surface": "apple",
@@ -14051,7 +14051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 47,
+      "line": 49,
       "path": "apps/ios/Sources/Chat/SessionDashboardScreen.swift",
       "source": "Connect to your gateway to open this session dashboard.",
       "surface": "apple",
