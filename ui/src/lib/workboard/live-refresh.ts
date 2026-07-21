@@ -3,8 +3,6 @@ import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
 import { getWorkboardRuntime, getWorkboardState, type WorkboardHost } from "./runtime.ts";
 
-export { stopWorkboardLiveRefresh } from "./runtime.ts";
-
 const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
 
 function documentHidden(): boolean {
