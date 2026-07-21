@@ -117,6 +117,7 @@ async function assertSuccessfulCardKitResponse(
   action: string,
 ): Promise<void> {
   if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
     throw new Error(`${action} failed with HTTP ${response.status}`);
   }
   const data = await readFeishuJsonResponse<CardKitResponse>(response, auditContext);
@@ -157,6 +158,7 @@ async function getToken(creds: Credentials, deps?: FeishuStreamingDeps): Promise
   };
   try {
     if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
       throw new Error(`Token request failed with HTTP ${response.status}`);
     }
     data = await readFeishuJsonResponse(response, "feishu.streaming-card.token");
@@ -327,6 +329,7 @@ export class FeishuStreamingSession {
     };
     try {
       if (!createRes.ok) {
+        await createRes.body?.cancel().catch(() => undefined);
         throw new Error(`Create card request failed with HTTP ${createRes.status}`);
       }
       createData = await readFeishuJsonResponse(createRes, "feishu.streaming-card.create");
