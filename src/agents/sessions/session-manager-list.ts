@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { parseStrictTimestampStringMs } from "@openclaw/normalization-core/number-coercion";
 import pMap, { pMapSkip } from "p-map";
 import type { Message, TextContent } from "../../llm/types.js";
 import { logWarn } from "../../logger.js";
@@ -109,11 +110,9 @@ function getLastActivityTime(entries: FileEntry[]): number | undefined {
       continue;
     }
     const entryTimestamp = (entry as SessionEntryBase).timestamp;
-    if (typeof entryTimestamp === "string") {
-      const timestamp = new Date(entryTimestamp).getTime();
-      if (!Number.isNaN(timestamp)) {
-        lastActivityTime = Math.max(lastActivityTime ?? 0, timestamp);
-      }
+    const timestamp = parseStrictTimestampStringMs(entryTimestamp);
+    if (timestamp !== undefined) {
+      lastActivityTime = Math.max(lastActivityTime ?? 0, timestamp);
     }
   }
   return lastActivityTime;
@@ -128,9 +127,8 @@ function getSessionModifiedDate(
   if (typeof lastActivityTime === "number" && lastActivityTime > 0) {
     return new Date(lastActivityTime);
   }
-  const headerTime =
-    typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
-  return !Number.isNaN(headerTime) ? new Date(headerTime) : statsMtime;
+  const headerTime = parseStrictTimestampStringMs(header.timestamp);
+  return headerTime !== undefined ? new Date(headerTime) : statsMtime;
 }
 
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
