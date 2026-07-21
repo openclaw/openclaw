@@ -155,7 +155,14 @@ export function resolveProviderEnvAuthEvidence(
   }
 
   for (const evidence of authEvidenceMap[normalized] ?? []) {
-    if (!hasRequiredAuthEvidenceEnv(evidence, env) || !hasLocalFileAuthEvidence(evidence, env)) {
+    if (!hasRequiredAuthEvidenceEnv(evidence, env)) {
+      continue;
+    }
+    // Local-file evidence additionally needs the credential file present;
+    // env-vars-with-marker evidence (e.g. ambient ADC) is satisfied by the
+    // required env vars alone. The type guard also narrows evidence for
+    // hasLocalFileAuthEvidence, which only accepts the local-file variant.
+    if (evidence.type === "local-file-with-env" && !hasLocalFileAuthEvidence(evidence, env)) {
       continue;
     }
     return {
