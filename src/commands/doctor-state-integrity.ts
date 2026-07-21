@@ -1502,10 +1502,10 @@ export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
 }
 
 /** Emits the workspace backup tip when applicable. */
-export function noteWorkspaceBackupTip(workspaceDir: string) {
+export function noteWorkspaceBackupTip(workspaceDir: string, labelPrefix = "") {
   const tip = collectWorkspaceBackupTip(workspaceDir);
   if (tip) {
-    note(tip, "Workspace");
+    note(`${labelPrefix}${tip}`, "Workspace");
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1475,15 +1475,23 @@ async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Prom
   if (ctx.options.workspaceSuggestions === false) {
     return;
   }
-  const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
+  // Iterate every configured agent's workspace, not just the default, so a
+  // secondary agent whose workspace lacks a git backup or the memory system
+  // still gets the suggestion (mirrors #111758's per-agent doctor audit).
+  const { listAgentIds, resolveAgentWorkspaceDir } = await loadAgentScopeModule();
   const { noteWorkspaceBackupTip } = await loadDoctorStateIntegrityModule();
   const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
     await import("../commands/doctor-workspace.js");
   const { note } = await loadNoteModule();
-  const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-  noteWorkspaceBackupTip(workspaceDir);
-  if (await shouldSuggestMemorySystem(workspaceDir)) {
-    note(MEMORY_SYSTEM_PROMPT, "Workspace");
+  const agentIds = listAgentIds(ctx.cfg);
+  const labelAgents = agentIds.length > 1;
+  for (const agentId of agentIds) {
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, agentId);
+    const prefix = labelAgents ? `Agent "${agentId}": ` : "";
+    noteWorkspaceBackupTip(workspaceDir, prefix);
+    if (await shouldSuggestMemorySystem(workspaceDir)) {
+      note(`${prefix}${MEMORY_SYSTEM_PROMPT}`, "Workspace");
+    }
   }
 }
 

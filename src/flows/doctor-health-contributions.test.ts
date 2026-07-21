@@ -76,8 +76,9 @@ const mocks = vi.hoisted(() => ({
   maybeRepairLegacyPluginManifestContracts: vi.fn().mockResolvedValue(undefined),
   detectLegacyClawdBrowserProfileResidue: vi.fn(),
   maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  resolveAgentWorkspaceDir: vi.fn((_cfg: unknown, _agentId: string) => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
+  listAgentIds: vi.fn(() => ["default"]),
   resolveAgentContextLimits: vi.fn(
     (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
       cfg.agents?.defaults?.contextLimits ?? {},
@@ -101,7 +102,7 @@ const mocks = vi.hoisted(() => ({
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
   collectWorkspaceBackupTip: vi.fn((): string | undefined => undefined),
-  shouldSuggestMemorySystem: vi.fn(async () => false),
+  shouldSuggestMemorySystem: vi.fn(async (_workspaceDir: string) => false),
   collectDiskSpaceHealthFindings: vi.fn((): readonly HealthFinding[] => []),
   collectHeartbeatTemplateHealthFindings: vi.fn(async () => [] as unknown[]),
   maybeRepairHeartbeatTemplate: vi.fn().mockResolvedValue(undefined),
@@ -330,6 +331,7 @@ vi.mock("../commands/doctor-browser.js", () => ({
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
+  listAgentIds: mocks.listAgentIds,
   resolveAgentContextLimits: mocks.resolveAgentContextLimits,
 }));
 
@@ -617,6 +619,8 @@ describe("doctor health contributions", () => {
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
+    mocks.listAgentIds.mockReset();
+    mocks.listAgentIds.mockReturnValue(["default"]);
     mocks.resolveAgentContextLimits.mockReset();
     mocks.resolveAgentContextLimits.mockImplementation(
       (cfg: { agents?: { defaults?: { contextLimits?: unknown } } }) =>
@@ -2163,6 +2167,38 @@ describe("doctor health contributions", () => {
       ],
     });
     expect(mocks.collectWorkspaceBackupTip).toHaveBeenCalledWith("/tmp/openclaw-workspace");
+  });
+
+  it("labels workspace suggestions per agent when the roster has more than one agent", async () => {
+    // Secondary agent workspace lacks the memory system while the default is healthy.
+    mocks.listAgentIds.mockReturnValue(["main", "secondary"]);
+    mocks.resolveAgentWorkspaceDir.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/openclaw-${agentId}-workspace`,
+    );
+    mocks.shouldSuggestMemorySystem.mockImplementation(async (workspaceDir: string) =>
+      workspaceDir.includes("secondary"),
+    );
+    mocks.collectWorkspaceBackupTip.mockReturnValue(undefined);
+    mocks.note.mockReset();
+
+    const contribution = resolveDoctorHealthContributions().find(
+      (entry) => entry.id === "doctor:workspace-suggestions",
+    );
+    expect(contribution).toBeDefined();
+
+    await contribution!.run({
+      cfg: {},
+      options: {},
+      prompter: { shouldRepair: false },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<NonNullable<typeof contribution>["run"]>[0]);
+
+    const memoryNotes = mocks.note.mock.calls.filter(([, title]) => title === "Workspace");
+    expect(memoryNotes).toHaveLength(1);
+    expect(memoryNotes[0]?.[0]).toContain('Agent "secondary":');
+    // The default agent emitted no memory-system note because its workspace was healthy.
+    expect(memoryNotes[0]?.[0]).not.toContain('Agent "main":');
   });
 
   it("keeps disk space opt-in for default lint selection", async () => {
