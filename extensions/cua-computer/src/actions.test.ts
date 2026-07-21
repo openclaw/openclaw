@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { normalizeKey, normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
+import { normalizeModifiers, parseKeyChord, scalePoint } from "./actions.js";
+
+// normalizeKey is internal; exercise it through parseKeyChord's final segment.
+const normalizeKey = (input: string) => parseKeyChord(input).key;
 
 describe("cua-computer key normalization", () => {
   it.each([

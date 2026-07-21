@@ -9,7 +9,7 @@ import {
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
 // cua-driver is prerelease upstream; pin the exact minor contract until it stabilizes.
-export const SUPPORTED_DRIVER_VERSION_PREFIX = "0.10.";
+const SUPPORTED_DRIVER_VERSION_PREFIX = "0.10.";
 const BINARY_CACHE_MS = 1_000;
 // Cumulative ~9.75s of daemon readiness polling after spawning `serve`.
 const DAEMON_READY_BACKOFF_MS = [250, 500, 1_000, 2_000, 3_000, 3_000] as const;
@@ -19,7 +19,7 @@ const DAEMON_READY_BACKOFF_MS = [250, 500, 1_000, 2_000, 3_000, 3_000] as const;
 // every call.
 const UNSUPPORTED_REPROBE_MS = 30_000;
 
-export type CuaToolContent =
+type CuaToolContent =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mimeType: string }
   | Record<string, unknown>;
@@ -63,7 +63,7 @@ type DriverSession = {
   transport: Transport;
 };
 
-export class ComputerDriverUnsupportedError extends Error {
+class ComputerDriverUnsupportedError extends Error {
   readonly code = "COMPUTER_DRIVER_UNSUPPORTED";
 
   constructor(found: string, pinned: string) {
@@ -132,7 +132,7 @@ const DRIVER_ENV_ALLOWLIST = new Set(
 // by spec; the CUA_ namespace is deliberately excluded (see the allowlist).
 const DRIVER_ENV_ALLOW_PREFIXES = ["XDG_", "LC_"];
 
-export function buildDriverEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+function buildDriverEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
     if (typeof value !== "string") {
@@ -270,15 +270,21 @@ export class CuaDriverClient implements CuaDriver {
     return resolved;
   }
 
-  private unsupportedActive(): boolean {
-    return (
+  /** The cached version-incompatibility error while its re-probe window holds. */
+  private activeUnsupportedError(): ComputerDriverUnsupportedError | undefined {
+    if (
       this.unsupportedError !== undefined &&
       this.now() - this.unsupportedAt < UNSUPPORTED_REPROBE_MS
-    );
+    ) {
+      return this.unsupportedError;
+    }
+    return undefined;
   }
 
   isAvailable(): boolean {
-    return !this.disposed && !this.unsupportedActive() && this.resolveBinary() !== null;
+    return (
+      !this.disposed && this.activeUnsupportedError() === undefined && this.resolveBinary() !== null
+    );
   }
 
   resetAvailabilityCache(): void {
@@ -379,8 +385,9 @@ export class CuaDriverClient implements CuaDriver {
     if (this.session) {
       return this.session;
     }
-    if (this.unsupportedActive()) {
-      throw this.unsupportedError;
+    const activeUnsupported = this.activeUnsupportedError();
+    if (activeUnsupported) {
+      throw activeUnsupported;
     }
     // Verdict expired: allow one fresh compatibility probe so a corrected driver
     // or restarted daemon recovers without a node restart.
@@ -410,12 +417,12 @@ export class CuaDriverClient implements CuaDriver {
         // A cold `serve` start (Xvfb, portals, UIA warmup) can take seconds;
         // upstream's own mcp launcher waits up to 10s for the macOS daemon.
         // Poll with backoff instead of racing one fixed delay.
-        let lastError: unknown = error;
-        for (const delayMs of DAEMON_READY_BACKOFF_MS) {
+        const lastIndex = DAEMON_READY_BACKOFF_MS.length - 1;
+        for (const [index, delayMs] of DAEMON_READY_BACKOFF_MS.entries()) {
           await this.sleep(delayMs);
           if (this.disposed) {
             throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-driver client is disposed", {
-              cause: lastError,
+              cause: error,
             });
           }
           try {
@@ -426,17 +433,24 @@ export class CuaDriverClient implements CuaDriver {
               this.unsupportedAt = this.now();
               throw retryError;
             }
-            lastError = retryError;
+            // Give up only after the budget is exhausted, reporting the final
+            // retry failure (the most relevant cause) rather than the first.
+            // A child exit mid-budget is not terminal: cua-driver allows one
+            // daemon per endpoint, so ours may have collided with a shared one
+            // that needs more time to answer.
+            if (index === lastIndex) {
+              throw new Error(
+                "COMPUTER_DRIVER_UNAVAILABLE: cua-driver daemon did not become ready in time",
+                { cause: retryError },
+              );
+            }
           }
-          // Our `serve` child exiting is not terminal: cua-driver allows one
-          // daemon per endpoint, so the child may have collided with a shared
-          // daemon that needs more of the budget to answer. Keep polling and let
-          // the readiness timeout below own the give-up decision.
         }
-        throw new Error(
-          "COMPUTER_DRIVER_UNAVAILABLE: cua-driver daemon did not become ready in time",
-          { cause: lastError },
-        );
+        // Unreachable: the final iteration always returns or throws. Present for
+        // control-flow completeness only.
+        throw new Error("COMPUTER_DRIVER_UNAVAILABLE: cua-driver daemon did not become ready", {
+          cause: error,
+        });
       }
     })();
     this.connectPromise = pending;

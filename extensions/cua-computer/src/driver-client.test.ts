@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { describe, expect, it, vi } from "vitest";
-import { CuaDriverClient, SUPPORTED_DRIVER_VERSION_PREFIX } from "./driver-client.js";
+import { CuaDriverClient } from "./driver-client.js";
 
 function fakeTransport(): Transport {
   return {
@@ -68,7 +68,6 @@ describe("CuaDriverClient version gate", () => {
     const driver = createClient(fakeClient(options));
     await expect(driver.callTool("get_screen_size", {})).rejects.toThrow(found);
     expect(driver.isAvailable()).toBe(false);
-    expect(SUPPORTED_DRIVER_VERSION_PREFIX).toBe("0.10.");
   });
 
   it("re-probes and recovers after a corrected driver replaces an unsupported one", async () => {
@@ -287,7 +286,9 @@ describe("CuaDriverClient process contract", () => {
     });
 
     await expect(driver.callTool("get_screen_size", {})).rejects.toThrow("transport closed");
-    spawned[0].signalCode = "SIGKILL";
+    const firstChild = spawned[0];
+    expect(firstChild).toBeDefined();
+    firstChild!.signalCode = "SIGKILL";
     await expect(driver.callTool("get_desktop_state", {})).resolves.toBeDefined();
     expect(spawnProcess).toHaveBeenCalledTimes(2);
   });

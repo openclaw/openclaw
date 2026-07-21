@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { CuaLastFrame } from "./frame.js";
 
-export const COMPUTER_ACTIONS = [
+const COMPUTER_ACTIONS = [
   "left_click",
   "right_click",
   "middle_click",
@@ -105,7 +105,7 @@ export function normalizeModifiers(value: string | undefined): string[] {
   });
 }
 
-export function normalizeKey(value: string): string {
+function normalizeKey(value: string): string {
   const raw = value.trim();
   if (!raw) {
     throw unsupportedKey("key chord contains an empty key");

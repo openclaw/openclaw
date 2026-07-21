@@ -62,7 +62,7 @@ type ImageProcessor = {
   ): Promise<{ data: Buffer; width: number; height: number }>;
 };
 
-export type CuaComputerCommandsOptions = {
+type CuaComputerCommandsOptions = {
   driverPath?: string;
   platform?: NodeJS.Platform;
   env?: NodeJS.ProcessEnv;
