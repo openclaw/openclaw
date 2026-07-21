@@ -153,4 +153,67 @@ describe("spawnWithFallback", () => {
       expect(stdout).toContain("hello-105528");
     },
   );
+
+  it.runIf(process.platform === "win32")(
+    "restores PowerShell stdout when caller requests detached true (#105528)",
+    async () => {
+      const { spawn } = await import("node:child_process");
+
+      // BEFORE: unsanitized detached:true loses PowerShell stdout on this host.
+      const before = spawn(
+        "powershell.exe",
+        ["-NoProfile", "-Command", "Write-Output hello-ps-105528"],
+        {
+          detached: true,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      const beforeChunks: Buffer[] = [];
+      before.stdout?.on("data", (chunk: Buffer) => {
+        beforeChunks.push(Buffer.from(chunk));
+      });
+      const beforeCode = await new Promise<number | null>((resolve, reject) => {
+        before.once("error", reject);
+        before.once("close", (code) => resolve(code));
+      });
+      const beforeStdout = Buffer.concat(beforeChunks).toString("utf8");
+      expect(beforeCode).toBe(0);
+      expect(beforeStdout).toBe("");
+
+      // AFTER: spawnWithFallback forces detached:false and captures stdout.
+      let detachedPassedToNode: boolean | undefined;
+      const spawnImpl: typeof spawn = ((...args: Parameters<typeof spawn>) => {
+        const options = args[2];
+        if (options && typeof options === "object" && !Array.isArray(options)) {
+          detachedPassedToNode = Boolean((options as { detached?: boolean }).detached);
+        }
+        return spawn(...args);
+      }) as typeof spawn;
+
+      const result = await spawnWithFallback({
+        argv: ["powershell.exe", "-NoProfile", "-Command", "Write-Output hello-ps-105528"],
+        options: {
+          detached: true,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+        spawnImpl,
+      });
+
+      const afterChunks: Buffer[] = [];
+      result.child.stdout?.on("data", (chunk: Buffer) => {
+        afterChunks.push(Buffer.from(chunk));
+      });
+      const afterCode = await new Promise<number | null>((resolve, reject) => {
+        result.child.once("error", reject);
+        result.child.once("close", (code) => resolve(code));
+      });
+      const afterStdout = Buffer.concat(afterChunks).toString("utf8");
+
+      expect(detachedPassedToNode).toBe(false);
+      expect(afterCode).toBe(0);
+      expect(afterStdout).toContain("hello-ps-105528");
+    },
+  );
 });
