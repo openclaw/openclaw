@@ -1,6 +1,5 @@
 // Mattermost plugin module implements monitor websocket behavior.
 import { randomUUID } from "node:crypto";
-import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import {
   captureWsEvent,
   createDebugProxyWebSocketAgent,
@@ -89,14 +88,25 @@ const MattermostEventPayloadSchema = z.object({
 }) as z.ZodType<MattermostEventPayload>;
 
 export function parseMattermostEventPayload(raw: string): MattermostEventPayload | null {
-  return safeParseJsonWithSchema(MattermostEventPayloadSchema, raw);
+  try {
+    const result = MattermostEventPayloadSchema.safeParse(JSON.parse(raw));
+    return result.success ? result.data : null;
+  } catch {
+    return null;
+  }
 }
 
 export function parseMattermostPost(value: unknown): MattermostPost | null {
+  let candidate = value;
   if (typeof value === "string") {
-    return safeParseJsonWithSchema(MattermostPostSchema, value);
+    try {
+      candidate = JSON.parse(value);
+    } catch {
+      return null;
+    }
   }
-  return safeParseWithSchema(MattermostPostSchema, value);
+  const result = MattermostPostSchema.safeParse(candidate);
+  return result.success ? result.data : null;
 }
 
 class WebSocketClosedBeforeOpenError extends Error {

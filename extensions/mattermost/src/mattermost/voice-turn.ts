@@ -66,6 +66,7 @@ function stripMattermostVoiceTtsMarkdown(text: string): string {
       .replace(/^```\s*$/gm, ""),
   )
     .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/^\s*[•‣◦]\s+/gm, "")
     .replace(/^\s*\d+[.)]\s+/gm, "")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{2,}/g, "\n")

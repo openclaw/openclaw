@@ -130,10 +130,7 @@ import {
   hasMattermostThreadParticipationWithPersistence,
   recordMattermostThreadParticipation,
 } from "./thread-participation.js";
-import {
-  generateMattermostVoiceReply,
-  transcribeMattermostVoiceTurn,
-} from "./voice-turn.js";
+import { generateMattermostVoiceReply, transcribeMattermostVoiceTurn } from "./voice-turn.js";
 import { createMattermostVoiceWorker } from "./voice-worker.js";
 
 type MonitorMattermostOpts = {
@@ -2087,11 +2084,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           // startup path when voice calls are disabled.
           const { connectMattermostCall } = await import("./calls-client.js");
           return await connectMattermostCall({
+            baseUrl,
             wsUrl,
             botToken,
             channelId,
             callbacks,
             abortSignal: opts.abortSignal,
+            fetchImpl: client.fetchImpl,
             onError: (message) => runtime.error?.(message),
             onDebug: (message) => runtime.log?.(message),
           });

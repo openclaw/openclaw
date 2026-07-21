@@ -4,10 +4,12 @@ import { decodeMulti, encode } from "@msgpack/msgpack";
 import wrtc from "@roamhq/wrtc";
 import WebSocket from "ws";
 import { z } from "zod";
+import { normalizeMattermostBaseUrl, readMattermostError, type MattermostFetch } from "./client.js";
 import { decodeAudioFileToStereo48k } from "./voice-audio.js";
 import type { MattermostVoiceCallCallbacks, MattermostVoiceCallSession } from "./voice-worker.js";
 
 const CALLS_PREFIX = "custom_com.mattermost.calls_";
+const CALLS_PLUGIN_API_PREFIX = "/plugins/com.mattermost.calls/api/v1";
 const AUDIO_SAMPLE_RATE = 48_000;
 const AUDIO_CHANNELS = 2;
 const AUDIO_FRAME_MILLISECONDS = 10;
@@ -64,6 +66,26 @@ type IceCandidate = {
   usernameFragment?: string | null;
 };
 
+const IceServerSchema = z
+  .object({
+    urls: z.union([z.string(), z.array(z.string())]),
+    username: z.string().optional(),
+    credential: z.string().optional(),
+    credentialType: z.string().optional(),
+  })
+  .passthrough();
+
+const CallsConfigSchema = z
+  .object({
+    ICEServersConfigs: z.array(IceServerSchema).nullish(),
+    NeedsTURNCredentials: z.boolean().nullish(),
+  })
+  .passthrough();
+
+const TurnCredentialsSchema = z.array(IceServerSchema);
+
+export type MattermostCallsIceServer = z.infer<typeof IceServerSchema>;
+
 export type MattermostCallsPeerConnection = {
   readonly remoteDescription: unknown;
   on: (event: "icecandidate" | "negotiationneeded" | "track", listener: CallsHandler) => void;
@@ -100,7 +122,9 @@ type MattermostCallsAudioSource = {
 };
 
 export type MattermostCallsRtcFactory = {
-  createPeerConnection: () => MattermostCallsPeerConnection;
+  createPeerConnection: (options: {
+    iceServers: MattermostCallsIceServer[];
+  }) => MattermostCallsPeerConnection;
   createAudioSource: () => MattermostCallsAudioSource;
   createAudioSink: (track: unknown) => MattermostCallsAudioSink;
 };
@@ -121,8 +145,10 @@ function defaultWebSocketFactory(url: string): MattermostCallsWebSocket {
 
 function defaultRtcFactory(): MattermostCallsRtcFactory {
   return {
-    createPeerConnection() {
-      const peer = new wrtc.RTCPeerConnection();
+    createPeerConnection(options) {
+      const peer = new wrtc.RTCPeerConnection({
+        iceServers: options.iceServers,
+      } as RTCConfiguration);
       return {
         get remoteDescription() {
           return peer.remoteDescription;
@@ -267,7 +293,53 @@ function bufferToAudioSamples(frame: Buffer): Int16Array {
   return samples;
 }
 
+function buildCallsApiUrl(baseUrl: string, path: "config" | "turn-credentials"): string {
+  const normalized = normalizeMattermostBaseUrl(baseUrl);
+  if (!normalized) {
+    throw new Error("Mattermost baseUrl is required");
+  }
+  return `${normalized}${CALLS_PLUGIN_API_PREFIX}/${path}`;
+}
+
+async function fetchCallsJson(params: {
+  abortSignal?: AbortSignal;
+  baseUrl: string;
+  botToken: string;
+  fetchImpl: MattermostFetch;
+  path: "config" | "turn-credentials";
+}): Promise<unknown> {
+  const url = buildCallsApiUrl(params.baseUrl, params.path);
+  const response = await params.fetchImpl(url, {
+    headers: { Authorization: `Bearer ${params.botToken}` },
+    signal: params.abortSignal,
+  });
+  if (!response.ok) {
+    const detail = await readMattermostError(response);
+    throw new Error(`Mattermost Calls ${params.path} failed (${response.status}): ${detail}`);
+  }
+  return await response.json();
+}
+
+async function resolveCallsIceServers(params: {
+  abortSignal?: AbortSignal;
+  baseUrl: string;
+  botToken: string;
+  fetchImpl: MattermostFetch;
+}): Promise<MattermostCallsIceServer[]> {
+  const config = CallsConfigSchema.parse(await fetchCallsJson({ ...params, path: "config" }));
+  const iceServers = [...(config.ICEServersConfigs ?? [])];
+  if (!config.NeedsTURNCredentials) {
+    return iceServers;
+  }
+  const turnCredentials = TurnCredentialsSchema.parse(
+    await fetchCallsJson({ ...params, path: "turn-credentials" }),
+  );
+  iceServers.push(...turnCredentials);
+  return iceServers;
+}
+
 export async function connectMattermostCall(params: {
+  baseUrl: string;
   wsUrl: string;
   botToken: string;
   channelId: string;
@@ -275,6 +347,7 @@ export async function connectMattermostCall(params: {
   abortSignal?: AbortSignal;
   webSocketFactory?: (url: string) => MattermostCallsWebSocket;
   rtc?: MattermostCallsRtcFactory;
+  fetchImpl?: MattermostFetch;
   decodeAudioFile?: (filePath: string) => Promise<Buffer>;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
@@ -285,6 +358,13 @@ export async function connectMattermostCall(params: {
   const now = params.now ?? Date.now;
   const sleep = params.sleep ?? delay;
   const decode = params.decodeAudioFile ?? decodeAudioFileToStereo48k;
+  const fetchImpl = params.fetchImpl ?? globalThis.fetch.bind(globalThis);
+  const iceServers = await resolveCallsIceServers({
+    abortSignal: params.abortSignal,
+    baseUrl: params.baseUrl,
+    botToken: params.botToken,
+    fetchImpl,
+  });
   const ws = (params.webSocketFactory ?? defaultWebSocketFactory)(params.wsUrl);
   const sinksBySession = new Map<string, MattermostCallsAudioSink[]>();
   const pendingTracksByMid = new Map<string, unknown[]>();
@@ -301,13 +381,17 @@ export async function connectMattermostCall(params: {
   let remoteDescriptionReady = false;
   let sessionResolved = false;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
-  let removeAbortListener = () => undefined;
+  let removeAbortListener: () => void = () => undefined;
 
   let resolveSession: (session: MattermostVoiceCallSession) => void = () => undefined;
   let rejectSession: (error: Error) => void = () => undefined;
+  let resolveClosed: () => void = () => undefined;
   const sessionPromise = new Promise<MattermostVoiceCallSession>((resolve, reject) => {
     resolveSession = resolve;
     rejectSession = reject;
+  });
+  const closedPromise = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
   });
 
   const reportError = (error: unknown) => {
@@ -430,6 +514,7 @@ export async function connectMattermostCall(params: {
     if (options.closeSocket) {
       ws.close();
     }
+    resolveClosed();
   };
 
   const close = async () => {
@@ -437,7 +522,8 @@ export async function connectMattermostCall(params: {
   };
 
   const play = async (audio: { audioPath: string }, options?: { signal?: AbortSignal }) => {
-    if (closed || !audioSource) {
+    const activeAudioSource = audioSource;
+    if (closed || !activeAudioSource) {
       throw new Error("Mattermost call is not connected");
     }
     const isAborted = () => options?.signal?.aborted ?? false;
@@ -463,7 +549,7 @@ export async function connectMattermostCall(params: {
       let targetTime = now();
       let sentPackets = 0;
       const writePacket = async (frame: Buffer) => {
-        audioSource.onData({
+        activeAudioSource.onData({
           samples: bufferToAudioSamples(frame),
           sampleRate: AUDIO_SAMPLE_RATE,
           bitsPerSample: 16,
@@ -508,7 +594,7 @@ export async function connectMattermostCall(params: {
     if (peer) {
       return;
     }
-    peer = rtc.createPeerConnection();
+    peer = rtc.createPeerConnection({ iceServers });
     audioSource = rtc.createAudioSource();
     audioTrack = audioSource.createTrack();
 
@@ -637,7 +723,7 @@ export async function connectMattermostCall(params: {
       joinedAt = now();
       debug("join acknowledged");
       sessionResolved = true;
-      resolveSession({ play, close });
+      resolveSession({ play, close, closed: closedPromise });
       return;
     }
     if (eventName === `${CALLS_PREFIX}signal`) {

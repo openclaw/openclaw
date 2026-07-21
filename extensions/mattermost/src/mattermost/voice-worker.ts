@@ -4,6 +4,7 @@ import { createVoiceCapture } from "./voice-audio.js";
 const CALLS_EVENT_PREFIX = "custom_com.mattermost.calls_";
 const PLAYBACK_INTERRUPT_MILLISECONDS = 2_000;
 const PLAYBACK_STALL_TIMEOUT_MILLISECONDS = 10_000;
+const RECONNECT_RETRY_DELAYS_MILLISECONDS = [1_000, 2_000, 5_000, 10_000] as const;
 
 export type MattermostVoiceCallCallbacks = {
   onAudio: (event: { sessionId: string; samples: Int16Array }) => void;
@@ -26,6 +27,7 @@ export type MattermostVoiceCallSession = {
     options?: MattermostVoicePlaybackOptions,
   ) => Promise<void>;
   close: () => Promise<void>;
+  closed?: Promise<void>;
 };
 
 type MattermostCallsEvent = {
@@ -51,6 +53,7 @@ type MattermostVoiceWorker = {
 type ActiveCall = {
   channelId: string;
   session: MattermostVoiceCallSession;
+  userId: string;
 };
 
 type PlaybackState = {
@@ -81,6 +84,10 @@ type PlaybackCaptureGuard = {
   userId: string;
 };
 
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 export function createMattermostVoiceWorker(params: {
   authorizeJoin: (params: { channelId: string; userId: string }) => Promise<boolean>;
   botUserId: string;
@@ -103,12 +110,15 @@ export function createMattermostVoiceWorker(params: {
     userId: string;
     samples: Int16Array;
   }) => Promise<string | undefined>;
+  reconnectRetryDelaysMs?: readonly number[];
+  sleep?: (milliseconds: number) => Promise<void>;
   onDebug?: (message: string) => void;
   onError?: (message: string) => void;
 }): MattermostVoiceWorker {
   const captures = new Map<string, ReturnType<typeof createVoiceCapture>>();
   let activeCall: ActiveCall | undefined;
   let pendingChannelId: string | undefined;
+  let pendingOwnerId = 0;
   let lifecycleGeneration = 0;
   let playback: PlaybackState | undefined;
   let activeGeneration: ActiveGeneration | undefined;
@@ -117,9 +127,14 @@ export function createMattermostVoiceWorker(params: {
   let nextUtteranceId = 1;
   let nextTranscriptId = 1;
   const pendingTasks = new Set<Promise<void>>();
+  const pendingLifecycleTasks = new Set<Promise<void>>();
   const pendingTranscripts = new Map<number, PendingTranscript>();
   const playbackCaptureGuards = new Map<string, PlaybackCaptureGuard>();
   let voiceBatch: string[] = [];
+  const sleep = params.sleep ?? delay;
+  const reconnectRetryDelays = params.reconnectRetryDelaysMs?.length
+    ? params.reconnectRetryDelaysMs
+    : RECONNECT_RETRY_DELAYS_MILLISECONDS;
   const resolvePlaybackTimeoutMilliseconds = (reply: MattermostVoiceReplyAudio) => {
     if (params.playbackTimeoutMilliseconds !== undefined) {
       return Math.max(1, params.playbackTimeoutMilliseconds);
@@ -143,6 +158,27 @@ export function createMattermostVoiceWorker(params: {
     return capture;
   };
 
+  const reservePendingChannel = (channelId: string) => {
+    pendingOwnerId += 1;
+    pendingChannelId = channelId;
+    return pendingOwnerId;
+  };
+
+  const clearPendingChannel = (ownerId: number, channelId: string) => {
+    if (pendingOwnerId === ownerId && pendingChannelId === channelId) {
+      pendingChannelId = undefined;
+    }
+  };
+
+  const cancelPendingChannel = (channelId: string) => {
+    if (pendingChannelId !== channelId) {
+      return false;
+    }
+    pendingOwnerId += 1;
+    pendingChannelId = undefined;
+    return true;
+  };
+
   const trackTask = (task: Promise<void>) => {
     pendingTasks.add(task);
     void task.then(
@@ -151,9 +187,23 @@ export function createMattermostVoiceWorker(params: {
     );
   };
 
+  const trackLifecycleTask = (task: Promise<void>) => {
+    pendingLifecycleTasks.add(task);
+    void task.then(
+      () => pendingLifecycleTasks.delete(task),
+      () => pendingLifecycleTasks.delete(task),
+    );
+  };
+
   const waitForTrackedTasks = async () => {
     while (pendingTasks.size > 0) {
       await Promise.all([...pendingTasks]);
+    }
+  };
+
+  const waitForLifecycleTasks = async () => {
+    while (pendingLifecycleTasks.size > 0) {
+      await Promise.all([...pendingLifecycleTasks]);
     }
   };
 
@@ -268,7 +318,9 @@ export function createMattermostVoiceWorker(params: {
         return "failed";
       });
     try {
-      params.onDebug?.(`mattermost voice playback start channel=${call.channelId} speaker=${userId}`);
+      params.onDebug?.(
+        `mattermost voice playback start channel=${call.channelId} speaker=${userId}`,
+      );
       const playbackTimedOut =
         playbackTimeoutMilliseconds === undefined
           ? undefined
@@ -489,7 +541,7 @@ export function createMattermostVoiceWorker(params: {
     },
   };
 
-  const closeActiveCall = async () => {
+  const resetActiveCall = async (options: { closeSession: boolean }) => {
     const call = activeCall;
     activeCall = undefined;
     activeGeneration?.controller.abort();
@@ -502,8 +554,139 @@ export function createMattermostVoiceWorker(params: {
     nextUtteranceId = 1;
     nextTranscriptId = 1;
     setPlaybackActive(false);
-    await call?.session.close();
+    if (options.closeSession) {
+      await call?.session.close();
+    }
   };
+
+  const connectActiveCall = async (paramsForCall: {
+    channelId: string;
+    generation: number;
+    userId: string;
+  }) => {
+    const { channelId, generation, userId } = paramsForCall;
+    const pendingOwner = reservePendingChannel(channelId);
+    await resetActiveCall({ closeSession: true });
+    if (
+      generation !== lifecycleGeneration ||
+      pendingOwnerId !== pendingOwner ||
+      pendingChannelId !== channelId
+    ) {
+      return;
+    }
+    let session: MattermostVoiceCallSession;
+    try {
+      session = await params.connect({ channelId, callbacks });
+    } catch (error) {
+      clearPendingChannel(pendingOwner, channelId);
+      throw error;
+    }
+    // Call end and shutdown can race the async WebRTC join. Never retain a
+    // connection that belongs to an older lifecycle generation.
+    if (
+      generation !== lifecycleGeneration ||
+      pendingOwnerId !== pendingOwner ||
+      pendingChannelId !== channelId
+    ) {
+      await session.close();
+      return;
+    }
+    const call: ActiveCall = { channelId, session, userId };
+    clearPendingChannel(pendingOwner, channelId);
+    activeCall = call;
+    watchSessionClosed(call);
+  };
+
+  const handleSessionClosed = async (call: ActiveCall) => {
+    if (activeCall !== call) {
+      return;
+    }
+    if (pendingChannelId && pendingChannelId !== call.channelId) {
+      await resetActiveCall({ closeSession: false });
+      return;
+    }
+    params.onDebug?.(
+      `mattermost voice call session closed channel=${call.channelId}; reconnecting`,
+    );
+    const generation = ++lifecycleGeneration;
+    let pendingOwner = reservePendingChannel(call.channelId);
+    await resetActiveCall({ closeSession: false });
+    if (
+      generation !== lifecycleGeneration ||
+      pendingOwnerId !== pendingOwner ||
+      pendingChannelId !== call.channelId
+    ) {
+      return;
+    }
+    let attempt = 0;
+    for (;;) {
+      if (
+        generation !== lifecycleGeneration ||
+        pendingOwnerId !== pendingOwner ||
+        pendingChannelId !== call.channelId
+      ) {
+        return;
+      }
+      let retrying = false;
+      try {
+        if ((await params.resolveChannelType(call.channelId))?.toUpperCase() !== "D") {
+          return;
+        }
+        if (
+          generation !== lifecycleGeneration ||
+          pendingOwnerId !== pendingOwner ||
+          pendingChannelId !== call.channelId
+        ) {
+          return;
+        }
+        if (!(await params.authorizeJoin({ channelId: call.channelId, userId: call.userId }))) {
+          return;
+        }
+        if (generation === lifecycleGeneration) {
+          await connectActiveCall({
+            channelId: call.channelId,
+            generation,
+            userId: call.userId,
+          });
+        }
+        return;
+      } catch (error) {
+        if (generation !== lifecycleGeneration) {
+          return;
+        }
+        params.onError?.(
+          `mattermost voice reconnect failed channel=${call.channelId}: ${String(error)}`,
+        );
+        const retryDelay = reconnectRetryDelays[attempt];
+        if (retryDelay === undefined) {
+          params.onError?.(`mattermost voice reconnect exhausted channel=${call.channelId}`);
+          return;
+        }
+        attempt += 1;
+        pendingOwner = reservePendingChannel(call.channelId);
+        await sleep(Math.max(0, retryDelay));
+        retrying = true;
+      } finally {
+        if (!retrying) {
+          clearPendingChannel(pendingOwner, call.channelId);
+        }
+      }
+    }
+  };
+
+  function watchSessionClosed(call: ActiveCall) {
+    if (!call.session.closed) {
+      return;
+    }
+    const task = call.session.closed
+      .then(async () => {
+        await handleSessionClosed(call);
+      })
+      .catch((error: unknown) => {
+        params.onError?.(`mattermost voice call session watcher failed: ${String(error)}`);
+      });
+    trackLifecycleTask(task);
+  }
 
   return {
     async handleEvent(event) {
@@ -523,10 +706,13 @@ export function createMattermostVoiceWorker(params: {
         return;
       }
       if (eventName === "call_end") {
-        if (activeCall?.channelId === channelId || pendingChannelId === channelId) {
-          lifecycleGeneration += 1;
-          pendingChannelId = undefined;
-          await closeActiveCall();
+        const matchesActiveCall = activeCall?.channelId === channelId;
+        const invalidatedPendingJoin = cancelPendingChannel(channelId);
+        if (matchesActiveCall) {
+          if (!pendingChannelId && !invalidatedPendingJoin) {
+            lifecycleGeneration += 1;
+          }
+          await resetActiveCall({ closeSession: true });
         }
         return;
       }
@@ -536,46 +722,43 @@ export function createMattermostVoiceWorker(params: {
       if (!humanJoined || !joinedUserId) {
         return;
       }
-      if (activeCall?.channelId === channelId || pendingChannelId === channelId) {
+      if (activeCall?.channelId === channelId || pendingChannelId !== undefined) {
         return;
       }
-      if ((await params.resolveChannelType(channelId))?.toUpperCase() !== "D") {
-        return;
-      }
-      if (!(await params.authorizeJoin({ channelId, userId: joinedUserId }))) {
-        return;
-      }
-      if (activeCall?.channelId === channelId || pendingChannelId === channelId) {
-        return;
-      }
-      const generation = ++lifecycleGeneration;
-      pendingChannelId = channelId;
-      await closeActiveCall();
-      let session: MattermostVoiceCallSession;
+      const pendingOwner = reservePendingChannel(channelId);
       try {
-        session = await params.connect({ channelId, callbacks });
-      } catch (error) {
-        if (generation === lifecycleGeneration) {
-          pendingChannelId = undefined;
+        if ((await params.resolveChannelType(channelId))?.toUpperCase() !== "D") {
+          return;
         }
-        throw error;
+        if (pendingOwnerId !== pendingOwner || pendingChannelId !== channelId) {
+          return;
+        }
+        if (!(await params.authorizeJoin({ channelId, userId: joinedUserId }))) {
+          return;
+        }
+        if (pendingOwnerId !== pendingOwner || pendingChannelId !== channelId) {
+          return;
+        }
+        if (activeCall?.channelId === channelId || pendingChannelId !== channelId) {
+          return;
+        }
+        const generation = ++lifecycleGeneration;
+        const connectTask = connectActiveCall({ channelId, generation, userId: joinedUserId });
+        trackLifecycleTask(connectTask);
+        await connectTask;
+      } finally {
+        clearPendingChannel(pendingOwner, channelId);
       }
-      // Call end and shutdown can race the async WebRTC join. Never retain a
-      // connection that belongs to an older lifecycle generation.
-      if (generation !== lifecycleGeneration) {
-        await session.close();
-        return;
-      }
-      pendingChannelId = undefined;
-      activeCall = { channelId, session };
     },
     async waitForIdle() {
       await waitForTrackedTasks();
     },
     async close() {
       lifecycleGeneration += 1;
+      pendingOwnerId += 1;
       pendingChannelId = undefined;
-      await closeActiveCall();
+      await resetActiveCall({ closeSession: true });
+      await waitForLifecycleTasks();
       await waitForTrackedTasks();
     },
   };

@@ -45,6 +45,31 @@ function mediaMapMessage(mediaMap: Record<string, unknown>): Buffer {
   return Buffer.concat([Buffer.from(encode(9)), Buffer.from(encode(mediaMap))]);
 }
 
+function createCallsFetch(params?: {
+  config?: Record<string, unknown>;
+  turnCredentials?: unknown[];
+}) {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const pathname = new URL(String(input)).pathname;
+    if (pathname === "/plugins/com.mattermost.calls/api/v1/config") {
+      return Response.json(
+        params?.config ?? {
+          ICEServersConfigs: [],
+          NeedsTURNCredentials: false,
+        },
+      );
+    }
+    if (pathname === "/plugins/com.mattermost.calls/api/v1/turn-credentials") {
+      return Response.json(params?.turnCredentials ?? []);
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
+async function waitForWebSocketListeners(ws: FakeWebSocket): Promise<void> {
+  await vi.waitFor(() => expect(ws.handlers.has("open")).toBe(true));
+}
+
 function createRtc() {
   const peerHandlers = new Map<string, Handler>();
   const dataChannel = {
@@ -86,6 +111,7 @@ function createRtc() {
 
 async function joinCall(params?: {
   abortSignal?: AbortSignal;
+  fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   now?: () => number;
   sleep?: (milliseconds: number) => Promise<void>;
   decodeAudioFile?: (path: string) => Promise<Buffer>;
@@ -95,15 +121,18 @@ async function joinCall(params?: {
   const onAudio = vi.fn();
   const onVoice = vi.fn();
   const pending = connectMattermostCall({
+    baseUrl: "https://mattermost.test",
     botToken: "test-token",
     callbacks: { onAudio, onVoice },
     channelId: "dm-channel",
+    fetchImpl: params?.fetchImpl ?? createCallsFetch(),
     rtc,
     webSocketFactory: () => ws,
     wsUrl: "ws://mattermost.test/api/v4/websocket",
     ...params,
   });
 
+  await waitForWebSocketListeners(ws);
   ws.emit("open");
   await ws.message({ event: "hello", data: { connection_id: "conn-1" } });
   await ws.message({
@@ -111,7 +140,18 @@ async function joinCall(params?: {
     data: { connID: "conn-1" },
   });
   const session = await pending;
-  return { audioSource, dataChannel, onAudio, onVoice, peer, peerHandlers, session, sinks, ws };
+  return {
+    audioSource,
+    dataChannel,
+    onAudio,
+    onVoice,
+    peer,
+    peerHandlers,
+    rtc,
+    session,
+    sinks,
+    ws,
+  };
 }
 
 describe("Mattermost Calls client", () => {
@@ -119,14 +159,17 @@ describe("Mattermost Calls client", () => {
     const ws = new FakeWebSocket();
     const { peer, rtc } = createRtc();
     const pending = connectMattermostCall({
+      baseUrl: "https://mattermost.test",
       botToken: "test-token",
       callbacks: { onAudio: vi.fn(), onVoice: vi.fn() },
       channelId: "dm-channel",
+      fetchImpl: createCallsFetch(),
       rtc,
       webSocketFactory: () => ws,
       wsUrl: "ws://mattermost.test/api/v4/websocket",
     });
 
+    await waitForWebSocketListeners(ws);
     ws.emit("open");
     await ws.message({ event: "hello", data: { connection_id: "conn-1" } });
     await ws.message({
@@ -160,6 +203,67 @@ describe("Mattermost Calls client", () => {
         },
       });
       expect(peer.setRemoteDescription).not.toHaveBeenCalled();
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("configures the peer with Mattermost Calls ICE servers and generated TURN credentials", async () => {
+    const fetchImpl = createCallsFetch({
+      config: {
+        ICEServersConfigs: [{ urls: "stun:stun.example.com:3478" }],
+        NeedsTURNCredentials: true,
+      },
+      turnCredentials: [
+        {
+          credential: "turn-pass",
+          urls: ["turn:turn.example.com:3478"],
+          username: "turn-user",
+        },
+      ],
+    });
+    const { rtc, session } = await joinCall({ fetchImpl });
+    try {
+      expect(fetchImpl).toHaveBeenNthCalledWith(
+        1,
+        "https://mattermost.test/plugins/com.mattermost.calls/api/v1/config",
+        expect.objectContaining({
+          headers: { Authorization: "Bearer test-token" },
+        }),
+      );
+      expect(fetchImpl).toHaveBeenNthCalledWith(
+        2,
+        "https://mattermost.test/plugins/com.mattermost.calls/api/v1/turn-credentials",
+        expect.objectContaining({
+          headers: { Authorization: "Bearer test-token" },
+        }),
+      );
+      expect(rtc.createPeerConnection).toHaveBeenCalledWith({
+        iceServers: [
+          { urls: "stun:stun.example.com:3478" },
+          {
+            credential: "turn-pass",
+            urls: ["turn:turn.example.com:3478"],
+            username: "turn-user",
+          },
+        ],
+      });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("treats nullable Mattermost Calls ICE config as empty", async () => {
+    const fetchImpl = createCallsFetch({
+      config: {
+        ICEServersConfigs: null,
+        NeedsTURNCredentials: null,
+      },
+    });
+    const { rtc, session } = await joinCall({ fetchImpl });
+    try {
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(rtc.createPeerConnection).toHaveBeenCalledWith({ iceServers: [] });
     } finally {
       await session.close();
     }
@@ -363,7 +467,7 @@ describe("Mattermost Calls client", () => {
   });
 
   it("releases WebRTC resources when the signaling socket disconnects", async () => {
-    const { dataChannel, peer, peerHandlers, sinks, ws } = await joinCall();
+    const { dataChannel, peer, peerHandlers, session, sinks, ws } = await joinCall();
     dataChannel.onmessage?.({
       data: mediaMapMessage({ 3: { type: "voice", sender_id: "speaker-session" } }),
     });
@@ -373,6 +477,8 @@ describe("Mattermost Calls client", () => {
     });
 
     await ws.emit("close", 1006, Buffer.from("network lost"));
+    expect(session.closed).toBeDefined();
+    await session.closed;
 
     expect(peer.close).toHaveBeenCalledTimes(1);
     expect(sinks[0]?.stop).toHaveBeenCalledTimes(1);
