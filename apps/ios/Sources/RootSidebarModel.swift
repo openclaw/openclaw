@@ -98,10 +98,14 @@ extension NodeAppModel {
             }
 
             if page.hasMore == false {
+                // Only a single-page roster is provably consistent: offset
+                // pages are separate live requests, and mutations between them
+                // can swap rows across boundaries without any detectable dup
+                // or totalCount change. Multi-page merges stay incomplete.
                 return ChatSessionRosterSnapshot(
                     sessions: sessions,
                     isCached: false,
-                    isComplete: !sawConsistencyDrift)
+                    isComplete: pageIndex == 0 && !sawConsistencyDrift)
             }
             if page.hasMore == nil {
                 let totalIsLoaded = page.totalCount.map { sessions.count >= $0 } ?? false
@@ -109,7 +113,7 @@ extension NodeAppModel {
                 return ChatSessionRosterSnapshot(
                     sessions: sessions,
                     isCached: false,
-                    isComplete: (totalIsLoaded || pageWasShort) && !sawConsistencyDrift)
+                    isComplete: pageIndex == 0 && (totalIsLoaded || pageWasShort) && !sawConsistencyDrift)
             }
 
             guard pageIndex + 1 < maximumPageCount,
@@ -140,7 +144,8 @@ final class RootSidebarModel {
     }
 
     private(set) var sessions: [OpenClawChatSessionEntry] = []
-    private(set) var isSessionRosterComplete = true
+    // Starts false: an unloaded roster is unknown, not provably complete.
+    private(set) var isSessionRosterComplete = false
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false

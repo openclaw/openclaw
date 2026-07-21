@@ -123,9 +123,29 @@ struct RootTabsPresentationTests {
 
         #expect(requestedOffsets == [0, 2])
         #expect(complete.sessions.map(\.key) == ["one", "two", "three"])
-        #expect(complete.isComplete)
+        // Multi-page merges are never provably consistent without a server
+        // cursor; only single-page rosters may claim completeness.
+        #expect(!complete.isComplete)
         #expect(bounded.sessions.map(\.key) == ["one", "two"])
         #expect(!bounded.isComplete)
+    }
+
+    @Test func `single page roster with no more pages is complete`() async throws {
+        let snapshot = try await NodeAppModel.loadChatSessionRosterPages(pageSize: 200) { _, _, _ in
+            OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: 2,
+                defaults: nil,
+                sessions: [Self.sessionEntry(key: "one"), Self.sessionEntry(key: "two")],
+                totalCount: 2,
+                offset: nil,
+                nextOffset: nil,
+                hasMore: false)
+        }
+
+        #expect(snapshot.sessions.map(\.key) == ["one", "two"])
+        #expect(snapshot.isComplete)
     }
 
     @Test func `session roster pagination demotes drifted snapshots to incomplete`() async throws {
