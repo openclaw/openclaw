@@ -653,6 +653,72 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("retries stream teardown after a prior drain failure", async () => {
+    vi.useFakeTimers();
+    let resolveWait!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      resolveWait = resolve;
+    });
+    let cancelAttempts = 0;
+    const cancel = vi.fn(() => {
+      cancelAttempts += 1;
+      if (cancelAttempts === 2) {
+        resolveWait();
+      }
+    });
+    const spawn = vi.fn(async () => ({
+      runId: "run-retry-drain-stream",
+      startedAtMs: Date.now(),
+      cancel,
+      detachOutput: vi.fn(),
+      wait: async () => {
+        await wait;
+        return {
+          reason: "manual-cancel" as const,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: 10_000,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-stream-retry-drain");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      await state.cron.add({
+        name: "retry drain stream source",
+        enabled: true,
+        schedule: { kind: "stream", command: ["source"] },
+        payload: { kind: "systemEvent", text: "event" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+
+      const firstFailure = expect(state.cron.stopAndDrain?.()).rejects.toThrow(
+        "stream source did not exit",
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await firstFailure;
+      await expect(state.cron.stopAndDrain?.()).resolves.toBeUndefined();
+      expect(cancel).toHaveBeenCalledTimes(2);
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("reports a committed stream update as successful when source teardown fails", async () => {
     vi.useFakeTimers();
     let resolveWait!: () => void;

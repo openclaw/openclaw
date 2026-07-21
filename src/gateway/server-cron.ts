@@ -990,9 +990,9 @@ export function buildGatewayCronService(params: {
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
         broadcastCronBoundSessionChanges(evt);
         void reconcileExitWatchers();
-        // Public update wrappers enqueue stream lifecycle changes after the
-        // mutation. Ignoring state-only update events prevents the owner's own
-        // status/counter persistence from recursively restarting its process.
+        // cron.update and cron.add (including declarative convergence) route
+        // lifecycle after the mutation. Ignoring state-only update events keeps
+        // owner status/counter persistence from recursively restarting its process.
         if (evt.action !== "updated") {
           void routeStreamWatcherMutation(
             evt.jobId,
@@ -1235,12 +1235,23 @@ export function buildGatewayCronService(params: {
   // second shutdown stop whose bounded wait could spuriously time out.
   let streamWatchersStopPromise: Promise<void> | undefined;
   const stopStreamWatchers = (): Promise<void> => {
-    streamWatchersStopPromise ??= (async () => {
+    if (streamWatchersStopPromise) {
+      return streamWatchersStopPromise;
+    }
+    const stopPromise = (async () => {
       streamWatcherGeneration += 1;
       streamWatchersStopped = true;
       await streamWatchersRef.current?.stopAll("shutdown");
     })();
-    return streamWatchersStopPromise;
+    streamWatchersStopPromise = stopPromise;
+    void stopPromise.catch(() => {
+      // Owners retain failed process handles so a later drain can retry them;
+      // only overlapping callers should share the rejected attempt.
+      if (streamWatchersStopPromise === stopPromise) {
+        streamWatchersStopPromise = undefined;
+      }
+    });
+    return stopPromise;
   };
   const automationSource = {
     getJobs: () => cron.getLoadedJobs(),
