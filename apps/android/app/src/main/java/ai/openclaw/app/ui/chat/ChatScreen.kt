@@ -94,6 +94,7 @@ import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.HourglassEmpty
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -235,6 +236,7 @@ fun ChatScreen(
   talkActive: Boolean,
   onToggleTalk: () -> Unit,
   onOpenSessions: () -> Unit,
+  onOpenDashboard: (String) -> Unit,
   onOpenGatewaySettings: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
@@ -600,6 +602,7 @@ fun ChatScreen(
         viewModel.refreshChat()
         viewModel.refreshChatSessions(limit = 100)
       },
+      onOpenDashboard = { onOpenDashboard(sessionKey) },
       onOpenBackgroundTasks = { showBackgroundTasks = true },
     )
 
@@ -968,6 +971,7 @@ private fun ChatHeader(
   onNewChat: () -> Unit,
   onNewChatInWorktree: () -> Unit,
   onRefresh: () -> Unit,
+  onOpenDashboard: () -> Unit,
   onOpenBackgroundTasks: () -> Unit,
 ) {
   var actionsMenuExpanded by remember { mutableStateOf(false) }
@@ -1015,6 +1019,14 @@ private fun ChatHeader(
             onClick = {
               actionsMenuExpanded = false
               onRefresh()
+            },
+          )
+          DropdownMenuItem(
+            text = { Text(nativeString("Dashboard")) },
+            leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
+            onClick = {
+              actionsMenuExpanded = false
+              onOpenDashboard()
             },
           )
           DropdownMenuItem(
