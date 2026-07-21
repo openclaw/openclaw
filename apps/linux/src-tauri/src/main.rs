@@ -777,6 +777,7 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_activate,
         quickchat::quickchat_agents,
         quickchat::quickchat_hide,
         quickchat::quickchat_identity,
@@ -802,6 +803,7 @@ fn main() {
         discovery::discover_gateways,
         install_cli,
         gateway_action,
+        quickchat::quickchat_activate,
         quickchat::quickchat_agents,
         quickchat::quickchat_hide,
         quickchat::quickchat_identity,
@@ -836,6 +838,9 @@ fn main() {
                 }
             }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label().starts_with("gateway-") {
+                    return;
+                }
                 let state = window.app_handle().state::<DesktopState>();
                 if !state.is_quitting() {
                     api.prevent_close();

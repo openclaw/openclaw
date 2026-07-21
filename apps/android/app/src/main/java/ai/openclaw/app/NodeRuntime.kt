@@ -15,6 +15,7 @@ import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionDeletion
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatTranscriptCache
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.ChatWidgetSurface
@@ -109,6 +110,7 @@ import ai.openclaw.app.wear.WearProxyController
 import ai.openclaw.app.wear.WearProxyGatewayException
 import ai.openclaw.app.wear.WearProxyModel
 import ai.openclaw.app.wear.WearRealtimeTalkController
+import ai.openclaw.app.wear.wearConnectionFailure
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
@@ -780,14 +782,14 @@ class NodeRuntime private constructor(
   )
 
   /**
-   * HTTP(S) page origin of the connected gateway plus the shared credential a
-   * gateway-served page (e.g. the `?view=terminal` Control UI document) can
-   * authenticate with. Derived from the same endpoint/auth the WS sessions use.
+   * HTTP(S) page origin plus shared credentials for gateway-served Control UI pages.
+   * The values come from the same endpoint and auth material that the WS sessions use.
    */
   data class GatewayControlPage(
     val baseUrl: String,
     val token: String?,
     val password: String?,
+    val tlsFingerprintSha256: String?,
   )
 
   private val appContext = context.applicationContext
@@ -1327,13 +1329,18 @@ class NodeRuntime private constructor(
         clearOperatorGatewayState(retirePendingCronRuns = false)
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
+        val wearFailure = wearConnectionFailure(operatorConnectionProblem?.code, message)
         updateStatus {
           operatorConnected = false
           operatorStatusText = message
           operatorConnectionProblem = gatewayProblemAfterDisconnect(operatorConnectionProblem, message)
         }
         micCapture.onGatewayConnectionChanged(false)
-        wearProxyBridge()?.publishConnection(connected = false, status = message)
+        wearProxyBridge()?.publishConnection(
+          connected = false,
+          status = message,
+          failure = wearFailure,
+        )
       },
       onConnectFailure = { error, pauseReconnect ->
         if (wearRealtimeTalkControllerLazy.isInitialized()) wearRealtimeTalkController.abort()
@@ -1344,13 +1351,26 @@ class NodeRuntime private constructor(
           operatorConnectionProblem = problem
         }
         micCapture.onGatewayConnectionChanged(false)
-        wearProxyBridge()?.publishConnection(connected = false, status = problem.message)
+        wearProxyBridge()?.publishConnection(
+          connected = false,
+          status = problem.message,
+          failure = wearConnectionFailure(problem.code, problem.message),
+        )
       },
       onEvent = { event, payloadJson ->
         handleGatewayEvent(event, payloadJson)
       },
       customHeadersProvider = prefs::loadGatewayCustomHeaders,
     )
+
+  private data class SecondaryOperatorRuntime(
+    val endpoint: GatewayEndpoint,
+    val session: GatewaySession,
+  )
+
+  private val secondaryOperatorSessions = ConcurrentHashMap<String, SecondaryOperatorRuntime>()
+  private val _backgroundGatewayStatuses = MutableStateFlow<Map<String, String>>(emptyMap())
+  val backgroundGatewayStatuses: StateFlow<Map<String, String>> = _backgroundGatewayStatuses.asStateFlow()
 
   private val wearProxyController by lazy {
     WearProxyController(
@@ -1363,7 +1383,7 @@ class NodeRuntime private constructor(
       activeSessionKey = { chatSessionKey.value },
       selectedModelRef = { chatSelectedModelRef.value },
       agents = {
-        gatewayAgents.value.map { agent ->
+        gatewayAgents.value.selectableAgents().map { agent ->
           WearProxyAgent(
             id = agent.id,
             name = agent.name,
@@ -1372,7 +1392,7 @@ class NodeRuntime private constructor(
         }
       },
       selectGatewayAgent = { agentId ->
-        if (gatewayAgents.value.none { agent -> agent.id == agentId }) {
+        if (gatewayAgents.value.selectableAgents().none { agent -> agent.id == agentId }) {
           false
         } else {
           selectChatAgent(agentId)
@@ -2684,6 +2704,7 @@ class NodeRuntime private constructor(
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
+  val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val notificationForwardingEnabled: StateFlow<Boolean> = prefs.notificationForwardingEnabled
@@ -2701,12 +2722,14 @@ class NodeRuntime private constructor(
   private var didAutoConnect = false
 
   @Volatile private var preferredGatewayReconnectSuppressed = initialReconnectSuppressed
+  private val secondaryGatewayConnectionsEnabled = MutableStateFlow(!initialReconnectSuppressed)
 
   val chatSessionKey: StateFlow<String> = chat.sessionKey
   val chatSessionOwnerAgentId: StateFlow<String?> = chat.sessionOwnerAgentId
   internal val gatewayComposerDefaultAgentOwner: StateFlow<GatewayDefaultAgentOwner?> = chat.composerDefaultAgentOwner
   val chatSessionId: StateFlow<String?> = chat.sessionId
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> = chat.transcriptAnchor
   val chatHistoryLoading: StateFlow<Boolean> = chat.historyLoading
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
@@ -2829,6 +2852,20 @@ class NodeRuntime private constructor(
           seedLastDiscoveredGateway(list)
           autoConnectIfNeeded()
         }
+      }
+      scope.launch(Dispatchers.Default) {
+        combine(
+          prefs.gatewayRegistry.entries,
+          prefs.gatewayRegistry.connectedStableIds,
+          prefs.gatewayRegistry.activeStableId,
+          gateways,
+          combine(_isForeground, secondaryGatewayConnectionsEnabled) { foreground, enabled ->
+            foreground && enabled
+          },
+        ) { entries, connectedIds, activeId, discovered, shouldRun ->
+          BackgroundGatewayFleetSnapshot(entries, connectedIds, activeId, discovered, shouldRun)
+        }.distinctUntilChanged()
+          .collect(::reconcileBackgroundGatewayFleet)
       }
     } else {
       applyScreenshotFixture()
@@ -2968,21 +3005,111 @@ class NodeRuntime private constructor(
     prefs.setLastDiscoveredStableId(list.first().stableId)
   }
 
-  private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
-    val entry = prefs.gatewayRegistry.activeEntry() ?: return null
-    return when (entry.kind) {
-      GatewayRegistryEntryKind.MANUAL -> {
-        val host = entry.host?.trim().orEmpty()
-        val port = entry.port ?: return null
-        if (host.isEmpty() || port !in 1..65535) return null
-        GatewayEndpoint.manual(host = host, port = port)
+  private data class BackgroundGatewayFleetSnapshot(
+    val entries: List<GatewayRegistryEntry>,
+    val connectedIds: List<String>,
+    val activeId: String?,
+    val discovered: List<GatewayEndpoint>,
+    val shouldRun: Boolean,
+  )
+
+  private suspend fun reconcileBackgroundGatewayFleet(snapshot: BackgroundGatewayFleetSnapshot) {
+    val plan =
+      backgroundGatewayFleetPlan(
+        entries = snapshot.entries,
+        connectedIds = snapshot.connectedIds,
+        activeId = snapshot.activeId,
+        foreground = snapshot.shouldRun,
+        existingStableIds = secondaryOperatorSessions.keys.toList(),
+      ) { entry ->
+        resolveRegistryEndpoint(entry, snapshot.discovered)
       }
+
+    for (stableId in plan.disconnectStableIds) {
+      secondaryOperatorSessions.remove(stableId)?.session?.disconnectAndJoin()
+      updateBackgroundGatewayStatus(stableId, null)
+    }
+
+    for ((stableId, endpoint) in plan.resolvedEndpoints) {
+      val existing = secondaryOperatorSessions[stableId]
+      if (existing?.endpoint == endpoint) continue
+      existing?.session?.disconnectAndJoin()
+      val auth = resolveGatewayConnectAuth(endpoint)
+      val storedOperatorEntry = loadStoredRoleDeviceAuthEntry(endpoint, "operator")
+      val operatorAuth = resolveOperatorSessionConnectAuth(auth, storedOperatorEntry?.token)
+      if (operatorAuth == null) {
+        updateBackgroundGatewayStatus(stableId, "Needs setup")
+        secondaryOperatorSessions.remove(stableId)
+        continue
+      }
+      val session =
+        GatewaySession(
+          scope = scope,
+          identityStore = identityStore,
+          deviceAuthStore = deviceAuthStore,
+          onConnected = {
+            prefs.gatewayRegistry.markConnected(stableId, System.currentTimeMillis())
+            updateBackgroundGatewayStatus(stableId, "Connected")
+          },
+          onDisconnected = { message -> updateBackgroundGatewayStatus(stableId, message) },
+          onConnectFailure = { error, _ -> updateBackgroundGatewayStatus(stableId, error.message) },
+          // Secondary sessions retain authenticated presence only. Focused UI state and
+          // capability commands remain exclusively owned by the active runtime sessions.
+          onEvent = { _, _ -> },
+          customHeadersProvider = prefs::loadGatewayCustomHeaders,
+        )
+      secondaryOperatorSessions[stableId] = SecondaryOperatorRuntime(endpoint, session)
+      updateBackgroundGatewayStatus(stableId, "Connecting…")
+      val usesStoredOperatorDeviceToken =
+        operatorSessionUsesStoredDeviceToken(auth, storedOperatorEntry?.token)
+      session.connect(
+        endpoint,
+        operatorAuth.token,
+        operatorAuth.bootstrapToken,
+        operatorAuth.password,
+        connectionManager.buildOperatorConnectOptions(
+          scopes =
+            operatorConnectScopesForAuth(
+              usesStoredDeviceToken = usesStoredOperatorDeviceToken,
+              storedOperatorScopes = storedOperatorEntry?.scopes,
+            ),
+        ),
+        connectionManager.resolveTlsParams(endpoint),
+      )
+    }
+  }
+
+  private fun resolveRegistryEndpoint(
+    entry: GatewayRegistryEntry,
+    discovered: List<GatewayEndpoint> = gateways.value,
+  ): GatewayEndpoint? {
+    return when (entry.kind) {
+      GatewayRegistryEntryKind.MANUAL -> manualGatewayEndpoint(entry)
       GatewayRegistryEntryKind.DISCOVERED -> {
-        val endpoint = gateways.value.firstOrNull { it.stableId == entry.stableId } ?: return null
+        val endpoint = discovered.firstOrNull { it.stableId == entry.stableId } ?: return null
         val storedFingerprint = prefs.loadGatewayTlsFingerprint(endpoint.stableId)?.trim().orEmpty()
         endpoint.takeIf { storedFingerprint.isNotEmpty() }
       }
     }
+  }
+
+  private fun updateBackgroundGatewayStatus(
+    stableId: String,
+    status: String?,
+  ) {
+    synchronized(secondaryOperatorSessions) {
+      _backgroundGatewayStatuses.value =
+        if (status == null) {
+          _backgroundGatewayStatuses.value - stableId
+        } else {
+          _backgroundGatewayStatuses.value + (stableId to status)
+        }
+    }
+  }
+
+  private fun resolvePreferredGatewayEndpoint(): GatewayEndpoint? {
+    val entry = prefs.gatewayRegistry.activeEntry() ?: return null
+    return resolveRegistryEndpoint(entry)
   }
 
   suspend fun switchToGateway(stableId: String): Boolean {
@@ -2991,12 +3118,7 @@ class NodeRuntime private constructor(
         .firstOrNull { it.stableId == stableId } ?: return false
     val endpoint =
       when (entry.kind) {
-        GatewayRegistryEntryKind.MANUAL -> {
-          val host = entry.host?.trim().orEmpty()
-          val port = entry.port ?: return false
-          if (host.isEmpty() || port !in 1..65535) return false
-          GatewayEndpoint.manual(host, port)
-        }
+        GatewayRegistryEntryKind.MANUAL -> manualGatewayEndpoint(entry) ?: return false
         GatewayRegistryEntryKind.DISCOVERED ->
           gateways.value.firstOrNull { it.stableId == stableId }
             ?: run {
@@ -3007,11 +3129,20 @@ class NodeRuntime private constructor(
     return connectSwitchingGateway(endpoint)
   }
 
+  fun setGatewayConnectionEnabled(
+    stableId: String,
+    enabled: Boolean,
+  ) {
+    if (enabled) secondaryGatewayConnectionsEnabled.value = true
+    prefs.gatewayRegistry.setConnectionEnabled(stableId, enabled)
+  }
+
   suspend fun connectSwitchingGateway(
     endpoint: GatewayEndpoint,
     explicitAuth: GatewayConnectAuth? = null,
   ): Boolean {
     preferredGatewayReconnectSuppressed = false
+    secondaryGatewayConnectionsEnabled.value = true
     val intent = gatewayLifecycleIntentSeq.incrementAndGet()
     return gatewaySwitchMutex.withLock {
       if (intent != gatewayLifecycleIntentSeq.get()) return@withLock false
@@ -3960,6 +4091,7 @@ class NodeRuntime private constructor(
 
   fun refreshGatewayConnection() {
     preferredGatewayReconnectSuppressed = false
+    secondaryGatewayConnectionsEnabled.value = true
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchGatewayLifecycle {
       val endpoint = connectedEndpoint
@@ -4191,6 +4323,7 @@ class NodeRuntime private constructor(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
         token = pageAuth.token,
         password = pageAuth.password,
+        tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
       )
   }
 
@@ -4222,6 +4355,7 @@ class NodeRuntime private constructor(
 
   fun connect(endpoint: GatewayEndpoint) {
     preferredGatewayReconnectSuppressed = false
+    secondaryGatewayConnectionsEnabled.value = true
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = null)
   }
@@ -4231,6 +4365,7 @@ class NodeRuntime private constructor(
     auth: GatewayConnectAuth,
   ) {
     preferredGatewayReconnectSuppressed = false
+    secondaryGatewayConnectionsEnabled.value = true
     gatewayLifecycleIntentSeq.incrementAndGet()
     launchConnect(endpoint, explicitAuth = auth)
   }
@@ -4247,8 +4382,7 @@ class NodeRuntime private constructor(
 
   private fun prepareGatewayTarget(endpoint: GatewayEndpoint) {
     if (connectedEndpoint?.stableId?.let { it != endpoint.stableId } == true) {
-      // Closing both sockets is synchronous; cleanup callbacks may finish later, but no event can
-      // cross the active-pointer change on the old authenticated transport.
+      // Close both sockets before changing routes so stale callbacks cannot cross the handoff.
       disconnect(retireRunState = true)
     }
     if (prefs.gatewayRegistry.entries.value
@@ -4256,12 +4390,6 @@ class NodeRuntime private constructor(
     ) {
       prefs.gatewayRegistry.setActive(endpoint.stableId)
     }
-  }
-
-  /** HTTP(S) origin serving the connected gateway's Control UI pages. */
-  private fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
-    val scheme = if (endpoint.tlsEnabled) "https" else "http"
-    return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}"
   }
 
   internal fun resolveGatewayConnectAuth(
@@ -4342,7 +4470,13 @@ class NodeRuntime private constructor(
       setStandaloneGatewayStatus("Failed: invalid manual host/port")
       return
     }
-    connect(GatewayEndpoint.manual(host = host, port = port))
+    connect(
+      GatewayEndpoint.manual(
+        host = host,
+        port = port,
+        tlsEnabled = manualTls.value,
+      ),
+    )
   }
 
   private fun loadStoredRoleDeviceAuthEntry(
@@ -4393,7 +4527,9 @@ class NodeRuntime private constructor(
   fun disconnect() {
     synchronized(gatewayLifecycleIntentLock) {
       preferredGatewayReconnectSuppressed = true
+      secondaryGatewayConnectionsEnabled.value = false
       gatewayLifecycleIntentSeq.incrementAndGet()
+      disconnectSecondaryGatewayConnections()
       disconnect(retireRunState = false)
     }
   }
@@ -4401,9 +4537,18 @@ class NodeRuntime private constructor(
   fun prepareForGatewaySetup() {
     synchronized(gatewayLifecycleIntentLock) {
       preferredGatewayReconnectSuppressed = true
+      secondaryGatewayConnectionsEnabled.value = false
       gatewayLifecycleIntentSeq.incrementAndGet()
+      disconnectSecondaryGatewayConnections()
       disconnect(retireRunState = true)
     }
+  }
+
+  private fun disconnectSecondaryGatewayConnections() {
+    val sessions = secondaryOperatorSessions.values.map { it.session }
+    secondaryOperatorSessions.clear()
+    _backgroundGatewayStatuses.value = emptyMap()
+    sessions.forEach { it.disconnect() }
   }
 
   private fun disconnect(retireRunState: Boolean) {
@@ -4423,6 +4568,8 @@ class NodeRuntime private constructor(
   private suspend fun forgetGatewayLocked(stableId: String): Boolean {
     val normalized = stableId.trim()
     if (normalized.isEmpty()) return false
+    secondaryOperatorSessions.remove(normalized)?.session?.disconnectAndJoin()
+    updateBackgroundGatewayStatus(normalized, null)
     val wasActive = prefs.gatewayRegistry.activeStableId.value == normalized
     val connectOperationsDrained =
       synchronized(gatewayAuthLifecycleLock) {
@@ -4514,26 +4661,7 @@ class NodeRuntime private constructor(
     val existing =
       prefs.gatewayRegistry.entries.value
         .firstOrNull { it.stableId == endpoint.stableId }
-    val entry =
-      if (endpoint.stableId.startsWith("manual|")) {
-        GatewayRegistryEntry(
-          stableId = endpoint.stableId,
-          kind = GatewayRegistryEntryKind.MANUAL,
-          name = endpoint.name,
-          host = endpoint.host,
-          port = endpoint.port,
-          tls = existing?.tls ?: manualTls.value,
-          lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
-        )
-      } else {
-        GatewayRegistryEntry(
-          stableId = endpoint.stableId,
-          kind = GatewayRegistryEntryKind.DISCOVERED,
-          name = endpoint.name,
-          tls = true,
-          lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
-        )
-      }
+    val entry = gatewayRegistryEntry(endpoint, existing)
     prefs.gatewayRegistry.upsert(entry)
     if (setActive) prefs.gatewayRegistry.setActive(endpoint.stableId)
   }
@@ -8108,6 +8236,96 @@ internal fun normalizeOperatorScopes(scopes: List<String>): List<String> =
     .distinct()
     .sorted()
 
+internal fun backgroundGatewayStableIds(
+  entries: List<GatewayRegistryEntry>,
+  connectedIds: List<String>,
+  activeId: String?,
+  foreground: Boolean,
+): List<String> {
+  if (!foreground) return emptyList()
+  val registered = entries.mapTo(mutableSetOf()) { it.stableId }
+  return connectedIds.distinct().filter { it != activeId && it in registered }
+}
+
+internal data class BackgroundGatewayFleetPlan(
+  val disconnectStableIds: List<String>,
+  val resolvedEndpoints: Map<String, GatewayEndpoint>,
+)
+
+internal fun backgroundGatewayFleetPlan(
+  entries: List<GatewayRegistryEntry>,
+  connectedIds: List<String>,
+  activeId: String?,
+  foreground: Boolean,
+  existingStableIds: List<String>,
+  resolveEndpoint: (GatewayRegistryEntry) -> GatewayEndpoint?,
+): BackgroundGatewayFleetPlan {
+  val desiredStableIds =
+    backgroundGatewayStableIds(
+      entries = entries,
+      connectedIds = connectedIds,
+      activeId = activeId,
+      foreground = foreground,
+    )
+  val desiredSet = desiredStableIds.toSet()
+  val entriesByStableId = entries.associateBy(GatewayRegistryEntry::stableId)
+  val resolvedEndpoints =
+    desiredStableIds
+      .mapNotNull { stableId ->
+        val entry = entriesByStableId[stableId] ?: return@mapNotNull null
+        resolveEndpoint(entry)?.let { stableId to it }
+      }.toMap()
+
+  // Discovery gaps remove the current route from resolvedEndpoints, but the desired ID remains.
+  // Disconnect only when the user disables, forgets, or focuses the gateway.
+  return BackgroundGatewayFleetPlan(
+    disconnectStableIds = existingStableIds.filterNot(desiredSet::contains),
+    resolvedEndpoints = resolvedEndpoints,
+  )
+}
+
+internal fun manualGatewayEndpoint(entry: GatewayRegistryEntry): GatewayEndpoint? {
+  if (entry.kind != GatewayRegistryEntryKind.MANUAL) return null
+  val normalizedHost = entry.host?.trim().orEmpty()
+  val normalizedPort = entry.port ?: return null
+  if (normalizedHost.isEmpty() || normalizedPort !in 1..65535) return null
+  return GatewayEndpoint.manual(
+    host = normalizedHost,
+    port = normalizedPort,
+    tlsEnabled = entry.tls,
+  )
+}
+
+internal fun gatewayRegistryEntry(
+  endpoint: GatewayEndpoint,
+  existing: GatewayRegistryEntry?,
+): GatewayRegistryEntry =
+  if (endpoint.stableId.startsWith("manual|")) {
+    GatewayRegistryEntry(
+      stableId = endpoint.stableId,
+      kind = GatewayRegistryEntryKind.MANUAL,
+      name = endpoint.name,
+      host = endpoint.host,
+      port = endpoint.port,
+      tls = endpoint.tlsEnabled,
+      lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
+    )
+  } else {
+    GatewayRegistryEntry(
+      stableId = endpoint.stableId,
+      kind = GatewayRegistryEntryKind.DISCOVERED,
+      name = endpoint.name,
+      tls = true,
+      lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
+    )
+  }
+
+/** HTTP(S) origin serving the connected gateway's Control UI pages. */
+internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String {
+  val scheme = if (endpoint.tlsEnabled) "https" else "http"
+  return "$scheme://${formatGatewayAuthority(endpoint.host, endpoint.port)}"
+}
+
 private enum class HomeCanvasGatewayState {
   Connected,
   Connecting,
@@ -8640,3 +8858,11 @@ private data class HomeCanvasAgentCard(
   val caption: String,
   val isActive: Boolean,
 )
+
+private fun gatewayControlPageTlsFingerprint(
+  prefs: SecurePrefs,
+  endpoint: GatewayEndpoint,
+): String? =
+  prefs
+    .loadGatewayTlsFingerprint(endpoint.stableId)
+    ?.let(::normalizeGatewayTlsFingerprintInput)
