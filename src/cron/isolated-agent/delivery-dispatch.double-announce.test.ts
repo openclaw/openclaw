@@ -417,7 +417,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
-  it("adds a generic summary fallback hint to metadata-only direct payloads", async () => {
+  it("adds generic fallback text to metadata-only direct payloads", async () => {
     const params = makeBaseParams({ synthesizedText: undefined });
     params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
     params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
@@ -440,9 +440,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [
+        { text: "Pablo Daily Summary\n- Review the stuck cron." },
         {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
           channelData: {
-            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
             },
@@ -452,6 +456,36 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       skipQueue: true,
     });
     expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("leaves portable button-only payloads for channel presentation rendering", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary";
+    params.outputText = "Pablo Daily Summary";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      {
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+        },
+      },
+    ];
+
+    const state = await dispatchCronDelivery(params);
+
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "retry" }] }],
+          },
+        },
+      ],
+      skipQueue: true,
+    });
     expect(state.delivered).toBe(true);
   });
 
@@ -477,9 +511,13 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [
+        { text: "Pablo Daily Summary\n- Review the stuck cron." },
         {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
           channelData: {
-            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               reaction: { emoji: "👍", replyToId: "123" },
             },
@@ -492,12 +530,14 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
   });
 
-  it("preserves separate metadata-only direct payloads for channel-owned normalization", async () => {
+  it("carries the summary payload index into channel-owned fallback normalization", async () => {
     const params = makeBaseParams({ synthesizedText: undefined });
     params.summary = "Pablo Daily Summary\n- Review the stuck cron.";
     params.outputText = "Pablo Daily Summary\n- Review the stuck cron.";
     params.deliveryPayloadHasStructuredContent = true;
     params.deliveryPayloads = [
+      { text: "   " },
+      { text: "Pablo Daily Summary\n- Review the stuck cron." },
       {
         channelData: {
           telegram: {
@@ -522,17 +562,24 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       channel: "telegram",
       to: "123456",
       payloads: [
+        { text: "Pablo Daily Summary\n- Review the stuck cron." },
         {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
           channelData: {
-            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               reaction: { emoji: "👍", replyToId: "123" },
             },
           },
         },
         {
+          fallbackText: {
+            text: "Pablo Daily Summary\n- Review the stuck cron.",
+            replacesPayloadIndex: 0,
+          },
           channelData: {
-            openclawDirectDeliveryFallbackText: "Pablo Daily Summary\n- Review the stuck cron.",
             telegram: {
               buttons: [[{ text: "Open task", url: "https://example.test/task" }]],
             },
@@ -542,6 +589,40 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       skipQueue: true,
     });
     expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("reuses captioned media as the source for metadata fallback", async () => {
+    const params = makeBaseParams({ synthesizedText: undefined });
+    params.summary = "Pablo Daily Summary";
+    params.outputText = "Pablo Daily Summary";
+    params.deliveryPayloadHasStructuredContent = true;
+    params.deliveryPayloads = [
+      { text: "Pablo Daily Summary", mediaUrl: "https://example.test/report.png" },
+      {
+        channelData: {
+          telegram: { buttons: [[{ text: "Open task", url: "https://example.test/task" }]] },
+        },
+      },
+    ];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        { text: "Pablo Daily Summary", mediaUrl: "https://example.test/report.png" },
+        {
+          fallbackText: { text: "Pablo Daily Summary", replacesPayloadIndex: 0 },
+          channelData: {
+            telegram: { buttons: [[{ text: "Open task", url: "https://example.test/task" }]] },
+          },
+        },
+      ],
+      skipQueue: true,
+    });
     expect(state.delivered).toBe(true);
   });
 

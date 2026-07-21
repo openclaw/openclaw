@@ -10,6 +10,12 @@ import type {
 /** Channel-agnostic assistant reply payload. */
 export type ReplyPayload = {
   text?: string;
+  /** Visible body a channel adapter may use when native structured content requires text. */
+  fallbackText?: {
+    text: string;
+    /** Batch payload replaced when the adapter adopts this fallback body. */
+    replacesPayloadIndex?: number;
+  };
   mediaUrl?: string;
   mediaUrls?: string[];
   /** Internal-only trust signal for gateway webchat local media embedding. */
@@ -70,32 +76,6 @@ export type ReplyPayload = {
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
-
-const DIRECT_DELIVERY_FALLBACK_TEXT_CHANNEL_DATA_KEY = "openclawDirectDeliveryFallbackText";
-
-export function withDirectDeliveryFallbackText(
-  payload: ReplyPayload,
-  fallbackText: string | undefined,
-): ReplyPayload {
-  const text = fallbackText?.trim();
-  if (!text) {
-    return payload;
-  }
-  return {
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      [DIRECT_DELIVERY_FALLBACK_TEXT_CHANNEL_DATA_KEY]: text,
-    },
-  };
-}
-
-export function readDirectDeliveryFallbackText(
-  payload: Pick<ReplyPayload, "channelData">,
-): string | undefined {
-  const raw = payload.channelData?.[DIRECT_DELIVERY_FALLBACK_TEXT_CHANNEL_DATA_KEY];
-  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
-}
 
 // Private device-pair -> Gateway live-display envelope key. Do not re-export
 // through Plugin SDK; this is not a third-party plugin contract.

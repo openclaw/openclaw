@@ -1,10 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  withDirectDeliveryFallbackText,
-  type ReplyPayload,
-} from "../../auto-reply/reply-payload.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
@@ -475,6 +472,19 @@ function shouldAttachDirectCronFallbackText(payload: ReplyPayload): boolean {
     Boolean(payload.channelData) &&
     !hasReplyPayloadContent(payload, { trimText: true, hasChannelData: false })
   );
+}
+
+function resolveDirectCronFallbackSourceIndex(
+  payloads: ReplyPayload[],
+  fallbackText: string | undefined,
+): number | undefined {
+  if (!fallbackText) {
+    return undefined;
+  }
+  const index = payloads.findLastIndex(
+    (payload) => normalizeOptionalString(payload.text) === fallbackText,
+  );
+  return index >= 0 ? index : undefined;
 }
 
 function formatTargetCronDeliveryAwarenessText(text: string): string {
@@ -1130,28 +1140,48 @@ export async function dispatchCronDelivery(
         normalizedSummaryFallback?.strippedTrailingSilentToken === true
           ? undefined
           : normalizedSummaryFallback?.text;
-      const fallbackPayloads = normalizedSummaryFallbackText
-        ? [{ text: normalizedSummaryFallbackText }]
-        : [];
-      const normalizeDirectPayloads = (payloads: ReplyPayload[]) =>
-        payloads
-          .map((p) => {
-            const normalized = p.text ? normalizeSilentReplyText(p.text) : undefined;
-            const payload = normalized
-              ? Object.assign({}, p, {
-                  text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
-                })
-              : p;
-            return shouldAttachDirectCronFallbackText(payload)
-              ? withDirectDeliveryFallbackText(payload, normalizedSummaryFallbackText)
-              : payload;
-          })
-          .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
-      let normalizedPayloads = normalizeDirectPayloads(
-        deliveryPayloads.length > 0 ? deliveryPayloads : fallbackPayloads,
+      const normalizeDirectPayload = (payload: ReplyPayload): ReplyPayload => {
+        const normalized = payload.text ? normalizeSilentReplyText(payload.text) : undefined;
+        return normalized
+          ? {
+              ...payload,
+              text: normalized.strippedTrailingSilentToken ? undefined : normalized.text,
+            }
+          : payload;
+      };
+      const normalizedDeliveryPayloads = deliveryPayloads
+        .map(normalizeDirectPayload)
+        .filter((payload) => hasReplyPayloadContent(payload, { trimText: true }));
+      const existingFallbackSourceIndex = resolveDirectCronFallbackSourceIndex(
+        normalizedDeliveryPayloads,
+        normalizedSummaryFallbackText,
       );
-      if (normalizedPayloads.length === 0 && deliveryPayloads.length > 0) {
-        normalizedPayloads = normalizeDirectPayloads(fallbackPayloads);
+      const needsFallbackSource =
+        Boolean(normalizedSummaryFallbackText) &&
+        normalizedDeliveryPayloads.some(shouldAttachDirectCronFallbackText) &&
+        existingFallbackSourceIndex === undefined;
+      const fallbackSourceIndex = needsFallbackSource ? 0 : existingFallbackSourceIndex;
+      const directPayloads = needsFallbackSource
+        ? [{ text: normalizedSummaryFallbackText }, ...normalizedDeliveryPayloads]
+        : normalizedDeliveryPayloads;
+      let normalizedPayloads: ReplyPayload[] = [];
+      for (const payload of directPayloads) {
+        normalizedPayloads.push(
+          shouldAttachDirectCronFallbackText(payload) && normalizedSummaryFallbackText
+            ? {
+                ...payload,
+                fallbackText: {
+                  text: normalizedSummaryFallbackText,
+                  ...(fallbackSourceIndex !== undefined
+                    ? { replacesPayloadIndex: fallbackSourceIndex }
+                    : {}),
+                },
+              }
+            : payload,
+        );
+      }
+      if (normalizedPayloads.length === 0 && normalizedSummaryFallbackText) {
+        normalizedPayloads = [{ text: normalizedSummaryFallbackText }];
       }
       if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
