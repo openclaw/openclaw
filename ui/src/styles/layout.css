@@ -326,11 +326,30 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
 
 .settings-sidebar__search {
   position: relative;
+  z-index: 1;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  margin: 8px 21px 0;
+  margin: 8px 12px 0;
+  padding-bottom: 8px;
   color: var(--muted);
+}
+
+.settings-sidebar__search::after {
+  content: "";
+  position: absolute;
+  inset-inline: -12px;
+  bottom: 0;
+  height: 1px;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--border) 62%, transparent);
+  box-shadow: 0 6px 12px color-mix(in srgb, var(--text) 14%, transparent);
+  opacity: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.settings-sidebar__search--scrolled::after {
+  opacity: 1;
 }
 
 .settings-sidebar__search-icon {
@@ -1732,6 +1751,10 @@ html.openclaw-native-macos
   width: 12px;
   height: 12px;
   stroke: currentColor;
+  fill: none;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .sidebar-recent-session--dragging {
@@ -1864,12 +1887,6 @@ html.openclaw-native-macos
   text-decoration: none;
 }
 
-.sidebar-recent-session__state,
-.sidebar-recent-session__unread {
-  order: -1;
-  flex: none;
-}
-
 .sidebar-board-glyph {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1884,6 +1901,210 @@ html.openclaw-native-macos
   stroke-width: 1.7px;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.viewer-facepile {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+}
+
+.viewer-avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border: 1.5px solid var(--sidebar-bg, var(--bg));
+  border-radius: var(--radius-full);
+  color: white;
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.viewer-facepile > openclaw-tooltip:not(:first-child) .viewer-avatar {
+  margin-left: -5px;
+}
+
+.viewer-avatar > img,
+.viewer-avatar > span {
+  width: 100%;
+  height: 100%;
+}
+
+.viewer-avatar__fallback {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > img {
+  display: none;
+}
+
+.viewer-avatar.is-fallback > .viewer-avatar__fallback {
+  display: grid;
+}
+
+.viewer-avatar > img {
+  object-fit: cover;
+}
+
+.viewer-avatar > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-avatar--overflow {
+  background: var(--bg-elevated);
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: 0;
+}
+
+.viewer-facepile--session {
+  margin-left: 1px;
+}
+
+.viewer-avatar--footer,
+.viewer-facepile--footer .viewer-avatar--overflow {
+  width: 20px;
+  height: 20px;
+  font-size: 8px;
+}
+
+.viewer-avatar--profile {
+  width: 40px;
+  height: 40px;
+  border-color: color-mix(in srgb, var(--border) 72%, transparent);
+  font-size: var(--control-ui-text-sm);
+}
+
+.viewer-facepile-trigger {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  margin: -2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: none;
+  cursor: pointer;
+}
+
+.viewer-facepile-trigger:hover,
+.viewer-facepile-trigger:focus-visible {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+
+/* Long rosters scroll inside the popup instead of growing past the viewport.
+   Chrome matches the sidebar's other fixed menus (customize/session menus). */
+.presence-roster-menu::part(menu) {
+  min-width: 232px;
+  max-width: 288px;
+  max-height: min(340px, 60vh);
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 78%, transparent);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+
+.presence-roster-menu__title {
+  padding: 6px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* Rows are informational people entries, not checkbox menu items: drop Web
+   Awesome's checkmark gutter and item metrics so title, avatars, and text
+   share one left edge with the rest of the app's menus. */
+.presence-roster-menu__item {
+  padding: 6px 8px;
+  border-radius: var(--radius-md);
+}
+
+.presence-roster-menu__item:hover,
+.presence-roster-menu__item:focus-visible {
+  outline: none;
+  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+}
+
+.presence-roster-menu__item::part(checkmark) {
+  display: none;
+}
+
+.presence-roster-menu__item::part(label) {
+  display: flex;
+  align-items: center;
+}
+
+/* Roster avatars grow to two-line row scale. The circle clips via the child
+   image/initials instead of the wrapper so the online badge can overflow.
+   The avatar-to-text gap lives here: Web Awesome's icon-slot margin targets
+   the slotted openclaw-viewer-avatar host, which is display:contents and
+   therefore generates no box for the margin to apply to. */
+.presence-roster-menu__item .viewer-avatar {
+  width: 26px;
+  height: 26px;
+  margin-inline-end: 10px;
+  overflow: visible;
+  border: none;
+  font-size: 10px;
+}
+
+.presence-roster-menu__item .viewer-avatar > img,
+.presence-roster-menu__item .viewer-avatar > span {
+  border-radius: var(--radius-full);
+}
+
+/* Everyone listed is online; the dot restates the header at a glance. */
+.presence-roster-menu__item .viewer-avatar::after {
+  content: "";
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--bg-elevated);
+  border-radius: var(--radius-full);
+  background: var(--ok);
+}
+
+.presence-roster-menu__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.presence-roster-menu__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.presence-roster-menu__you {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.presence-roster-menu__email {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .sidebar-recent-session__name {
@@ -2041,7 +2262,17 @@ html.openclaw-native-macos
   border-radius: var(--radius-md);
   transition:
     opacity var(--duration-fast) ease,
+    transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
     box-shadow var(--duration-fast) ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  @starting-style {
+    .sidebar-r .sidebar-zone-entry {
+      opacity: 0;
+      transform: translateX(-8px) scale(0.98);
+    }
+  }
 }
 
 .sidebar-zone-entry--dragging {
@@ -2302,6 +2533,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--accent);
 }
 
+.session-menu__icon {
+  color: var(--muted);
+}
+
 .session-menu__icon svg,
 .session-menu__check svg,
 .session-menu__chevron svg {
@@ -2318,6 +2553,16 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-menu__sub {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2766,6 +3011,26 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   height: 6px;
 }
 
+.sidebar-agent-approval-count {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  color: var(--warning);
+  font-size: 10px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-agent-card__approval-count {
+  flex: none;
+  margin-left: auto;
+}
+
 /* "Pages" section head: zone-style label plus the pin-editor affordance. */
 .sidebar-nav__head {
   display: flex;
@@ -2816,6 +3081,12 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   margin-left: auto;
 }
 
+.sidebar-home-session-states {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top
    border is the only divider (and the pet's ledge); no second line here. */
 .sidebar-footer-bar {
@@ -2833,6 +3104,40 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-footer-bar__logo .sidebar-brand__logo {
   width: 18px;
   height: 18px;
+}
+
+.sidebar-footer-bar .viewer-facepile {
+  margin-left: 1px;
+}
+
+.sidebar-footer-bar__identity {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  max-width: 132px;
+  padding: 2px 5px 2px 2px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  transition: background var(--duration-fast) ease;
+}
+
+.sidebar-footer-bar__identity:hover,
+.sidebar-footer-bar__identity:focus-visible {
+  background: var(--bg-hover);
+}
+
+.sidebar-footer-bar__identity-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 550;
 }
 
 .sidebar-footer-bar .sidebar-footer-build {
@@ -3465,6 +3770,44 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 }
 
 /* Sidebar sessions redesign: work-session subtitles, agent sections, draft row. */
+.sidebar-session-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+.sidebar-session-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 76%, transparent);
+}
+
+.sidebar-session-pr-indicator--open {
+  color: var(--ok);
+}
+
+.sidebar-session-pr-indicator--merged {
+  color: #a78bfa;
+}
+
+:root[data-theme-mode="light"] .sidebar-session-pr-indicator--merged {
+  color: #7c3aed;
+}
+
+.sidebar-session-pr-indicator svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .sidebar-recent-session__text {
   display: flex;
   flex: 1 1 auto;
@@ -3494,6 +3837,10 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   color: var(--warn);
 }
 
+.sidebar-session-attention__icon--agent {
+  color: var(--warn);
+}
+
 .sidebar-session-attention__icon--error {
   color: var(--danger);
 }
@@ -3516,6 +3863,19 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__name,
 .sidebar-recent-session.sidebar-recent-session--attention-danger .sidebar-recent-session__subtitle {
   color: color-mix(in srgb, var(--danger) 86%, var(--text));
+}
+
+.sidebar-recent-session__subtitle--narration {
+  animation: sidebar-narration-arrive var(--duration-fast) ease-out;
+}
+
+@keyframes sidebar-narration-arrive {
+  from {
+    opacity: 0.45;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* Kept for the agent-chip menu switcher rows (sessions list is single-agent now). */

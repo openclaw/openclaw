@@ -12,6 +12,7 @@ function bundledPluginFile(pluginId: string, relativePath: string, suffix = ""):
 const repositoryScriptEntries = [
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
+  ".github/actions/setup-node-env/verify-importers.mjs!",
   ".github/actions/register-bind-mount-cleanup/main.cjs!",
   ".github/actions/register-bind-mount-cleanup/post.cjs!",
   "apps/android/scripts/build-release-artifacts.ts!",
@@ -68,7 +69,11 @@ const repositoryScriptEntries = [
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mjs!",
+  // Generates the checked-in native protocol models from core descriptor metadata.
+  "scripts/protocol-gen.ts!",
   "scripts/pr-gates-lock.mjs!",
+  "scripts/pr-lib/ci-dispatch.mjs!",
+  "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
   "scripts/qa-coverage-report.ts!",
@@ -250,6 +255,9 @@ const rootToolingAndWorkspaceDependencies = [
   // scripts/ui.js anchors these lookups at ui/package.json before invoking the UI workspace.
   "@vitest/browser-playwright",
   "dompurify",
+  // Root typecheck/test projects compile @openclaw/net-policy source directly.
+  // Keep its exact dependency available without externalizing it from packaged builds.
+  "ipaddr.js",
   "jscpd",
   "lit",
   "oxlint",
@@ -350,6 +358,12 @@ const config = {
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
+    // GatewayBoardProvider and boardExists are constructed/asserted by the
+    // focused Control UI provider tests, not by a separate production module.
+    "ui/src/lib/board/provider.ts": ["exports"],
+    // Greeting cache/fact contracts (hash, alert text, store shapes) are
+    // asserted by the focused greeting unit tests, not by another prod module.
+    "src/system-agent/greeting.ts": ["exports", "types"],
   },
   workspaces: {
     ".": {
@@ -358,6 +372,7 @@ const config = {
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
+        "openai",
         "cross-spawn",
         "file-type",
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its

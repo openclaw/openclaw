@@ -1752,7 +1752,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'add_profile_suite live-gateway-advisory-docker-opencode-openrouter "full"',
     );
-    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai "full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker-xai-zai "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-subagent-announce-docker "stable full"');
     expect(workflow).toContain(
@@ -1762,12 +1762,12 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
-    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai");
+    expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
     expect(workflow).toContain("suite_id: live-subagent-announce-docker");
     expect(workflow).toContain("suite_group: live-gateway-advisory-docker");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
     expect(workflow).toContain("inputs.live_suite_filter == matrix.suite_group");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
@@ -1829,8 +1829,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-opencode-go");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-openrouter");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-xai");
-    expect(workflow).not.toContain("suite_id: native-live-src-gateway-profiles-zai");
-    expect(workflow).toContain("Z.AI API Platform validation is temporarily disabled");
+    expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-zai");
+    expect(workflow).not.toContain("Z.AI API Platform validation is temporarily disabled");
     expect(workflow).not.toContain(
       "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,opencode-go,openrouter,xai,zai",
     );
@@ -3674,12 +3674,22 @@ describe("package artifact reuse", () => {
       "Workflow-dispatched real publish requires release_publish_run_id",
     );
     expect(npmWorkflow).toContain("tarballSha256");
+    expect(npmWorkflow).toContain("corePackageTarballs");
     expect(npmWorkflow).toContain("dependencyTarballs");
+    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
     expect(npmWorkflow).toContain('packageName: "@openclaw/ai"');
+    expect(npmWorkflow).toContain('packageName: "@openclaw/gateway-protocol"');
+    expect(npmWorkflow).toContain('packageName: "@openclaw/gateway-client"');
+    expect(npmWorkflow).toContain(
+      "CORE_PACKAGE_DIRS: packages/ai packages/gateway-protocol packages/gateway-client",
+    );
     expect(npmWorkflow).toContain("AI_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("GATEWAY_PROTOCOL_TARBALL_SHA256");
+    expect(npmWorkflow).toContain("GATEWAY_CLIENT_TARBALL_SHA256");
     expect(npmWorkflow).toContain("does not match openclaw");
     expect(npmWorkflow).toContain("Frozen target does not depend on @openclaw/ai");
-    expect(npmWorkflow).toContain("dependencyTarballs: process.env.AI_TARBALL_NAME");
+    expect(npmWorkflow).toContain("core-packages-SHA256SUMS");
+    expect(npmWorkflow).toContain(".corePackageTarballs[] | [.packageName, .tarballName] | @tsv");
     expect(npmWorkflow).toContain('verify_args=("$TARBALL_PATH" "$PACKAGE_VERSION")');
     expect(npmWorkflow).toContain("Frozen target without an @openclaw/ai dependency");
     const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");

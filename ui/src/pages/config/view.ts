@@ -35,6 +35,7 @@ import {
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -70,6 +71,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -175,6 +177,8 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  sidebarLiveActivity: boolean;
+  setSidebarLiveActivity: (enabled: boolean) => void;
   lobsterPetVisits?: boolean;
   setLobsterPetVisits?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
@@ -192,6 +196,8 @@ export type ConfigProps = {
   camera?: SettingsMediaDeviceState;
   onCameraRefresh?: () => void;
   onCameraSelect?: (deviceId: string) => void;
+  composerHoldToRecord?: boolean;
+  setComposerHoldToRecord?: (enabled: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -943,6 +949,24 @@ function renderSettingsMediaDeviceField(options: {
       : []),
   ];
   const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
   const note = state.error
     ? html`<span role="alert">${state.error}</span>`
     : !state.loading && state.devices.length === 0
@@ -953,11 +977,13 @@ function renderSettingsMediaDeviceField(options: {
     description: note,
     control: html`
       <select
-        class="settings-select"
+        class="settings-select settings-select--media-device"
         data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
         data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
         aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
           options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
@@ -1083,6 +1109,14 @@ function renderChatPreferencesSection(props: ConfigProps) {
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
         ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
+        ${props.setComposerHoldToRecord
+          ? renderSettingsToggleRow({
+              title: t("chat.composer.holdToRecordSetting"),
+              description: t("chat.composer.holdToRecordSettingDescription"),
+              checked: props.composerHoldToRecord !== false,
+              onChange: props.setComposerHoldToRecord,
+            })
+          : nothing}
       </div>
     </section>
   `;
@@ -1118,6 +1152,11 @@ function renderLobsterPetSection(props: ConfigProps) {
             : t("quickSettings.appearance.lobsterSoundsOff"),
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onAct: (enabled) => {
+            if (enabled) {
+              previewLobsterChirp();
+            }
+          },
         })}
         ${renderSettingsRow({
           title: t("quickSettings.appearance.lobsterdex"),
@@ -1131,6 +1170,7 @@ function renderLobsterPetSection(props: ConfigProps) {
               ${LOBSTER_PET_PALETTES.map((palette) => {
                 const entry = getLobsterdexEntries().get(palette.id);
                 const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
                 const title = !seen
                   ? "?"
                   : entry.firstSeenAt !== null
@@ -1145,14 +1185,38 @@ function renderLobsterPetSection(props: ConfigProps) {
                       ? ""
                       : "lobsterdex__mini--unseen"}"
                     style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                    title=${title}
+                    title=${shinySeen ? `${title} ✦` : title}
                   >
                     ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
                   </span>
                 `;
               })}
             </div>
           `,
+        })}
+      </div>
+    </section>
+  `;
+}
+
+function renderSidebarPreferencesSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
+      </div>
+      <p class="settings-section__desc">
+        ${t("configView.sidebarPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.liveActivity"),
+          description: t("configView.sidebarPrefs.liveActivityHint"),
+          checked: props.sidebarLiveActivity,
+          onChange: props.setSidebarLiveActivity,
         })}
       </div>
     </section>
@@ -1353,7 +1417,8 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
-      ${renderLobsterPetSection(props)} ${renderChatPreferencesSection(props)}
+      ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
+      ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">

@@ -16,7 +16,6 @@ type NavigationItem = {
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
-  "custodian",
   "workboard",
   "usage",
   "cron",
@@ -55,7 +54,7 @@ export type SidebarZoneEntry =
 
 // Keep the highest-value operational destinations visible on first use. Users
 // can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = ["custodian", "usage", "cron", "plugins"].map((route) =>
+export const DEFAULT_SIDEBAR_ENTRIES = ["usage", "cron", "plugins"].map((route) =>
   serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
 );
 
@@ -192,22 +191,16 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 // highlights nothing for them; search still deep-links via their owning page.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
 
-const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = [
+const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ...SETTINGS_SUBPAGE_ROUTES,
-];
-
-// Custodian is linked from Settings, but remains a workspace destination with
-// normal app chrome when opened from either Settings or the pinned sidebar.
-const SETTINGS_TAKEOVER_ROUTES = SETTINGS_NAVIGATION_ROUTES.filter(
-  (routeId) => routeId !== "custodian",
-);
+]);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
   apps: "layoutGrid",
-  approvals: "shieldCheck",
+  approvals: "badgeCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -223,19 +216,19 @@ const NAVIGATION_ICONS: NavigationItem = {
   chat: "messageSquare",
   custodian: "lobster",
   config: "settings",
-  profile: "lobster",
+  profile: "circleUser",
   communications: "send",
-  appearance: "spark",
+  appearance: "palette",
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
-  labs: "spark",
+  labs: "flaskConical",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
   "model-providers": "plug",
   "memory-import": "download",
-  notifications: "send",
+  notifications: "bell",
   security: "shieldCheck",
   advanced: "fileCode",
   debug: "bug",
@@ -245,7 +238,7 @@ const NAVIGATION_ICONS: NavigationItem = {
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
-  return (SETTINGS_TAKEOVER_ROUTES as readonly NavigationRouteId[]).includes(routeId);
+  return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -337,13 +330,16 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
   "model-providers": {
-    titleKey: "tabs.modelProviders",
+    titleKey: "routeTitles.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
   "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
-  notifications: { titleKey: "tabs.notifications", subtitleKey: "subtitles.notifications" },
+  notifications: {
+    titleKey: "routeTitles.notifications",
+    subtitleKey: "subtitles.notifications",
+  },
   security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
-  advanced: { titleKey: "tabs.advanced", subtitleKey: "subtitles.advanced" },
+  advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

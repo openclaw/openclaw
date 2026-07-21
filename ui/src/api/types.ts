@@ -1,7 +1,9 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
+import type { CronPayload as CoreCronPayload } from "../../../src/cron/types.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type { FastModeSource } from "../../../src/shared/fast-mode.js";
 import type {
@@ -304,6 +306,13 @@ export type PresenceEntry = {
   reason?: string | null;
   text?: string | null;
   ts?: number | null;
+  user?: {
+    id: string;
+    email?: string | null;
+    name?: string | null;
+    avatarUrl?: string | null;
+  } | null;
+  watchedSessions?: string[] | null;
 };
 
 export type GatewaySessionsDefaults = {
@@ -475,6 +484,8 @@ type SessionCompactionCheckpointPreview = Pick<
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
+  /** Collector swarm group that owns this child session, when applicable. */
+  swarmGroupId?: string;
   parentSessionKey?: string;
   /** Managed worktree bound to this session (repo checkout + branch). */
   worktree?: { id: string; branch: string; repoRoot: string };
@@ -498,6 +509,7 @@ export type GatewaySessionRow = {
   updatedAt: number | null;
   unread?: boolean;
   lastReadAt?: number;
+  agentStatus?: SessionAgentStatus;
   lastActivityAt?: number;
   archived?: boolean;
   archivedAt?: number;
@@ -634,32 +646,7 @@ type CronSchedule =
 type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 type CronWakeMode = "next-heartbeat" | "now";
 
-export type CronPayload =
-  | { kind: "systemEvent"; text: string }
-  | {
-      kind: "command";
-      argv: string[];
-      cwd?: string;
-      env?: Record<string, string>;
-      input?: string;
-      timeoutSeconds?: number;
-      noOutputTimeoutSeconds?: number;
-      outputMaxBytes?: number;
-    }
-  | {
-      kind: "agentTurn";
-      message: string;
-      model?: string;
-      fallbacks?: string[];
-      thinking?: string;
-      timeoutSeconds?: number;
-      allowUnsafeExternalContent?: boolean;
-      lightContext?: boolean;
-      deliver?: boolean;
-      channel?: string;
-      to?: string;
-      bestEffortDeliver?: boolean;
-    };
+export type CronPayload = CoreCronPayload;
 
 type CronDelivery = {
   mode: "none" | "announce" | "webhook";

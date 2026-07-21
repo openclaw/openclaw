@@ -63,8 +63,6 @@ export const SessionSchema = z
     resetByType: z
       .object({
         direct: SessionResetConfigSchema.optional(),
-        /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-        dm: SessionResetConfigSchema.optional(),
         group: SessionResetConfigSchema.optional(),
         thread: SessionResetConfigSchema.optional(),
       })
@@ -72,24 +70,9 @@ export const SessionSchema = z
       .optional(),
     resetByChannel: z.record(z.string(), SessionResetConfigSchema).optional(),
     store: z.string().optional(),
-    typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: TypingModeSchema.optional(),
     mainKey: z.string().optional(),
     sendPolicy: SessionSendPolicySchema.optional(),
-    writeLock: z
-      .object({
-        acquireTimeoutMs: z.number().int().positive().optional(),
-        staleMs: z.number().int().positive().optional(),
-        maxHoldMs: z.number().int().positive().optional(),
-      })
-      .strict()
-      .optional(),
-    agentToAgent: z
-      .object({
-        maxPingPongTurns: z.number().int().min(0).max(20).optional(),
-      })
-      .strict()
-      .optional(),
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
@@ -104,8 +87,6 @@ export const SessionSchema = z
       .object({
         mode: z.enum(["enforce", "warn"]).optional(),
         pruneAfter: PositiveDurationSchema.optional(),
-        /** @deprecated Use pruneAfter instead. */
-        pruneDays: z.number().int().positive().optional(),
         maxEntries: z.number().int().positive().optional(),
         resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number(), z.literal(false)]).optional(),
@@ -149,7 +130,6 @@ const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
 
 export const MessagesSchema = z
   .object({
-    messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
     usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
@@ -182,16 +162,6 @@ export const MessagesSchema = z
             stallSoft: z.string().optional(),
             stallHard: z.string().optional(),
             compacting: z.string().optional(),
-          })
-          .strict()
-          .optional(),
-        timing: z
-          .object({
-            debounceMs: z.number().int().min(0).optional(),
-            stallSoftMs: z.number().int().min(0).optional(),
-            stallHardMs: z.number().int().min(0).optional(),
-            doneHoldMs: z.number().int().min(0).optional(),
-            errorHoldMs: z.number().int().min(0).optional(),
           })
           .strict()
           .optional(),

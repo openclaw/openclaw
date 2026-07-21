@@ -23,6 +23,7 @@ import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
 import { icons } from "./icons.ts";
+import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
   const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
@@ -39,8 +40,8 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   for (const catalog of catalogs) {
     for (const host of catalog.hosts) {
       for (const session of host.sessions) {
-        if (session.openClawSessionKey) {
-          keys.add(session.openClawSessionKey);
+        if (session.sessionKey) {
+          keys.add(session.sessionKey);
         }
       }
     }
@@ -53,6 +54,7 @@ export type CatalogBackingSessionDisplay = {
   subtitle?: string;
   meta: string;
   title: string;
+  pullRequest?: SessionCatalogSession["pullRequest"];
 };
 
 export type CatalogSessionMenuRequest = {
@@ -78,7 +80,7 @@ export function bindAdoptedCatalogSession(
                   ...host,
                   sessions: host.sessions.map((session) =>
                     session.threadId === detail.threadId
-                      ? { ...session, openClawSessionKey: detail.sessionKey }
+                      ? { ...session, sessionKey: detail.sessionKey }
                       : session,
                   ),
                 }
@@ -170,9 +172,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       host.sessions.map((session) => ({ host, session })),
     );
     const liveRows = rows.flatMap(({ session }) => {
-      const row = session.openClawSessionKey
-        ? liveRowsByKey.get(session.openClawSessionKey)
-        : undefined;
+      const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
       return row ? [row] : [];
     });
     const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
@@ -344,15 +344,14 @@ function renderCatalogSessionRow(
     typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
       ? rawTimestamp * 1000
       : rawTimestamp;
-  const adoptedRow = session.openClawSessionKey
-    ? liveRowsByKey.get(session.openClawSessionKey)
-    : undefined;
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
     const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
       label,
       meta: formatSidebarTimestamp(timestamp),
       title: `${label} · ${host.label}`,
+      ...(session.pullRequest ? { pullRequest: session.pullRequest } : {}),
     });
   }
   const catalogKey = {
@@ -360,7 +359,7 @@ function renderCatalogSessionRow(
     hostId: host.hostId,
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
-  const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
+  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey);
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
   const search = searchForSession(key);
@@ -407,6 +406,10 @@ function renderCatalogSessionRow(
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__name hover-marquee">${label}</span>
         </span>
+        ${renderSessionRowBadges({
+          hasAutomation: false,
+          pullRequest: session.pullRequest,
+        })}
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">

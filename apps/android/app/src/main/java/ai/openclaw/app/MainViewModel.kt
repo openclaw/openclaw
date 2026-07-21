@@ -10,6 +10,7 @@ import ai.openclaw.app.chat.ChatPlanStep
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
+import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
@@ -39,7 +40,6 @@ import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
@@ -114,8 +114,8 @@ internal fun retainRefusedAssistantPrompt(
 data class ChatShareDraft(
   val id: Long,
   val text: String?,
-  val imageUris: List<Uri>,
-  val droppedImageCount: Int,
+  val attachments: List<SharedAttachment>,
+  val droppedAttachmentCount: Int,
 )
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
@@ -537,6 +537,12 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
   val nodesDevicesErrorText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesErrorText }
+  val nodesDevicesNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesNoticeText }
+  val devicePairingCapabilities: StateFlow<GatewayDevicePairingCapabilities> =
+    runtimeState(initial = GatewayDevicePairingCapabilities()) { it.devicePairingCapabilities }
+  val operatorScopes: StateFlow<List<String>> = runtimeState(initial = emptyList()) { it.operatorScopes }
+  val devicePairingMutation: StateFlow<GatewayDevicePairingMutation?> =
+    runtimeState(initial = null) { it.devicePairingMutation }
   val channelsSummary: StateFlow<GatewayChannelsSummary> =
     runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
   val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
@@ -567,6 +573,7 @@ class MainViewModel private constructor(
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
+  val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
@@ -611,6 +618,8 @@ class MainViewModel private constructor(
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionOwnerAgentId }
   val chatSessionId: StateFlow<String?> = runtimeState(initial = null) { it.chatSessionId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chatMessages }
+  val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
+    runtimeState(initial = null) { it.chatTranscriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHistoryLoading }
   val chatError: StateFlow<String?> = runtimeState(initial = null) { it.chatError }
   val chatHealthOk: StateFlow<Boolean> = runtimeState(initial = false) { it.chatHealthOk }
@@ -774,7 +783,12 @@ class MainViewModel private constructor(
       gatewayConfigOperationMutex.withLock {
         if (operation != gatewayConfigOperationSeq.get()) return@withLock
         val config = plan.config
-        val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+        val endpoint =
+          GatewayEndpoint.manual(
+            host = config.host,
+            port = config.port,
+            tlsEnabled = config.tls,
+          )
         val targetAlreadyPaired =
           prefs.gatewayRegistry.entries.value
             .any { it.stableId == endpoint.stableId }
@@ -925,15 +939,17 @@ class MainViewModel private constructor(
   }
 
   /** Opens shared content as a fresh composer draft; sending still requires an explicit tap. */
-  fun handleShareLaunch(request: ShareLaunchRequest): Boolean {
-    val owner = currentOrProvisionalChatComposerOwner()
+  internal fun handleShareLaunch(
+    request: ShareLaunchRequest,
+    owner: ChatComposerOwner,
+  ): Boolean {
     val accepted =
       chatShareDraftQueue.enqueue(
         ChatShareDraft(
           id = chatShareDraftSeq.incrementAndGet(),
           text = request.text,
-          imageUris = request.imageUris,
-          droppedImageCount = request.droppedImageCount,
+          attachments = request.attachments,
+          droppedAttachmentCount = request.droppedAttachmentCount,
         ),
         owner,
       )
@@ -1214,6 +1230,13 @@ class MainViewModel private constructor(
     }
   }
 
+  fun setGatewayConnectionEnabled(
+    stableId: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setGatewayConnectionEnabled(stableId, enabled)
+  }
+
   fun forgetGateway(stableId: String) {
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
@@ -1237,8 +1260,12 @@ class MainViewModel private constructor(
     }
   }
 
-  fun acceptGatewayTrustPrompt() {
-    runtimeRef.value?.acceptGatewayTrustPrompt()
+  fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
+    runtimeRef.value?.acceptGatewayTrustPrompt(manualFingerprint)
+  }
+
+  fun useSystemGatewayTrustPrompt() {
+    runtimeRef.value?.useSystemGatewayTrustPrompt()
   }
 
   fun declineGatewayTrustPrompt() {
@@ -1411,6 +1438,21 @@ class MainViewModel private constructor(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun approveDevicePairing(
+    requestId: String,
+    deviceId: String,
+  ) {
+    ensureRuntime().approveDevicePairing(requestId, deviceId)
+  }
+
+  fun rejectDevicePairing(requestId: String) {
+    ensureRuntime().rejectDevicePairing(requestId)
+  }
+
+  fun removePairedDevice(deviceId: String) {
+    ensureRuntime().removePairedDevice(deviceId)
   }
 
   fun refreshExecApprovals() {
@@ -1586,6 +1628,8 @@ class MainViewModel private constructor(
         sessionKey = chatSessionKey.value,
         mainSessionKey = mainSessionKey.value,
       )
+
+  internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     (

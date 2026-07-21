@@ -567,7 +567,7 @@ function isHeartbeatTypingEnabled(params: { cfg: OpenClawConfig; hasChatDelivery
 
 function resolveHeartbeatTypingIntervalSeconds(cfg: OpenClawConfig) {
   const agentCfg = cfg.agents?.defaults;
-  const configured = agentCfg?.typingIntervalSeconds ?? cfg.session?.typingIntervalSeconds;
+  const configured = agentCfg?.typingIntervalSeconds;
   return typeof configured === "number" && configured > 0 ? configured : undefined;
 }
 

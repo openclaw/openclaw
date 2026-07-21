@@ -14,6 +14,7 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import {
   isDefaultChatLanding,
@@ -34,6 +35,7 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
 import { createNativeNotificationsCapability } from "./native-notifications.ts";
@@ -323,6 +325,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const initialUserMessage = createInitialUserMessageHandoff();
   applyStartupPresentation(settings);
   const router = createApplicationRouter();
   let pendingGatewayConnection =
@@ -395,6 +398,7 @@ export function bootstrapApplication(): ApplicationRuntime {
     nativeNotifications,
     webPush,
     skillWorkshopRevision,
+    initialUserMessage,
     navigate: (routeId, options) => {
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
@@ -415,7 +419,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   const stopModelSetupRedirect = firstRunDefaultLanding
     ? startModelSetupFirstRunRedirect({
         context,
-        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
+        isStillDefaultLanding: () =>
+          locationsMatch(history.location(), expectedDefaultLanding, (left, right) =>
+            areUiSessionKeysEquivalentForHost({ hello: gateway.snapshot.hello }, left, right),
+          ),
       })
     : () => undefined;
   return {
@@ -453,6 +460,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
+      initialUserMessage.clear();
     },
   };
 }

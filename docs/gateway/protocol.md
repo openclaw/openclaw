@@ -12,6 +12,25 @@ OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
 headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
+## npm packages
+
+These packages ship with OpenClaw release trains. During the initial rollout,
+npm may return `E404` until the first package-bearing release is published.
+
+- [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
+  publishes the schemas, validators, TypeScript types, lightweight frame and error
+  helpers, and version constants. Its tarball includes the generated
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  machine-readable contract.
+- [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
+  publishes the reference Node client and a browser-safe entry at
+  `@openclaw/gateway-client/browser`.
+
+For application lifecycle guidance, see
+[Building a Gateway client](https://docs.openclaw.ai/gateway/clients). For apps
+that supervise the Gateway as a child process, see
+[Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+
 ## Transport and framing
 
 - WebSocket, text frames, JSON payloads.
@@ -496,8 +515,10 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
     - `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
-    - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns config, credentials, instructions, and tool policy.
-    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result.
+    - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call.
+    - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
+    - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact action and the next consult supplies the `confirmationId`.
     - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
@@ -526,7 +547,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
-    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
+    - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
@@ -1145,5 +1166,7 @@ the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Bridge protocol](/gateway/bridge-protocol)
 - [Gateway runbook](/gateway)

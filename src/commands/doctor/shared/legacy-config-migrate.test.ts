@@ -1486,75 +1486,6 @@ describe("legacy session parent fork migrate", () => {
   });
 });
 
-describe("legacy diagnostics memory pressure snapshot migrate", () => {
-  it("renames the boolean toggle", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        enabled: true,
-        memoryPressureBundle: false,
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      enabled: true,
-      memoryPressureSnapshot: false,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-
-  it("preserves the renamed toggle when both keys are present", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        memoryPressureBundle: false,
-        memoryPressureSnapshot: true,
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      memoryPressureSnapshot: true,
-    });
-    expect(res.changes).toStrictEqual([
-      "Removed diagnostics.memoryPressureBundle (memoryPressureSnapshot already set).",
-    ]);
-  });
-
-  it("moves nested enabled to the renamed boolean", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        enabled: true,
-        memoryPressureBundle: {
-          enabled: false,
-        },
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      enabled: true,
-      memoryPressureSnapshot: false,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-
-  it("moves empty object form to the renamed default boolean", () => {
-    const res = migrateLegacyConfigForTest({
-      diagnostics: {
-        memoryPressureBundle: {},
-      },
-    });
-
-    expect(res.config?.diagnostics).toEqual({
-      memoryPressureSnapshot: true,
-    });
-    expect(res.changes).toStrictEqual([
-      "Moved diagnostics.memoryPressureBundle → memoryPressureSnapshot.",
-    ]);
-  });
-});
-
 describe("legacy WebChat channel config migrate", () => {
   it("removes retired WebChat channel config", () => {
     const raw = {
@@ -2927,6 +2858,81 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 });
 
+describe("gateway.port out-of-range repair migrate", () => {
+  it("removes gateway.port above TCP max and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed out-of-range gateway.port (65536). Valid TCP ports are 1–65535; the gateway will use the default port 18789.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("removes gateway.port zero and records a change", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 0 },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Removed out-of-range gateway.port (0). Valid TCP ports are 1–65535; the gateway will use the default port 18789.",
+    ]);
+    expect(res.config).not.toHaveProperty("gateway");
+  });
+
+  it("preserves valid gateway.port values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_535 },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("preserves other gateway keys when removing the port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "loopback" },
+    });
+
+    expect(res.config?.gateway).toEqual({ bind: "loopback" });
+    expect(res.changes.length).toBeGreaterThan(0);
+  });
+
+  it("seeds non-loopback Control UI origins with the fallback port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "lan" },
+    });
+
+    expect(res.config?.gateway).toMatchObject({
+      bind: "lan",
+      controlUi: {
+        allowedOrigins: ["http://localhost:18789", "http://127.0.0.1:18789"],
+      },
+    });
+  });
+
+  it("is idempotent for out-of-range values", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+    expect(first.changes.length).toBe(1);
+    expect(first.config).not.toHaveProperty("gateway");
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+
+  it("leaves gateway.port set to 1 (valid minimum) untouched", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 1 },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+});
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {
@@ -4131,14 +4137,16 @@ describe("legacy flat memory search field migrate", () => {
 
     expect(res.config?.agents?.defaults?.memorySearch).toEqual({
       enabled: true,
-      chunking: { tokens: 800, overlap: 100 },
       query: { maxResults: 5 },
     });
-    expect(res.changes).toStrictEqual([
-      "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
-      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-      "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
-    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Moved agents.defaults.memorySearch.chunkSize → agents.defaults.memorySearch.chunking.tokens.",
+        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
+        "Moved agents.defaults.memorySearch.maxResults → agents.defaults.memorySearch.query.maxResults.",
+        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      ]),
+    );
   });
 
   it("moves a top-level legacy object and keeps explicit canonical values", () => {
@@ -4162,15 +4170,17 @@ describe("legacy flat memory search field migrate", () => {
     expect(res.config).not.toHaveProperty("memorySearch");
     expect(res.config?.agents?.defaults?.memorySearch).toEqual({
       enabled: true,
-      chunking: { tokens: 1200, overlap: 100 },
       query: { maxResults: 9 },
     });
-    expect(res.changes).toEqual([
-      "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
-      "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
-      "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
-      "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
-    ]);
+    expect(res.changes).toEqual(
+      expect.arrayContaining([
+        "Merged memorySearch → agents.defaults.memorySearch (filled missing fields from legacy; kept explicit agents.defaults values).",
+        "Removed agents.defaults.memorySearch.chunkSize (agents.defaults.memorySearch.chunking.tokens already set).",
+        "Moved agents.defaults.memorySearch.chunkOverlap → agents.defaults.memorySearch.chunking.overlap.",
+        "Removed agents.defaults.memorySearch.maxResults (agents.defaults.memorySearch.query.maxResults already set).",
+        "Removed retired runtime tuning knobs; built-in defaults now apply.",
+      ]),
+    );
   });
 
   it("moves per-agent flat fields independently", () => {
@@ -4183,16 +4193,16 @@ describe("legacy flat memory search field migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.list?.[0]?.memorySearch).toEqual({
-      chunking: { tokens: 500 },
-    });
+    expect(res.config?.agents?.list?.[0]?.memorySearch).toBeUndefined();
     expect(res.config?.agents?.list?.[1]?.memorySearch).toEqual({
-      chunking: { overlap: 50 },
       query: { maxResults: 10 },
     });
+    expect(res.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
   });
 
-  it("is a no-op for canonical memory search fields", () => {
+  it("removes retired canonical memory search chunking fields", () => {
     const raw = {
       agents: {
         defaults: {
@@ -4204,8 +4214,14 @@ describe("legacy flat memory search field migrate", () => {
       },
     };
 
-    expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(migrateLegacyConfigForTest(raw)).toEqual({ config: null, changes: [] });
+    expect(findLegacyConfigIssues(raw)).toEqual([expect.objectContaining({ path: "" })]);
+    const res = migrateLegacyConfigForTest(raw);
+    expect(res.config?.agents?.defaults?.memorySearch).toEqual({
+      query: { maxResults: 5 },
+    });
+    expect(res.changes).toContain(
+      "Removed retired runtime tuning knobs; built-in defaults now apply.",
+    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -459,6 +459,21 @@
       "translated": "स्वीकृति हल नहीं हो सकी। रिफ़्रेश करें और फिर से प्रयास करें।"
     },
     {
+      "id": "native.android.ab7de09b2e9bafd2",
+      "source": "Device approved.",
+      "translated": "डिवाइस स्वीकृत किया गया।"
+    },
+    {
+      "id": "native.android.0f3b1e2ce6f0aed5",
+      "source": "Pairing request rejected.",
+      "translated": "पेयरिंग अनुरोध अस्वीकार किया गया।"
+    },
+    {
+      "id": "native.android.e98062fe81b36c4a",
+      "source": "Paired device removed.",
+      "translated": "पेयर किया गया डिवाइस हटा दिया गया।"
+    },
+    {
       "id": "native.android.5cf2b6b55ea97b67",
       "source": "Proposal applied.",
       "translated": "प्रस्ताव लागू किया गया।"
@@ -802,6 +817,11 @@
       "id": "native.android.df0d071809dfbbb3",
       "source": "Connect the gateway to update Skill Workshop proposals.",
       "translated": "Skill Workshop प्रस्तावों को अपडेट करने के लिए Gateway कनेक्ट करें।"
+    },
+    {
+      "id": "native.android.9481b642ee32ed95",
+      "source": "Could not verify the device pairing change. Refresh and try again.",
+      "translated": "डिवाइस पेयरिंग में बदलाव सत्यापित नहीं किया जा सका। रीफ़्रेश करके फिर से कोशिश करें।"
     },
     {
       "id": "native.android.21445608d791c302",
@@ -2429,6 +2449,91 @@
       "translated": "पेयर किए गए डिवाइस"
     },
     {
+      "id": "native.android.8c6f23f9b2a2f5c3",
+      "source": "Approve device?",
+      "translated": "डिवाइस स्वीकृत करें?"
+    },
+    {
+      "id": "native.android.61e56e7c2425c765",
+      "source": "Reject pairing request?",
+      "translated": "पेयरिंग अनुरोध अस्वीकार करें?"
+    },
+    {
+      "id": "native.android.a233e379d3281626",
+      "source": "Remove paired device?",
+      "translated": "पेयर किया गया डिवाइस हटाएँ?"
+    },
+    {
+      "id": "native.android.84789f373ff7e379",
+      "source": "Verify this requesting device before granting access.",
+      "translated": "पहुँच देने से पहले अनुरोध करने वाले इस डिवाइस को सत्यापित करें।"
+    },
+    {
+      "id": "native.android.80f2666384538867",
+      "source": "$label: $value",
+      "translated": "$label: $value"
+    },
+    {
+      "id": "native.android.857fc6dbd43c147c",
+      "source": "Reject the pairing request from this device?",
+      "translated": "इस डिवाइस का पेयरिंग अनुरोध अस्वीकार करें?"
+    },
+    {
+      "id": "native.android.a0cb7097dac32274",
+      "source": "This device will lose its trusted Gateway access.",
+      "translated": "यह डिवाइस अपनी विश्वसनीय Gateway पहुँच खो देगा।"
+    },
+    {
+      "id": "native.android.d62bd835e46f047f",
+      "source": "Cancel",
+      "translated": "रद्द करें"
+    },
+    {
+      "id": "native.android.54bc27d84e77fdeb",
+      "source": "Name",
+      "translated": "नाम"
+    },
+    {
+      "id": "native.android.549fcca19ab575e8",
+      "source": "Device ID",
+      "translated": "डिवाइस ID"
+    },
+    {
+      "id": "native.android.0a2b46e9ba9a43a7",
+      "source": "Public key",
+      "translated": "सार्वजनिक कुंजी"
+    },
+    {
+      "id": "native.android.3029d9b112d91460",
+      "source": "Platform",
+      "translated": "प्लेटफ़ॉर्म"
+    },
+    {
+      "id": "native.android.34495d4163dd2b0d",
+      "source": "Client",
+      "translated": "क्लाइंट"
+    },
+    {
+      "id": "native.android.9d5173f45aa99bc9",
+      "source": "Origin",
+      "translated": "मूल"
+    },
+    {
+      "id": "native.android.1690971a387e62fa",
+      "source": "Remote IP",
+      "translated": "रिमोट IP"
+    },
+    {
+      "id": "native.android.e478d6d87813a30a",
+      "source": "Roles",
+      "translated": "भूमिकाएँ"
+    },
+    {
+      "id": "native.android.d390e77c38097584",
+      "source": "Scopes",
+      "translated": "दायरे"
+    },
+    {
       "id": "native.android.f87fa5da40b7f94f",
       "source": "New device",
       "translated": "नया डिवाइस"
@@ -2444,9 +2549,24 @@
       "translated": "समीक्षा करें"
     },
     {
+      "id": "native.android.caa6c7dea18d5127",
+      "source": "Reject",
+      "translated": "अस्वीकार करें"
+    },
+    {
+      "id": "native.android.ef8a2c38eba42e89",
+      "source": "Approve",
+      "translated": "स्वीकृत करें"
+    },
+    {
       "id": "native.android.36735662df3e8ab2",
       "source": "Paired device",
       "translated": "युग्मित डिवाइस"
+    },
+    {
+      "id": "native.android.ce8e5c5a934ed2aa",
+      "source": "Remove",
+      "translated": "हटाएँ"
     },
     {
       "id": "native.android.e274308654ddc04b",
@@ -2504,9 +2624,9 @@
       "translated": "क्षमता अस्वीकृत है"
     },
     {
-      "id": "native.android.13024ff403917bfe",
-      "source": "This gateway sign-in can list connected nodes, but it cannot approve new phone pairing. Pair new phones from a gateway admin session. Node capability approval is separate and still uses nodes approve <request id>.",
-      "translated": "यह Gateway साइन-इन कनेक्ट किए गए नोड सूचीबद्ध कर सकता है, लेकिन नए फ़ोन की पेयरिंग को स्वीकृति नहीं दे सकता। नए फ़ोन को Gateway एडमिन सत्र से पेयर करें। नोड क्षमता की स्वीकृति अलग है और इसके लिए अब भी nodes approve <request id> का उपयोग होता है।"
+      "id": "native.android.8b55ed05cd70b8d9",
+      "source": "Device pairing actions are unavailable in this Gateway session. Run openclaw devices list on the Gateway host and manage the request there. Node capability approval is separate and still uses nodes approve <request id>.",
+      "translated": "इस Gateway सत्र में डिवाइस पेयरिंग की कार्रवाइयाँ उपलब्ध नहीं हैं। Gateway होस्ट पर openclaw devices list चलाएँ और अनुरोध को वहीं प्रबंधित करें। नोड क्षमता की स्वीकृति अलग है और अब भी nodes approve <request id> का उपयोग करती है।"
     },
     {
       "id": "native.android.0d8e9ede9c229b8e",
@@ -2604,9 +2724,29 @@
       "translated": "कैमरा शुरू नहीं किया जा सका। गैलरी से QR इमेज चुनें या सेटअप कोड मैन्युअल रूप से दर्ज करें।"
     },
     {
+      "id": "native.android.7a18be21a62739bf",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "Gateway प्रमाणपत्र को स्वचालित रूप से पढ़ा नहीं जा सका। Gateway होस्ट पर प्राप्त SHA-256 फ़िंगरप्रिंट पेस्ट करें।"
+    },
+    {
+      "id": "native.android.aa489429ad39aa39",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "यह Gateway अब इस डिवाइस द्वारा विश्वसनीय प्रमाणपत्र प्रस्तुत करता है।"
+    },
+    {
+      "id": "native.android.b3db82f1162808ad",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 फ़िंगरप्रिंट"
+    },
+    {
       "id": "native.android.9ac2d4498b17d478",
       "source": "Trust",
       "translated": "भरोसा करें"
+    },
+    {
+      "id": "native.android.09245320d3878458",
+      "source": "Use system trust",
+      "translated": "सिस्टम विश्वसनीयता का उपयोग करें"
     },
     {
       "id": "native.android.e26ee07a1d1911be",
@@ -3586,7 +3726,7 @@
     {
       "id": "native.android.fd67be543e321cc9",
       "source": "Toggle thread layout",
-      "translated": "थ्रेड लेआउट टॉगल करें"
+      "translated": "थ्रेड लेआउट बदलें"
     },
     {
       "id": "native.android.49db3101cf9c806c",
@@ -3666,7 +3806,7 @@
     {
       "id": "native.android.691e92cfe5cf106e",
       "source": "Threads in \"$group\" are kept and move back to Ungrouped.",
-      "translated": "\"$group\" के थ्रेड रखे जाते हैं और वापस असमूहीकृत में चले जाते हैं।"
+      "translated": "\"$group\" के थ्रेड रखे जाते हैं और वापस अवर्गीकृत में चले जाते हैं।"
     },
     {
       "id": "native.android.d87a8217ab56999b",
@@ -3676,7 +3816,7 @@
     {
       "id": "native.android.930de97ff47113a8",
       "source": "This permanently deletes the thread and its transcript.",
-      "translated": "यह थ्रेड और इसकी ट्रांसक्रिप्ट को स्थायी रूप से हटा देता है।"
+      "translated": "यह थ्रेड और इसकी प्रतिलिपि को स्थायी रूप से हटा देता है।"
     },
     {
       "id": "native.android.807ba5c6699af2f1",
@@ -3801,17 +3941,17 @@
     {
       "id": "native.android.8e21a70428def6e0",
       "source": "No threads yet",
-      "translated": "अभी तक कोई थ्रेड नहीं"
+      "translated": "अभी कोई थ्रेड नहीं है"
     },
     {
       "id": "native.android.cda4c5ad8b17e394",
       "source": "No current thread",
-      "translated": "कोई मौजूदा थ्रेड नहीं"
+      "translated": "कोई मौजूदा थ्रेड नहीं है"
     },
     {
       "id": "native.android.be84f061047aa2da",
       "source": "No archived threads",
-      "translated": "कोई आर्काइव किया गया थ्रेड नहीं"
+      "translated": "कोई संग्रहीत थ्रेड नहीं है"
     },
     {
       "id": "native.android.0a38a1167c6b6941",
@@ -3821,12 +3961,12 @@
     {
       "id": "native.android.f289d03e1d3eee98",
       "source": "Open Chat to start or resume the current thread.",
-      "translated": "मौजूदा थ्रेड शुरू करने या फिर से जारी रखने के लिए Chat खोलें।"
+      "translated": "मौजूदा थ्रेड शुरू करने या फिर से जारी रखने के लिए चैट खोलें।"
     },
     {
       "id": "native.android.504b71386e76c6ae",
       "source": "Archived threads will show up here.",
-      "translated": "आर्काइव किए गए थ्रेड यहाँ दिखाई देंगे।"
+      "translated": "संग्रहीत थ्रेड यहाँ दिखाई देंगे।"
     },
     {
       "id": "native.android.2261a31153cec409",
@@ -4041,7 +4181,7 @@
     {
       "id": "native.android.6c93973c13db43ae",
       "source": "Chat tool calls waiting in the active thread remain visible here.",
-      "translated": "सक्रिय थ्रेड में प्रतीक्षारत Chat टूल कॉल यहाँ दिखाई देते रहेंगे।"
+      "translated": "सक्रिय थ्रेड में प्रतीक्षारत चैट टूल कॉल यहाँ दिखाई देते रहेंगे।"
     },
     {
       "id": "native.android.fea93eda5bf97d9e",
@@ -4236,7 +4376,7 @@
     {
       "id": "native.android.8c4e91f53928efb2",
       "source": "Built-in microphone",
-      "translated": "बिल्ट-इन माइक्रोफ़ोन"
+      "translated": "अंतर्निहित माइक्रोफ़ोन"
     },
     {
       "id": "native.android.14b613cb6e2446b4",
@@ -5439,6 +5579,26 @@
       "translated": "Canvas बंद करें"
     },
     {
+      "id": "native.android.846fe5afd08b8089",
+      "source": "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+      "translated": "Gateway प्रमाणपत्र को स्वचालित रूप से पढ़ा नहीं जा सका। Gateway होस्ट पर प्राप्त SHA-256 फ़िंगरप्रिंट पेस्ट करें।"
+    },
+    {
+      "id": "native.android.b263dca13f55dad9",
+      "source": "This gateway now presents a certificate trusted by this device.",
+      "translated": "यह Gateway अब इस डिवाइस द्वारा विश्वसनीय प्रमाणपत्र प्रस्तुत करता है।"
+    },
+    {
+      "id": "native.android.dca0f8814b658170",
+      "source": "SHA-256 fingerprint",
+      "translated": "SHA-256 फ़िंगरप्रिंट"
+    },
+    {
+      "id": "native.android.bb5d50fcdd5ebafe",
+      "source": "Use system trust",
+      "translated": "सिस्टम विश्वसनीयता का उपयोग करें"
+    },
+    {
       "id": "native.android.3d83e0755437a5f9",
       "source": "Overview",
       "translated": "अवलोकन"
@@ -5596,7 +5756,7 @@
     {
       "id": "native.android.43320b54a68b00a1",
       "source": "No recent threads",
-      "translated": "कोई हाल का थ्रेड नहीं"
+      "translated": "कोई हालिया थ्रेड नहीं"
     },
     {
       "id": "native.android.7178756ffe9e4c72",
@@ -7704,11 +7864,6 @@
       "translated": "OpenClaw"
     },
     {
-      "id": "native.android.e695e7b72d13e9e5",
-      "source": "Attachment",
-      "translated": "अटैचमेंट"
-    },
-    {
       "id": "native.android.5aafbef3744d86f3",
       "source": "Preparing audio…",
       "translated": "ऑडियो तैयार किया जा रहा है…"
@@ -7812,6 +7967,11 @@
       "id": "native.android.623e434c83e3c020",
       "source": "Attach image",
       "translated": "छवि संलग्न करें"
+    },
+    {
+      "id": "native.android.e695e7b72d13e9e5",
+      "source": "Attachment",
+      "translated": "अटैचमेंट"
     },
     {
       "id": "native.android.f1d69eb66c5dfa39",
@@ -8159,11 +8319,6 @@
       "translated": "वाक् पहचानकर्ता उपलब्ध नहीं है"
     },
     {
-      "id": "native.android.0faf9df3e5f708df",
-      "source": "Listening (PTT)",
-      "translated": "सुन रहा है (PTT)"
-    },
-    {
       "id": "native.android.47a59f8798682ea0",
       "source": "Ready",
       "translated": "तैयार"
@@ -8237,6 +8392,11 @@
       "id": "native.android.92409eac33327a8d",
       "source": "Speaking…",
       "translated": "बोल रहा है…"
+    },
+    {
+      "id": "native.android.0faf9df3e5f708df",
+      "source": "Listening (PTT)",
+      "translated": "सुन रहा है (PTT)"
     },
     {
       "id": "native.android.d1a7db2c16fd6d09",
@@ -10634,6 +10794,61 @@
       "translated": "कार्य का विवरण"
     },
     {
+      "id": "native.apple.29cacb53ea5e77fc",
+      "source": "Pinned",
+      "translated": "पिन किया गया"
+    },
+    {
+      "id": "native.apple.940062cfdce9211b",
+      "source": "Recent",
+      "translated": "हाल के"
+    },
+    {
+      "id": "native.apple.a0980128426308a9",
+      "source": "Model",
+      "translated": "मॉडल"
+    },
+    {
+      "id": "native.apple.9520e60f21535dde",
+      "source": "Thinking",
+      "translated": "सोच-विचार"
+    },
+    {
+      "id": "native.apple.8b321f3ffce97429",
+      "source": "Fast",
+      "translated": "तेज़"
+    },
+    {
+      "id": "native.apple.989b70d64e328d55",
+      "source": "Default (inherited)",
+      "translated": "डिफ़ॉल्ट (इनहेरिट किया गया)"
+    },
+    {
+      "id": "native.apple.f4114e73b07eb9ae",
+      "source": "Off",
+      "translated": "बंद"
+    },
+    {
+      "id": "native.apple.7ed231b28d16312f",
+      "source": "On",
+      "translated": "चालू"
+    },
+    {
+      "id": "native.apple.412a74802320a037",
+      "source": "Full",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.299f21a2071ff9fc",
+      "source": "Verbosity",
+      "translated": "विस्तार का स्तर"
+    },
+    {
+      "id": "native.apple.faf0ef05e1496de7",
+      "source": "Default",
+      "translated": "डिफ़ॉल्ट"
+    },
+    {
       "id": "native.apple.e5524d5756a62744",
       "source": "Unable to Export Transcript",
       "translated": "प्रतिलेख निर्यात नहीं किया जा सका"
@@ -10654,9 +10869,9 @@
       "translated": "आप किस पर काम करना चाहेंगे?"
     },
     {
-      "id": "native.apple.4da775013ac9b123",
-      "source": "The thread attaches once the gateway is ready.",
-      "translated": "Gateway तैयार होने पर थ्रेड संलग्न हो जाता है।"
+      "id": "native.apple.ed7f703a8809b564",
+      "source": "The session attaches once the gateway is ready.",
+      "translated": "Gateway के तैयार होते ही सत्र जुड़ जाता है।"
     },
     {
       "id": "native.apple.02611ddddef7295a",
@@ -10691,7 +10906,7 @@
     {
       "id": "native.apple.7c87384c7d1370e1",
       "source": "New Chat",
-      "translated": "नया चैट"
+      "translated": "नई चैट"
     },
     {
       "id": "native.apple.1876037e64a74110",
@@ -10699,9 +10914,14 @@
       "translated": "Worktree में नया चैट"
     },
     {
-      "id": "native.apple.003b25ddafeb18e9",
-      "source": "Threads…",
-      "translated": "थ्रेड…"
+      "id": "native.apple.ce6ebe91fc597015",
+      "source": "New Session Options…",
+      "translated": "नए सत्र के विकल्प…"
+    },
+    {
+      "id": "native.apple.a1b0d289758e2213",
+      "source": "Sessions…",
+      "translated": "सत्र…"
     },
     {
       "id": "native.apple.17c13312e7532c89",
@@ -10864,14 +11084,14 @@
       "translated": "बनाएँ"
     },
     {
-      "id": "native.apple.31d5c7287cfb3abe",
-      "source": "Delete Thread?",
-      "translated": "थ्रेड हटाएँ?"
+      "id": "native.apple.e7382c53c7dd48f7",
+      "source": "Delete Session?",
+      "translated": "सत्र हटाएँ?"
     },
     {
-      "id": "native.apple.d3395564809f1120",
-      "source": "Delete Thread",
-      "translated": "थ्रेड हटाएँ"
+      "id": "native.apple.702fd8b48da56065",
+      "source": "Delete Session",
+      "translated": "सत्र हटाएँ"
     },
     {
       "id": "native.apple.9b1aed19568a048e",
@@ -10879,9 +11099,9 @@
       "translated": "रद्द करें"
     },
     {
-      "id": "native.apple.092659256d26cb03",
-      "source": "This permanently deletes the thread and its transcript.",
-      "translated": "इससे थ्रेड और उसका ट्रांसक्रिप्ट स्थायी रूप से हट जाएगा।"
+      "id": "native.apple.61f3f19ea24c6012",
+      "source": "This permanently deletes the session and its transcript.",
+      "translated": "इससे सत्र और उसका ट्रांसक्रिप्ट स्थायी रूप से हट जाएगा।"
     },
     {
       "id": "native.apple.0965d8d2429c3b9f",
@@ -10909,9 +11129,9 @@
       "translated": "नया समूह"
     },
     {
-      "id": "native.apple.683032464c497bbd",
-      "source": "Rename Thread",
-      "translated": "थ्रेड का नाम बदलें"
+      "id": "native.apple.cd368674179237a0",
+      "source": "Rename Session",
+      "translated": "सत्र का नाम बदलें"
     },
     {
       "id": "native.apple.31424500c53d6c32",
@@ -10919,14 +11139,54 @@
       "translated": "समूह का नाम"
     },
     {
-      "id": "native.apple.f887aa956588f237",
-      "source": "Thread name",
-      "translated": "थ्रेड का नाम"
+      "id": "native.apple.8b54306971cfa8c9",
+      "source": "Session name",
+      "translated": "सत्र का नाम"
     },
     {
       "id": "native.apple.e8018adcccaa2a4d",
       "source": "View More",
       "translated": "और देखें"
+    },
+    {
+      "id": "native.apple.e3ef1aa93156bd67",
+      "source": "Live",
+      "translated": "Live"
+    },
+    {
+      "id": "native.apple.bdfc040fb974b4aa",
+      "source": "Unread",
+      "translated": "अपठित"
+    },
+    {
+      "id": "native.apple.6f94924c0a736fcf",
+      "source": "Tokens",
+      "translated": "टोकन"
+    },
+    {
+      "id": "native.apple.bec8b61a3a29b59a",
+      "source": "Opens Sessions",
+      "translated": "सत्र खोलता है"
+    },
+    {
+      "id": "native.apple.69279daa342241c1",
+      "source": "Pending approvals",
+      "translated": "लंबित अनुमोदन"
+    },
+    {
+      "id": "native.apple.48af1bbb4fd06321",
+      "source": "Automation issues",
+      "translated": "Automation issues"
+    },
+    {
+      "id": "native.apple.3e4f2dd3a0d41b97",
+      "source": "31-day usage",
+      "translated": "31-day usage"
+    },
+    {
+      "id": "native.apple.c334a60ae7b4d508",
+      "source": "Opens Usage",
+      "translated": "Opens Usage"
     },
     {
       "id": "native.apple.65fb4d9ce6e5bbda",
@@ -10959,14 +11219,14 @@
       "translated": "एजेंट"
     },
     {
-      "id": "native.apple.7c8231b7b1ca480f",
-      "source": "Agent thread",
-      "translated": "एजेंट थ्रेड"
+      "id": "native.apple.789d5d0790fd18ca",
+      "source": "Agent session",
+      "translated": "एजेंट सत्र"
     },
     {
-      "id": "native.apple.b3c553614f762a58",
-      "source": "Recent threads",
-      "translated": "हाल के थ्रेड"
+      "id": "native.apple.ee45dce4a2e44737",
+      "source": "Recent sessions",
+      "translated": "हाल के सत्र"
     },
     {
       "id": "native.apple.9161ca3c61de6cc7",
@@ -10974,9 +11234,9 @@
       "translated": "Gateway ऑफ़लाइन है"
     },
     {
-      "id": "native.apple.5aa32afda85064ea",
-      "source": "No recent threads",
-      "translated": "कोई हाल का थ्रेड नहीं"
+      "id": "native.apple.c97e0382e578a2f7",
+      "source": "No recent sessions",
+      "translated": "कोई हालिया सत्र नहीं"
     },
     {
       "id": "native.apple.79937d7781fb65ae",
@@ -11034,6 +11294,11 @@
       "translated": "सीधी चैट"
     },
     {
+      "id": "native.apple.7a39e0991fa3cd53",
+      "source": "just now",
+      "translated": "just now"
+    },
+    {
       "id": "native.apple.dbd48d25920f342b",
       "source": "%@ on %@",
       "translated": "%@ पर %@"
@@ -11074,14 +11339,14 @@
       "translated": "रद्द करें"
     },
     {
-      "id": "native.apple.b6855cf19a50f477",
-      "source": "Threads",
-      "translated": "थ्रेड"
+      "id": "native.apple.7a6511a467e34f69",
+      "source": "Sessions",
+      "translated": "सत्र"
     },
     {
-      "id": "native.apple.9b1d0ef27a1333b0",
-      "source": "Archived threads",
-      "translated": "संग्रहीत थ्रेड"
+      "id": "native.apple.e6b8913014b64f0a",
+      "source": "Archived sessions",
+      "translated": "संग्रहित सत्र"
     },
     {
       "id": "native.apple.bc8e64efb095a625",
@@ -11089,34 +11354,34 @@
       "translated": "आर्काइव किए गए दिखाएँ"
     },
     {
-      "id": "native.apple.98167401c7267735",
-      "source": "Threads unavailable",
-      "translated": "थ्रेड उपलब्ध नहीं हैं"
+      "id": "native.apple.119433782518f199",
+      "source": "Sessions unavailable",
+      "translated": "सत्र उपलब्ध नहीं हैं"
     },
     {
-      "id": "native.apple.4d28a7def2337b9f",
-      "source": "Loading archived threads",
-      "translated": "संग्रहीत थ्रेड लोड किए जा रहे हैं"
+      "id": "native.apple.9882fbadac3bea03",
+      "source": "Loading archived sessions",
+      "translated": "संग्रहित सत्र लोड हो रहे हैं"
     },
     {
-      "id": "native.apple.777d7b706933bd7b",
-      "source": "Loading recent threads",
-      "translated": "हाल के थ्रेड लोड किए जा रहे हैं"
+      "id": "native.apple.16dca1cfac8a571b",
+      "source": "Loading recent sessions",
+      "translated": "हाल के सत्र लोड हो रहे हैं"
     },
     {
-      "id": "native.apple.22f81ea94bef8410",
-      "source": "^[\\(count) thread](inflect: true)",
-      "translated": "^[\\(count) थ्रेड](inflect: true)"
+      "id": "native.apple.207dad20d09f3160",
+      "source": "^[\\(count) session](inflect: true)",
+      "translated": "^[\\(count) सत्र](inflect: true)"
     },
     {
-      "id": "native.apple.1cad51e14db59bf9",
-      "source": "No archived threads",
-      "translated": "कोई संग्रहीत थ्रेड नहीं"
+      "id": "native.apple.a0b4091bf77d4060",
+      "source": "No archived sessions",
+      "translated": "कोई संग्रहित सत्र नहीं"
     },
     {
-      "id": "native.apple.18ef832d3a7ddcf8",
-      "source": "Archived threads will appear here.",
-      "translated": "संग्रहीत थ्रेड यहाँ दिखाई देंगे।"
+      "id": "native.apple.acfdf5c72e289736",
+      "source": "Archived sessions will appear here.",
+      "translated": "संग्रहित सत्र यहाँ दिखाई देंगे।"
     },
     {
       "id": "native.apple.e8e8cea7ec44fe08",
@@ -11199,9 +11464,9 @@
       "translated": "इनटेक साझा करें"
     },
     {
-      "id": "native.apple.21d9208d86a4d1fe",
-      "source": "Loading threads",
-      "translated": "थ्रेड लोड हो रहे हैं"
+      "id": "native.apple.4c5b2ecf243cfbbc",
+      "source": "Loading sessions",
+      "translated": "सत्र लोड हो रहे हैं"
     },
     {
       "id": "native.apple.48655128d0a34e44",
@@ -11209,19 +11474,19 @@
       "translated": "Gateway से हाल की गतिविधि प्राप्त की जा रही है।"
     },
     {
-      "id": "native.apple.4be1f79aa2b230ff",
-      "source": "Threads unavailable",
-      "translated": "थ्रेड उपलब्ध नहीं हैं"
+      "id": "native.apple.c4479934c65c973c",
+      "source": "Sessions unavailable",
+      "translated": "सत्र उपलब्ध नहीं हैं"
     },
     {
-      "id": "native.apple.98b348873556bc46",
-      "source": "No recent threads",
-      "translated": "कोई हालिया थ्रेड नहीं"
+      "id": "native.apple.6e67b64954ba3002",
+      "source": "No recent sessions",
+      "translated": "कोई हालिया सत्र नहीं"
     },
     {
-      "id": "native.apple.7396d205574d279f",
-      "source": "Thread activity offline",
-      "translated": "थ्रेड गतिविधि ऑफ़लाइन है"
+      "id": "native.apple.5dce07848bec08b5",
+      "source": "Session activity offline",
+      "translated": "सत्र गतिविधि ऑफ़लाइन है"
     },
     {
       "id": "native.apple.e3586d8a603f67e0",
@@ -11679,9 +11944,9 @@
       "translated": "कार्ड"
     },
     {
-      "id": "native.apple.c9ec1b0e18074d8a",
-      "source": "Open Thread",
-      "translated": "थ्रेड खोलें"
+      "id": "native.apple.3edbccb7c14b693c",
+      "source": "Open Session",
+      "translated": "सत्र खोलें"
     },
     {
       "id": "native.apple.a2732e4ff77a201b",
@@ -11880,91 +12145,6 @@
     },
     {
       "id": "native.apple.1fc3cbd16076f75f",
-      "source": "Offline",
-      "translated": "ऑफ़लाइन"
-    },
-    {
-      "id": "native.apple.a2d8e7b4dba29764",
-      "source": "Control",
-      "translated": "कंट्रोल"
-    },
-    {
-      "id": "native.apple.597471e86dda3d38",
-      "source": "Opens Settings / Gateway",
-      "translated": "Settings / Gateway खोलता है"
-    },
-    {
-      "id": "native.apple.ed16c9793f468dcd",
-      "source": "Agent chat and recent work.",
-      "translated": "एजेंट चैट और हाल का कार्य।"
-    },
-    {
-      "id": "native.apple.a03e961ab14ba060",
-      "source": "Overview",
-      "translated": "ओवरव्यू"
-    },
-    {
-      "id": "native.apple.feb28c9cba676ba2",
-      "source": "Instances",
-      "translated": "इंस्टेंस"
-    },
-    {
-      "id": "native.apple.3f2726ccd1acd987",
-      "source": "Files",
-      "translated": "फ़ाइलें"
-    },
-    {
-      "id": "native.apple.614c9b40919fb103",
-      "source": "Dreaming",
-      "translated": "ड्रीमिंग"
-    },
-    {
-      "id": "native.apple.e2b5c2d7c5d461a3",
-      "source": "Usage",
-      "translated": "उपयोग"
-    },
-    {
-      "id": "native.apple.f21bf1e3b5ec896c",
-      "source": "Automations",
-      "translated": "स्वचालन"
-    },
-    {
-      "id": "native.apple.57587fec1ca582ec",
-      "source": "Default Agent",
-      "translated": "डिफ़ॉल्ट एजेंट"
-    },
-    {
-      "id": "native.apple.e0e99a802f07cc68",
-      "source": "Gateway",
-      "translated": "Gateway"
-    },
-    {
-      "id": "native.apple.731e5fccde7cbc86",
-      "source": "Gateway %1$@, %2$@, %3$@",
-      "translated": "Gateway %1$@, %2$@, %3$@"
-    },
-    {
-      "id": "native.apple.ab0a315f69e3d5df",
-      "source": "Gateway %1$@, %2$@",
-      "translated": "Gateway %1$@, %2$@"
-    },
-    {
-      "id": "native.apple.01ad746119fbc27d",
-      "source": "Online",
-      "translated": "ऑनलाइन"
-    },
-    {
-      "id": "native.apple.e253ef19f6e53371",
-      "source": "Connecting",
-      "translated": "कनेक्ट हो रहा है"
-    },
-    {
-      "id": "native.apple.6f28b07ebdc2b25d",
-      "source": "Attention",
-      "translated": "ध्यान दें"
-    },
-    {
-      "id": "native.apple.1c931bcd1cd20334",
       "source": "Offline",
       "translated": "ऑफ़लाइन"
     },
@@ -12769,6 +12949,16 @@
       "translated": "सिस्टम इस डिवाइस की अपीयरेंस सेटिंग का पालन करता है।"
     },
     {
+      "id": "native.apple.6d48137a8f6a5e96",
+      "source": "Sidebar Agents",
+      "translated": "साइडबार एजेंट"
+    },
+    {
+      "id": "native.apple.69cccbdee0bb0b56",
+      "source": "How many agents the sidebar lists before the switcher menu.",
+      "translated": "स्विचर मेनू से पहले साइडबार में सूचीबद्ध एजेंटों की संख्या।"
+    },
+    {
       "id": "native.apple.70eca66c79335a6e",
       "source": "Connection",
       "translated": "कनेक्शन"
@@ -13169,9 +13359,9 @@
       "translated": "डिफ़ॉल्ट"
     },
     {
-      "id": "native.apple.f4ae5664c3eda95d",
-      "source": "Used for new Chat threads and Talk sessions.",
-      "translated": "नए Chat थ्रेड और Talk सत्रों के लिए उपयोग किया जाता है।"
+      "id": "native.apple.6805480889265026",
+      "source": "Used for new Chat and Talk sessions.",
+      "translated": "नए Chat और Talk सत्रों के लिए उपयोग किया जाता है।"
     },
     {
       "id": "native.apple.19552e71de246322",
@@ -15404,39 +15594,134 @@
       "translated": "unknown relay error"
     },
     {
-      "id": "native.apple.c23d35de8d70863f",
+      "id": "native.apple.8855710a55de2ed5",
       "source": "OpenClaw",
       "translated": "OpenClaw"
     },
     {
-      "id": "native.apple.9e781c0183b79a76",
-      "source": "OpenClaw %@",
-      "translated": "OpenClaw %@"
+      "id": "native.apple.7029e1235380a92c",
+      "source": "Settings",
+      "translated": "सेटिंग्स"
     },
     {
-      "id": "native.apple.f4eea6473f43388d",
+      "id": "native.apple.7042a7d70a7e5a20",
+      "source": "Hide Sidebar",
+      "translated": "साइडबार छिपाएँ"
+    },
+    {
+      "id": "native.apple.e779847164babc29",
+      "source": "Selected",
+      "translated": "चयनित"
+    },
+    {
+      "id": "native.apple.698c71602b569378",
+      "source": "More Agents",
+      "translated": "और एजेंट"
+    },
+    {
+      "id": "native.apple.94772cbd85c42e6e",
+      "source": "Search sessions",
+      "translated": "Search sessions"
+    },
+    {
+      "id": "native.apple.38e1e910f0958067",
+      "source": "Clear session search",
+      "translated": "Clear session search"
+    },
+    {
+      "id": "native.apple.58248484e54174e3",
+      "source": "Loading sessions",
+      "translated": "Loading sessions"
+    },
+    {
+      "id": "native.apple.dfb5cbd55893c4e5",
+      "source": "No recent sessions",
+      "translated": "No recent sessions"
+    },
+    {
+      "id": "native.apple.01a4c3f6192bb1a3",
+      "source": "Recent",
+      "translated": "हाल के"
+    },
+    {
+      "id": "native.apple.c0a4d120556df169",
+      "source": "All Sessions…",
+      "translated": "All Sessions…"
+    },
+    {
+      "id": "native.apple.aa7c4ecffd2ba36a",
+      "source": "Edit Pages",
+      "translated": "पेज संपादित करें"
+    },
+    {
+      "id": "native.apple.4d724d2e5731583d",
+      "source": "Home",
+      "translated": "होम"
+    },
+    {
+      "id": "native.apple.3995f7f73d1ded5f",
+      "source": "Unread",
+      "translated": "अपठित"
+    },
+    {
+      "id": "native.apple.b4567540cbcaf944",
+      "source": "Attention",
+      "translated": "ध्यान दें"
+    },
+    {
+      "id": "native.apple.14858678ae3f059f",
+      "source": "New Chat",
+      "translated": "नई चैट"
+    },
+    {
+      "id": "native.apple.9d87aa7e7862a607",
+      "source": "Connection",
+      "translated": "कनेक्शन"
+    },
+    {
+      "id": "native.apple.7e7c47f471dd2c69",
       "source": "Online",
       "translated": "ऑनलाइन"
     },
     {
-      "id": "native.apple.9e2aea6088887f1f",
+      "id": "native.apple.02ff27780aad60aa",
       "source": "Connecting",
       "translated": "कनेक्ट हो रहा है"
     },
     {
-      "id": "native.apple.3624978c7d43335a",
+      "id": "native.apple.b2d0754aab434ea3",
       "source": "Needs attention",
       "translated": "ध्यान देने की आवश्यकता है"
     },
     {
-      "id": "native.apple.7da053dd774cb201",
+      "id": "native.apple.342c72a01b0f4bb1",
       "source": "Offline",
       "translated": "ऑफ़लाइन"
     },
     {
-      "id": "native.apple.a4256b2ab523ee60",
-      "source": "Chat",
-      "translated": "चैट"
+      "id": "native.apple.9fc7dfa0dccea003",
+      "source": "Pinned pages stay in the sidebar. Home is always shown.",
+      "translated": "पिन किए गए पेज साइडबार में बने रहते हैं। होम हमेशा दिखाया जाता है।"
+    },
+    {
+      "id": "native.apple.4bfe6dc45811d50f",
+      "source": "Pages",
+      "translated": "Pages"
+    },
+    {
+      "id": "native.apple.422767686f219093",
+      "source": "Done",
+      "translated": "पूर्ण"
+    },
+    {
+      "id": "native.apple.e197e8708ad3b2c8",
+      "source": "Pinned",
+      "translated": "पिन किया गया"
+    },
+    {
+      "id": "native.apple.098013d7dd8cdfc7",
+      "source": "Not pinned",
+      "translated": "पिन नहीं किया गया"
     },
     {
       "id": "native.apple.64d7dc062ef4cc81",
@@ -15474,44 +15759,19 @@
       "translated": "स्वचालन"
     },
     {
-      "id": "native.apple.20f4753fc51c5341",
-      "source": "Show Sidebar",
-      "translated": "साइडबार दिखाएँ"
-    },
-    {
-      "id": "native.apple.bb0ea6d61a32c7c2",
-      "source": "Back to %@",
-      "translated": "%@ पर वापस जाएँ"
-    },
-    {
       "id": "native.apple.72fab75688479b3e",
       "source": "Hide Sidebar",
       "translated": "साइडबार छिपाएँ"
     },
     {
+      "id": "native.apple.20f4753fc51c5341",
+      "source": "Show Sidebar",
+      "translated": "साइडबार दिखाएँ"
+    },
+    {
       "id": "native.apple.8af43f59602ec0d8",
       "source": "Close canvas",
       "translated": "कैनवास बंद करें"
-    },
-    {
-      "id": "native.apple.a1db6ce0aed1d18e",
-      "source": "Chat, voice active",
-      "translated": "चैट, आवाज़ चालू"
-    },
-    {
-      "id": "native.apple.bda6cfa988e49a75",
-      "source": "Control",
-      "translated": "नियंत्रण"
-    },
-    {
-      "id": "native.apple.3c80f5351055a5f3",
-      "source": "Agent",
-      "translated": "एजेंट"
-    },
-    {
-      "id": "native.apple.22d107db5b905ef4",
-      "source": "Settings",
-      "translated": "सेटिंग्स"
     },
     {
       "id": "native.apple.8a4751c86aa6fe77",
@@ -15574,9 +15834,9 @@
       "translated": "इंस्टेंस"
     },
     {
-      "id": "native.apple.11fe8b9941954dfb",
-      "source": "Threads",
-      "translated": "थ्रेड"
+      "id": "native.apple.e3e3ce1a79ebbd70",
+      "source": "Sessions",
+      "translated": "सत्र"
     },
     {
       "id": "native.apple.253cb2debeb51859",
@@ -16084,6 +16344,11 @@
       "translated": "OpenClaw उपलब्ध नहीं है"
     },
     {
+      "id": "native.apple.f4adf2762402e92a",
+      "source": "Confirmation needed",
+      "translated": "पुष्टि आवश्यक है"
+    },
+    {
       "id": "native.apple.f703391677039fa3",
       "source": "iOS Speech + TTS",
       "translated": "iOS स्पीच + TTS"
@@ -16147,6 +16412,16 @@
       "id": "native.apple.d2db26b3bb266491",
       "source": "Updating OpenClaw",
       "translated": "OpenClaw अपडेट किया जा रहा है"
+    },
+    {
+      "id": "native.apple.4b89dccea20c58fa",
+      "source": "Confirmation needed",
+      "translated": "पुष्टि आवश्यक है"
+    },
+    {
+      "id": "native.apple.8a62f0e9416188e3",
+      "source": "OpenClaw unavailable",
+      "translated": "OpenClaw उपलब्ध नहीं है"
     },
     {
       "id": "native.apple.8a944b06087fe8ef",
@@ -19466,7 +19741,7 @@
     {
       "id": "native.apple.13f96467014cf344",
       "source": "New Thread",
-      "translated": "नया थ्रेड"
+      "translated": "नई थ्रेड"
     },
     {
       "id": "native.apple.185a1b27c9859cc0",
@@ -21766,7 +22041,7 @@
     {
       "id": "native.apple.14ccb32cd8ed1c81",
       "source": "No threads yet. They appear after the first inbound message or heartbeat.",
-      "translated": "अभी तक कोई थ्रेड नहीं है। वे पहला इनबाउंड संदेश या हार्टबीट मिलने के बाद दिखाई देते हैं।"
+      "translated": "अभी तक कोई थ्रेड नहीं है। वे पहला इनबाउंड संदेश या हार्टबीट मिलने के बाद दिखाई देती हैं।"
     },
     {
       "id": "native.apple.cebd5d2895976bee",
@@ -22856,7 +23131,7 @@
     {
       "id": "native.apple.fc4ce810900ec0b6",
       "source": "Summarize what happened in my threads since yesterday.",
-      "translated": "कल से अब तक मेरे थ्रेड में क्या हुआ, उसका सारांश दें।"
+      "translated": "कल से अब तक मेरी थ्रेड में जो हुआ, उसका सारांश दें।"
     },
     {
       "id": "native.apple.c5d8bca2d78e1b9b",
@@ -22907,6 +23182,51 @@
       "id": "native.apple.d4f7cdeb3737a201",
       "source": "<\\(tag)",
       "translated": "<\\(tag)"
+    },
+    {
+      "id": "native.apple.fc5931c1f0a6bbec",
+      "source": "Switch to back camera",
+      "translated": "पीछे वाले कैमरे पर स्विच करें"
+    },
+    {
+      "id": "native.apple.cce3b539e31701c0",
+      "source": "Switch to front camera",
+      "translated": "सामने वाले कैमरे पर स्विच करें"
+    },
+    {
+      "id": "native.apple.f397daffdfd02ee0",
+      "source": "Flip camera",
+      "translated": "कैमरा पलटें"
+    },
+    {
+      "id": "native.apple.11f8de87ca3fcb11",
+      "source": "Stop",
+      "translated": "रोकें"
+    },
+    {
+      "id": "native.apple.7c92bec1c8a83e43",
+      "source": "Talk",
+      "translated": "बात करें"
+    },
+    {
+      "id": "native.apple.dae61543f9b416ca",
+      "source": "Start realtime chat",
+      "translated": "रीयल-टाइम चैट शुरू करें"
+    },
+    {
+      "id": "native.apple.d376b015a90792a9",
+      "source": "Stop realtime chat",
+      "translated": "रीयल-टाइम चैट रोकें"
+    },
+    {
+      "id": "native.apple.ac48dbe25ac4d40d",
+      "source": "Connecting...",
+      "translated": "कनेक्ट हो रहा है..."
+    },
+    {
+      "id": "native.apple.ccce98756eb1dacd",
+      "source": "Gateway connected",
+      "translated": "Gateway कनेक्ट हो गया"
     },
     {
       "id": "native.apple.03aca5cfee32f12d",
@@ -23004,21 +23324,6 @@
       "translated": "अटैचमेंट"
     },
     {
-      "id": "native.apple.ee2c0d22f5861159",
-      "source": "Talk",
-      "translated": "बात करें"
-    },
-    {
-      "id": "native.apple.5d5041aefe6dfddd",
-      "source": "Start realtime chat",
-      "translated": "रीयल-टाइम चैट शुरू करें"
-    },
-    {
-      "id": "native.apple.21a7d3a3386a2218",
-      "source": "Stop realtime chat",
-      "translated": "रीयल-टाइम चैट बंद करें"
-    },
-    {
       "id": "native.apple.88c2de261ddae511",
       "source": "Start",
       "translated": "शुरू करें"
@@ -23062,16 +23367,6 @@
       "id": "native.apple.f4473f79bb87b2fd",
       "source": "Refresh",
       "translated": "रीफ़्रेश करें"
-    },
-    {
-      "id": "native.apple.6c984c0e3ed3a69e",
-      "source": "Connecting...",
-      "translated": "कनेक्ट हो रहा है..."
-    },
-    {
-      "id": "native.apple.898849eb2bcb0b53",
-      "source": "Gateway connected",
-      "translated": "Gateway कनेक्ट हो गया"
     },
     {
       "id": "native.apple.b6adfcd17a6e73d7",
@@ -23206,22 +23501,32 @@
     {
       "id": "native.apple.0589cce608418f90",
       "source": "The widget image could not be captured.",
-      "translated": "विजेट की छवि कैप्चर नहीं की जा सकी।"
+      "translated": "विजेट की इमेज कैप्चर नहीं की जा सकी।"
     },
     {
       "id": "native.apple.dfe24e827fdbe9c5",
       "source": "The widget image could not be copied.",
-      "translated": "विजेट की छवि कॉपी नहीं की जा सकी।"
+      "translated": "विजेट की इमेज कॉपी नहीं की जा सकी।"
     },
     {
       "id": "native.apple.9e611e3a80e71408",
       "source": "The widget image could not be encoded as PNG.",
-      "translated": "विजेट की छवि को PNG के रूप में एन्कोड नहीं किया जा सका।"
+      "translated": "विजेट की इमेज को PNG के रूप में एन्कोड नहीं किया जा सका।"
     },
     {
       "id": "native.apple.9a6e8afbe24a262b",
       "source": "The widget image could not be saved.",
-      "translated": "विजेट की छवि सहेजी नहीं जा सकी।"
+      "translated": "विजेट की इमेज सेव नहीं की जा सकी।"
+    },
+    {
+      "id": "native.apple.bf5924f1129e06d3",
+      "source": "List item",
+      "translated": "सूची आइटम"
+    },
+    {
+      "id": "native.apple.2a03f71557a5b659",
+      "source": "Item",
+      "translated": "आइटम"
     },
     {
       "id": "native.apple.769b7dcea4708c40",
@@ -23366,17 +23671,17 @@
     {
       "id": "native.apple.9d0cba09d92ee669",
       "source": "This thread cannot be archived while it is active or running.",
-      "translated": "सक्रिय या चल रहे इस थ्रेड को आर्काइव नहीं किया जा सकता।"
+      "translated": "सक्रिय या चालू होने के दौरान इस थ्रेड को आर्काइव नहीं किया जा सकता।"
     },
     {
       "id": "native.apple.8952a111a1075051",
       "source": "The main thread cannot be deleted.",
-      "translated": "मुख्य थ्रेड को हटाया नहीं जा सकता।"
+      "translated": "मुख्य थ्रेड को डिलीट नहीं किया जा सकता।"
     },
     {
       "id": "native.apple.90d0ccf80ca28717",
       "source": "Remove attachments or wait for delivery before archiving or deleting this thread.",
-      "translated": "इस थ्रेड को आर्काइव करने या हटाने से पहले अटैचमेंट हटाएँ या डिलीवरी की प्रतीक्षा करें।"
+      "translated": "इस थ्रेड को संग्रहित करने या हटाने से पहले अटैचमेंट हटाएँ या उनके डिलीवर होने की प्रतीक्षा करें।"
     },
     {
       "id": "native.apple.476b3862e0449857",
@@ -23641,7 +23946,7 @@
     {
       "id": "native.apple.87ef57319d1ddc85",
       "source": "The thread could not be created.",
-      "translated": "थ्रेड बनाया नहीं जा सका।"
+      "translated": "थ्रेड नहीं बनाया जा सका।"
     },
     {
       "id": "native.apple.6bd91c435b69d638",
@@ -23851,7 +24156,7 @@
     {
       "id": "native.apple.0970247871a834a0",
       "source": "Each selected thread and its transcript will be removed from the gateway.",
-      "translated": "प्रत्येक चयनित थ्रेड और उसकी ट्रांसक्रिप्ट Gateway से हटा दी जाएगी।"
+      "translated": "हर चुना गया थ्रेड और उसका ट्रांसक्रिप्ट Gateway से हटा दिया जाएगा।"
     },
     {
       "id": "native.apple.bf09df5e38a7a950",
@@ -23979,6 +24284,11 @@
       "translated": "सभी %lld पंक्तियाँ दिखाएँ"
     },
     {
+      "id": "native.apple.f80bb83a659d23f4",
+      "source": "Collapsed",
+      "translated": "संक्षिप्त"
+    },
+    {
       "id": "native.apple.c4e808a2ec8d49f5",
       "source": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3",
       "translated": "INSERT INTO cached_transcripts(gateway_id, session_key, agent_id, payload, updated_at)\nSELECT gateway_id, session_key, agent_id, payload, updated_at\nFROM cached_transcripts_pre_v3"
@@ -24046,7 +24356,7 @@
     {
       "id": "native.apple.002bfcede229ad4b",
       "source": "Rewind to Here",
-      "translated": "यहाँ तक रिवाइंड करें"
+      "translated": "यहाँ तक वापस जाएँ"
     },
     {
       "id": "native.apple.14df2e4997689fb3",
@@ -24141,7 +24451,7 @@
     {
       "id": "native.apple.e0f045151c8d3137",
       "source": "Gateway changed before the thread operation started.",
-      "translated": "थ्रेड कार्रवाई शुरू होने से पहले Gateway बदल गया।"
+      "translated": "थ्रेड की कार्रवाई शुरू होने से पहले Gateway बदल गया।"
     },
     {
       "id": "native.apple.710c7bd117a7cc12",
@@ -24366,7 +24676,7 @@
     {
       "id": "native.apple.6239ced0b86e86f8",
       "source": "Compact Thread",
-      "translated": "थ्रेड संक्षिप्त करें"
+      "translated": "थ्रेड को संक्षिप्त करें"
     },
     {
       "id": "native.apple.fa10740f9e272e83",

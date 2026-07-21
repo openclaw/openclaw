@@ -57,7 +57,10 @@ function redactTranscriptStructuredFieldValue(
   if (cfg?.logging?.redactSensitive === "off") {
     return value;
   }
-  return redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
+  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
+    ? redactTranscriptText(value, cfg)
+    : redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
@@ -65,13 +68,11 @@ function isPlainTranscriptObject(value: object): value is Record<string, unknown
   return prototype === Object.prototype || prototype === null;
 }
 
-function isImageMimeType(value: unknown): value is string {
-  return typeof value === "string" && /^image\//iu.test(value.trim());
-}
+const isImageMimeType = (value: unknown): value is string =>
+  typeof value === "string" && /^image\//iu.test(value.trim());
 
-function normalizeImageMimeType(value: unknown): string | undefined {
-  return isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
-}
+const normalizeImageMimeType = (value: unknown): string | undefined =>
+  isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
 
 function imageMimeTypeForRecord(value: Record<string, unknown>): string | undefined {
   return (
@@ -205,6 +206,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 const GOOGLE_REASONING_APIS = new Set([
@@ -239,9 +241,8 @@ function isAnthropicReasoningRoute(route: TranscriptAssistantRoute | undefined):
   return typeof route?.api === "string" && ANTHROPIC_REASONING_APIS.has(route.api);
 }
 
-function isOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_COMPLETIONS_APIS.has(route.api);
-}
+const isOpenAICompletionsRoute = (route?: TranscriptAssistantRoute) =>
+  OPENAI_COMPLETIONS_APIS.has(route?.api ?? "");
 
 function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
   return (

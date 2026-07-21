@@ -360,15 +360,13 @@ function hasProviderWildcardVisibility(params: {
 function hasRuntimeProviderCatalog(
   provider: import("../plugins/types.js").ProviderPlugin,
 ): boolean {
-  return (
-    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
-  );
+  return typeof provider.catalog?.run === "function";
 }
 
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
-  order: import("../plugins/types.js").ProviderDiscoveryOrder,
+  order: import("../plugins/types.js").ProviderCatalogOrder,
 ): Promise<Record<string, ProviderConfig> | undefined> {
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
@@ -412,6 +410,10 @@ async function resolvePluginImplicitProviders(
       };
     };
 
+    if (ctx.providerDiscoveryEntriesOnly === true && !provider.staticCatalog) {
+      // Mandatory startup accepts only provider facts that do not execute live discovery.
+      continue;
+    }
     const useStaticCatalog =
       Boolean(provider.staticCatalog) &&
       (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));

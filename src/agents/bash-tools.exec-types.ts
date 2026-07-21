@@ -81,6 +81,8 @@ export type ExecToolDefaults = {
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;
+  /** Deny approval-requiring commands without creating operator approval events. */
+  nonInteractiveApproval?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
@@ -90,6 +92,7 @@ export type ExecToolDefaults = {
 export type ExecApprovalFollowupOutcome = {
   status: "completed" | "failed";
   exitCode: number | null;
+  exitReason?: TerminationReason;
   timedOut: boolean;
   aggregated: string;
   reason?: string;

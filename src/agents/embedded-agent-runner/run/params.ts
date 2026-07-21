@@ -140,6 +140,8 @@ export type RunEmbeddedAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  swarmCollector?: boolean;
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
@@ -229,6 +231,8 @@ export type RunEmbeddedAgentParams = {
   toolsAllow?: string[];
   /** Owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted in-process subagent-completion handoff; never derived from public input. */
+  trustedInternalHandoff?: boolean;
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
   /** Last shown bootstrap truncation warning signature for this session. */

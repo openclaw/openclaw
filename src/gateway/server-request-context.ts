@@ -23,6 +23,7 @@ type GatewayRequestContextParams = {
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
+  ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
@@ -159,6 +160,7 @@ export function createGatewayRequestContext(
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
+    ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
@@ -248,8 +250,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
-        // Marking is separate from socket close so already-buffered requests
-        // fail authorization even if transport teardown has not completed.
+        // Retire node-owned projections and pending invokes synchronously; socket
+        // close remains separate so already-buffered requests fail authorization.
+        if (gatewayClient.connId) {
+          params.nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
+        }
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }

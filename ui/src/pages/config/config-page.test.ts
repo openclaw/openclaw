@@ -10,15 +10,13 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
 
-const { switchActiveRealtimeTalkCameras } = vi.hoisted(() => ({
-  switchActiveRealtimeTalkCameras: vi.fn<() => Promise<void>>(),
-}));
-
-vi.mock("../chat/realtime-talk.ts", () => ({ switchActiveRealtimeTalkCameras }));
+const switchActiveRealtimeTalkCameras =
+  vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -31,6 +29,9 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
+    switchActiveRealtimeTalkCameras,
+  );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
   switchActiveRealtimeTalkCameras.mockReset();
@@ -110,6 +111,52 @@ describe("ConfigPage advanced selection guard", () => {
       activeSection: null,
       activeSubsection: null,
     });
+  });
+});
+
+describe("ConfigPage media discovery", () => {
+  it("coalesces refreshes while discovery is in flight", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const discovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi.fn(() => discovery.promise);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const first = state[method](true);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      discovery.resolve([]);
+      await first;
+    }
+  });
+
+  it("upgrades passive discovery when the user requests permission", async () => {
+    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+      const passiveDiscovery = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi
+        .fn()
+        .mockImplementationOnce(() => passiveDiscovery.promise)
+        .mockResolvedValueOnce([]);
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+      const page = new ConfigPage();
+      const state = page as unknown as Record<
+        typeof method,
+        (requestPermission: boolean) => Promise<void>
+      >;
+
+      const passive = state[method](false);
+      await state[method](true);
+      expect(enumerateDevices).toHaveBeenCalledOnce();
+
+      passiveDiscovery.resolve([]);
+      await passive;
+      expect(enumerateDevices).toHaveBeenCalledTimes(2);
+    }
   });
 });
 

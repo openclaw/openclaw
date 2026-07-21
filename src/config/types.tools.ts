@@ -45,12 +45,6 @@ export type MediaUnderstandingAttachmentsConfig = {
 type MediaProviderRequestConfig = {
   /** Optional provider-specific query params (merged into requests). */
   providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
   /** Optional base URL override for provider requests. */
   baseUrl?: string;
   /** Optional headers merged into provider requests. */
@@ -152,13 +146,6 @@ export type MediaToolsConfig = {
   models?: MediaUnderstandingModelConfig[];
   /** Max concurrent media understanding runs. */
   concurrency?: number;
-  asyncCompletion?: {
-    /**
-     * Deprecated compatibility flag. Async media generation completions stay
-     * requester-session mediated so source delivery policy remains agent-owned.
-     */
-    directSend?: boolean;
-  };
   image?: MediaUnderstandingConfig;
   audio?: MediaUnderstandingConfig;
   video?: MediaUnderstandingConfig;
@@ -166,37 +153,9 @@ export type MediaToolsConfig = {
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
-export type ToolLoopDetectionDetectorConfig = {
-  /** Enable warning/blocking for repeated identical calls to the same tool/params. */
-  genericRepeat?: boolean;
-  /** Enable warning/blocking for known no-progress polling loops. */
-  knownPollNoProgress?: boolean;
-  /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
-  pingPong?: boolean;
-};
-
-export type ToolLoopPostCompactionGuardConfig = {
-  /** How many attempts post-compaction the guard remains armed (default: 3). */
-  windowSize?: number;
-};
-
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
-  /** Maximum tool call history entries retained for loop detection (default: 30). */
-  historySize?: number;
-  /** Warning threshold before a warning-only loop classification (default: 10). */
-  warningThreshold?: number;
-  /** Block repeated calls to the same unavailable tool after this many misses (default: 10). */
-  unknownToolThreshold?: number;
-  /** Critical threshold for blocking repetitive loops (default: 20). */
-  criticalThreshold?: number;
-  /** Global no-progress breaker threshold (default: 30). */
-  globalCircuitBreakerThreshold?: number;
-  /** Detector toggles. */
-  detectors?: ToolLoopDetectionDetectorConfig;
-  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
-  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
 export type ToolSearchConfig =
@@ -241,6 +200,23 @@ export type CodeModeConfig =
       searchDefaultLimit?: number;
       /** Maximum search result count for tools.search. */
       maxSearchLimit?: number;
+    };
+
+export type SwarmConfig =
+  | boolean
+  | {
+      /** Enable collector-mode subagents and agents_wait. Default: false. */
+      enabled?: boolean;
+      /** Maximum concurrently running collector children per swarm group. */
+      maxConcurrent?: number;
+      /** Maximum live collector children per swarm group. */
+      maxChildrenPerGroup?: number;
+      /** Maximum lifetime collector spawns per swarm group. */
+      maxTotalPerGroup?: number;
+      /** Maximum agents_wait timeout in seconds. */
+      waitTimeoutSecondsMax?: number;
+      /** Default child agent id when sessions_spawn omits agentId. */
+      defaultAgentId?: string;
     };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
@@ -408,6 +384,8 @@ export type AgentToolsConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
   codeMode?: CodeModeConfig;
+  /** Per-agent swarm override; merges over the top-level tools.swarm config. */
+  swarm?: SwarmConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -530,18 +508,11 @@ export type MemorySearchConfig = {
       maxEntries?: number;
     };
   };
-  /** Chunking configuration. */
-  chunking?: {
-    tokens?: number;
-    overlap?: number;
-  };
   /** Sync behavior. */
   sync?: {
     onSessionStart?: boolean;
     onSearch?: boolean;
     watch?: boolean;
-    watchDebounceMs?: number;
-    intervalMinutes?: number;
     /**
      * Timeout in seconds for inline embedding batches during memory indexing.
      * Unset uses provider defaults: 600s for local/self-hosted providers, 120s for hosted providers.
@@ -563,25 +534,15 @@ export type MemorySearchConfig = {
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;
-      /** Weight for vector similarity when merging results (0-1). */
-      vectorWeight?: number;
-      /** Weight for BM25 text relevance when merging results (0-1). */
-      textWeight?: number;
-      /** Multiplier for candidate pool size (default: 4). */
-      candidateMultiplier?: number;
       /** Optional MMR re-ranking for result diversity. */
       mmr?: {
         /** Enable MMR re-ranking (default: false). */
         enabled?: boolean;
-        /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
-        lambda?: number;
       };
       /** Optional temporal decay to boost recency in hybrid scoring. */
       temporalDecay?: {
         /** Enable temporal decay (default: false). */
         enabled?: boolean;
-        /** Half-life in days for exponential decay (default: 30). */
-        halfLifeDays?: number;
       };
     };
   };
@@ -589,8 +550,6 @@ export type MemorySearchConfig = {
   cache?: {
     /** Cache chunk embeddings in SQLite (default: true). */
     enabled?: boolean;
-    /** Optional cap on cached embeddings (best-effort). */
-    maxEntries?: number;
   };
 };
 
@@ -611,8 +570,6 @@ export type ToolsConfig = {
       enabled?: boolean;
       /** Search provider id. */
       provider?: string;
-      /** Shared API key slot used by providers that do not need nested config. */
-      apiKey?: SecretInput;
       /** Default search results count (1-10). */
       maxResults?: number;
       /** Timeout in seconds for search requests. */
@@ -637,21 +594,6 @@ export type ToolsConfig = {
           timezone?: string;
         };
       };
-    } & Record<string, unknown>;
-    /** X (formerly Twitter) search tool configuration using xAI Grok. */
-    x_search?: {
-      /** Enable X search tool (default: true when xAI auth is available via plugin config or XAI_API_KEY). */
-      enabled?: boolean;
-      /** Model id to use for X search. */
-      model?: string;
-      /** Keep inline citations in the xAI response payload when available. */
-      inlineCitations?: boolean;
-      /** Optional max search/tool turns for xAI to use internally. */
-      maxTurns?: number;
-      /** Timeout in seconds for X search requests. */
-      timeoutSeconds?: number;
-      /** Cache TTL in minutes for X search results. */
-      cacheTtlMinutes?: number;
     };
     fetch?: {
       /** Enable web fetch tool (default: true). */
@@ -727,6 +669,8 @@ export type ToolsConfig = {
   toolSearch?: ToolSearchConfig;
   /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */
   codeMode?: CodeModeConfig;
+  /** Collector-mode subagents and wait controls. */
+  swarm?: SwarmConfig;
   /** sessions_spawn tool configuration. */
   sessions_spawn?: SessionsSpawnToolsConfig;
   /** Sub-agent tool policy defaults (deny wins). */
@@ -755,11 +699,6 @@ export type ToolsConfig = {
 };
 
 export type MessageToolsConfig = {
-  /**
-   * @deprecated Use tools.message.crossContext settings.
-   * Allows cross-context sends across providers.
-   */
-  allowCrossContextSend?: boolean;
   crossContext?: {
     /** Allow sends to other channels within the same provider (default: true). */
     allowWithinProvider?: boolean;

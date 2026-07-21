@@ -9,6 +9,7 @@ import type {
   SessionBranch,
   SessionsListResult,
 } from "../../api/types.ts";
+import type { ApplicationInitialUserMessageHandoff } from "../../app/context.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
@@ -58,6 +59,7 @@ import {
   preserveOptimisticTailMessages,
   readTranscriptSequence,
 } from "./history-merge.ts";
+import { reconcileInitialUserMessageHandoff } from "./initial-turn-handoff.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
@@ -70,6 +72,7 @@ import {
   clearChatMessagesFromCache,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { retireHistoryProvenSteeredChips } from "./steer-lifecycle.ts";
 import {
   clearToolStreamSegments,
   currentLiveToolCallIds,
@@ -253,18 +256,19 @@ export function materializeVisibleAssistantStreamMessages(
     includeCurrent?: boolean;
     requirePersistedTool?: boolean;
     replacementMessages?: unknown[];
+    persistCommentary?: boolean;
   } = {},
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
     ...opts,
-    persistCommentary: chatPersistCommentaryEnabled(state),
+    persistCommentary: opts.persistCommentary ?? chatPersistCommentaryEnabled(state),
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
 }
 
 function chatPersistCommentaryEnabled(state: ChatState): boolean {
-  return state.settings?.chatPersistCommentary === true;
+  return state.settings?.chatPersistCommentary !== false;
 }
 
 function historyHasSameOrNewerDisplayMessage(
@@ -316,6 +320,7 @@ function collectLateOptimisticTailMessages(
 export type ChatState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  initialUserMessage?: ApplicationInitialUserMessageHandoff;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   sessionKey: string;
@@ -341,6 +346,7 @@ export type ChatState = {
   planStatus?: PlanStatus | null;
   lastError: string | null;
   chatError?: string | null;
+  chatRunError?: { summary: string } | null;
   /** Completed side-chat turns (oldest first); follow-ups accumulate here. */
   chatSideChatTurns?: ChatSideResult[];
   chatSideResultPending?: ChatSideResultPending | null;
@@ -897,6 +903,7 @@ export async function clearChatHistory(
     return "completed";
   }
   state.chatMessages = [];
+  state.chatRunError = null;
   state.chatSideChatTurns = [];
   state.chatSideChatHidden = false;
   state.chatReplyTarget = null;
@@ -1268,6 +1275,16 @@ async function loadChatHistoryUncached(
     if (lateOptimisticTail.length > 0) {
       state.chatMessages = [...state.chatMessages, ...lateOptimisticTail];
     }
+    if (state.initialUserMessage) {
+      reconcileInitialUserMessageHandoff(
+        state.initialUserMessage,
+        state,
+        sessionKey,
+        authoritativeMessages,
+        isSessionRunActive(res.sessionInfo ?? {}),
+      );
+    }
+    retireHistoryProvenSteeredChips(state);
     state.chatHistoryPagination = reconciledHistory?.pagination ?? nextPagination;
     state.currentSessionId = nextSessionId;
     replaceCachedChatMessages(state, sessionKey, requestAgentId);
@@ -1285,7 +1302,7 @@ async function loadChatHistoryUncached(
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
-        persistCommentary: chatPersistCommentaryEnabled(state),
+        persistCommentary: state.chatRunId ? true : chatPersistCommentaryEnabled(state),
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
@@ -1327,6 +1344,7 @@ async function loadChatHistoryUncached(
       } else if (historyReplacedToolStream) {
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
+          persistCommentary: true,
         });
         state.chatStream = visibleCurrentAssistantStreamTail(
           state,
@@ -1344,6 +1362,7 @@ async function loadChatHistoryUncached(
         state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
           includeCurrent: false,
           requirePersistedTool: true,
+          persistCommentary: true,
         });
         state.chatStream = visibleCurrentTail;
         if (state.chatStream === null) {

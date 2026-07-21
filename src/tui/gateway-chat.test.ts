@@ -172,7 +172,6 @@ describe("resolveGatewayConnection", () => {
             gateway: {
               mode: "remote",
               remote: { url: "wss://selected.example/ws" },
-              handshakeTimeoutMs: 12_345,
             },
           },
           url: "wss://selected.example/ws",
@@ -184,7 +183,6 @@ describe("resolveGatewayConnection", () => {
           token: undefined,
           password: undefined,
           tlsFingerprint: "sha256:selected",
-          preauthHandshakeTimeoutMs: 12_345,
           allowInsecureLocalOperatorUi: false,
         });
         expect(loadConfig).not.toHaveBeenCalled();
@@ -225,20 +223,6 @@ describe("resolveGatewayConnection", () => {
       preauthHandshakeTimeoutMs: undefined,
       allowInsecureLocalOperatorUi: false,
     });
-  });
-
-  it("carries configured handshake timeout to the TUI client connection", async () => {
-    loadConfig.mockReturnValue({
-      gateway: {
-        mode: "local",
-        handshakeTimeoutMs: 30_000,
-        auth: { token: "config-token" },
-      },
-    });
-
-    const result = await resolveGatewayConnection({});
-
-    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
   });
 
   it("keeps the TLS pin on an explicit Gateway target", async () => {
@@ -714,7 +698,7 @@ describe("GatewayChatClient", () => {
       expect(constructedOptions).toHaveLength(1);
       expect(constructedOptions[0]).toMatchObject({
         clientName: "openclaw-tui",
-        caps: ["plugin-approvals", "task-suggestions", "tool-events"],
+        caps: ["agent-kind", "plugin-approvals", "task-suggestions", "tool-events"],
         mode: "ui",
         preauthHandshakeTimeoutMs: 30_000,
         tlsFingerprint: "sha256:11:22:33:44",

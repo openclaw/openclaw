@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover config behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -1972,11 +1973,18 @@ describe("config form auto-save", () => {
     // Patch during the debounce window: the draft must be flushed as a real
     // save before the patch, not silently dropped with its timer.
     runtimeConfig.patchForm(["count"], 2);
+    let patchBaseCount: unknown;
     await expect(
-      runtimeConfig.patch({ raw: { other: true }, note: "test patch after autosave" }),
+      runtimeConfig.patchFromSnapshot((config) => {
+        patchBaseCount = config.count;
+        return {
+          options: { raw: { other: true }, note: "test patch after autosave" },
+        };
+      }),
     ).resolves.toBe(true);
 
     expect(order).toEqual(["config.set", "config.patch"]);
+    expect(patchBaseCount).toBe(2);
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     runtimeConfig.dispose();
   });

@@ -55,6 +55,7 @@ private struct AppearanceSettingsRow: View {
 private struct AppearanceSettingsScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(RootSidebar.visibleAgentCountKey) private var sidebarVisibleAgentCount: Int = 1
 
     var body: some View {
         List {
@@ -84,6 +85,23 @@ private struct AppearanceSettingsScreen: View {
                 }
             } footer: {
                 Text("System follows this device’s appearance setting.")
+                    .font(OpenClawType.footnote)
+            }
+
+            Section {
+                Stepper(value: self.$sidebarVisibleAgentCount, in: 1...3) {
+                    HStack {
+                        Text("Sidebar Agents")
+                            .font(OpenClawType.body)
+                        Spacer()
+                        Text(verbatim: self.sidebarVisibleAgentCount.formatted())
+                            .font(OpenClawType.body)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .accessibilityIdentifier("settings-appearance-sidebar-agents")
+            } footer: {
+                Text("How many agents the sidebar lists before the switcher menu.")
                     .font(OpenClawType.footnote)
             }
         }
@@ -272,11 +290,6 @@ extension SettingsProTab {
                 await self.appModel.refreshWatchMessagingStatus()
             }
             .toolbar {
-                if let headerLeadingAction {
-                    ToolbarItem(placement: .topBarLeading) {
-                        OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
-                    }
-                }
                 ToolbarItem(placement: .principal) {
                     Text(title(for: route))
                         .font(OpenClawType.headline)
@@ -293,6 +306,11 @@ extension SettingsProTab {
                         .disabled(self.connectingGateway != nil)
                         .accessibilityLabel("Scan QR")
                     }
+                }
+                if let headerSidebarAction {
+                    OpenClawSidebarToolbarItem(
+                        action: headerSidebarAction,
+                        placement: .topBarLeading)
                 }
             }
         }
@@ -1038,14 +1056,17 @@ extension SettingsProTab {
                 Text("Default").font(OpenClawType.body).tag("")
                 let defaultId = (self.appModel.gatewayDefaultAgentId ?? "")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                ForEach(self.appModel.gatewayAgents.filter { $0.id != defaultId }, id: \.id) { agent in
+                ForEach(
+                    self.appModel.gatewayAgents.filter(\.isSelectableAgent).filter { $0.id != defaultId },
+                    id: \.id)
+                { agent in
                     let name = (agent.name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                     Text(name.isEmpty ? agent.id : name).font(OpenClawType.body).tag(agent.id)
                 }
             }
             .font(OpenClawType.body)
         } footer: {
-            Text("Used for new Chat threads and Talk sessions.")
+            Text("Used for new Chat and Talk sessions.")
                 .font(OpenClawType.footnote)
         }
     }
@@ -1114,7 +1135,7 @@ extension SettingsProTab {
             Text("Paired Gateways")
                 .font(OpenClawType.subheadSemiBold)
         } footer: {
-            Text("Switch gateways without pairing again.")
+            Text("Keep multiple gateways connected and switch which one is in focus.")
                 .font(OpenClawType.footnote)
         }
     }
@@ -1123,11 +1144,14 @@ extension SettingsProTab {
         let isActive = GatewayStableIdentifier.matches(
             entry.stableID,
             self.gatewayRegistry.activeStableID)
-        return Button {
-            guard !isActive else { return }
-            Task { await self.switchGateway(to: entry) }
-        } label: {
-            HStack(spacing: 12) {
+        let keepsConnected = self.gatewayRegistry.connectedStableIDs.contains {
+            GatewayStableIdentifier.matches($0, entry.stableID)
+        }
+        return HStack(spacing: 12) {
+            Button {
+                guard !isActive else { return }
+                Task { await self.switchGateway(to: entry) }
+            } label: {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(entry.name)
                         .font(OpenClawType.subheadSemiBold)
@@ -1137,20 +1161,36 @@ extension SettingsProTab {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                if self.connectingGateway == .gateway(entry.id) {
-                    ProgressView()
-                        .controlSize(.small)
-                } else if isActive {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(OpenClawBrand.accent)
-                        .accessibilityLabel("Active Gateway")
-                }
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .disabled(self.connectingGateway != nil)
+
+            if self.connectingGateway == .gateway(entry.id) {
+                ProgressView()
+                    .controlSize(.small)
+            } else if isActive {
+                Image(systemName: "checkmark.circle.fill")
+                    .font(OpenClawType.subheadSemiBold)
+                    .foregroundStyle(OpenClawBrand.accent)
+                    .accessibilityLabel("Focused Gateway")
+            } else {
+                Button {
+                    if self.gatewayController.setGatewayConnectionEnabled(
+                        stableID: entry.stableID,
+                        enabled: !keepsConnected)
+                    {
+                        self.refreshGatewayRegistry()
+                    }
+                } label: {
+                    Image(systemName: keepsConnected ? "bolt.horizontal.circle.fill" : "bolt.horizontal.circle")
+                        .font(OpenClawType.subheadSemiBold)
+                        .foregroundStyle(keepsConnected ? OpenClawBrand.accent : .secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(keepsConnected ? "Disconnect Gateway" : "Keep Gateway Connected")
+            }
         }
-        .buttonStyle(.plain)
-        .disabled(self.connectingGateway != nil)
+        .contentShape(Rectangle())
         .swipeActions {
             Button(role: .destructive) {
                 self.pendingForgetGateway = entry

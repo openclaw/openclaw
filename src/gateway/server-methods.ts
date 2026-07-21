@@ -69,6 +69,10 @@ const loadAuditHandlers = lazyHandlerModule(
   () => import("./server-methods/audit.js"),
   (module) => module.auditHandlers,
 );
+const loadUsersHandlers = lazyHandlerModule(
+  () => import("./server-methods/users.js"),
+  (module) => module.usersHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -221,6 +225,10 @@ const loadSessionCatalogHandlers = lazyHandlerModule(
   () => import("./server-methods/session-catalog.js"),
   (module) => module.sessionCatalogHandlers,
 );
+const loadSessionDiscussionHandlers = lazyHandlerModule(
+  () => import("./server-methods/session-discussion.js"),
+  (module) => module.sessionDiscussionHandlers,
+);
 const loadSkillsHandlers = lazyHandlerModule(
   () => import("./server-methods/skills.js"),
   (module) => module.skillsHandlers,
@@ -284,6 +292,10 @@ const loadWebHandlers = lazyHandlerModule(
 const loadSystemAgentHandlers = lazyHandlerModule(
   () => import("./server-methods/system-agent.js"),
   (module) => module.systemAgentHandlers,
+);
+const loadSystemChangesHandlers = lazyHandlerModule(
+  () => import("./server-methods/system-changes.js"),
+  (module) => module.systemChangesHandlers,
 );
 const loadWizardHandlers = lazyHandlerModule(
   () => import("./server-methods/wizard.js"),
@@ -360,6 +372,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadLogsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["openclaw.changes.list"],
+    loadHandlers: loadSystemChangesHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "terminal.open",
       "terminal.input",
@@ -377,7 +393,17 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadUiCommandHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["board.get", "board.update", "board.widget.put", "board.widget.grant", "board.event"],
+    methods: [
+      "board.get",
+      "board.update",
+      "board.widget.put",
+      "board.widget.grant",
+      "board.widget.appView",
+      "board.event",
+      "board.prompt.authorize",
+      "board.data.read",
+      "board.action",
+    ],
     loadHandlers: loadBoardHandlers,
   }),
   ...createLazyCoreHandlers({
@@ -551,6 +577,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: [
       "openclaw.chat",
+      "openclaw.chat.history",
       "openclaw.approval.list",
       "openclaw.setup.detect",
       "openclaw.setup.verify",
@@ -574,6 +601,8 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.session.steer",
       "talk.session.close",
       "talk.client.create",
+      "talk.client.transcript",
+      "talk.client.close",
       "talk.client.toolCall",
       "talk.client.steer",
       "talk.catalog",
@@ -586,6 +615,16 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["audit.list", "audit.activity.list"],
     loadHandlers: loadAuditHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: [
+      "users.list",
+      "users.self",
+      "users.linkEmail",
+      "users.setDisplayName",
+      "users.setAvatar",
+    ],
+    loadHandlers: loadUsersHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
@@ -650,6 +689,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "sessions.catalog.archive",
     ],
     loadHandlers: loadSessionCatalogHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["session.discussion.info", "session.discussion.open"],
+    loadHandlers: loadSessionDiscussionHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: [
@@ -869,6 +912,20 @@ export async function handleGatewayRequest(
   const authError = authorizeGatewayMethod(req.method, client, req.params, methodRegistry);
   if (authError) {
     respond(false, undefined, authError);
+    return;
+  }
+  if (
+    client?.connect.role === "node" &&
+    (!client.connId || !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId)))
+  ) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "node pairing changed before request dispatch", {
+        retryable: true,
+        details: { code: "PAIRING_CHANGED" },
+      }),
+    );
     return;
   }
   if (context.unavailableGatewayMethods?.has(req.method)) {

@@ -725,6 +725,112 @@ describe("SystemAgentChatEngine", () => {
     expect(wizardRuns).toEqual(["telegram", "token:123:abc", "mode:open"]);
   });
 
+  it("reports hosted channel setup success when audit persistence fails", async () => {
+    const appendAuditEntry = vi.fn(async () => {
+      throw new Error("audit store is read-only");
+    });
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async () => {},
+      appendAuditEntry,
+    });
+
+    const reply = await engine.handle("connect telegram");
+
+    expect(reply.text).toContain("Done — telegram is configured.");
+    expect(reply.text).not.toContain("audit store is read-only");
+    expect(appendAuditEntry).toHaveBeenCalledOnce();
+  });
+
+  it("recommends the confirm option matching the initial value", async () => {
+    let enabled: boolean | undefined;
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        enabled = await prompter.confirm({
+          message: "Enable delegated auth?",
+          initialValue: false,
+        });
+      },
+    });
+
+    const confirmStep = await engine.handle("connect telegram");
+
+    expect(confirmStep.question).toEqual({
+      id: expect.any(String),
+      header: "Confirm",
+      question: "Enable delegated auth?",
+      options: [
+        { label: "Yes", reply: "yes" },
+        { label: "No", reply: "no", recommended: true },
+      ],
+    });
+
+    await engine.handle("no");
+    expect(enabled).toBe(false);
+
+    const defaultEngine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.confirm({ message: "Continue?" });
+      },
+    });
+
+    const defaultConfirmStep = await defaultEngine.handle("connect telegram");
+
+    expect(defaultConfirmStep.question?.options).toEqual([
+      { label: "Yes", reply: "yes", recommended: true },
+      { label: "No", reply: "no" },
+    ]);
+    await defaultEngine.handle("yes");
+  });
+
+  it("rejects non-decimal menu numbers in hosted wizard choices", async () => {
+    useTempStateDir();
+    const runs: unknown[] = [];
+    const engine = new SystemAgentChatEngine({
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel, prompter) => {
+        runs.push(
+          await prompter.select({
+            message: "DM mode",
+            options: [
+              { value: "pair", label: "Pairing" },
+              { value: "open", label: "Open" },
+            ],
+          }),
+        );
+        runs.push(
+          await prompter.multiselect({
+            message: "Features",
+            options: [
+              { value: "alerts", label: "Alerts" },
+              { value: "logs", label: "Logs" },
+            ],
+          }),
+        );
+      },
+    });
+    expect((await engine.handle("connect telegram")).text).toContain("1. Pairing");
+    expect((await engine.handle("1e0")).text).toContain("I could not match that answer.");
+    expect(runs).toEqual([]);
+    expect((await engine.handle("1")).text).toContain("1. Alerts");
+    expect((await engine.handle("0x1")).text).toContain("I could not match that answer.");
+    expect(await engine.handle("1,2")).toHaveProperty(
+      "text",
+      expect.stringContaining("telegram is configured"),
+    );
+    expect(runs).toEqual(["pair", ["alerts", "logs"]]);
+  });
+
   it("rejects a hosted channel commit after a concurrent inference-route change", async () => {
     useTempStateDir();
     const baseConfig: OpenClawConfig = {
@@ -956,6 +1062,27 @@ describe("SystemAgentChatEngine", () => {
     expect(tokenStep.text).toContain("Before entering the token");
     expect(tokenStep.text).toContain("Bot token");
     expect(tokenStep.sensitive).toBe(true);
+    expect(tokenStep.wizardInputPending).toBe(true);
+  });
+
+  it("marks a non-card hosted-wizard step as pending input", async () => {
+    useTempStateDir();
+    const engine = new SystemAgentChatEngine({
+      surface: "gateway",
+      runAgentTurn: async () => null,
+      planWithAssistant: async () => null,
+      deps: { loadOverview: fakeOverviewLoader() },
+      runChannelSetupWizard: async (_channel: string, prompter: WizardPrompter) => {
+        await prompter.text({ message: "Bot label" });
+      },
+    });
+
+    const textStep = await engine.handle("connect telegram");
+
+    expect(textStep.text).toContain("Bot label");
+    expect(textStep.question).toBeUndefined();
+    expect(textStep.sensitive).toBeUndefined();
+    expect(textStep.wizardInputPending).toBe(true);
   });
 
   it("routes sensitive CLI wizard prompts to the masked channel setup flow", async () => {
@@ -1794,6 +1921,60 @@ describe("SystemAgentChatEngine", () => {
     expect(reply.text).toContain("(claude-cli → `set default model openai/gpt-5.5`)");
     expect(reply.text).toContain("Apply this operation");
     expect(engine.hasPendingProposal()).toBe(true);
+  });
+
+  it("rebinds the live conversation after changing its default model", async () => {
+    useTempStateDir();
+    const baseConfig = structuredClone(sharedVerifiedInferenceConfig);
+    const changedConfig = {
+      ...baseConfig,
+      agents: {
+        ...baseConfig.agents,
+        list: baseConfig.agents.list.map((agent) => ({ ...agent, model: "openai/gpt-5.6-sol" })),
+      },
+    } satisfies OpenClawConfig;
+    const verifiedInference = await createAmbientVerifiedBinding(baseConfig);
+    const reboundInference = await createAmbientVerifiedBinding(changedConfig);
+    let currentConfig: OpenClawConfig = baseConfig;
+    const executeOperation = vi.fn(async (_operation, runtime, options) => {
+      currentConfig = changedConfig;
+      options.onVerifiedInferenceChanged?.(reboundInference);
+      runtime.log("Default model: openai/gpt-5.6-sol");
+      return { applied: true };
+    });
+    const runAgentTurn = vi.fn(async (params) => {
+      if (currentConfig === baseConfig) {
+        return null;
+      }
+      return { text: `using ${params.session.verifiedInference.execution.modelLabel}` };
+    });
+    const engine = new SystemAgentChatEngine({
+      yes: true,
+      verifiedInference,
+      executeOperation,
+      runAgentTurn,
+      planWithAssistant: async () => ({
+        reply: "Switching models.",
+        command: "set default model openai/gpt-5.6-sol",
+        modelLabel: "openai/gpt-5.5",
+      }),
+      deps: {
+        readConfigFileSnapshot: vi.fn(async () => configSnapshot(currentConfig)) as never,
+        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
+      },
+    });
+
+    const changed = await engine.handle("switch models");
+    const next = await engine.handle("which model is active now?");
+
+    expect(changed.text).toContain("Default model: openai/gpt-5.6-sol");
+    expect(next.text).toBe("using openai/gpt-5.6-sol");
+    expect(executeOperation).toHaveBeenCalledOnce();
+    expect(runAgentTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        session: expect.objectContaining({ verifiedInference: reboundInference }),
+      }),
+    );
   });
 
   it("keeps a pending proposal when the user asks a question instead of yes/no", async () => {
