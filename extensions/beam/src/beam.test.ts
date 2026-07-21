@@ -3,14 +3,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createBeamRequestHandler } from "./http.js";
 import { createBeamSessionCatalog } from "./session-catalog.js";
 import type { BeamStore } from "./store.js";
-import {
-  BEAM_MAX_BODY_BYTES,
-  parseBeamUpload,
-  type BeamStoredSession,
-  type BeamUpload,
-} from "./types.js";
+import { BEAM_MAX_BODY_BYTES, parseBeamUpload, type BeamStoredSession } from "./types.js";
 
-function sampleUpload(overrides: Record<string, unknown> = {}): BeamUpload {
+type BeamUploadFixture = Omit<BeamStoredSession, "createdAt" | "receivedAt">;
+
+function sampleUpload(overrides: Record<string, unknown> = {}): BeamUploadFixture {
   return {
     version: 1,
     beamId: "0123456789abcdef0123456789abcdef",
@@ -23,7 +20,7 @@ function sampleUpload(overrides: Record<string, unknown> = {}): BeamUpload {
       { type: "agentMessage", text: "Implemented and tested." },
     ],
     ...overrides,
-  } as BeamUpload;
+  } as BeamUploadFixture;
 }
 
 const writeClient = () => ({ clientIp: "127.0.0.1", scopes: ["operator.write"] });

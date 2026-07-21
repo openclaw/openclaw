@@ -4,15 +4,15 @@ export const BEAM_HOST_ID = "gateway";
 export const BEAM_MAX_BODY_BYTES = 56 * 1024;
 export const BEAM_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const BEAM_MAX_SESSIONS = 500;
-export const BEAM_MAX_ITEMS = 200;
-export const BEAM_MAX_ITEM_CHARS = 6_000;
+const BEAM_MAX_ITEMS = 200;
+const BEAM_MAX_ITEM_CHARS = 6_000;
 
-export type BeamTranscriptItem = {
+type BeamTranscriptItem = {
   type: "userMessage" | "agentMessage" | "other";
   text: string;
 };
 
-export type BeamUpload = {
+type BeamUpload = {
   version: 1;
   beamId: string;
   source: string;
