@@ -15,8 +15,10 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEmbedSandbox } from "../../lib/chat/tool-display.ts";
+import { searchForSession } from "../../lib/sessions/navigation.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+import { PluginUiBridgeController } from "./plugin-ui-bridge.ts";
 import { pluginTabKey } from "./route.ts";
 
 /**
@@ -108,6 +110,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   private externalAuthRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthExpiryTimer: ReturnType<typeof setTimeout> | null = null;
   private externalAuthRefreshedAt = 0;
+  private readonly pluginUiBridge = new PluginUiBridgeController();
   private readonly subscriptions = new SubscriptionsController(this)
     .watch(
       () => this.context?.gateway,
@@ -141,10 +144,48 @@ export class PluginPage extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.pluginUiBridge.clear();
     this.clearExternalTabAuth();
     this.subscriptions.clear();
     this.stopBundledView();
     super.disconnectedCallback();
+  }
+
+  override updated() {
+    const context = this.context;
+    const info = this.tabInfo();
+    const frame = this.querySelector<HTMLIFrameElement>(".plugin-tab-embed__frame");
+    const sessionActions = info?.sessionActions ?? [];
+    if (
+      !context ||
+      !info ||
+      !frame ||
+      (sessionActions.length === 0 && info.allowChatNavigation !== true)
+    ) {
+      this.pluginUiBridge.sync(null);
+      return;
+    }
+    const sessionKey = context.gateway.snapshot.sessionKey;
+    const sessions = context.sessions?.state.result;
+    const contextTokens =
+      sessions?.sessions.find((session) => session.key === sessionKey)?.contextTokens ??
+      sessions?.defaults.contextTokens ??
+      undefined;
+    this.pluginUiBridge.sync({
+      frame,
+      key: this.tabKey(),
+      pluginId: info.pluginId,
+      client: context.gateway.snapshot.client,
+      connected: context.gateway.snapshot.connected,
+      sessionKey,
+      ...(typeof contextTokens === "number" && contextTokens > 0 ? { contextTokens } : {}),
+      sessionActions,
+      allowChatNavigation: info.allowChatNavigation === true,
+      navigateToChat: (targetSessionKey) => {
+        context.gateway.setSessionKey(targetSessionKey);
+        context.navigate("chat", { search: searchForSession(targetSessionKey), hash: "" });
+      },
+    });
   }
 
   private tabKey(): string {

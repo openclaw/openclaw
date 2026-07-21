@@ -60,6 +60,26 @@ describe("listControlUiPluginTabs", () => {
     expect(expectDefined(tabs[0], "tabs[0] test invariant").pluginId).toBe("logbook");
   });
 
+  it("projects only the tab's explicit action and navigation capabilities", () => {
+    activateDescriptors([
+      {
+        pluginId: "logbook",
+        descriptor: tabDescriptor({
+          sessionActions: ["append", "export"],
+          allowChatNavigation: true,
+        }),
+      },
+    ]);
+
+    expect(listControlUiPluginTabs(["operator.admin"])).toEqual([
+      expect.objectContaining({
+        pluginId: "logbook",
+        sessionActions: ["append", "export"],
+        allowChatNavigation: true,
+      }),
+    ]);
+  });
+
   it("hides tabs whose required scopes are not granted", () => {
     activateDescriptors([
       {

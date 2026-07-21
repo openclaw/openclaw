@@ -272,8 +272,8 @@ describe("plugin session actions", () => {
               version: { type: "string" },
             },
           },
-          handler: ({ payload, sessionKey, client }) => {
-            handlerCalls.push({ payload, sessionKey, scopes: client?.scopes ?? [] });
+          handler: ({ payload, sessionKey, contextTokens, client }) => {
+            handlerCalls.push({ payload, sessionKey, contextTokens, scopes: client?.scopes ?? [] });
             return {
               result: { accepted: true, ...(sessionKey ? { sessionKey } : {}) },
               continueAgent: true,
@@ -317,6 +317,7 @@ describe("plugin session actions", () => {
     await expect(
       callSchemaAction("approve", {
         sessionKey: MAIN_SESSION_KEY,
+        contextTokens: 64_000,
         payload: { version: "2026.05.01" },
       }),
     ).resolves.toEqual({
@@ -333,6 +334,7 @@ describe("plugin session actions", () => {
       {
         payload: { version: "2026.05.01" },
         sessionKey: MAIN_SESSION_KEY,
+        contextTokens: 64_000,
         scopes: [WRITE_SCOPE],
       },
     ]);

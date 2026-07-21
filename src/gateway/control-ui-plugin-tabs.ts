@@ -22,6 +22,8 @@ type ControlUiPluginTab = {
   group?: "control" | "agent";
   order?: number;
   requiresGatewayAuth?: boolean;
+  sessionActions?: string[];
+  allowChatNavigation?: boolean;
 };
 
 function findControlUiTabGatewayRoute(
@@ -83,6 +85,8 @@ function projectControlUiPluginTabs(
       path: descriptor.path,
       group: descriptor.group,
       order: descriptor.order,
+      sessionActions: descriptor.sessionActions ? [...descriptor.sessionActions] : undefined,
+      allowChatNavigation: descriptor.allowChatNavigation,
     });
   }
   // Deterministic ordering keeps hello payloads stable across connects.

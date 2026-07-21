@@ -14817,17 +14817,20 @@ public struct PluginsSessionActionParams: Codable, Sendable {
     public let pluginid: String
     public let actionid: String
     public let sessionkey: String?
+    public let contexttokens: Int?
     public let payload: AnyCodable?
 
     public init(
         pluginid: String,
         actionid: String,
         sessionkey: String? = nil,
+        contexttokens: Int? = nil,
         payload: AnyCodable? = nil)
     {
         self.pluginid = pluginid
         self.actionid = actionid
         self.sessionkey = sessionkey
+        self.contexttokens = contexttokens
         self.payload = payload
     }
 
@@ -14835,6 +14838,7 @@ public struct PluginsSessionActionParams: Codable, Sendable {
         case pluginid = "pluginId"
         case actionid = "actionId"
         case sessionkey = "sessionKey"
+        case contexttokens = "contextTokens"
         case payload
     }
 }

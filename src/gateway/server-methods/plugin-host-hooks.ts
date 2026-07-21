@@ -110,6 +110,12 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     const pluginId = normalizeOptionalString(params.pluginId);
     const actionId = normalizeOptionalString(params.actionId);
     const sessionKey = normalizeOptionalString(params.sessionKey);
+    const contextTokens =
+      typeof params.contextTokens === "number" &&
+      Number.isSafeInteger(params.contextTokens) &&
+      params.contextTokens > 0
+        ? params.contextTokens
+        : undefined;
     if (!pluginId || !actionId) {
       respond(
         false,
@@ -207,6 +213,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         pluginId,
         actionId,
         ...(sessionKey ? { sessionKey } : {}),
+        ...(contextTokens ? { contextTokens } : {}),
         ...(params.payload !== undefined ? { payload: params.payload } : {}),
         client: {
           ...(client?.connId ? { connId: client.connId } : {}),

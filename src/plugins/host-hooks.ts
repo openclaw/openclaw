@@ -111,12 +111,18 @@ export type PluginControlUiDescriptor = {
   group?: PluginControlUiTabGroup;
   /** Sort order among plugin tabs; lower renders first. */
   order?: number;
+  /** Plugin-owned session actions this external tab may invoke through the parent UI. */
+  sessionActions?: string[];
+  /** Allow this external tab to navigate the parent UI to a chat session. */
+  allowChatNavigation?: boolean;
 };
 
 export type PluginSessionActionContext = {
   pluginId: string;
   actionId: string;
   sessionKey?: string;
+  /** Active Control UI context window when supplied by an authenticated UI caller. */
+  contextTokens?: number;
   payload?: PluginJsonValue;
   client?: {
     connId?: string;

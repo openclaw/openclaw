@@ -376,8 +376,14 @@ probes the grant from the same opaque sandbox before mounting, so browser
 privacy modes that block the cookie fail closed with an unavailable panel.
 The frame grant accepts only `GET` and `HEAD` and always carries
 `operator.read`; `requiredScopes` controls tab visibility but never widens the
-cookie grant. Mutations remain on explicit Gateway-authenticated parent or
-bearer surfaces. External tabs require HTTPS/Tailscale Serve or a
+cookie grant. An external tab that needs a mutation can declare an explicit
+`sessionActions` allowlist. The parent invokes only those plugin-owned actions
+through `plugins.sessionAction`, supplies the active Control UI session key and
+known context-window size,
+and leaves the action's registered operator-scope and payload-schema checks in
+force. `allowChatNavigation: true` separately allows the tab to return the
+parent to a chat session. There is no generic parent fetch proxy and the frame
+never receives the Gateway bearer token. External tabs require HTTPS/Tailscale Serve or a
 browser-trusted loopback origin; plain HTTP on a LAN host shows the
 secure-context error instead of mounting a panel that cannot authenticate.
 Full third-party-cookie blocking also makes gateway-protected tabs unavailable.
@@ -399,8 +405,36 @@ api.session.controls.registerControlUiDescriptor({
   icon: "sun",
   group: "control",
   requiredScopes: ["operator.write"],
+  sessionActions: ["append-entry"],
+  allowChatNavigation: true,
 });
 ```
+
+The frame announces readiness with
+`window.parent.postMessage({ v: 1, type: "openclaw.pluginUi.ready" }, "*")`.
+Because a very fast frame can finish loading before the parent attaches its
+listener, repeat the ready message briefly until the connection arrives.
+The parent then connects by transferring a
+`MessagePort` in an `openclaw.pluginUi.connect` message. The message includes
+the declared capabilities plus the active `sessionKey` and, when known,
+`contextTokens`. Invoke an allowed action on that port:
+
+```javascript
+port.postMessage({
+  v: 1,
+  type: "openclaw.pluginUi.sessionAction",
+  id: "append-1",
+  actionId: "append-entry",
+  payload: { text: "Ship the narrow bridge" },
+});
+```
+
+The parent replies on the same port with
+`{ v: 1, type: "openclaw.pluginUi.response", id, ok, result?, error? }`.
+When chat navigation is enabled, the frame can send
+`{ v: 1, type: "openclaw.pluginUi.navigate", id, target: "chat", sessionKey }`.
+The parent accepts neither a plugin id nor a target session key for action
+dispatch: the active descriptor and current Control UI session supply both.
 
 Use the grouped namespaces for new plugin code:
 
