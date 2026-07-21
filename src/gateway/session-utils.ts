@@ -1187,9 +1187,7 @@ function readConfiguredChannelAccountName(params: {
   if (!channelConfig || typeof channelConfig !== "object" || Array.isArray(channelConfig)) {
     return undefined;
   }
-  const channelAccountName = normalizeOptionalString(
-    (channelConfig as { name?: unknown }).name,
-  );
+  const channelAccountName = normalizeOptionalString((channelConfig as { name?: unknown }).name);
   const accounts = (channelConfig as { accounts?: unknown }).accounts;
   if (!accounts || typeof accounts !== "object" || Array.isArray(accounts)) {
     return channelAccountName;
@@ -1242,9 +1240,7 @@ function listDirectSessionAccountDisplayNameCandidates(params: {
   const candidates: string[] = [];
   const seen = new Set<string>();
   const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
-  const parsedAgentId = params.parsed.agentId
-    ? normalizeAgentId(params.parsed.agentId)
-    : undefined;
+  const parsedAgentId = params.parsed.agentId ? normalizeAgentId(params.parsed.agentId) : undefined;
   appendAccountIdCandidate(candidates, seen, params.entry?.origin?.accountId);
   appendAccountIdCandidate(candidates, seen, params.entry?.lastAccountId);
   appendAccountIdCandidate(candidates, seen, params.parsed.accountId);

@@ -5,11 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { listSessionsFromStore } from "./session-utils.js";
 
-function listDirectSession(params: {
-  cfg: OpenClawConfig;
-  directKey: string;
-  search: string;
-}) {
+function listDirectSession(params: { cfg: OpenClawConfig; directKey: string; search: string }) {
   return listSessionsFromStore({
     cfg: params.cfg,
     storePath: "/tmp/sessions.json",
