@@ -1,0 +1,490 @@
+# Mythos-Class Kubernetes Deployment
+# Production-grade deployment with scaling, monitoring, and security
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Namespace
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mythos
+  labels:
+    app: mythos
+    tier: production
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# ConfigMap - Environment Configuration
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mythos-config
+  namespace: mythos
+data:
+  NODE_ENV: "production"
+  TZ: "UTC"
+  OPENCLAW_GATEWAY_PORT: "18789"
+  OPENCLAW_CANVAS_PORT: "18793"
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Secret - API Keys and Tokens
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mythos-secrets
+  namespace: mythos
+type: Opaque
+stringData:
+  OPENCLAW_GATEWAY_TOKEN: "${OPENCLAW_GATEWAY_TOKEN}"
+  ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY}"
+  OPENAI_API_KEY: "${OPENAI_API_KEY}"
+  GEMINI_API_KEY: "${GEMINI_API_KEY}"
+  TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN}"
+  DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN}"
+  SLACK_BOT_TOKEN: "${SLACK_BOT_TOKEN}"
+  GITHUB_TOKEN: "${GITHUB_TOKEN}"
+  PG_PASSWORD: "${PG_PASSWORD}"
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Persistent Volume Claims
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mythos-config-pvc
+  namespace: mythos
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mythos-memory-pvc
+  namespace: mythos
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mythos-workspace-pvc
+  namespace: mythos
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: standard
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# PostgreSQL StatefulSet
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mythos-postgres
+  namespace: mythos
+spec:
+  serviceName: mythos-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mythos-postgres
+  template:
+    metadata:
+      labels:
+        app: mythos-postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:16-alpine
+        ports:
+        - containerPort: 5432
+          name: postgres
+        env:
+        - name: POSTGRES_USER
+          value: "mythos"
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: PG_PASSWORD
+        - name: POSTGRES_DB
+          value: "mythos"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: postgres-data
+          mountPath: /var/lib/postgresql/data
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - mythos
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - mythos
+          initialDelaySeconds: 5
+          periodSeconds: 5
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 20Gi
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Redis Deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mythos-redis
+  namespace: mythos
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mythos-redis
+  template:
+    metadata:
+      labels:
+        app: mythos-redis
+    spec:
+      containers:
+      - name: redis
+        image: redis:7-alpine
+        command:
+        - redis-server
+        - --appendonly
+        - "yes"
+        - --maxmemory
+        - 512mb
+        - --maxmemory-policy
+        - allkeys-lru
+        ports:
+        - containerPort: 6379
+          name: redis
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        livenessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          tcpSocket:
+            port: 6379
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gateway Deployment
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mythos-gateway
+  namespace: mythos
+  labels:
+    app: mythos-gateway
+    tier: frontend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mythos-gateway
+  template:
+    metadata:
+      labels:
+        app: mythos-gateway
+        tier: frontend
+    spec:
+      containers:
+      - name: gateway
+        image: openclaw-mythos:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 18789
+          name: gateway
+        - containerPort: 18793
+          name: canvas
+        envFrom:
+        - configMapRef:
+            name: mythos-config
+        env:
+        - name: OPENCLAW_GATEWAY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: OPENCLAW_GATEWAY_TOKEN
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: ANTHROPIC_API_KEY
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: OPENAI_API_KEY
+        - name: GEMINI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: GEMINI_API_KEY
+        - name: TELEGRAM_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: TELEGRAM_BOT_TOKEN
+        - name: DISCORD_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: DISCORD_BOT_TOKEN
+        - name: SLACK_BOT_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: SLACK_BOT_TOKEN
+        - name: GITHUB_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: mythos-secrets
+              key: GITHUB_TOKEN
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "2000m"
+          limits:
+            memory: "8Gi"
+            cpu: "4000m"
+        volumeMounts:
+        - name: config
+          mountPath: /home/openclaw/.openclaw
+        - name: memory
+          mountPath: /home/openclaw/.openclaw/memory
+        - name: workspace
+          mountPath: /home/openclaw/mythos-workspace
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 18789
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 18789
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: config
+        persistentVolumeClaim:
+          claimName: mythos-config-pvc
+      - name: memory
+        persistentVolumeClaim:
+          claimName: mythos-memory-pvc
+      - name: workspace
+        persistentVolumeClaim:
+          claimName: mythos-workspace-pvc
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Gateway Service
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Service
+metadata:
+  name: mythos-gateway
+  namespace: mythos
+  labels:
+    app: mythos-gateway
+spec:
+  type: ClusterIP
+  ports:
+  - name: gateway
+    port: 18789
+    targetPort: 18789
+    protocol: TCP
+  - name: canvas
+    port: 18793
+    targetPort: 18793
+    protocol: TCP
+  selector:
+    app: mythos-gateway
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# PostgreSQL Service
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Service
+metadata:
+  name: mythos-postgres
+  namespace: mythos
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+  selector:
+    app: mythos-postgres
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Redis Service
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: v1
+kind: Service
+metadata:
+  name: mythos-redis
+  namespace: mythos
+spec:
+  type: ClusterIP
+  ports:
+  - port: 6379
+    targetPort: 6379
+    protocol: TCP
+  selector:
+    app: mythos-redis
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Horizontal Pod Autoscaler
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mythos-gateway-hpa
+  namespace: mythos
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mythos-gateway
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pod Disruption Budget
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mythos-gateway-pdb
+  namespace: mythos
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: mythos-gateway
+
+---
+# ═══════════════════════════════════════════════════════════════════════════════
+# Network Policy
+# ═══════════════════════════════════════════════════════════════════════════════
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mythos-gateway-network-policy
+  namespace: mythos
+spec:
+  podSelector:
+    matchLabels:
+      app: mythos-gateway
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 18789
+    - protocol: TCP
+      port: 18793
+  egress:
+  - to:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 443  # HTTPS
+    - protocol: TCP
+      port: 80   # HTTP
+  - to:
+    - podSelector:
+        matchLabels:
+          app: mythos-postgres
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          app: mythos-redis
+    ports:
+    - protocol: TCP
+      port: 6379
