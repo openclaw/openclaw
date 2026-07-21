@@ -1194,6 +1194,139 @@ describe("clawhub helpers", () => {
     expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
   });
 
+  it("keeps the ClawHub request deadline through stalled bodies after headers", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        timeoutMs: 50,
+        fetchImpl: async (_input, init) => {
+          const signal = init?.signal;
+          if (!signal) {
+            throw new Error("missing ClawHub request signal");
+          }
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    controller.error(
+                      signal.reason instanceof Error
+                        ? signal.reason
+                        : new Error("ClawHub request aborted"),
+                    );
+                  },
+                  { once: true },
+                );
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      }),
+    ).rejects.toThrow(/ClawHub request timed out after 50ms/);
+  });
+
+  it("aborts ClawHub JSON bodies that drip past the request deadline", async () => {
+    await expect(
+      searchClawHubSkills({
+        query: "calendar",
+        timeoutMs: 50,
+        fetchImpl: async (_input, init) => {
+          const signal = init?.signal;
+          if (!signal) {
+            throw new Error("missing ClawHub request signal");
+          }
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                const encoder = new TextEncoder();
+                let dripTimer: ReturnType<typeof setTimeout> | undefined;
+                const stop = () => {
+                  if (dripTimer) {
+                    clearTimeout(dripTimer);
+                    dripTimer = undefined;
+                  }
+                };
+                const drip = () => {
+                  if (signal.aborted) {
+                    stop();
+                    return;
+                  }
+                  // Chunks keep arriving so per-chunk idle alone cannot bound the read.
+                  controller.enqueue(encoder.encode("x"));
+                  dripTimer = setTimeout(drip, 10);
+                };
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    stop();
+                    try {
+                      controller.error(
+                        signal.reason instanceof Error
+                          ? signal.reason
+                          : new Error("ClawHub request aborted"),
+                      );
+                    } catch {
+                      // already closed by a racing drip/error
+                    }
+                  },
+                  { once: true },
+                );
+                drip();
+              },
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          );
+        },
+      }),
+    ).rejects.toThrow(/ClawHub request timed out after 50ms/);
+  });
+
+  it("does not bound dripping ClawHub bodies when the request deadline ends at headers", async () => {
+    // Negative control: the pre-fix pattern cleared the AbortController timer as soon as
+    // fetch returned headers, so a slow drip that resets chunk-idle could hang forever.
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      const timeoutMs = 50;
+      const timeout = setTimeout(
+        () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+      // Simulate clawhubRequest clearing the deadline at headers.
+      clearTimeout(timeout);
+
+      let chunks = 0;
+      const body = new ReadableStream<Uint8Array>({
+        start(streamController) {
+          const encoder = new TextEncoder();
+          const drip = () => {
+            chunks += 1;
+            streamController.enqueue(encoder.encode("x"));
+            setTimeout(drip, 10);
+          };
+          drip();
+        },
+      });
+      const reader = body.getReader();
+      await vi.advanceTimersByTimeAsync(10);
+      await reader.read();
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(controller.signal.aborted).toBe(false);
+      expect(chunks).toBeGreaterThan(5);
+      await reader.cancel();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("times out and cancels stalled ClawHub error bodies", async () => {
     const stalledResponses: ReturnType<typeof createStalledBodyResponse>[] = [];
 
@@ -1397,6 +1530,130 @@ describe("clawhub helpers", () => {
     ).rejects.toThrow(/ClawPack download for demo@1.2.3 body stalled after 5ms/i);
     expect(stalled.cancel).toHaveBeenCalledTimes(1);
     expect(stalled.cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+  });
+
+  it("lets a progressing archive body survive past the request deadline", async () => {
+    // Archive downloads release the metadata wall-clock after headers so a
+    // transfer that keeps receiving bytes is not cut off at the request budget.
+    // Per-chunk idle detection in readClawHubResponseBytes still bounds stalls.
+    vi.useFakeTimers();
+    try {
+      let abortCount = 0;
+      let chunks = 0;
+      const archive = downloadClawHubSkillArchive({
+        slug: "large-skill",
+        version: "1.0.0",
+        timeoutMs: 50,
+        fetchImpl: async (_input, init) => {
+          const signal = init?.signal;
+          signal?.addEventListener(
+            "abort",
+            () => {
+              abortCount += 1;
+            },
+            { once: true },
+          );
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                const encoder = new TextEncoder();
+                const drip = () => {
+                  chunks += 1;
+                  controller.enqueue(encoder.encode("x"));
+                  if (chunks >= 10) {
+                    controller.close();
+                    return;
+                  }
+                  setTimeout(drip, 10);
+                };
+                drip();
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/zip" } },
+          );
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(200);
+      const result = await archive;
+      expect(abortCount).toBe(0);
+      expect(chunks).toBe(10);
+      expect(result.sha256Hex).toBeTruthy();
+      await result.cleanup();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps archive error bodies under the request wall-clock deadline", async () => {
+    // Non-2xx archive responses must stay bounded by the wall-clock instead of
+    // releasing the deadline at headers. A continuously dripping 500 body must
+    // be cut off within the request budget.
+    const startedAt = performance.now();
+    await expect(
+      downloadClawHubSkillArchive({
+        slug: "broken-skill",
+        version: "1.0.0",
+        timeoutMs: 50,
+        fetchImpl: async (_input, init) => {
+          const signal = init?.signal;
+          if (!signal) {
+            throw new Error("missing ClawHub request signal");
+          }
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                const encoder = new TextEncoder();
+                let dripTimer: ReturnType<typeof setTimeout> | undefined;
+                const stop = () => {
+                  if (dripTimer) {
+                    clearTimeout(dripTimer);
+                    dripTimer = undefined;
+                  }
+                };
+                const drip = () => {
+                  if (signal.aborted) {
+                    stop();
+                    return;
+                  }
+                  try {
+                    controller.enqueue(encoder.encode("x"));
+                  } catch {
+                    stop();
+                    return;
+                  }
+                  dripTimer = setTimeout(drip, 10);
+                };
+                signal.addEventListener(
+                  "abort",
+                  () => {
+                    stop();
+                    try {
+                      controller.error(
+                        signal.reason instanceof Error
+                          ? signal.reason
+                          : new Error("ClawHub request aborted"),
+                      );
+                    } catch {
+                      // already closed by a racing drip/error
+                    }
+                  },
+                  { once: true },
+                );
+                drip();
+              },
+            }),
+            {
+              status: 400,
+              statusText: "Bad Request",
+              headers: { "content-type": "text/plain" },
+            },
+          );
+        },
+      }),
+    ).rejects.toThrow("ClawHub /api/v1/download failed (400)");
+    const elapsedMs = performance.now() - startedAt;
+    expect(elapsedMs).toBeLessThan(200);
   });
 
   it("downloads skill archives to sanitized temp paths and cleans them up", async () => {

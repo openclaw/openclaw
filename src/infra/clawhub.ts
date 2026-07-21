@@ -638,16 +638,24 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
   return url;
 }
 
-async function clawhubRequest(
-  params: ClawHubRequestParams,
-): Promise<{ response: Response; url: URL; hasToken: boolean }> {
+type ClawHubRequestResult = {
+  response: Response;
+  url: URL;
+  hasToken: boolean;
+  /** Clears the request deadline. Call after body consumption (or cancel). */
+  release: () => void;
+};
+
+async function clawhubRequest(params: ClawHubRequestParams): Promise<ClawHubRequestResult> {
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
     : normalizeOptionalString(params.token) || (await resolveClawHubAuthToken());
   const timeoutMs = resolveClawHubRequestTimeoutMs(params.timeoutMs);
-  const request = async () => {
+  const request = async (): Promise<ClawHubRequestResult> => {
     const controller = new AbortController();
+    // Keep this deadline active through body consumption. Fetch resolves at
+    // headers, so clearing it earlier would leave a stalled ClawHub body unbounded.
     const timeout = setTimeout(
       () => controller.abort(new Error(`ClawHub request timed out after ${timeoutMs}ms`)),
       timeoutMs,
@@ -669,9 +677,18 @@ async function clawhubRequest(
     }
     try {
       const response = await (params.fetchImpl ?? fetch)(url, init);
-      return { response, url, hasToken: Boolean(token) };
-    } finally {
+      let released = false;
+      const release = () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        clearTimeout(timeout);
+      };
+      return { response, url, hasToken: Boolean(token), release };
+    } catch (error) {
       clearTimeout(timeout);
+      throw error;
     }
   };
 
@@ -681,10 +698,34 @@ async function clawhubRequest(
     return await request();
   }
   return await retryClawHubRead(request, {
-    disposeRetry: async ({ response }) => {
+    disposeRetry: async ({ response, release }) => {
+      release();
       await response.body?.cancel().catch(() => undefined);
     },
   });
+}
+
+async function withClawHubResponse<T>(
+  params: ClawHubRequestParams,
+  run: (ctx: {
+    response: Response;
+    url: URL;
+    hasToken: boolean;
+    /** Release the request wall-clock deadline before consuming a progressing
+     *  body (e.g. archive download). Archive callers release after confirming
+     *  response.ok so non-2xx error bodies stay bounded by the wall-clock. */
+    release: () => void;
+  }) => Promise<T>,
+): Promise<T> {
+  const { response, url, hasToken, release } = await clawhubRequest(params);
+  try {
+    return await run({ response, url, hasToken, release });
+  } finally {
+    if (!response.bodyUsed) {
+      await response.body?.cancel().catch(() => undefined);
+    }
+    release();
+  }
 }
 
 async function readErrorBody(response: Response, timeoutMs?: number): Promise<string> {
@@ -743,11 +784,12 @@ function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
 }
 
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
-  const { response, url, hasToken } = await clawhubRequest(params);
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+  return await withClawHubResponse(params, async ({ response, url, hasToken }) => {
+    if (!response.ok) {
+      throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+    }
+    return parseClawHubJsonBody<T>(response, url, params.timeoutMs);
+  });
 }
 
 async function parseClawHubJsonBody<T>(
@@ -1234,25 +1276,29 @@ export async function fetchClawHubSkillInstallResolution(params: {
   fetchImpl?: FetchLike;
   forceInstall?: boolean;
 }): Promise<ClawHubSkillInstallResolutionResponse> {
-  const { response, url, hasToken } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      ownerHandle: params.ownerHandle,
-      forceInstall: params.forceInstall ? "1" : undefined,
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: `/api/v1/skills/${encodeURIComponent(params.slug)}/install`,
+      token: params.token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      search: {
+        ownerHandle: params.ownerHandle,
+        forceInstall: params.forceInstall ? "1" : undefined,
+      },
     },
-  });
-  const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
-  if (!response.ok && !isStructuredBlock) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
-    response,
-    url,
-    params.timeoutMs,
+    async ({ response, url, hasToken }) => {
+      const isStructuredBlock = [403, 409, 410, 423].includes(response.status);
+      if (!response.ok && !isStructuredBlock) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      return parseClawHubJsonBody<ClawHubSkillInstallResolutionResponse>(
+        response,
+        url,
+        params.timeoutMs,
+      );
+    },
   );
 }
 
@@ -1318,26 +1364,30 @@ export async function fetchClawHubSkillCard(params: {
     explicitToken == null &&
     new URL(cardUrl, `${normalizeBaseUrl(params.baseUrl)}/`).origin !==
       new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
-  const { response, url, hasToken } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    url: cardUrl,
-    path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
-    token: explicitToken,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: cardUrl ? undefined : buildVersionOrTagSearch(params),
-    skipAuth,
-  });
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubResponseBytes({
-    response,
-    maxBytes: SKILL_CARD_MAX_BYTES,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
-  });
-  return new TextDecoder().decode(bytes);
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      url: cardUrl,
+      path: slug ? `/api/v1/skills/${encodeURIComponent(slug)}/card` : undefined,
+      token: explicitToken,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      search: cardUrl ? undefined : buildVersionOrTagSearch(params),
+      skipAuth,
+    },
+    async ({ response, url, hasToken }) => {
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      const bytes = await readClawHubResponseBytes({
+        response,
+        maxBytes: SKILL_CARD_MAX_BYTES,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
+      });
+      return new TextDecoder().decode(bytes);
+    },
+  );
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1354,114 +1404,129 @@ export async function downloadClawHubPackageArchive(params: {
     if (!params.version) {
       throw new Error("ClawPack package downloads require an explicit version.");
     }
-    const { response, url, hasToken } = await clawhubRequest({
-      baseUrl: params.baseUrl,
-      path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
-        params.version,
-      )}/artifact/download`,
-      token: params.token,
-      timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
-    });
-    if (!response.ok) {
-      throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-    }
-    const bytes = await readClawHubResponseBytes({
-      response,
-      timeoutMs: params.timeoutMs,
-      resourceLabel: `ClawPack download for ${params.name}@${params.version}`,
-    });
-    const sha256Hex = formatSha256Hex(bytes);
-    const npmIntegrity = formatSha512Integrity(bytes);
-    const npmShasum = formatSha1Hex(bytes);
-    const headerSha256 = normalizeClawHubSha256Hex(
-      response.headers.get("X-ClawHub-Artifact-Sha256") ??
-        response.headers.get("X-ClawHub-ClawPack-Sha256") ??
-        "",
+    const version = params.version;
+    return await withClawHubResponse(
+      {
+        baseUrl: params.baseUrl,
+        path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
+          version,
+        )}/artifact/download`,
+        token: params.token,
+        timeoutMs: params.timeoutMs,
+        fetchImpl: params.fetchImpl,
+      },
+      async ({ response, url, hasToken, release }) => {
+        if (!response.ok) {
+          throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+        }
+        // Release the metadata wall-clock so a progressing transfer is not cut off.
+        // Per-chunk idle detection in readClawHubResponseBytes still bounds stalls.
+        release();
+        const bytes = await readClawHubResponseBytes({
+          response,
+          timeoutMs: params.timeoutMs,
+          resourceLabel: `ClawPack download for ${params.name}@${version}`,
+        });
+        const sha256Hex = formatSha256Hex(bytes);
+        const npmIntegrity = formatSha512Integrity(bytes);
+        const npmShasum = formatSha1Hex(bytes);
+        const headerSha256 = normalizeClawHubSha256Hex(
+          response.headers.get("X-ClawHub-Artifact-Sha256") ??
+            response.headers.get("X-ClawHub-ClawPack-Sha256") ??
+            "",
+        );
+        if (!headerSha256) {
+          throw new Error(
+            `ClawHub ClawPack download for "${params.name}@${version}" is missing X-ClawHub-Artifact-Sha256.`,
+          );
+        }
+        if (headerSha256 !== sha256Hex) {
+          throw new Error(
+            `ClawHub ClawPack download for "${params.name}@${version}" declared sha256 ${headerSha256}, got ${sha256Hex}.`,
+          );
+        }
+        const headerNpmIntegrity = normalizeHeaderValue(
+          response.headers.get("X-ClawHub-Npm-Integrity"),
+        );
+        if (headerNpmIntegrity && headerNpmIntegrity !== npmIntegrity) {
+          throw new Error(
+            `ClawHub ClawPack download for "${params.name}@${version}" declared npm integrity ${headerNpmIntegrity}, got ${npmIntegrity}.`,
+          );
+        }
+        const headerNpmShasum = normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum"));
+        if (headerNpmShasum && headerNpmShasum !== npmShasum) {
+          throw new Error(
+            `ClawHub ClawPack download for "${params.name}@${version}" declared npm shasum ${headerNpmShasum}, got ${npmShasum}.`,
+          );
+        }
+        const npmTarballName =
+          normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
+          safePackageTarballName(params.name, version);
+        const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
+        const specVersion = parseStrictPositiveInteger(rawSpecVersion);
+        const target = await createTempDownloadTarget({
+          prefix: "openclaw-clawhub-clawpack",
+          fileName: npmTarballName,
+        });
+        await fs.writeFile(target.path, bytes);
+        return {
+          archivePath: target.path,
+          integrity: normalizeClawHubSha256Integrity(sha256Hex) ?? formatSha256Integrity(bytes),
+          sha256Hex,
+          artifact: "clawpack" as const,
+          clawpackHeaderSha256: headerSha256,
+          ...(typeof specVersion === "number" &&
+          Number.isSafeInteger(specVersion) &&
+          specVersion >= 0
+            ? { clawpackHeaderSpecVersion: specVersion }
+            : {}),
+          npmIntegrity,
+          npmShasum,
+          npmTarballName,
+          cleanup: target.cleanup,
+        };
+      },
     );
-    if (!headerSha256) {
-      throw new Error(
-        `ClawHub ClawPack download for "${params.name}@${params.version}" is missing X-ClawHub-Artifact-Sha256.`,
-      );
-    }
-    if (headerSha256 !== sha256Hex) {
-      throw new Error(
-        `ClawHub ClawPack download for "${params.name}@${params.version}" declared sha256 ${headerSha256}, got ${sha256Hex}.`,
-      );
-    }
-    const headerNpmIntegrity = normalizeHeaderValue(
-      response.headers.get("X-ClawHub-Npm-Integrity"),
-    );
-    if (headerNpmIntegrity && headerNpmIntegrity !== npmIntegrity) {
-      throw new Error(
-        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm integrity ${headerNpmIntegrity}, got ${npmIntegrity}.`,
-      );
-    }
-    const headerNpmShasum = normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum"));
-    if (headerNpmShasum && headerNpmShasum !== npmShasum) {
-      throw new Error(
-        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm shasum ${headerNpmShasum}, got ${npmShasum}.`,
-      );
-    }
-    const npmTarballName =
-      normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
-      safePackageTarballName(params.name, params.version);
-    const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
-    const specVersion = parseStrictPositiveInteger(rawSpecVersion);
-    const target = await createTempDownloadTarget({
-      prefix: "openclaw-clawhub-clawpack",
-      fileName: npmTarballName,
-    });
-    await fs.writeFile(target.path, bytes);
-    return {
-      archivePath: target.path,
-      integrity: normalizeClawHubSha256Integrity(sha256Hex) ?? formatSha256Integrity(bytes),
-      sha256Hex,
-      artifact: "clawpack",
-      clawpackHeaderSha256: headerSha256,
-      ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
-        ? { clawpackHeaderSpecVersion: specVersion }
-        : {}),
-      npmIntegrity,
-      npmShasum,
-      npmTarballName,
-      cleanup: target.cleanup,
-    };
   }
   const search = params.version
     ? { version: params.version }
     : params.tag
       ? { tag: params.tag }
       : undefined;
-  const { response, url, hasToken } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
-    search,
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubResponseBytes({
-    response,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: `package archive download for ${params.name}`,
-  });
-  const sha256Hex = formatSha256Hex(bytes);
-  const target = await createTempDownloadTarget({
-    prefix: "openclaw-clawhub-package",
-    fileName: `${params.name}.zip`,
-  });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: `/api/v1/packages/${encodeURIComponent(params.name)}/download`,
+      search,
+      token: params.token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+    },
+    async ({ response, url, hasToken, release }) => {
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      release();
+      const bytes = await readClawHubResponseBytes({
+        response,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: `package archive download for ${params.name}`,
+      });
+      const sha256Hex = formatSha256Hex(bytes);
+      const target = await createTempDownloadTarget({
+        prefix: "openclaw-clawhub-package",
+        fileName: `${params.name}.zip`,
+      });
+      await fs.writeFile(target.path, bytes);
+      return {
+        archivePath: target.path,
+        integrity: formatSha256Integrity(bytes),
+        sha256Hex,
+        artifact: "archive" as const,
+        cleanup: target.cleanup,
+      };
+    },
+  );
 }
 
 export async function downloadClawHubSkillArchive(params: {
@@ -1474,40 +1539,45 @@ export async function downloadClawHubSkillArchive(params: {
   timeoutMs?: number;
   fetchImpl?: FetchLike;
 }): Promise<ClawHubDownloadResult> {
-  const { response, url, hasToken } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/download",
-    token: params.token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    search: {
-      slug: params.slug,
-      ownerHandle: params.ownerHandle,
-      version: params.version,
-      tag: params.version ? undefined : params.tag,
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: "/api/v1/download",
+      token: params.token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      search: {
+        slug: params.slug,
+        ownerHandle: params.ownerHandle,
+        version: params.version,
+        tag: params.version ? undefined : params.tag,
+      },
     },
-  });
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubResponseBytes({
-    response,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: `skill archive download for ${params.slug}`,
-  });
-  const sha256Hex = formatSha256Hex(bytes);
-  const target = await createTempDownloadTarget({
-    prefix: "openclaw-clawhub-skill",
-    fileName: `${params.slug}.zip`,
-  });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
+    async ({ response, url, hasToken, release }) => {
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      release();
+      const bytes = await readClawHubResponseBytes({
+        response,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: `skill archive download for ${params.slug}`,
+      });
+      const sha256Hex = formatSha256Hex(bytes);
+      const target = await createTempDownloadTarget({
+        prefix: "openclaw-clawhub-skill",
+        fileName: `${params.slug}.zip`,
+      });
+      await fs.writeFile(target.path, bytes);
+      return {
+        archivePath: target.path,
+        integrity: formatSha256Integrity(bytes),
+        sha256Hex,
+        artifact: "archive" as const,
+        cleanup: target.cleanup,
+      };
+    },
+  );
 }
 
 export async function downloadClawHubSkillArchiveUrl(params: {
@@ -1521,35 +1591,40 @@ export async function downloadClawHubSkillArchiveUrl(params: {
   const requestUrl = new URL(params.url, `${normalizeBaseUrl(params.baseUrl)}/`);
   const registryOrigin = new URL(`${normalizeBaseUrl(params.baseUrl)}/`).origin;
   const skipAuth = explicitToken == null && requestUrl.origin !== registryOrigin;
-  const { response, url, hasToken } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    url: params.url,
-    token: explicitToken,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    skipAuth,
-  });
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubResponseBytes({
-    response,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: `skill archive download at ${url.pathname}`,
-  });
-  const sha256Hex = formatSha256Hex(bytes);
-  const target = await createTempDownloadTarget({
-    prefix: "openclaw-clawhub-skill",
-    fileName: "skill.zip",
-  });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      url: params.url,
+      token: explicitToken,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      skipAuth,
+    },
+    async ({ response, url, hasToken, release }) => {
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      release();
+      const bytes = await readClawHubResponseBytes({
+        response,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: `skill archive download at ${url.pathname}`,
+      });
+      const sha256Hex = formatSha256Hex(bytes);
+      const target = await createTempDownloadTarget({
+        prefix: "openclaw-clawhub-skill",
+        fileName: "skill.zip",
+      });
+      await fs.writeFile(target.path, bytes);
+      return {
+        archivePath: target.path,
+        integrity: formatSha256Integrity(bytes),
+        sha256Hex,
+        artifact: "archive" as const,
+        cleanup: target.cleanup,
+      };
+    },
+  );
 }
 
 export async function downloadClawHubGitHubSkillArchive(params: {
@@ -1559,33 +1634,38 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   fetchImpl?: FetchLike;
 }): Promise<ClawHubDownloadResult> {
   const downloadUrl = buildGitHubZipUrl(params.repo, params.commit);
-  const { response, url, hasToken } = await clawhubRequest({
-    url: downloadUrl,
-    skipAuth: true,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-  });
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
-  const bytes = await readClawHubResponseBytes({
-    response,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: `GitHub source archive for ${params.repo}@${params.commit}`,
-  });
-  const sha256Hex = formatSha256Hex(bytes);
-  const target = await createTempDownloadTarget({
-    prefix: "openclaw-clawhub-github-skill",
-    fileName: `${params.commit}.zip`,
-  });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
+  return await withClawHubResponse(
+    {
+      url: downloadUrl,
+      skipAuth: true,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+    },
+    async ({ response, url, hasToken, release }) => {
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+      release();
+      const bytes = await readClawHubResponseBytes({
+        response,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: `GitHub source archive for ${params.repo}@${params.commit}`,
+      });
+      const sha256Hex = formatSha256Hex(bytes);
+      const target = await createTempDownloadTarget({
+        prefix: "openclaw-clawhub-github-skill",
+        fileName: `${params.commit}.zip`,
+      });
+      await fs.writeFile(target.path, bytes);
+      return {
+        archivePath: target.path,
+        integrity: formatSha256Integrity(bytes),
+        sha256Hex,
+        artifact: "archive" as const,
+        cleanup: target.cleanup,
+      };
+    },
+  );
 }
 
 export async function reportClawHubSkillInstallTelemetry(params: {
@@ -1606,23 +1686,27 @@ export async function reportClawHubSkillInstallTelemetry(params: {
     return;
   }
 
-  const { response, url, hasToken } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    path: "/api/cli/telemetry/install",
-    method: "POST",
-    token,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    json: {
-      event: "install",
-      slug,
-      ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-      version: params.version ?? undefined,
+  await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: "/api/cli/telemetry/install",
+      method: "POST",
+      token,
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      json: {
+        event: "install",
+        slug,
+        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+        version: params.version ?? undefined,
+      },
     },
-  });
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
-  }
+    async ({ response, url, hasToken }) => {
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, hasToken, params.timeoutMs);
+      }
+    },
+  );
 }
 
 function isClawHubTelemetryDisabled(): boolean {
@@ -1925,40 +2009,44 @@ export async function fetchClawHubPromotionsFeed(
     fetchImpl?: FetchLike;
   } = {},
 ): Promise<ClawHubPromotionsFeedFetchResult> {
-  const { response, url } = await clawhubRequest({
-    baseUrl: params.baseUrl,
-    path: "/api/v1/feeds/promotions",
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
-    // This passive refresh runs inline from interactive commands. Its cache
-    // cadence owns retries; shared backoff would turn the 2.5s cap into ~24s.
-    retryTransientReads: false,
-    // Public CDN-served snapshot; an Authorization header would only
-    // fragment edge caches.
-    skipAuth: true,
-    ...(params.etag ? { headers: { "If-None-Match": params.etag } } : {}),
-  });
-  if (response.status === 304) {
-    return { status: "not-modified" };
-  }
-  if (!response.ok) {
-    throw await buildClawHubError(response, url, false, params.timeoutMs);
-  }
-  const buffer = await readClawHubResponseBytes({
-    response,
-    maxBytes: CLAWHUB_JSON_MAX_BYTES,
-    timeoutMs: params.timeoutMs,
-    resourceLabel: "promotions feed",
-  });
-  const payload = new TextDecoder().decode(buffer);
-  let parsedJson: unknown;
-  try {
-    parsedJson = JSON.parse(payload);
-  } catch (cause) {
-    throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
-  }
-  const feed = parseClawHubPromotionsFeed(parsedJson);
-  const etag = response.headers.get("etag") ?? undefined;
-  return { status: "ok", feed, payload, ...(etag ? { etag } : {}) };
+  return await withClawHubResponse(
+    {
+      baseUrl: params.baseUrl,
+      path: "/api/v1/feeds/promotions",
+      timeoutMs: params.timeoutMs,
+      fetchImpl: params.fetchImpl,
+      // This passive refresh runs inline from interactive commands. Its cache
+      // cadence owns retries; shared backoff would turn the 2.5s cap into ~24s.
+      retryTransientReads: false,
+      // Public CDN-served snapshot; an Authorization header would only
+      // fragment edge caches.
+      skipAuth: true,
+      ...(params.etag ? { headers: { "If-None-Match": params.etag } } : {}),
+    },
+    async ({ response, url }) => {
+      if (response.status === 304) {
+        return { status: "not-modified" as const };
+      }
+      if (!response.ok) {
+        throw await buildClawHubError(response, url, false, params.timeoutMs);
+      }
+      const buffer = await readClawHubResponseBytes({
+        response,
+        maxBytes: CLAWHUB_JSON_MAX_BYTES,
+        timeoutMs: params.timeoutMs,
+        resourceLabel: "promotions feed",
+      });
+      const payload = new TextDecoder().decode(buffer);
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(payload);
+      } catch (cause) {
+        throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
+      }
+      const feed = parseClawHubPromotionsFeed(parsedJson);
+      const etag = response.headers.get("etag") ?? undefined;
+      return { status: "ok" as const, feed, payload, ...(etag ? { etag } : {}) };
+    },
+  );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
