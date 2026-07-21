@@ -13035,7 +13035,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 252,
+      "line": 253,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "${decimal(count / 1_000_000.0)}M",
       "surface": "android",
@@ -13043,7 +13043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 259,
+      "line": 260,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "${thousands}k",
       "surface": "android",

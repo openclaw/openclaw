@@ -247,6 +247,7 @@ internal fun turnRecapTokenFormat(count: Long): TurnRecapTokenFormat = TurnRecap
 
 internal fun formatCompactTokenCount(count: Long): String {
   fun decimal(value: Double): String = String.format(Locale.US, "%.1f", value).removeSuffix(".0")
+
   fun millions(): String {
     val value = decimal(count / 1_000_000.0)
     return nativeString("\${decimal(count / 1_000_000.0)}M", value)
