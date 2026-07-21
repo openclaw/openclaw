@@ -443,6 +443,12 @@ select.settings-select {
   transition: border-color var(--duration-fast) var(--ease-out);
 }
 
+select.settings-select {
+  background-position: right 10px center;
+  background-repeat: no-repeat;
+  padding-right: 36px;
+}
+
 .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select {
   width: auto;
   min-width: min(220px, 100%);
