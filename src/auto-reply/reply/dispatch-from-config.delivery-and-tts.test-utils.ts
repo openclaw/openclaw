@@ -165,8 +165,12 @@ describe("dispatchReplyFromConfig", () => {
     expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "Codex native reply" });
     expect(
-      getReplyPayloadMetadata(firstMockArg(dispatcher.sendFinalReply, "plugin reply"))
-        ?.sourceReplyTranscriptMirror,
+      getReplyPayloadMetadata(
+        firstMockArg(
+          dispatcher.sendFinalReply as ReturnType<typeof vi.fn>,
+          "plugin reply",
+        ) as ReplyPayload,
+      )?.sourceReplyTranscriptMirror,
     ).toBeUndefined();
     expect(replyResolver).not.toHaveBeenCalled();
   });
@@ -191,11 +195,13 @@ describe("dispatchReplyFromConfig", () => {
       updatedAt: Date.now(),
     };
     sessionStoreMocks.entriesBySessionKey.set(targetSessionKey, targetSessionEntry);
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(
-      (params: { sessionKey: string }) =>
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation((...args: unknown[]) => {
+      const params = args[0] as { sessionKey: string };
+      return (
         sessionStoreMocks.entriesBySessionKey.get(params.sessionKey) ??
-        sessionStoreMocks.currentEntry,
-    );
+        sessionStoreMocks.currentEntry
+      );
+    });
     sessionBindingMocks.resolveByConversation.mockReturnValue({
       bindingId: "binding-history-1",
       targetSessionKey,
