@@ -16,7 +16,12 @@ import {
   text,
 } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import {
+  stripAnsi,
+  truncateToVisibleWidth,
+  visibleWidth,
+} from "../../packages/terminal-core/src/ansi.js";
 import { note as emitNote } from "../../packages/terminal-core/src/note.js";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
 import {
@@ -40,6 +45,23 @@ import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 // Same species as the pixel-mascot banner, compressed into a four-column
 // spinner for long-running wizard steps.
 const CLAW_SPINNER_FRAMES = ["(\\/)", "(||)", "(--)", "(||)"];
+const SPINNER_DECORATION_COLUMNS = 10;
+
+function clampProgressLabel(label: string): string {
+  const columns = process.stdout.columns;
+  if (typeof columns !== "number" || !Number.isFinite(columns) || columns <= 0) {
+    return label;
+  }
+  const maxLabelWidth = columns - SPINNER_DECORATION_COLUMNS;
+  if (maxLabelWidth <= 0) {
+    return "";
+  }
+  if (visibleWidth(label) <= maxLabelWidth) {
+    return label;
+  }
+  const utf16Cut = truncateUtf16Safe(label, maxLabelWidth - 1);
+  return `${truncateToVisibleWidth(utf16Cut, maxLabelWidth - 1)}…`;
+}
 
 // Clack-backed WizardPrompter implementation for interactive CLI setup. It
 // converts the generic wizard prompt contract into styled Clack prompts.
@@ -334,7 +356,9 @@ export function createClackPrompter(): WizardPrompter {
             styleFrame: theme.accent,
           })
         : spinner();
-      spin.start(theme.accent(label));
+      // Clack erases using bare-message wrapping but writes the frame and dots too.
+      // Keeping animated labels to one row prevents long scans from leaking a line each tick.
+      spin.start(theme.accent(clampProgressLabel(label)));
       const osc = createCliProgress({
         label,
         indeterminate: true,
@@ -345,7 +369,7 @@ export function createClackPrompter(): WizardPrompter {
       // display command progress outside the prompt line.
       return {
         update: (message) => {
-          spin.message(theme.accent(message));
+          spin.message(theme.accent(clampProgressLabel(message)));
           osc.setLabel(message);
         },
         stop: (message) => {

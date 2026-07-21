@@ -197,12 +197,13 @@ describe("setupAppRecommendations", () => {
       return true;
     });
     const recommend = vi.fn(async () => recommendationResult());
+    const log = vi.fn();
 
     refreshOnboardRecommendationsCommand(runtime, { clear });
     await setupAppRecommendations({
       config: {},
       prompter: createPrompter(),
-      runtime,
+      runtime: { ...runtime, log },
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
@@ -216,10 +217,15 @@ describe("setupAppRecommendations", () => {
 
     expect(clear).toHaveBeenCalledOnce();
     expect(recommend).toHaveBeenCalledOnce();
+    expect(log).toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
+    expect(log.mock.invocationCallOrder[0]).toBeLessThan(recommend.mock.invocationCallOrder[0]!);
   });
 
   it("reuses a pending stored offer without rescanning and acknowledges the answer", async () => {
     const recommend = vi.fn(async () => recommendationResult());
+    const log = vi.fn();
     const prompter = createPrompter(["recommendation:0"]);
     const pending: OnboardingRecommendationsRecord = {
       inventoryHash: "hash",
@@ -238,7 +244,7 @@ describe("setupAppRecommendations", () => {
     await setupAppRecommendations({
       config: {},
       prompter,
-      runtime,
+      runtime: { ...runtime, log },
       workspaceDir: "/tmp/workspace",
       modelRouteVerified: true,
       platform: "darwin",
@@ -256,6 +262,9 @@ describe("setupAppRecommendations", () => {
     });
 
     expect(recommend).not.toHaveBeenCalled();
+    expect(log).not.toHaveBeenCalledWith(
+      "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+    );
     expect(prompter.progress).not.toHaveBeenCalled();
     expect(prompter.multiselect).toHaveBeenCalledOnce();
     expect(store.acknowledgeStored).toHaveBeenCalledOnce();

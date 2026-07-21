@@ -7,10 +7,22 @@ const themeMocks = vi.hoisted(() => ({
 }));
 
 const stdoutIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const stdoutColumnsDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "columns");
 
 function stubStdoutIsTTY(value: boolean): void {
   Object.defineProperty(process.stdout, "isTTY", { configurable: true, value });
 }
+
+function stubStdoutColumns(value: number | undefined): void {
+  Object.defineProperty(process.stdout, "columns", { configurable: true, value });
+}
+
+const cliProgressMocks = vi.hoisted(() => ({
+  createCliProgress: vi.fn(() => ({
+    done: vi.fn(),
+    setLabel: vi.fn(),
+  })),
+}));
 
 const clackMocks = vi.hoisted(() => ({
   autocomplete: vi.fn(),
@@ -67,6 +79,10 @@ vi.mock("@clack/prompts", () => ({
   text: clackMocks.text,
 }));
 
+vi.mock("../cli/progress.js", () => ({
+  createCliProgress: cliProgressMocks.createCliProgress,
+}));
+
 vi.mock("./clack-navigation-prompts.js", () => ({
   autocompleteMultiselectWithNavigationFooter:
     navigationPromptMocks.autocompleteMultiselectWithNavigationFooter,
@@ -90,6 +106,11 @@ afterEach(() => {
     Object.defineProperty(process.stdout, "isTTY", stdoutIsTTYDescriptor);
   } else {
     Reflect.deleteProperty(process.stdout, "isTTY");
+  }
+  if (stdoutColumnsDescriptor) {
+    Object.defineProperty(process.stdout, "columns", stdoutColumnsDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdout, "columns");
   }
   themeMocks.isRich.mockReturnValue(false);
   clackMocks.settings.actions = new Set(["left", "right"]);
@@ -129,6 +150,55 @@ describe("tokenizedOptionFilter", () => {
 });
 
 describe("createClackPrompter", () => {
+  it("clamps long progress labels by display width without splitting UTF-16 pairs", () => {
+    stubStdoutColumns(20);
+    const prompter = createClackPrompter();
+
+    const progress = prompter.progress("12345678😀ABC");
+    progress.update("正在扫描已安装应用…");
+    progress.stop("1234567890ABC");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    const osc = cliProgressMocks.createCliProgress.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("12345678…"));
+    expect(spin.message).toHaveBeenCalledWith(theme.accent("正在扫描…"));
+    expect(spin.stop).toHaveBeenCalledWith("1234567890ABC");
+    expect(cliProgressMocks.createCliProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ label: "12345678😀ABC" }),
+    );
+    expect(osc.setLabel).toHaveBeenCalledWith("正在扫描已安装应用…");
+  });
+
+  it("leaves progress labels untouched when terminal columns are unavailable", () => {
+    stubStdoutColumns(undefined);
+    const prompter = createClackPrompter();
+
+    prompter.progress("1234567890ABC");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("1234567890ABC"));
+  });
+
+  it("leaves short progress labels untouched", () => {
+    stubStdoutColumns(20);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent("Loading"));
+  });
+
+  it("uses an empty progress label when decoration consumes the terminal width", () => {
+    stubStdoutColumns(10);
+    const prompter = createClackPrompter();
+
+    prompter.progress("Loading");
+
+    const spin = clackMocks.spinner.mock.results[0]!.value;
+    expect(spin.start).toHaveBeenCalledWith(theme.accent(""));
+  });
+
   it("uses the claw spinner on rich interactive terminals", () => {
     stubStdoutIsTTY(true);
     vi.stubEnv("CI", "");
