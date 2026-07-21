@@ -31,8 +31,7 @@ function summarizeSources(sources: Array<string | undefined>): {
   return { label, parts };
 }
 
-/** Formats a redacted channel-token hint for `openclaw status --all --show-secrets`. */
-export function formatTokenHint(token: string, opts: { showSecrets: boolean }): string {
+function formatTokenHint(token: string, opts: { showSecrets: boolean }): string {
   const t = token.trim();
   if (!t) {
     return "empty";
