@@ -627,6 +627,7 @@ export const handleNodeEvent = async (
             entry,
             sessionId,
             now: receivedAt,
+            isConnectionCurrent: opts?.isConnectionCurrent,
           });
 
           // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).

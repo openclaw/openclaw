@@ -1171,6 +1171,36 @@ describe("voice transcript events", () => {
     expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
   });
 
+  it("skips the detached session-store touch after voice admission loses ownership", async () => {
+    const addChatRun = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    let checkCount = 0;
+    const isConnectionCurrent = vi.fn(() => {
+      checkCount += 1;
+      return checkCount <= 3;
+    });
+
+    await handleNodeEvent(
+      ctx,
+      "node-stale-after-voice-admission",
+      {
+        event: "voice.transcript",
+        payloadJSON: JSON.stringify({
+          text: "do not persist stale voice ownership",
+          sessionKey: "voice-detached-store-currentness",
+        }),
+      },
+      { isConnectionCurrent },
+    );
+    await waitForFast(() => expect(isConnectionCurrent).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+  });
+
   it("rejects a missing harness-owned session before touching the store", async () => {
     const sessionKey = "agent:main:harness:codex:supervision:missing-voice";
     loadSessionEntryMock.mockReturnValueOnce({
