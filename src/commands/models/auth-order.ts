@@ -61,7 +61,11 @@ export async function modelsAuthOrderGetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
-  runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
+  runtime.log(
+    order.length > 0
+      ? `Auth profile order: ${order.join(", ")}`
+      : "Auth profile order: (not set; using config/round-robin)",
+  );
 }
 
 /** Clears the configured auth profile priority order for a provider. */
@@ -83,7 +87,7 @@ export async function modelsAuthOrderClearCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log("Cleared per-agent order override.");
+  runtime.log("Auth profile order cleared; using config/round-robin.");
 }
 
 /** Sets the provider auth profile priority order after validating each profile id. */
@@ -129,5 +133,5 @@ export async function modelsAuthOrderSetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Order override: ${describeOrder(updated, provider).join(", ")}`);
+  runtime.log(`Auth profile order: ${describeOrder(updated, provider).join(", ")}`);
 }
