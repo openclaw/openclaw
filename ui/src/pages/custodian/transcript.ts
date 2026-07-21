@@ -69,7 +69,7 @@ export function custodianErrorMessage(error: unknown): string {
     : t("custodian.requestFailed");
 }
 
-export function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
+function toCustodianMessageGroup(message: CustodianMessage): MessageGroup {
   const key = `msg-${message.id}`;
   return {
     kind: "group",
@@ -125,7 +125,7 @@ export function createCustodianTranscriptMessages(
   return { messages, nextMessageId };
 }
 
-export function renderCustodianEarlierDivider(
+function renderCustodianEarlierDivider(
   message: CustodianMessage,
   boundaryAfterId: number | null,
 ) {
