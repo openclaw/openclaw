@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import { z } from "zod";
 import { searchClawHubSkills } from "../infra/clawhub.js";
@@ -79,7 +81,7 @@ const MatcherOutputSchema = z.object({
         .string()
         .trim()
         .min(1)
-        .transform((value) => (value.length > 120 ? `${value.slice(0, 119)}…` : value)),
+        .transform((value) => (value.length > 120 ? `${truncateUtf16Safe(value, 119)}…` : value)),
     }),
   ),
 });
@@ -254,14 +256,19 @@ async function gatherSetupAppCandidates(params: {
             limit: CLAWHUB_SEARCH_LIMIT,
             timeoutMs: CLAWHUB_SEARCH_TIMEOUT_MS,
           });
-          return results.slice(0, CLAWHUB_SEARCH_LIMIT).map(
-            (result): SetupAppCandidate => ({
-              id: result.slug,
-              displayName: result.displayName,
-              summary: result.summary?.trim() || "ClawHub skill",
-              source: "clawhub-skill",
-            }),
-          );
+          return results.slice(0, CLAWHUB_SEARCH_LIMIT).flatMap((result): SetupAppCandidate[] => {
+            const ownerHandle = normalizeOptionalString(result.ownerHandle);
+            return ownerHandle
+              ? [
+                  {
+                    id: `@${ownerHandle}/${result.slug}`,
+                    displayName: result.displayName,
+                    summary: result.summary?.trim() || "ClawHub skill",
+                    source: "clawhub-skill",
+                  },
+                ]
+              : [];
+          });
         } catch {
           return [];
         }

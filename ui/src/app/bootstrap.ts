@@ -14,6 +14,7 @@ import { createAgentCapability } from "../lib/agents/index.ts";
 import { createChannelCapability } from "../lib/channels/index.ts";
 import { createRuntimeConfigCapability } from "../lib/config/index.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalentForHost } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import {
   isDefaultChatLanding,
@@ -34,8 +35,10 @@ import type {
 } from "./context.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
+import { createInitialUserMessageHandoff } from "./initial-user-message-handoff.ts";
 import { createNativeChatDrafts } from "./native-bridge.ts";
 import { startNativeLinkRouting } from "./native-link-routing.ts";
+import { createNativeNotificationsCapability } from "./native-notifications.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import {
   loadSettings,
@@ -170,7 +173,7 @@ function createApplicationNavigationPreferences(
   let snapshot: ApplicationNavigationPreferencesSnapshot = {
     navCollapsed: settings.navCollapsed,
     navWidth: settings.navWidth,
-    sidebarPinnedRoutes: settings.sidebarPinnedRoutes,
+    sidebarEntries: settings.sidebarEntries,
     pinnedAgentIds: settings.pinnedAgentIds ?? [],
   };
   const listeners = new Set<(next: ApplicationNavigationPreferencesSnapshot) => void>();
@@ -184,7 +187,7 @@ function createApplicationNavigationPreferences(
       if (
         nextSnapshot.navCollapsed === snapshot.navCollapsed &&
         nextSnapshot.navWidth === snapshot.navWidth &&
-        nextSnapshot.sidebarPinnedRoutes === snapshot.sidebarPinnedRoutes &&
+        nextSnapshot.sidebarEntries === snapshot.sidebarEntries &&
         nextSnapshot.pinnedAgentIds === snapshot.pinnedAgentIds
       ) {
         return;
@@ -192,7 +195,7 @@ function createApplicationNavigationPreferences(
       settings = patchSettings({
         navCollapsed: nextSnapshot.navCollapsed,
         navWidth: nextSnapshot.navWidth,
-        sidebarPinnedRoutes: [...nextSnapshot.sidebarPinnedRoutes],
+        sidebarEntries: [...nextSnapshot.sidebarEntries],
         pinnedAgentIds: [...nextSnapshot.pinnedAgentIds],
       });
       snapshot = nextSnapshot;
@@ -319,8 +322,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   const theme = createApplicationTheme(settings);
   const nativeChatDrafts = createNativeChatDrafts();
   const nativeLinkRouting = startNativeLinkRouting();
+  const nativeNotifications = createNativeNotificationsCapability();
   const webPush = createWebPushCapability(gateway);
   const skillWorkshopRevision = createSkillWorkshopRevisionHandoff();
+  const initialUserMessage = createInitialUserMessageHandoff();
   applyStartupPresentation(settings);
   const router = createApplicationRouter();
   let pendingGatewayConnection =
@@ -390,8 +395,10 @@ export function bootstrapApplication(): ApplicationRuntime {
     navigation,
     theme,
     nativeChatDrafts,
+    nativeNotifications,
     webPush,
     skillWorkshopRevision,
+    initialUserMessage,
     navigate: (routeId, options) => {
       void router
         .navigate(routeId, context, { history: "push" }, routeLocation(routeId, options))
@@ -412,7 +419,10 @@ export function bootstrapApplication(): ApplicationRuntime {
   const stopModelSetupRedirect = firstRunDefaultLanding
     ? startModelSetupFirstRunRedirect({
         context,
-        isStillDefaultLanding: () => locationsMatch(history.location(), expectedDefaultLanding),
+        isStillDefaultLanding: () =>
+          locationsMatch(history.location(), expectedDefaultLanding, (left, right) =>
+            areUiSessionKeysEquivalentForHost({ hello: gateway.snapshot.hello }, left, right),
+          ),
       })
     : () => undefined;
   return {
@@ -447,8 +457,10 @@ export function bootstrapApplication(): ApplicationRuntime {
       theme.dispose();
       nativeChatDrafts.dispose();
       nativeLinkRouting.dispose();
+      nativeNotifications?.dispose();
       webPush.dispose();
       skillWorkshopRevision.clear();
+      initialUserMessage.clear();
     },
   };
 }

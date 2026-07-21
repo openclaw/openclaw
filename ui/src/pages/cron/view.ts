@@ -1051,13 +1051,15 @@ function renderPromptSection(
   props: CronProps,
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
+  const lockedPayloadLabel =
+    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
-    ? t("cron.form.command")
+    ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
       : t("cron.form.assistantTaskPrompt");
   const promptHelp = ctx.payloadLocked
-    ? undefined
+    ? t("cron.form.readOnlyPayloadHelp")
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
@@ -1096,7 +1098,7 @@ function renderPromptSection(
           <input
             id="cron-payload-kind"
             class="settings-input"
-            .value=${t("cron.form.command")}
+            .value=${lockedPayloadLabel}
             readonly
           />
         `
@@ -1306,7 +1308,15 @@ function renderScheduleSection(props: CronProps) {
           value: form.scheduleKind,
           options: kinds,
           ariaLabel: t("cron.form.repeat"),
-          onChange: (value) => props.onFormChange({ scheduleKind: value }),
+          onChange: (value) =>
+            props.onFormChange({
+              scheduleKind: value,
+              ...(value === "at" && (form.scheduleKind === "every" || form.scheduleKind === "cron")
+                ? { deleteAfterRun: true }
+                : value === "every" || value === "cron"
+                  ? { deleteAfterRun: false }
+                  : {}),
+            }),
         }),
       })}
       ${form.scheduleKind === "at"
@@ -1613,12 +1623,14 @@ function renderAdvanced(
                 `,
               })
             : nothing}
-          ${renderToggleRow({
-            label: t("cron.form.deleteAfterRun"),
-            checked: props.form.deleteAfterRun,
-            help: t("cron.form.deleteAfterRunHelp"),
-            onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
-          })}
+          ${props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit"
+            ? renderToggleRow({
+                label: t("cron.form.deleteAfterRun"),
+                checked: props.form.deleteAfterRun,
+                help: t("cron.form.deleteAfterRunHelp"),
+                onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
+              })
+            : nothing}
           ${renderToggleRow({
             label: t("cron.form.clearAgentOverride"),
             checked: props.form.clearAgent,

@@ -30,11 +30,13 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
+      "configPromotion": true,
       "legacyStateMigrations": true,
       "legacySessionSurfaces": true
     },
     "channel": {
       "id": "whatsapp",
+      "approvalFlags": ["native"],
       "label": "WhatsApp",
       "selectionLabel": "WhatsApp (QR link)",
       "detailLabel": "WhatsApp Web",

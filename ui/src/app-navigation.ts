@@ -10,13 +10,12 @@ type NavigationItem = {
   [TRouteId in NavigationRouteId]: IconName;
 };
 
-// The sidebar shows a small user-customizable pinned set; every other nav route
+// The sidebar shows a small user-customizable ordered zone; every other nav route
 // lives in the collapsed "More" section. Chat is reachable through the session
 // list and Settings/Docs live in the sidebar footer, so neither is listed here.
 // Skills and Skill Workshop are tabs inside the Plugins hub, not sidebar items.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 export const SIDEBAR_NAV_ROUTES = [
-  "custodian",
   "workboard",
   "usage",
   "cron",
@@ -24,6 +23,7 @@ export const SIDEBAR_NAV_ROUTES = [
   "sessions",
   "activity",
   "plugins",
+  "apps",
 ] as const satisfies readonly NavigationRouteId[];
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
@@ -48,39 +48,70 @@ export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
+export type SidebarZoneEntry =
+  | { type: "route"; route: SidebarNavRoute }
+  | { type: "session"; key: string };
+
 // Keep the highest-value operational destinations visible on first use. Users
-// can still replace this set through the customize menu.
-export const DEFAULT_SIDEBAR_PINNED_ROUTES = [
-  "custodian",
-  "usage",
-  "cron",
-  "plugins",
-] as const satisfies readonly SidebarNavRoute[];
+// can still replace this route set through the customize menu.
+export const DEFAULT_SIDEBAR_ENTRIES = ["usage", "cron", "plugins"].map((route) =>
+  serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
+);
 
 /**
- * Normalize a persisted pinned-route list. Returns null when the value is not a
- * list (caller falls back to defaults); unknown or duplicate entries are dropped
- * so prefs survive route renames/removals without a migration.
+ * Parse the compact persisted representation used by browser and synced prefs.
  */
-export function normalizeSidebarPinnedRoutes(value: unknown): SidebarNavRoute[] | null {
+export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  if (value.startsWith("route:")) {
+    const route = value.slice("route:".length);
+    return SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)
+      ? { type: "route", route: route as SidebarNavRoute }
+      : null;
+  }
+  if (value.startsWith("session:")) {
+    const key = value.slice("session:".length).trim();
+    return key ? { type: "session", key } : null;
+  }
+  return null;
+}
+
+export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
+  return entry.type === "route" ? `route:${entry.route}` : `session:${entry.key}`;
+}
+
+/**
+ * Normalize a persisted sidebar-zone list. Returns null when the value is not a
+ * list; malformed and duplicate entries are dropped.
+ */
+export function normalizeSidebarEntries(value: unknown): string[] | null {
   if (!Array.isArray(value)) {
     return null;
   }
-  const pinned: SidebarNavRoute[] = [];
-  for (const entry of value) {
-    if (
-      typeof entry === "string" &&
-      (SIDEBAR_NAV_ROUTES as readonly string[]).includes(entry) &&
-      !pinned.includes(entry as SidebarNavRoute)
-    ) {
-      pinned.push(entry as SidebarNavRoute);
+  const normalized: string[] = [];
+  for (const valueEntry of value) {
+    const parsed = parseSidebarEntry(valueEntry);
+    if (!parsed) {
+      continue;
+    }
+    const entry = serializeSidebarEntry(parsed);
+    if (!normalized.includes(entry)) {
+      normalized.push(entry);
     }
   }
-  return pinned;
+  return normalized;
 }
 
-export function sidebarMoreRoutes(pinned: readonly SidebarNavRoute[]): SidebarNavRoute[] {
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !pinned.includes(routeId));
+export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
+  const visibleRoutes = new Set(
+    entries.flatMap((entry) => {
+      const parsed = parseSidebarEntry(entry);
+      return parsed?.type === "route" ? [parsed.route] : [];
+    }),
+  );
+  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
 }
 
 type SettingsNavigationGroup = {
@@ -143,7 +174,7 @@ export const SETTINGS_NAVIGATION_GROUPS = [
   },
   {
     labelKey: "nav.settingsGroupAgents",
-    routes: ["agents", "ai-agents", "model-providers", "mcp", "automation"],
+    routes: ["agents", "ai-agents", "labs", "model-providers", "mcp", "automation"],
   },
   {
     labelKey: "nav.settingsGroupSecurity",
@@ -160,21 +191,16 @@ export const SETTINGS_NAVIGATION_GROUPS = [
 // highlights nothing for them; search still deep-links via their owning page.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = ["model-setup"];
 
-const SETTINGS_NAVIGATION_ROUTES: readonly NavigationRouteId[] = [
+const SETTINGS_NAVIGATION_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   ...SETTINGS_NAVIGATION_GROUPS.flatMap((group) => group.routes),
   ...SETTINGS_SUBPAGE_ROUTES,
-];
-
-// Custodian is linked from Settings, but remains a workspace destination with
-// normal app chrome when opened from either Settings or the pinned sidebar.
-const SETTINGS_TAKEOVER_ROUTES = SETTINGS_NAVIGATION_ROUTES.filter(
-  (routeId) => routeId !== "custodian",
-);
+]);
 
 const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
-  approvals: "shieldCheck",
+  apps: "layoutGrid",
+  approvals: "badgeCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -190,18 +216,19 @@ const NAVIGATION_ICONS: NavigationItem = {
   chat: "messageSquare",
   custodian: "lobster",
   config: "settings",
-  profile: "lobster",
+  profile: "circleUser",
   communications: "send",
-  appearance: "spark",
+  appearance: "palette",
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
+  labs: "flaskConical",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
   "model-providers": "plug",
   "memory-import": "download",
-  notifications: "send",
+  notifications: "bell",
   security: "shieldCheck",
   advanced: "fileCode",
   debug: "bug",
@@ -211,7 +238,7 @@ const NAVIGATION_ICONS: NavigationItem = {
 };
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
-  return (SETTINGS_TAKEOVER_ROUTES as readonly NavigationRouteId[]).includes(routeId);
+  return SETTINGS_NAVIGATION_ROUTES.has(routeId);
 }
 
 export function navigationIconForRoute(routeId: NavigationRouteId): IconName {
@@ -269,6 +296,7 @@ export function cancelRoutePreload(
 const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey: string }> = {
   agents: { titleKey: "tabs.agents", subtitleKey: "subtitles.agents" },
   activity: { titleKey: "tabs.activity", subtitleKey: "subtitles.activity" },
+  apps: { titleKey: "tabs.apps", subtitleKey: "subtitles.apps" },
   approvals: { titleKey: "tabs.approvals", subtitleKey: "subtitles.approvals" },
   workboard: { titleKey: "tabs.workboard", subtitleKey: "subtitles.workboard" },
   worktrees: { titleKey: "tabs.worktrees", subtitleKey: "subtitles.worktrees" },
@@ -297,17 +325,21 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   automation: { titleKey: "tabs.automation", subtitleKey: "subtitles.automation" },
   mcp: { titleKey: "tabs.mcp", subtitleKey: "subtitles.mcp" },
   infrastructure: { titleKey: "tabs.infrastructure", subtitleKey: "subtitles.infrastructure" },
+  labs: { titleKey: "tabs.labs", subtitleKey: "subtitles.labs" },
   about: { titleKey: "tabs.about", subtitleKey: "subtitles.about" },
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
   "model-providers": {
-    titleKey: "tabs.modelProviders",
+    titleKey: "routeTitles.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
   "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
-  notifications: { titleKey: "tabs.notifications", subtitleKey: "subtitles.notifications" },
+  notifications: {
+    titleKey: "routeTitles.notifications",
+    subtitleKey: "subtitles.notifications",
+  },
   security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
-  advanced: { titleKey: "tabs.advanced", subtitleKey: "subtitles.advanced" },
+  advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

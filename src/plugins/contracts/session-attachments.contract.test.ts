@@ -154,7 +154,7 @@ describe("plugin session attachments", () => {
     delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
   });
 
-  it("sends validated files through the session delivery route with channel hints", async () => {
+  it("sends validated files through the session delivery route with portable hints", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
         deliveryContext: {
@@ -167,7 +167,7 @@ describe("plugin session attachments", () => {
 
       const result = await sendBundledSessionAttachment({
         files: [{ path: filePath }],
-        channelHints: { telegram: { disableNotification: true, parseMode: "HTML" } },
+        channelHints: { silent: true, parseMode: "HTML", threadId: "attachment-thread" },
       });
 
       expect(result).toEqual({
@@ -181,7 +181,7 @@ describe("plugin session attachments", () => {
       expect(sendParams.to).toBe("12345");
       expect(sendParams.channel).toBe("telegram");
       expect(sendParams.accountId).toBe("default");
-      expect(sendParams.threadId).toBe(42);
+      expect(sendParams.threadId).toBe("attachment-thread");
       expect(sendParams.mediaUrls).toEqual([filePath]);
       expect(sendParams.bestEffort).toBe(false);
       expect(sendParams.silent).toBe(true);
@@ -208,7 +208,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("escapes plain Telegram attachment captions before HTML delivery", async () => {
+  it("keeps shipped Telegram hints compatible when escaping plain captions", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
@@ -223,6 +223,23 @@ describe("plugin session attachments", () => {
       const sendParams = requireFirstSendMessageParams();
       expect(sendParams.content).toBe("1 &lt; 2 &amp; 3 &gt; 2");
       expect(sendParams.parseMode).toBe("HTML");
+    });
+  });
+
+  it("keeps shipped Slack thread hints compatible", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await writeSessionEntry(storePath, {
+        deliveryContext: { channel: "slack", to: "C123" },
+      });
+      mockSuccessfulAttachmentDelivery();
+
+      const result = await sendBundledSessionAttachment({
+        files: [{ path: filePath }],
+        channelHints: { slack: { threadTs: "171234.567" } },
+      });
+
+      expect(result).toMatchObject({ ok: true, channel: "slack", deliveredTo: "C123" });
+      expect(requireFirstSendMessageParams().threadId).toBe("171234.567");
     });
   });
 
@@ -345,7 +362,7 @@ describe("plugin session attachments", () => {
       await expect(
         sendBundledSessionAttachment({
           files: [{ path: filePath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+          channelHints: { forceDocumentMime: "application/pdf" },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -356,7 +373,7 @@ describe("plugin session attachments", () => {
       await expect(
         sendBundledSessionAttachment({
           files: [{ path: fakePdfPath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+          channelHints: { forceDocumentMime: "application/pdf" },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -379,7 +396,7 @@ describe("plugin session attachments", () => {
       const result = await sendBundledSessionAttachment({
         files: [{ path: pdfPath }],
         forceDocument: false,
-        channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        channelHints: { forceDocumentMime: "application/pdf" },
       });
       expectTelegramAttachmentResult(result, 1);
       const sendParams = requireFirstSendMessageParams();

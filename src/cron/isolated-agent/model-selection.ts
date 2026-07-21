@@ -1,3 +1,4 @@
+import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 /** Resolves provider/model precedence for isolated cron runs. */
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -6,7 +7,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
   getModelRefStatus,
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   normalizeModelSelection,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
@@ -24,12 +25,15 @@ type CronModelSelectionSource = "default" | "subagent" | "agent" | "hook" | "pay
 /** Inputs used to resolve the model for one isolated cron run. */
 type ResolveCronModelSelectionParams = {
   cfg: OpenClawConfig;
+  catalogConfig: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   agentConfigOverride?: Pick<AgentConfig, "model" | "subagents">;
   sessionEntry: CronSessionModelOverrides;
   payload: CronJob["payload"];
   isGmailHook: boolean;
   agentId?: string;
+  agentDir: string;
+  workspaceDir: string;
 };
 
 /** Resolved provider/model pair plus the precedence source that selected it. */
@@ -45,23 +49,26 @@ type ResolveCronModelSelectionResult =
       error: string;
     };
 
-function formatAllowedModelRefs(params: { cfg: OpenClawConfig }): string {
-  const configured = params.cfg.agents?.defaults?.models;
-  if (configured && typeof configured === "object" && Object.keys(configured).length > 0) {
-    return Object.keys(configured).toSorted().join(", ");
+function formatAllowedModelRefs(params: { cfg: OpenClawConfig; agentId?: string }): string {
+  const configured = resolveConfiguredModelPolicyAllow(params).refs;
+  if (configured && configured.length > 0) {
+    return configured.toSorted().join(", ");
   }
   return "(none configured)";
 }
 
 function formatCronPayloadModelRejection(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   modelOverride: string;
   error: string;
 }): string {
   const { modelOverride, error } = params;
   if (error.startsWith("model not allowed:")) {
     const modelRef = error.slice("model not allowed:".length).trim();
-    return `cron payload.model '${modelOverride}' rejected by agents.defaults.models allowlist: ${modelRef} is not in [${formatAllowedModelRefs({ cfg: params.cfg })}]`;
+    const policy = resolveConfiguredModelPolicyAllow(params);
+    const policyPath = policy.configPath ?? "agents.defaults.modelPolicy.allow";
+    return `cron payload.model '${modelOverride}' rejected by ${policyPath}: ${modelRef} is not in [${formatAllowedModelRefs(params)}]`;
   }
   return `cron payload.model '${modelOverride}' rejected: ${error}`;
 }
@@ -79,10 +86,16 @@ export async function resolveCronModelSelection(
   let model = resolvedDefault.model;
   let modelSource: CronModelSelectionSource = "default";
 
-  let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
+  let catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>> | undefined;
   const loadCatalogOnce = async () => {
     if (!catalog) {
-      catalog = await loadModelCatalog({ config: params.cfgWithAgentDefaults });
+      catalog = await loadPreparedModelCatalog({
+        config: params.catalogConfig,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        readOnly: true,
+      });
     }
     return catalog;
   };
@@ -99,11 +112,12 @@ export async function resolveCronModelSelection(
     // Subagent/agent model config is advisory here: invalid refs fall back to
     // defaults so an agent config typo does not prevent unrelated cron runs.
     const resolvedSubagent = resolveAllowedModelRef({
-      cfg: params.cfgWithAgentDefaults,
+      cfg: params.cfg,
       catalog: await loadCatalogOnce(),
       raw: subagentModelRaw,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      agentId: params.agentId,
     });
     if (!("error" in resolvedSubagent)) {
       provider = resolvedSubagent.ref.provider;
@@ -128,6 +142,7 @@ export async function resolveCronModelSelection(
       ref: hooksGmailModelRef,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      agentId: params.agentId,
     });
     if (status.allowed) {
       provider = hooksGmailModelRef.provider;
@@ -143,17 +158,19 @@ export async function resolveCronModelSelection(
     // Payload model overrides are explicit cron config, so reject disallowed
     // refs instead of silently falling back to defaults.
     const resolvedOverride = resolveAllowedModelRef({
-      cfg: params.cfgWithAgentDefaults,
+      cfg: params.cfg,
       catalog: await loadCatalogOnce(),
       raw: modelOverride,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
+      agentId: params.agentId,
     });
     if ("error" in resolvedOverride) {
       return {
         ok: false,
         error: formatCronPayloadModelRejection({
-          cfg: params.cfgWithAgentDefaults,
+          cfg: params.cfg,
+          agentId: params.agentId,
           modelOverride,
           error: resolvedOverride.error,
         }),
@@ -172,11 +189,12 @@ export async function resolveCronModelSelection(
       const sessionProviderOverride =
         params.sessionEntry.providerOverride?.trim() || resolvedDefault.provider;
       const resolvedSessionOverride = resolveAllowedModelRef({
-        cfg: params.cfgWithAgentDefaults,
+        cfg: params.cfg,
         catalog: await loadCatalogOnce(),
         raw: `${sessionProviderOverride}/${sessionModelOverride}`,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
+        agentId: params.agentId,
       });
       if (!("error" in resolvedSessionOverride)) {
         provider = resolvedSessionOverride.ref.provider;

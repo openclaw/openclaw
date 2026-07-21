@@ -23,9 +23,11 @@ type GatewayRequestContextParams = {
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
+  ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
@@ -144,7 +146,7 @@ export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContextWithClientLookup {
-  return {
+  const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
@@ -158,9 +160,13 @@ export function createGatewayRequestContext(
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
+    ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    cancelRunBoundApprovals: params.cancelRunBoundApprovals
+      ? (runId) => params.cancelRunBoundApprovals!(runId, context)
+      : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
@@ -244,8 +250,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
-        // Marking is separate from socket close so already-buffered requests
-        // fail authorization even if transport teardown has not completed.
+        // Retire node-owned projections and pending invokes synchronously; socket
+        // close remains separate so already-buffered requests fail authorization.
+        if (gatewayClient.connId) {
+          params.nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
+        }
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }
@@ -326,4 +335,5 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
   };
+  return context;
 }

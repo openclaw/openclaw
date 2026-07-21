@@ -47,6 +47,8 @@ import {
 } from "./operator-approval-store.js";
 import { QuestionManager } from "./question-manager.js";
 import type { ChannelAutostartSuppression } from "./server-channels.js";
+import { cancelRunBoundExecApprovals } from "./server-methods/approval-run-cancellation.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
   claimSharedGatewaySessionGenerationIfOwned,
@@ -148,6 +150,14 @@ export function createGatewayAuxHandlers(params: {
   );
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalIosPushDelivery = createExecApprovalIosPushDelivery({ log: params.log });
+  const cancelRunBoundApprovals = (runId: string, context: GatewayRequestContext): number =>
+    cancelRunBoundExecApprovals({
+      runId,
+      manager: execApprovalManager,
+      context,
+      forwarder: execApprovalForwarder,
+      iosPushDelivery: execApprovalIosPushDelivery,
+    });
   const loadExecApprovalHandlers = createLazyPromise(
     () =>
       import("./server-methods/exec-approval.js").then(({ createExecApprovalHandlers }) =>
@@ -264,6 +274,9 @@ export function createGatewayAuxHandlers(params: {
                     {
                       reason: "reload",
                       activate: false,
+                      publishFailureAsDegraded: true,
+                      canPublishFailureAsDegraded: () =>
+                        getActiveSecretsRuntimeSnapshotRevision() === previousSnapshotRevision,
                     },
                   );
                   const plan = buildReloadPlan(
@@ -526,6 +539,7 @@ export function createGatewayAuxHandlers(params: {
 
   return {
     execApprovalManager,
+    cancelRunBoundApprovals,
     forwardPluginApprovalRequest: execApprovalForwarder.handlePluginApprovalRequested,
     pluginApprovalIosPushDelivery,
     pluginApprovalManager,

@@ -12,6 +12,7 @@ import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
 import {
   createChatAbortMarker,
@@ -398,6 +399,7 @@ export type ChatAbortOps = {
     opts?: { dropIfSlow?: boolean; sessionKeys?: readonly string[] },
   ) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
+  onRunAborted?: (runId: string) => void;
 };
 
 type TrackedChatRunAbortOps = {
@@ -561,6 +563,13 @@ export function abortChatRunById(
   active.projectSessionTerminalPending = true;
   active.projectSessionTerminalObservedAt = undefined;
   active.registrationCleanupRequested = true;
+  // Approval cancellation and run abort share this owner so authorization
+  // cannot outlive the active run whose controller is about to terminate.
+  try {
+    ops.onRunAborted?.(runId);
+  } catch {
+    // Approval persistence failure must not prevent the requested run abort.
+  }
   active.controller.abort(createChatAbortSignalReason(stopReason));
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
@@ -626,19 +635,28 @@ export function updateChatRunProvider(
 export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {
+    cfg: OpenClawConfig;
     providerId: string;
+    agentId?: string;
     stopReason?: string;
   },
 ): { runIds: string[] } {
   const providerId = normalizeProviderIdForActiveRun(params.providerId);
+  const agentId = normalizeActiveAgentId(params.agentId);
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
   if (!providerId) {
     return { runIds: [] };
   }
-  const matches = [...ops.chatAbortControllers.entries()].filter(
-    ([, entry]) =>
-      normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
-      normalizeProviderIdForActiveRun(entry.providerId) === providerId,
-  );
+  const matches = [...ops.chatAbortControllers.entries()].filter(([, entry]) => {
+    const entryAgentId = normalizeActiveAgentId(
+      entry.agentId ?? parseAgentSessionKey(entry.sessionKey)?.agentId ?? defaultAgentId,
+    );
+    return (
+      (!agentId || entryAgentId === agentId) &&
+      (normalizeProviderIdForActiveRun(entry.authProviderId) === providerId ||
+        normalizeProviderIdForActiveRun(entry.providerId) === providerId)
+    );
+  });
   const runIds: string[] = [];
   for (const [runId, entry] of matches) {
     const result = abortChatRunById(ops, {

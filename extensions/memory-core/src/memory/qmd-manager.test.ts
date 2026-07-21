@@ -49,6 +49,7 @@ const MEMORY_EMBEDDING_PROVIDERS_KEY = Symbol.for("openclaw.memoryEmbeddingProvi
 const MCPORTER_STATE_KEY = Symbol.for("openclaw.mcporterState");
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
+const BUILT_IN_WATCH_DEBOUNCE_MS = 1_500;
 
 type WatchOptions = {
   ignored?: (watchPath: string) => boolean;
@@ -59,9 +60,11 @@ type LeaseCall = Parameters<PluginStateLeaseRunner>;
 type MockStream = EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
 
 interface MockChild extends EventEmitter {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
   stdout: MockStream;
   stderr: MockStream;
-  kill: (signal?: NodeJS.Signals) => void;
+  kill: (signal?: NodeJS.Signals) => boolean;
   closeWith: (code?: number | null) => void;
 }
 
@@ -69,13 +72,18 @@ function createMockChild(params?: { autoClose?: boolean; closeDelayMs?: number }
   const stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const stderr = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
   const child: MockChild = Object.assign(new EventEmitter(), {
+    exitCode: null,
+    signalCode: null,
     stdout,
     stderr,
     closeWith: (code: number | null = 0) => {
-      child.emit("close", code);
+      child.exitCode = code;
+      child.emit("close", code, child.signalCode);
     },
-    kill: () => {
+    kill: (signal: NodeJS.Signals = "SIGTERM") => {
+      child.signalCode = signal;
       // Let timeout rejection win in tests that simulate hung QMD commands.
+      return true;
     },
   });
   if (params?.autoClose !== false) {
@@ -873,7 +881,20 @@ describe("QmdMemoryManager", () => {
     cfg?: OpenClawConfig;
     agentId?: string;
   }) {
-    const cfgToUse = params?.cfg ?? cfg;
+    const sourceCfg = params?.cfg ?? cfg;
+    const cfgToUse: OpenClawConfig = {
+      ...sourceCfg,
+      agents: {
+        ...sourceCfg.agents,
+        defaults: {
+          ...sourceCfg.agents?.defaults,
+          memorySearch: {
+            rememberAcrossConversations: false,
+            ...sourceCfg.agents?.defaults?.memorySearch,
+          },
+        },
+      },
+    };
     const selectedAgentId = params?.agentId ?? agentId;
     const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId: selectedAgentId });
     const manager = trackManager(
@@ -937,6 +958,7 @@ describe("QmdMemoryManager", () => {
           memorySearch: {
             provider: "openai",
             model: "mock-embed",
+            rememberAcrossConversations: false,
             store: { vector: { enabled: false } },
             sync: { watch: false, onSessionStart: false, onSearch: false },
           },
@@ -1124,7 +1146,7 @@ describe("QmdMemoryManager", () => {
             provider: "openai",
             model: "mock-embed",
             store: { vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            sync: { watch: true, onSessionStart: false, onSearch: false },
           },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -1172,7 +1194,7 @@ describe("QmdMemoryManager", () => {
     });
     expect(manager.status().dirty).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
 
     const updateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(updateCalls).toHaveLength(1);
@@ -1192,7 +1214,7 @@ describe("QmdMemoryManager", () => {
             provider: "openai",
             model: "mock-embed",
             store: { vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            sync: { watch: true, onSessionStart: false, onSearch: false },
           },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -1239,7 +1261,7 @@ describe("QmdMemoryManager", () => {
             provider: "openai",
             model: "mock-embed",
             store: { vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            sync: { watch: true, onSessionStart: false, onSearch: false },
           },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -1277,7 +1299,7 @@ describe("QmdMemoryManager", () => {
             provider: "openai",
             model: "mock-embed",
             store: { vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+            sync: { watch: true, onSessionStart: false, onSearch: false },
           },
         },
         list: [{ id: agentId, default: true, workspace: workspaceDir }],
@@ -1307,10 +1329,10 @@ describe("QmdMemoryManager", () => {
     });
     await fs.writeFile(notesPath, "hello updated");
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(0);
 
-    await vi.advanceTimersByTimeAsync(25);
+    await vi.advanceTimersByTimeAsync(BUILT_IN_WATCH_DEBOUNCE_MS);
     expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(1);
 
     await manager.close();

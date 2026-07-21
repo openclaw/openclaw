@@ -201,6 +201,23 @@ describe("findSettingsSearchBlocks", () => {
     ]);
   });
 
+  it("routes workspace queries to the sessions-hub pages", () => {
+    const matches = findSettingsSearchBlocks({
+      query: "worktree",
+      schema: null,
+      value: null,
+      uiHints: {},
+    });
+
+    expect(matches).toEqual([
+      expect.objectContaining({
+        routeId: "worktrees",
+        label: "Managed Worktrees",
+        hash: "",
+      }),
+    ]);
+  });
+
   it("does not create block results for an empty query", () => {
     expect(
       findSettingsSearchBlocks({
@@ -210,5 +227,24 @@ describe("findSettingsSearchBlocks", () => {
         uiHints: {},
       }),
     ).toEqual([]);
+  });
+
+  it("only exposes the identity block when the connection has an identity", () => {
+    const search = (identityAvailable: boolean) =>
+      findSettingsSearchBlocks({
+        query: "avatar",
+        schema: null,
+        value: null,
+        uiHints: {},
+        identityAvailable,
+      });
+
+    expect(search(false)).toEqual([]);
+    expect(search(true)).toEqual([
+      expect.objectContaining({
+        routeId: "profile",
+        hash: "#settings-profile-identity",
+      }),
+    ]);
   });
 });

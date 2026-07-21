@@ -5,8 +5,18 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "agent-default"));
-const resolveAgentDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default"));
-const resolveAgentWorkspaceDir = vi.hoisted(() => vi.fn(() => "/tmp/agent-default/workspace"));
+const listAgentIds = vi.hoisted(() =>
+  vi.fn(
+    (cfg: { agents?: { list?: Array<{ id: string }> } }) =>
+      cfg.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+  ),
+);
+const resolveAgentDir = vi.hoisted(() =>
+  vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(() => "/tmp/agent-default"),
+);
+const resolveAgentWorkspaceDir = vi.hoisted(() =>
+  vi.fn<(_cfg: OpenClawConfig, agentId: string) => string>(() => "/tmp/agent-default/workspace"),
+);
 const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
@@ -30,6 +40,7 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds,
   resolveDefaultAgentId,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -61,7 +72,7 @@ vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
   resolveQmdBinaryUnavailableReason: (result: { reason?: string }) => result.reason ?? "binary",
 }));
 
-vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
+vi.mock("../plugin-sdk/memory-core-bundled-runtime.js", () => ({
   auditDreamingArtifacts,
   auditShortTermPromotionArtifacts,
   repairDreamingArtifacts,
@@ -169,6 +180,10 @@ describe("noteMemorySearchHealth", () => {
   beforeEach(() => {
     note.mockClear();
     resolveDefaultAgentId.mockClear();
+    listAgentIds.mockImplementation(
+      (config: { agents?: { list?: Array<{ id: string }> } }) =>
+        config.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+    );
     resolveAgentDir.mockClear();
     resolveAgentWorkspaceDir.mockClear();
     resolveMemorySearchConfig.mockReset();
@@ -483,6 +498,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithLancedb = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
@@ -504,6 +520,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithSlotOnly = {
+      session: { dmScope: "per-peer" },
       plugins: { slots: { memory: "memory-lancedb" } },
     } as unknown as OpenClawConfig;
 
@@ -521,6 +538,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithDisabledLancedb = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: false } },
@@ -541,6 +559,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
     const cfgWithPlaceholderEntry = {
+      session: { dmScope: "per-peer" },
       plugins: {
         slots: { memory: "memory-lancedb" },
         entries: { "memory-lancedb": {} },
@@ -704,7 +723,7 @@ describe("noteMemorySearchHealth", () => {
       await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
       expect(firstNoteMessage()).toBe(
-        'Remember across conversations is enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Turn off Remember across conversations or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
+        'Remember across conversations is effectively enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Set memorySearch.rememberAcrossConversations to false or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
       );
     },
   );
@@ -726,7 +745,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
     expect(firstNoteMessage()).toBe(
-      'Remember across conversations is enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or turn off Remember across conversations.',
+      'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Enable the plugin or set memorySearch.rememberAcrossConversations to false.',
     );
   });
 
@@ -774,7 +793,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
     expect(firstNoteMessage()).toBe(
-      'Remember across conversations is enabled for agent "personal", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or turn off Remember across conversations.',
+      'Remember across conversations is effectively enabled for agent "personal", but Active Memory does not allow memory_search. Add memory_search to the plugin toolsAllow list or set memorySearch.rememberAcrossConversations to false.',
     );
   });
 
@@ -792,7 +811,7 @@ describe("noteMemorySearchHealth", () => {
     await noteMemorySearchHealth(qmdCfg, { skipQmdBinaryProbe: true });
 
     expect(firstNoteMessage()).toBe(
-      'Remember across conversations is enabled for agent "personal", but memory search is disabled. Enable memory search or turn off Remember across conversations.',
+      'Remember across conversations is effectively enabled for agent "personal", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.',
     );
   });
 
@@ -1628,9 +1647,29 @@ describe("noteMemorySearchHealth", () => {
 
     await noteMemorySearchHealth(cfg);
 
-    expect(noteWorkspaceMemoryHealth).toHaveBeenCalledWith(cfg);
+    expect(noteWorkspaceMemoryHealth).toHaveBeenCalledWith(cfg, {
+      agentId: "agent-default",
+      workspaceDir: "/tmp/agent-default/workspace",
+      labelAgent: false,
+    });
     const workspaceNote = note.mock.calls.find(([, title]) => title === "Workspace memory");
     expect(workspaceNote).toBeUndefined();
+  });
+
+  it("labels memory readiness failures for a secondary agent", async () => {
+    listAgentIds.mockReturnValue(["agent-default", "secondary"]);
+    resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);
+    resolveMemorySearchConfig.mockImplementation((_cfg, agentId) =>
+      agentId === "agent-default" ? { provider: "none", local: {}, remote: {} } : undefined,
+    );
+
+    await noteMemorySearchHealth(cfg, { includeWorkspaceMemoryHealth: false });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toBe(
+      'Agent "secondary": Remember across conversations is effectively enabled for agent "secondary", but memory search is disabled. Enable memory search or set memorySearch.rememberAcrossConversations to false.',
+    );
   });
 });
 
@@ -1639,6 +1678,10 @@ describe("memory recall doctor integration", () => {
 
   beforeEach(() => {
     note.mockClear();
+    listAgentIds.mockImplementation(
+      (config: { agents?: { list?: Array<{ id: string }> } }) =>
+        config.agents?.list?.map((agent) => agent.id) ?? ["agent-default"],
+    );
     resetMemoryRecallMocks();
   });
 
@@ -1731,7 +1774,15 @@ describe("memory recall doctor integration", () => {
 
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
-    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({ cfg, prompter });
+    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({
+      cfg,
+      prompter,
+      scope: {
+        agentId: "agent-default",
+        workspaceDir: "/tmp/agent-default/workspace",
+        labelAgent: false,
+      },
+    });
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
     expect(repairShortTermPromotionArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
@@ -1774,7 +1825,15 @@ describe("memory recall doctor integration", () => {
 
     await maybeRepairMemoryRecallHealth({ cfg, prompter });
 
-    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({ cfg, prompter });
+    expect(maybeRepairWorkspaceMemoryHealth).toHaveBeenCalledWith({
+      cfg,
+      prompter,
+      scope: {
+        agentId: "agent-default",
+        workspaceDir: "/tmp/agent-default/workspace",
+        labelAgent: false,
+      },
+    });
     expect(prompter.confirmRuntimeRepair).toHaveBeenCalled();
     expect(repairDreamingArtifacts).toHaveBeenCalledWith({
       workspaceDir: "/tmp/agent-default/workspace",
@@ -1783,6 +1842,63 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
     expect(message).toContain("archived session-ingestion state");
+  });
+
+  it("audits and repairs each agent with isolated managers and paths", async () => {
+    getActiveMemorySearchManager.mockClear();
+    listAgentIds.mockReturnValue(["agent-default", "secondary"]);
+    resolveAgentDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
+    resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}/workspace`);
+    const closes = new Map<string, ReturnType<typeof vi.fn>>();
+    getActiveMemorySearchManager.mockImplementation(async ({ agentId }) => {
+      const close = vi.fn(async () => {});
+      closes.set(agentId, close);
+      return {
+        manager: {
+          status: () => ({ workspaceDir: `/tmp/${agentId}/workspace`, backend: "builtin" }),
+          close,
+        },
+      };
+    });
+    auditShortTermPromotionArtifacts.mockImplementation(async ({ workspaceDir }) => ({
+      storePath: `${workspaceDir}/memory/.dreams/short-term-recall.json`,
+      lockPath: `${workspaceDir}/memory/.dreams/short-term-promotion.lock`,
+      exists: true,
+      entryCount: 1,
+      promotedCount: 0,
+      spacedEntryCount: 0,
+      conceptTaggedEntryCount: 1,
+      invalidEntryCount: workspaceDir.includes("secondary") ? 1 : 0,
+      issues: workspaceDir.includes("secondary")
+        ? [
+            {
+              severity: "warn",
+              code: "recall-store-invalid",
+              message: "Secondary recall is invalid.",
+              fixable: true,
+            },
+          ]
+        : [],
+    }));
+    repairShortTermPromotionArtifacts.mockResolvedValue({
+      changed: true,
+      removedInvalidEntries: 1,
+      removedOverflowEntries: 0,
+      rewroteStore: true,
+      removedStaleLock: false,
+    });
+    const prompter = createPrompter();
+
+    await maybeRepairMemoryRecallHealth({ cfg, prompter });
+
+    expect(getActiveMemorySearchManager).toHaveBeenCalledTimes(2);
+    expect(closes.get("agent-default")).toHaveBeenCalledOnce();
+    expect(closes.get("secondary")).toHaveBeenCalledOnce();
+    expect(repairShortTermPromotionArtifacts).toHaveBeenCalledTimes(1);
+    expect(repairShortTermPromotionArtifacts).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/secondary/workspace",
+    });
+    expect(String(note.mock.calls.at(-1)?.[0])).toContain('Agent "secondary":');
   });
 });
 

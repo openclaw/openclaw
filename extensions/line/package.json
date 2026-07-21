@@ -30,6 +30,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "line",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "LINE_CHANNEL_ACCESS_TOKEN",
+            "LINE_CHANNEL_SECRET"
+          ]
+        }
+      },
       "label": "LINE",
       "selectionLabel": "LINE (Messaging API)",
       "detailLabel": "LINE Bot",
@@ -38,7 +46,13 @@
       "blurb": "LINE Messaging API webhook bot.",
       "systemImage": "message",
       "order": 75,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--secret-file <path>",
+          "description": "Read channel shared secret from file"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/line",

@@ -139,6 +139,8 @@ describe("renderModelSetup", () => {
       render(nothing, container);
     }
     document.body.replaceChildren();
+    vi.unstubAllGlobals();
+    delete (document as unknown as { execCommand?: unknown }).execCommand;
   });
 
   it("renders candidate, unavailable, sign-in, and manual sections", () => {
@@ -336,15 +338,58 @@ describe("renderModelSetup", () => {
     expect(text(container)).toContain("Expires in 10 minutes");
   });
 
-  it("renders sensitive text, select, and confirm steps", () => {
-    const sensitive = wizardStep(
-      { id: "token", type: "text", sensitive: true, placeholder: "Paste token" },
-      "secret",
-    );
-    expect(sensitive.querySelector<HTMLInputElement>('input[name="wizard-text"]')?.type).toBe(
-      "password",
-    );
+  it("copies device codes through the plain-HTTP clipboard fallback", async () => {
+    vi.stubGlobal("navigator", {});
+    let copiedText: string | undefined;
+    const execCommand = vi.fn().mockImplementation(() => {
+      copiedText = document.querySelector<HTMLTextAreaElement>("textarea")?.value;
+      return true;
+    });
+    (document as unknown as { execCommand: typeof execCommand }).execCommand = execCommand;
+    const container = wizardStep({
+      id: "device",
+      type: "note",
+      deviceCode: { code: "ABCD-EFGH" },
+    });
 
+    const copy = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Copy",
+    );
+    expect(copy).toBeDefined();
+    copy?.click();
+
+    await vi.waitFor(() => expect(execCommand).toHaveBeenCalledWith("copy"));
+    expect(copiedText).toBe("ABCD-EFGH");
+    expect(document.querySelector("textarea")).toBeNull();
+  });
+
+  it.each([
+    { sensitive: false, expectedType: "text" },
+    { sensitive: true, expectedType: "password" },
+  ])(
+    "labels a $expectedType input with the visible text-step message",
+    ({ sensitive, expectedType }) => {
+      const container = wizardStep(
+        {
+          id: "access-value",
+          type: "text",
+          message: "Provider access value",
+          sensitive,
+          placeholder: "Enter value",
+        },
+        "initial value",
+      );
+      const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
+      const label = container.querySelector<HTMLLabelElement>(
+        'label[for="model-setup-wizard-text-input"]',
+      );
+      expect(label?.textContent).toBe("Provider access value");
+      expect(input?.type).toBe(expectedType);
+      expect(input?.labels).toContain(label);
+    },
+  );
+
+  it("renders select and confirm steps", () => {
     const select = wizardStep(
       {
         id: "account",

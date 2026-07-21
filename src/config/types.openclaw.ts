@@ -81,16 +81,6 @@ export type SecurityConfig = {
   };
 };
 
-export type WorktreesConfig = {
-  /** Retention limits enforced by hourly managed-worktree cleanup. */
-  cleanup?: {
-    /** Max managed worktrees to retain across all repositories; oldest evictable ones are snapshotted and removed first. 0 or unset disables the count limit. */
-    maxCount?: number;
-    /** Max total size in GB across all managed worktrees. 0 or unset disables the size limit. */
-    maxTotalSizeGb?: number;
-  };
-};
-
 export type SurfaceConfigEntry = {
   /** Surface-specific silent reply policy for channels or UI integrations. */
   silentReply?: SilentReplyPolicyShape;
@@ -105,6 +95,11 @@ export type OpenClawConfig = {
     lastTouchedVersion?: string;
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
+    /** One-time doctor migrations already applied to this config. */
+    migrations?: {
+      /** Legacy default/per-agent model-map restrictions were preserved or confirmed unrestricted. */
+      modelPolicyAllowlist?: true;
+    };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -143,6 +138,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** Model whose lean-mode default is owned by inference onboarding. */
+    localModelLeanAutoModel?: string;
     /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
     securityAcknowledgedAt?: string;
   };
@@ -167,12 +164,6 @@ export type OpenClawConfig = {
     auto?: {
       /** Enable background auto-update checks and apply logic. Default: false. */
       enabled?: boolean;
-      /** Stable channel minimum delay before auto-apply. Default: 6. */
-      stableDelayHours?: number;
-      /** Additional stable-channel jitter window. Default: 12. */
-      stableJitterHours?: number;
-      /** Beta channel check cadence. Default: 1 hour. */
-      betaCheckIntervalHours?: number;
     };
   };
   /** Browser automation and browser plugin integration settings. */
@@ -204,16 +195,16 @@ export type OpenClawConfig = {
       chatShowThinking?: boolean;
       /** Show tool call cards in chat. */
       chatShowToolCalls?: boolean;
+      /** Keep model commentary in Control UI transcripts after a run. */
+      chatPersistCommentary?: boolean;
       /** Chat send shortcut: Enter sends, or modifier+Enter sends. */
       chatSendShortcut?: "enter" | "modifier-enter";
-    };
-  };
-  /** Terminal UI display settings. */
-  tui?: {
-    /** Footer display settings for the terminal UI. */
-    footer?: {
-      /** Show the remote Gateway hostname in the footer for non-local URL-backed connections. */
-      showRemoteHost?: boolean;
+      /** Follow-up handling while a run is active; unset uses the server queue mode. */
+      chatFollowUpMode?: "steer" | "queue";
+      /** Ordered page and pinned-session entries shown in the Control UI sidebar. */
+      sidebarEntries?: string[];
+      /** Show live agent activity beneath running Control UI sidebar sessions. */
+      sidebarLiveActivity?: boolean;
     };
   };
   /** Secret providers, defaults, and ref-resolution settings. */
@@ -258,8 +249,6 @@ export type OpenClawConfig = {
   channels?: ChannelsConfig;
   /** Cron schedule and retention settings. */
   cron?: CronConfig;
-  /** Managed worktree retention settings. */
-  worktrees?: WorktreesConfig;
   /** Transcript persistence and export settings. */
   transcripts?: TranscriptsConfig;
   /** Commitment/reminder extraction settings. */
@@ -323,6 +312,8 @@ export type LegacyConfigIssue = {
 export type ConfigFileSnapshot = {
   /** Config file path that was read. */
   path: string;
+  /** Lexical and canonical file paths reached while resolving $include directives. */
+  includedPaths?: string[];
   /** Whether the config file exists on disk. */
   exists: boolean;
   /** Raw file contents before parsing; null when missing. */
