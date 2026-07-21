@@ -104,9 +104,9 @@ import {
   takeCommandSessionMetadataChanges,
   type CommandSessionMetadataChange,
 } from "./command-session-metadata.js";
+import { hasExplicitCommandContextText } from "./context-text.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
-import { hasExplicitCommandContextText } from "./context-text.js";
 import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
