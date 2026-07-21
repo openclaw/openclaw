@@ -71,6 +71,12 @@ public enum WorkerTunnelStatus: String, Codable, Sendable {
     case reconnecting = "reconnecting"
 }
 
+public enum WorktreeRepositoryStatus: String, Codable, Sendable {
+    case git = "git"
+    case notGit = "not_git"
+    case unavailable = "unavailable"
+}
+
 public enum NodePresenceAliveReason: String, Codable, Sendable {
     case background = "background"
     case silentPush = "silent_push"
@@ -2985,15 +2991,19 @@ public struct WorktreeBranch: Codable, Sendable {
 
 public struct WorktreesBranchesParams: Codable, Sendable {
     public let reporoot: String
+    public let includerepositorystatus: Bool?
 
     public init(
-        reporoot: String)
+        reporoot: String,
+        includerepositorystatus: Bool? = nil)
     {
         self.reporoot = reporoot
+        self.includerepositorystatus = includerepositorystatus
     }
 
     private enum CodingKeys: String, CodingKey {
         case reporoot = "repoRoot"
+        case includerepositorystatus = "includeRepositoryStatus"
     }
 }
 
@@ -3001,21 +3011,25 @@ public struct WorktreesBranchesResult: Codable, Sendable {
     public let branches: [WorktreeBranch]
     public let defaultbranch: String?
     public let headbranch: String?
+    public let repositorystatus: WorktreeRepositoryStatus?
 
     public init(
         branches: [WorktreeBranch],
         defaultbranch: String? = nil,
-        headbranch: String? = nil)
+        headbranch: String? = nil,
+        repositorystatus: WorktreeRepositoryStatus? = nil)
     {
         self.branches = branches
         self.defaultbranch = defaultbranch
         self.headbranch = headbranch
+        self.repositorystatus = repositorystatus
     }
 
     private enum CodingKeys: String, CodingKey {
         case branches
         case defaultbranch = "defaultBranch"
         case headbranch = "headBranch"
+        case repositorystatus = "repositoryStatus"
     }
 }
 
