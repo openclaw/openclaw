@@ -837,6 +837,51 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBeUndefined();
   });
 
+  it("keeps semantic route prefixes after target normalization", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "alpha",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "alpha",
+            outbound: createStubOutbound("Alpha"),
+            messaging: {
+              targetPrefixes: ["alpha"],
+              targetResolver: {
+                resolveTarget: async ({ input }) =>
+                  input === "user:U12345678"
+                    ? { to: "U12345678", kind: "user" as const, source: "normalized" as const }
+                    : null,
+              },
+              resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) =>
+                buildChannelOutboundSessionRoute({
+                  cfg,
+                  agentId,
+                  channel: "alpha",
+                  accountId,
+                  peer: { kind: "direct", id: target.replace(/^user:/i, "") },
+                  chatType: "direct",
+                  from: target,
+                  to: `user:${target.replace(/^user:/i, "")}`,
+                }),
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "alpha",
+      to: "user:U12345678",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("user:U12345678");
+    expect(result.threadId).toBeUndefined();
+  });
+
   it("keeps provider-qualified normalized targets for provider route parsing", async () => {
     setMainSessionEntry(undefined);
     setActivePluginRegistry(

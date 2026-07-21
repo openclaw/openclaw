@@ -426,10 +426,11 @@ export async function resolveDeliveryTarget(
     channel,
   });
   const routeShouldCanonicalizeTarget =
-    route && (route.threadId !== undefined || route.to !== routeTargetCandidate);
+    route && (route.threadId !== undefined || route.to !== toCandidate);
   if (route && routeCanCanonicalizeTarget && routeShouldCanonicalizeTarget) {
     // Prefer channel-canonical targets when the plugin can prove the route; this
-    // keeps stored session keys and delivery targets aligned for threaded sends.
+    // keeps stored delivery targets and later transcript mirrors aligned with the
+    // channel route, even when target normalization strips a semantic prefix.
     const routeTo = stripSelectedProviderPrefix({
       channel,
       to: route.to,
