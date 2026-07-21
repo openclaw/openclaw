@@ -1,14 +1,17 @@
-import type { ChildProcess, spawn } from "node:child_process";
+import type { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { terminateCodexResumeProcess } from "./node-cli-process-tree.js";
 
 type CodexResumeProcessTreeRuntime = NonNullable<Parameters<typeof terminateCodexResumeProcess>[1]>;
+type ResumeChildProcess = Parameters<typeof terminateCodexResumeProcess>[0];
 
 function createChild(pid = 4321) {
-  return {
+  return Object.assign(new EventEmitter(), {
     pid,
+    exitCode: null as number | null,
     kill: vi.fn(() => true),
-  } as Pick<ChildProcess, "kill" | "pid">;
+  }) as ResumeChildProcess;
 }
 
 function createRuntime(platform: NodeJS.Platform = "win32") {
@@ -193,6 +196,27 @@ describe("signalCodexResumeProcessTree", () => {
     }
   });
 
+  it("cancels a stalled helper and does not retry after the original child exits", () => {
+    vi.useFakeTimers();
+    try {
+      const child = createChild();
+      const { runtime, taskkillKill, unref } = createRuntime();
+
+      terminateCodexResumeProcess(child, runtime);
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+      vi.advanceTimersByTime(2_000);
+
+      expect(runtime.spawn).toHaveBeenCalledOnce();
+      expect(taskkillKill).toHaveBeenCalledOnce();
+      expect(taskkillKill).toHaveBeenCalledWith("SIGKILL");
+      expect(unref).toHaveBeenCalledOnce();
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("preserves the two-stage direct-child termination outside Windows", () => {
     vi.useFakeTimers();
     try {
@@ -218,8 +242,11 @@ describe("signalCodexResumeProcessTree", () => {
     try {
       const child = {
         pid: undefined,
+        exitCode: null,
         kill: vi.fn(() => true),
-      } as Pick<ChildProcess, "kill" | "pid">;
+        once: vi.fn(),
+        off: vi.fn(),
+      } as unknown as ResumeChildProcess;
       const { runtime, spawnTaskkill } = createRuntime();
 
       terminateCodexResumeProcess(child, runtime);

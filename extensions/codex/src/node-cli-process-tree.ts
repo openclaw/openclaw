@@ -7,7 +7,7 @@ const WINDOWS_TASKKILL_MAX_ATTEMPTS = 2;
 const WINDOWS_TASKKILL_TIMEOUT_MS = RESUME_FORCE_KILL_DELAY_MS / WINDOWS_TASKKILL_MAX_ATTEMPTS;
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 
-type ResumeChildProcess = Pick<ChildProcess, "kill" | "pid">;
+type ResumeChildProcess = Pick<ChildProcess, "exitCode" | "kill" | "off" | "once" | "pid">;
 
 type CodexResumeProcessTreeRuntime = {
   platform: NodeJS.Platform;
@@ -76,11 +76,46 @@ function terminateWindowsProcessTree(
   const taskkillPath = resolveCodexWindowsTaskkillPath(runtime.env);
   const args = ["/F", "/T", "/PID", String(pid)];
   let settled = false;
+  let activeTaskkill: ChildProcess | undefined;
+  let activeWatchdog: NodeJS.Timeout | undefined;
+  function handleChildExit() {
+    finishForChildExit();
+  }
+  const clearActiveAttempt = () => {
+    if (activeWatchdog) {
+      clearTimeout(activeWatchdog);
+      activeWatchdog = undefined;
+    }
+    activeTaskkill = undefined;
+  };
+  const removeChildExitListener = () => child.off("exit", handleChildExit);
+  const finishForChildExit = () => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    if (activeWatchdog) {
+      clearTimeout(activeWatchdog);
+      activeWatchdog = undefined;
+    }
+    if (activeTaskkill) {
+      try {
+        activeTaskkill.kill("SIGKILL");
+      } catch {
+        // The helper may already have exited.
+      }
+      activeTaskkill.unref();
+      activeTaskkill = undefined;
+    }
+    removeChildExitListener();
+  };
   const fallbackToChild = () => {
     if (settled) {
       return;
     }
     settled = true;
+    clearActiveAttempt();
+    removeChildExitListener();
     child.kill("SIGKILL");
   };
   const finishSuccessfully = () => {
@@ -88,9 +123,13 @@ function terminateWindowsProcessTree(
       return;
     }
     settled = true;
+    clearActiveAttempt();
+    removeChildExitListener();
   };
+  const canRetryOriginalChild = () => !settled && child.exitCode === null;
   const runTreeKillAttempt = (attempt: number) => {
-    if (settled) {
+    if (!canRetryOriginalChild()) {
+      finishForChildExit();
       return;
     }
     let attemptSettled = false;
@@ -103,7 +142,9 @@ function terminateWindowsProcessTree(
       if (watchdog) {
         clearTimeout(watchdog);
       }
-      if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
+      if (!canRetryOriginalChild()) {
+        finishForChildExit();
+      } else if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
         runTreeKillAttempt(attempt + 1);
       } else {
         fallbackToChild();
@@ -114,6 +155,7 @@ function terminateWindowsProcessTree(
         stdio: "ignore",
         windowsHide: true,
       });
+      activeTaskkill = taskkill;
       taskkill.once("error", failAttempt);
       taskkill.once("close", (code) => {
         if (attemptSettled || settled) {
@@ -125,6 +167,8 @@ function terminateWindowsProcessTree(
         }
         if (code === 0) {
           finishSuccessfully();
+        } else if (!canRetryOriginalChild()) {
+          finishForChildExit();
         } else if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
           runTreeKillAttempt(attempt + 1);
         } else {
@@ -142,18 +186,22 @@ function terminateWindowsProcessTree(
           // Continue with a fresh tree-level attempt below.
         }
         taskkill.unref();
-        if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
+        if (!canRetryOriginalChild()) {
+          finishForChildExit();
+        } else if (attempt < WINDOWS_TASKKILL_MAX_ATTEMPTS) {
           runTreeKillAttempt(attempt + 1);
         } else {
           fallbackToChild();
         }
       }, WINDOWS_TASKKILL_TIMEOUT_MS);
+      activeWatchdog = watchdog;
       watchdog.unref?.();
     } catch {
       failAttempt();
     }
   };
 
+  child.once("exit", handleChildExit);
   runTreeKillAttempt(1);
 }
 
@@ -161,6 +209,9 @@ export function terminateCodexResumeProcess(
   child: ResumeChildProcess,
   runtime: CodexResumeProcessTreeRuntime = defaultRuntime,
 ): NodeJS.Timeout | undefined {
+  if (child.exitCode !== null) {
+    return undefined;
+  }
   if (runtime.platform === "win32" && typeof child.pid === "number") {
     terminateWindowsProcessTree(child, child.pid, runtime);
     return undefined;
