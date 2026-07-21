@@ -62,6 +62,9 @@ internal fun ControlUiWebView(
         WebSettingsCompat.setAlgorithmicDarkeningAllowed(webSettings, false)
       }
       webView.overScrollMode = View.OVER_SCROLL_NEVER
+      // The native gateway connection already established this route's trust.
+      // Reuse only that exact accepted fingerprint; every other SSL error cancels.
+      // The same client protects both terminal and dashboard pages.
       webView.webViewClient = ControlUiWebViewClient(page)
       installControlUiAuthScript(webView, page)
       webView.loadUrl(url)
