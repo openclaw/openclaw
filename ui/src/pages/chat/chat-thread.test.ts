@@ -8,8 +8,10 @@ import {
   coalesceStreamRuns,
   collapseCompletedTurnWork,
   getExpandedToolCards,
+  getExpandedToolCardsVersion,
   persistedMessageEntryId,
   resetChatThreadState,
+  setToolCardExpanded,
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 
@@ -2876,6 +2878,84 @@ describe("tool expansion state", () => {
     syncToolCardExpansionState("tool-name-session", [group], true);
 
     expect(getExpandedToolCards("tool-name-session").get("toolmsg:tool-name-result")).toBe(true);
+  });
+
+  it("bumps the render version on real changes but not on no-ops", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-1",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-1",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-1",
+                name: "browser.open",
+                arguments: { url: "https://example.com" },
+              },
+            ],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+
+    expect(getExpandedToolCardsVersion("v-session")).toBe(0);
+
+    // Initializing a previously unseen tool card is a real change.
+    syncToolCardExpansionState("v-session", [group], false);
+    const afterInit = getExpandedToolCardsVersion("v-session");
+    expect(afterInit).toBeGreaterThan(0);
+
+    // Re-syncing the same cards changes nothing, so the version is stable.
+    syncToolCardExpansionState("v-session", [group], false);
+    expect(getExpandedToolCardsVersion("v-session")).toBe(afterInit);
+
+    // A real toggle bumps once; setting the same value is a no-op.
+    setToolCardExpanded("v-session", "assistant-1:toolcard:0", true);
+    expect(getExpandedToolCardsVersion("v-session")).toBe(afterInit + 1);
+    setToolCardExpanded("v-session", "assistant-1:toolcard:0", true);
+    expect(getExpandedToolCardsVersion("v-session")).toBe(afterInit + 1);
+  });
+
+  it("prunes expansion state for tool cards no longer in the transcript", () => {
+    resetChatThreadState();
+    const group: MessageGroup = {
+      kind: "group",
+      key: "assistant-1",
+      role: "assistant",
+      messages: [
+        {
+          key: "assistant-1",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolcall",
+                id: "call-1",
+                name: "browser.open",
+                arguments: { url: "https://example.com" },
+              },
+            ],
+          },
+        },
+      ],
+      timestamp: 1,
+      isStreaming: false,
+    };
+
+    syncToolCardExpansionState("prune-session", [group], false);
+    expect(getExpandedToolCards("prune-session").has("assistant-1:toolcard:0")).toBe(true);
+
+    // The message is gone from the (full) transcript: its state must not linger.
+    syncToolCardExpansionState("prune-session", [], false);
+    expect(getExpandedToolCards("prune-session").has("assistant-1:toolcard:0")).toBe(false);
   });
 });
 

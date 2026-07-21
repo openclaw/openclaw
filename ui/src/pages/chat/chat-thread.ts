@@ -101,6 +101,7 @@ type StreamRunRenderItem = {
 const chatItemsByPane = new Map<string, Map<string, CachedChatItems>>();
 const expandedToolCardsBySession = new Map<string, Map<string, boolean>>();
 const initializedToolCardsBySession = new Map<string, Set<string>>();
+const expandedToolCardsVersionBySession = new Map<string, number>();
 const lastAutoExpandPrefBySession = new Map<string, boolean>();
 
 export function resetChatThreadState(paneId?: string): void {
@@ -112,6 +113,7 @@ export function resetChatThreadState(paneId?: string): void {
   resetWorkingProgress();
   expandedToolCardsBySession.clear();
   initializedToolCardsBySession.clear();
+  expandedToolCardsVersionBySession.clear();
   lastAutoExpandPrefBySession.clear();
 }
 
@@ -2065,18 +2067,35 @@ export function deletedChatItemsSignature(
   return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
 }
 
-export function stableBooleanMapSignature(values: ReadonlyMap<string, boolean>): string {
-  if (values.size === 0) {
-    return "";
-  }
-  return Array.from(values)
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([key, value]) => `${key}:${value ? "1" : "0"}`)
-    .join("\u0000");
-}
-
 export function getExpandedToolCards(sessionKey: string): Map<string, boolean> {
   return getOrCreateSessionCacheValue(expandedToolCardsBySession, sessionKey, () => new Map());
+}
+
+// Monotonic per-session counter bumped whenever tool-card expansion state
+// changes. Chat threads include this in their lit guard() dependencies instead
+// of serializing the whole expansion map every render. The map grows one entry
+// per tool card for the life of a tab, and a locale-aware sort of it on every
+// render dominated the main thread while typing slash commands or navigating
+// input history (issue #111526). An integer version is an O(1) change signal
+// that never touches the ICU collator.
+export function getExpandedToolCardsVersion(sessionKey: string): number {
+  return expandedToolCardsVersionBySession.get(sessionKey) ?? 0;
+}
+
+function bumpExpandedToolCardsVersion(sessionKey: string): void {
+  expandedToolCardsVersionBySession.set(sessionKey, getExpandedToolCardsVersion(sessionKey) + 1);
+}
+
+// Set a tool-card expansion flag, bumping the session render version only when
+// the value actually changes. All expansion mutations must route through here
+// (or the sync pass below) so the version stays a faithful change signal.
+export function setToolCardExpanded(sessionKey: string, cardId: string, expanded: boolean): void {
+  const cards = getExpandedToolCards(sessionKey);
+  if (cards.get(cardId) === expanded) {
+    return;
+  }
+  cards.set(cardId, expanded);
+  bumpExpandedToolCardsVersion(sessionKey);
 }
 
 function getInitializedToolCards(sessionKey: string): Set<string> {
@@ -2092,6 +2111,13 @@ export function syncToolCardExpansionState(
   const initialized = getInitializedToolCards(sessionKey);
   const previousAutoExpand = lastAutoExpandPrefBySession.get(sessionKey) ?? false;
   const currentToolCardIds = new Set<string>();
+  let mutated = false;
+  const setExpanded = (disclosureId: string, value: boolean): void => {
+    if (expanded.get(disclosureId) !== value) {
+      mutated = true;
+    }
+    expanded.set(disclosureId, value);
+  };
   for (const item of items) {
     if (item.kind !== "group") {
       continue;
@@ -2104,7 +2130,7 @@ export function syncToolCardExpansionState(
         if (initialized.has(disclosureId)) {
           continue;
         }
-        expanded.set(disclosureId, autoExpandToolCalls);
+        setExpanded(disclosureId, autoExpandToolCalls);
         initialized.add(disclosureId);
       }
       if (!isStandaloneToolMessageForDisplay(entry.message)) {
@@ -2115,14 +2141,27 @@ export function syncToolCardExpansionState(
       if (initialized.has(disclosureId)) {
         continue;
       }
-      expanded.set(disclosureId, autoExpandToolCalls);
+      setExpanded(disclosureId, autoExpandToolCalls);
       initialized.add(disclosureId);
     }
   }
   if (autoExpandToolCalls && !previousAutoExpand) {
     for (const toolCardId of currentToolCardIds) {
-      expanded.set(toolCardId, true);
+      setExpanded(toolCardId, true);
     }
+  }
+  // Bound the per-session maps to tool cards still present in the transcript so
+  // they cannot grow without limit over a long-lived session/tab (issue #111526).
+  // `items` is the full built transcript, so this only drops cards for messages
+  // that are gone entirely, never ones merely scrolled out of the render window.
+  for (const disclosureId of initialized) {
+    if (!currentToolCardIds.has(disclosureId)) {
+      initialized.delete(disclosureId);
+      expanded.delete(disclosureId);
+    }
+  }
+  if (mutated) {
+    bumpExpandedToolCardsVersion(sessionKey);
   }
   lastAutoExpandPrefBySession.set(sessionKey, autoExpandToolCalls);
 }
