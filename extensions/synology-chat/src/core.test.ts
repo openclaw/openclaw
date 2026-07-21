@@ -223,11 +223,11 @@ describe("synology-chat account resolution", () => {
   });
 
   it("uses env var fallbacks", () => {
-    const paddedToken = ` ${"test-auth-token"} `;
-    process.env.SYNOLOGY_CHAT_TOKEN = paddedToken;
-    process.env.SYNOLOGY_CHAT_INCOMING_URL = " https://nas/incoming ";
-    process.env.SYNOLOGY_NAS_HOST = " 192.0.2.1 ";
-    process.env.OPENCLAW_BOT_NAME = " TestBot ";
+    const padded = ` ${"test-auth-token"} `;
+    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", padded);
+    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", " https://nas/incoming ");
+    vi.stubEnv("SYNOLOGY_NAS_HOST", " 192.0.2.1 ");
+    vi.stubEnv("OPENCLAW_BOT_NAME", " TestBot ");
 
     const cfg = { channels: { "synology-chat": {} } };
     const account = resolveAccount(cfg);
@@ -239,11 +239,11 @@ describe("synology-chat account resolution", () => {
 
   it("ignores blank env var fallbacks when resolving the default account", () => {
     const whitespace = "   ";
-    process.env.SYNOLOGY_CHAT_TOKEN = whitespace;
-    process.env.SYNOLOGY_CHAT_INCOMING_URL = whitespace;
-    process.env.SYNOLOGY_NAS_HOST = whitespace;
-    process.env.SYNOLOGY_ALLOWED_USER_IDS = whitespace;
-    process.env.OPENCLAW_BOT_NAME = whitespace;
+    vi.stubEnv("SYNOLOGY_CHAT_TOKEN", whitespace);
+    vi.stubEnv("SYNOLOGY_CHAT_INCOMING_URL", whitespace);
+    vi.stubEnv("SYNOLOGY_NAS_HOST", whitespace);
+    vi.stubEnv("SYNOLOGY_ALLOWED_USER_IDS", whitespace);
+    vi.stubEnv("OPENCLAW_BOT_NAME", whitespace);
 
     const account = resolveAccount({ channels: { "synology-chat": {} } });
 
