@@ -77,6 +77,21 @@ function consumeLongOptionToken(params: {
     longFlagPrefixMap: params.longFlagPrefixMap,
   });
   if (!canonicalFlag) {
+    // Allow unknown long flags as boolean when not explicitly denied.
+    // This lets tools without builtin profiles (git, gh, etc.) use --flags
+    // without needing every flag declared in safeBinProfiles.
+    if (
+      params.flag.startsWith("--") &&
+      params.flag.length > 2 &&
+      !params.deniedFlags.has(params.flag)
+    ) {
+      // Unknown flag with inline value: reject because we can't verify value safety.
+      if (params.inlineValue !== undefined) {
+        return -1;
+      }
+      // Unknown flag without value: treat as boolean.
+      return params.index + 1;
+    }
     return -1;
   }
   if (params.deniedFlags.has(canonicalFlag)) {
@@ -109,6 +124,7 @@ function consumeShortOptionClusterToken(params: {
       return -1;
     }
     if (!params.allowedValueFlags.has(flag)) {
+      // Unknown short flag: treat as boolean (not a value flag).
       continue;
     }
     const inlineValue = params.cluster.slice(j + 1);
@@ -117,7 +133,8 @@ function consumeShortOptionClusterToken(params: {
     }
     return isInvalidValueToken(params.args[params.index + 1]) ? -1 : params.index + 2;
   }
-  return -1;
+  // All flags processed successfully (all booleans or value flags consumed).
+  return params.index + 1;
 }
 
 function consumePositionalToken(token: string, positional: string[]): boolean {
