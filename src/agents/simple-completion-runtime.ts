@@ -1,5 +1,6 @@
 import { supportsOpenAIReasoningEffort } from "@openclaw/ai/internal/openai";
 import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
+import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { resolveClaudeSonnet5ModelIdentity } from "@openclaw/llm-core";
 /**
  * Simple completion runtime preparation.
@@ -21,7 +22,7 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveModel, resolveModelAsync } from "./embedded-agent-runner/model.js";
+import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
@@ -53,7 +54,6 @@ import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { resolveSimpleCompletionModelResolverWorkspace } from "./simple-completion-scope.js";
-import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type SimpleCompletionAuthStorage = {
@@ -226,6 +226,7 @@ function hasMissingApiKeyAllowance(params: {
 
 export async function prepareSimpleCompletionModel(params: {
   cfg: OpenClawConfig | undefined;
+  agentId?: string;
   provider: string;
   modelId: string;
   agentDir?: string;
@@ -233,34 +234,29 @@ export async function prepareSimpleCompletionModel(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  /** @deprecated Model resolution is lifecycle-backed and always asynchronous. */
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const workspaceDir = resolveSimpleCompletionModelResolverWorkspace(params.modelResolver);
-  const resolved =
-    params.useAsyncModelResolution || params.skipAgentDiscovery
-      ? await (params.modelResolver ?? resolveModelAsync)(
-          params.provider,
-          params.modelId,
-          params.agentDir,
-          params.cfg,
-          {
-            ...(params.allowBundledStaticCatalogFallback !== undefined
-              ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-              : {}),
-            ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
-            workspaceDir,
-            authProfileId: params.profileId,
-            preferredProfile: params.preferredProfile,
-          },
-        )
-      : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
-          workspaceDir,
-          authProfileId: params.profileId,
-          preferredProfile: params.preferredProfile,
-        });
+  const resolved = await (params.modelResolver ?? resolveModelAsync)(
+    params.provider,
+    params.modelId,
+    params.agentDir,
+    params.cfg,
+    {
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.allowBundledStaticCatalogFallback !== undefined
+        ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+        : {}),
+      ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+      workspaceDir,
+      authProfileId: params.profileId,
+      preferredProfile: params.preferredProfile,
+    },
+  );
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
@@ -472,6 +468,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  /** @deprecated Model resolution is lifecycle-backed and always asynchronous. */
   useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
@@ -491,6 +488,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   }
   const prepared = await prepareSimpleCompletionModel({
     cfg: params.cfg,
+    agentId: params.agentId,
     provider: selection.runtimeProvider ?? selection.provider,
     modelId: selection.modelId,
     agentDir: selection.agentDir,

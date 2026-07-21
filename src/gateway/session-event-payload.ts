@@ -41,6 +41,8 @@ export function buildGatewaySessionEventFields(params: {
     icon: sessionRow.icon ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
+    agentStatus: sessionRow.agentStatus ?? null,
+    observerDigest: sessionRow.observerDigest ?? null,
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
     swarmGroupId: sessionRow.swarmGroupId,

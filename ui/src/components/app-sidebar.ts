@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
+import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   serializeSidebarEntry,
   type NavigationRouteId,
@@ -9,9 +10,11 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import "./menu-surface.ts";
 import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
@@ -20,11 +23,16 @@ import "./sidebar-build-chip.ts";
 import "./sidebar-update-card.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { BoardAvailabilityController } from "../lib/board/availability-controller.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
+import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { pluginTabKey } from "../pages/plugin/route.ts";
+import {
+  renderSidebarPluginTab,
+  shouldHandleNavigationClick,
+  sidebarPluginTabs,
+} from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -84,15 +92,37 @@ class AppSidebar extends AppSidebarSessionListElement {
 
   constructor() {
     super();
-    void new BoardAvailabilityController(this, () => {
-      const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
-      return [
-        mainKey,
-        ...this.visibleSessionRowsInOrder()
-          .filter((session) => !session.isChild)
-          .map((session) => session.key),
-      ];
-    });
+    void new BoardAvailabilityController(
+      this,
+      () => {
+        const mainKey = this.selectedAgentMainSessionKey(this.activeChipAgent().activeId);
+        return [
+          mainKey,
+          ...this.visibleSessionRowsInOrder()
+            .filter((session) => !session.isChild)
+            .map((session) => session.key),
+        ];
+      },
+      undefined,
+      () => {
+        const snapshot = this.context?.gateway.snapshot;
+        const client = snapshot?.client;
+        const availabilityClient =
+          client &&
+          typeof client.request === "function" &&
+          typeof client.addEventListener === "function"
+            ? client
+            : null;
+        return {
+          client: availabilityClient,
+          connected: snapshot?.connected ?? false,
+          available: snapshot ? isGatewayMethodAdvertised(snapshot, "board.get") !== false : false,
+          key: `${this.context?.gateway.connection?.gatewayUrl ?? ""}\u0000${
+            snapshot?.hello?.server?.version ?? ""
+          }`,
+        };
+      },
+    );
     // The footer pet announces logo stand-in phases through this bubbling event.
     this.addEventListener(LOBSTER_LOGO_VISIT_EVENT, this.handleLogoVisit as EventListener);
   }
@@ -115,6 +145,10 @@ class AppSidebar extends AppSidebarSessionListElement {
     if (changed.has("connected")) {
       this.syncOfflineIndicator();
     }
+  }
+
+  protected override firstUpdated() {
+    requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
   }
 
   private syncOfflineIndicator(schedule = !this.connected) {
@@ -249,7 +283,7 @@ class AppSidebar extends AppSidebarSessionListElement {
               role="img"
               aria-label=${t("sessionsView.dashboardAvailable")}
               title=${t("sessionsView.dashboardAvailable")}
-              >${icons.barChart}</span
+              >${icons.layoutDashboard}</span
             >`
           : nothing}
         ${stateBadge !== nothing || approvalNeeded
@@ -295,6 +329,14 @@ class AppSidebar extends AppSidebarSessionListElement {
     const gatewayStatus = t("chat.gatewayStatus", {
       status: this.connected ? t("common.online") : t("common.offline"),
     });
+    const selfUser = this.connected
+      ? resolveCurrentSelfUser({
+          snapshotUser: this.context?.gateway.snapshot.selfUser,
+          presenceEntries: readPresenceEntries(this.presencePayload),
+          presenceInstanceId: this.presenceInstanceId,
+        })
+      : null;
+    const selfLabel = selfUser?.name ?? selfUser?.email ?? selfUser?.id;
     return html`
       <div class="sidebar-footer-bar">
         <span class="sidebar-brand__logo-slot sidebar-footer-bar__logo">
@@ -306,6 +348,21 @@ class AppSidebar extends AppSidebarSessionListElement {
           />
           <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
+        ${selfUser && selfLabel
+          ? html`<button
+              type="button"
+              class="sidebar-footer-bar__identity"
+              title=${selfLabel}
+              aria-label=${t("profilePage.identity.openSettings", { name: selfLabel })}
+              @click=${() => this.onNavigate?.("profile", { hash: "#settings-profile-identity" })}
+            >
+              <openclaw-viewer-avatar
+                .user=${{ ...selfUser, watchedSessions: [] }}
+                variant="footer"
+              ></openclaw-viewer-avatar>
+              <span class="sidebar-footer-bar__identity-name">${selfLabel}</span>
+            </button>`
+          : nothing}
         <openclaw-viewer-facepile
           .presencePayload=${this.presencePayload}
           .selfInstanceId=${this.presenceInstanceId}
@@ -394,6 +451,21 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
+  private renderPluginTabEntry(tab: GatewayControlUiPluginTab) {
+    const ref = { pluginId: tab.pluginId, id: tab.id };
+    const key = pluginTabKey(ref);
+    return html`
+      <div class="sidebar-zone-entry" data-sidebar-entry=${`plugin:${key}`}>
+        ${renderSidebarPluginTab({
+          tab,
+          basePath: this.basePath,
+          active: this.activeRouteId === "plugin" && this.activePluginTabId === key,
+          onNavigate: (search) => this.onNavigate?.("plugin", { search }),
+        })}
+      </div>
+    `;
+  }
+
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
     return html`
@@ -416,6 +488,9 @@ class AppSidebar extends AppSidebarSessionListElement {
                 ${this.renderHomeRow()}
                 ${sidebarZone.entries.map((entry) =>
                   this.renderSidebarZoneEntry(entry, sidebarZone.sessionRows),
+                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
+                  (tab) => this.renderPluginTabEntry(tab),
                 )}
               </div>
             </nav>

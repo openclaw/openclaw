@@ -194,6 +194,70 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `markdown lists and thematic breaks build across appearance and type size`() {
+        let markdown = """
+        Here are the options:
+
+        9. **Option one heading** – a sentence describing it.
+        10. **Option two heading** – another sentence.
+           - Nested detail
+           - [x] Completed detail
+
+        ---
+
+        Final paragraph.
+        """
+        for scheme in [ColorScheme.light, .dark] {
+            for typeSize in [DynamicTypeSize.large, .accessibility2] {
+                let root = ChatMarkdownRenderer(
+                    text: markdown,
+                    context: .assistant,
+                    variant: .standard,
+                    font: OpenClawChatTypography.body,
+                    textColor: OpenClawChatTheme.assistantText)
+                    .environment(\.dynamicTypeSize, typeSize)
+                    .preferredColorScheme(scheme)
+
+                _ = Self.host(root, size: CGSize(width: 320, height: 700))
+            }
+        }
+    }
+
+    @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
+        let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
+        let message = OpenClawChatMessage(
+            role: "user",
+            content: [OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil)],
+            timestamp: nil)
+
+        for typeSize in [DynamicTypeSize.large, .accessibility2] {
+            let root = ChatMessageBubble(
+                message: message,
+                style: .standard,
+                markdownVariant: .standard,
+                userAccent: nil,
+                displayOptions: [],
+                assistantName: "OpenClaw",
+                assistantAvatarText: "OC",
+                assistantAvatarTint: nil,
+                showsAssistantAvatar: true,
+                isClean: false,
+                contextWindowTokens: nil,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
+                inlineWidgetResolverReady: true,
+                inlineWidgetResourceResolver: { _, _ in nil })
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 320, height: 420))
+        }
+    }
+
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
         let text = """
         Earlier prose stays visible.
@@ -252,6 +316,8 @@ struct SwiftUIRenderSmokeTests {
                 showsAssistantAvatar: true,
                 isClean: false,
                 contextWindowTokens: 1_000_000,
+                userMessageExpanded: false,
+                onToggleUserMessageExpanded: {},
                 inlineWidgetResolverReady: true,
                 inlineWidgetResourceResolver: { _, _ in nil })
                 .environment(\.dynamicTypeSize, typeSize)
@@ -265,12 +331,11 @@ struct SwiftUIRenderSmokeTests {
             let appModel = NodeAppModel()
             let gatewayController = GatewayConnectionController(appModel: appModel, startDiscovery: false)
 
-            let root = RootTabs()
+            let root = RootTabs(initialSidebarVisibility: scenario.sidebarVisible)
                 .environment(AppAppearanceModel())
                 .environment(appModel)
                 .environment(appModel.voiceWake)
                 .environment(gatewayController)
-                .environment(\.rootTabsUserInterfaceIdiomOverride, scenario.idiom)
                 .environment(\.horizontalSizeClass, scenario.horizontalSizeClass)
                 .environment(\.verticalSizeClass, scenario.verticalSizeClass)
 
@@ -459,33 +524,35 @@ struct SwiftUIRenderSmokeTests {
         await controller.connectManual(host: host, port: port, useTLS: true)
     }
 
-    @Test @MainActor func `phone control hub builds gateway state view hierarchies`() {
+    @Test @MainActor func `root sidebar builds gateway state view hierarchies`() {
         for appModel in Self.rootTabsGatewayStateModels() {
-            let root = RootTabsPhoneControlHub(
-                groups: RootTabs.phoneControlGroups,
-                initialDestination: nil,
-                navigationRequest: nil,
-                openRootDestination: { _ in },
-                openChatFromControlDetail: { _ in })
+            let root = RootSidebar(
+                model: RootSidebarModel(),
+                selectedDestination: .overview,
+                isDrawerLayout: true,
+                isDismissButtonEnabled: true,
+                selectDestination: { _ in },
+                hideSidebar: {})
                 .environment(appModel)
 
-            _ = Self.host(root)
+            _ = Self.host(root, size: CGSize(width: 340, height: 852))
         }
     }
 
-    @Test @MainActor func `phone control hub builds landscape compact state`() {
+    @Test @MainActor func `root sidebar builds landscape compact state`() {
         let appModel = NodeAppModel()
-        let root = RootTabsPhoneControlHub(
-            groups: RootTabs.phoneControlGroups,
-            initialDestination: nil,
-            navigationRequest: nil,
-            openRootDestination: { _ in },
-            openChatFromControlDetail: { _ in })
+        let root = RootSidebar(
+            model: RootSidebarModel(),
+            selectedDestination: .chat,
+            isDrawerLayout: true,
+            isDismissButtonEnabled: true,
+            selectDestination: { _ in },
+            hideSidebar: {})
             .environment(appModel)
             .environment(\.horizontalSizeClass, .regular)
             .environment(\.verticalSizeClass, .compact)
 
-        _ = Self.host(root)
+        _ = Self.host(root, size: CGSize(width: 340, height: 393))
     }
 
     @Test @MainActor func `routed sidebar screens build offline states`() {
@@ -569,22 +636,32 @@ struct SwiftUIRenderSmokeTests {
                 idiom: .phone,
                 size: CGSize(width: 393, height: 852),
                 horizontalSizeClass: .compact,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: false),
+            RootTabsShellScenario(
+                idiom: .phone,
+                size: CGSize(width: 393, height: 852),
+                horizontalSizeClass: .compact,
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
             RootTabsShellScenario(
                 idiom: .phone,
                 size: CGSize(width: 852, height: 393),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .compact),
+                verticalSizeClass: .compact,
+                sidebarVisible: false),
             RootTabsShellScenario(
                 idiom: .pad,
                 size: CGSize(width: 1024, height: 1366),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
             RootTabsShellScenario(
                 idiom: .pad,
                 size: CGSize(width: 1366, height: 1024),
                 horizontalSizeClass: .regular,
-                verticalSizeClass: .regular),
+                verticalSizeClass: .regular,
+                sidebarVisible: true),
         ]
     }
 
@@ -593,6 +670,7 @@ struct SwiftUIRenderSmokeTests {
         let size: CGSize
         let horizontalSizeClass: UserInterfaceSizeClass
         let verticalSizeClass: UserInterfaceSizeClass
+        let sidebarVisible: Bool
     }
 }
 

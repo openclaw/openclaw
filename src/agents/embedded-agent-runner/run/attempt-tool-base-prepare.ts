@@ -169,7 +169,10 @@ export function prepareEmbeddedAttemptToolBase(params: {
     skillsSnapshot: params.skillsSnapshot,
     sandboxToolPolicy: params.sandbox?.tools,
     runtimeToolAllowlist: effectiveToolsAllow,
+    inheritRuntimeToolAllowlist: true,
     runtimePluginToolGrant: attempt.runtimePluginToolGrant,
+    inputProvenance: attempt.inputProvenance,
+    trustedInternalHandoff: attempt.trustedInternalHandoff,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
@@ -245,6 +248,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           oneShotCliRun: attempt.oneShotCliRun,
           toolSearchCatalogRef,
           agentDir: params.agentDir,
+          preparedModelRuntime: attempt.preparedModelRuntime,
           cwd: params.effectiveCwd,
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
   SessionCatalog,
+  SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -36,7 +37,7 @@ export type SidebarLifecycleState = HTMLElement & {
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
-  onNavigate: (routeId: string, options?: { search?: string }) => void;
+  onNavigate: (routeId: string, options?: { search?: string; hash?: string }) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
@@ -86,6 +87,17 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
+    },
+    updateSelfUser(
+      patch: Partial<Omit<NonNullable<ApplicationGatewaySnapshot["selfUser"]>, "id">>,
+    ) {
+      if (!snapshot.selfUser) {
+        return;
+      }
+      snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     },
   } as unknown as ApplicationGateway;
   return {
@@ -154,6 +166,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const groupsPut = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -194,6 +207,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
+    setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
+      if (summary) {
+        pullRequestSummaries.set(key, summary);
+      } else {
+        pullRequestSummaries.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
     groupsRename,

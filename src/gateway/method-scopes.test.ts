@@ -78,6 +78,8 @@ describe("method scope resolution", () => {
     ["sessions.catalog.read", ["operator.read"]],
     ["sessions.catalog.continue", ["operator.write"]],
     ["sessions.catalog.archive", ["operator.write"]],
+    ["session.discussion.info", ["operator.read"]],
+    ["session.discussion.open", ["operator.write"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
     ["skills.curator.status", ["operator.read"]],
@@ -317,6 +319,56 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.admin" });
   });
 
+  it("keeps keyed sessions.create model selection at write scope for handler-state checks", () => {
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        agentId: "main",
+        label: "Dashboard",
+        model: "openai/gpt-5.5",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        label: "Dashboard",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        model: "openai/gpt-5.5",
+      }),
+    ).toEqual(["operator.write"]);
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
+        key: "agent:main:dashboard:existing",
+        thinkingLevel: "high",
+      }),
+    ).toEqual(["operator.write"]);
+
+    for (const params of [
+      { key: "agent:main:dashboard:existing", model: "openai/gpt-5.5" },
+      { key: "agent:main:dashboard:existing", thinkingLevel: "high" },
+      {
+        key: "agent:main:dashboard:existing",
+        label: "Dashboard",
+        model: "openai/gpt-5.5",
+        thinkingLevel: "high",
+      },
+    ]) {
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.write"], params),
+      ).toEqual({
+        allowed: true,
+      });
+      expect(
+        authorizeOperatorScopesForMethod("sessions.create", ["operator.admin"], params),
+      ).toEqual({
+        allowed: true,
+      });
+    }
+  });
+
   it("keeps worktree target params at write scope but execNode at admin", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.create", {
@@ -347,6 +399,7 @@ describe("method scope resolution", () => {
     ["model", { key: "agent:main:ios-1", model: "anthropic/claude-sonnet-5" }],
     ["sendPolicy", { key: "agent:main:ios-1", sendPolicy: "deny" }],
     ["inheritedToolAllow", { key: "agent:main:ios-1", inheritedToolAllow: ["exec"] }],
+    ["inheritedToolPolicyVersion", { key: "agent:main:ios-1", inheritedToolPolicyVersion: 1 }],
     ["spawnedBy", { key: "agent:main:ios-1", spawnedBy: "agent:main:main" }],
     ["mixed with safe fields", { key: "agent:main:ios-1", label: "x", execHost: "node-1" }],
     ["unknown fields", { key: "agent:main:ios-1", futureField: true }],

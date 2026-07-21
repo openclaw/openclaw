@@ -24,6 +24,7 @@ import {
   createPostCompactionLoopGuard,
   PostCompactionLoopPersistedError,
 } from "./post-compaction-loop-guard.js";
+import { clearProviderPromptState } from "./provider-prompt-state.js";
 import { createEmbeddedRunReplayState } from "./replay-state.js";
 import { handleEmbeddedAssistantFailure } from "./run/assistant-failure.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run/attempt-dispatch-preparation.js";
@@ -87,6 +88,7 @@ export async function runPreparedEmbeddedLoop(
     markStartupStage: (stage) => startupStages.mark(stage),
     notifyExecutionPhase,
     fallbackConfigured,
+    preparedModelRuntime: input.preparedModelRuntime,
   });
   provider = preparedRuntime.provider;
   modelId = preparedRuntime.modelId;
@@ -165,11 +167,7 @@ export async function runPreparedEmbeddedLoop(
   const maxReasoningOnlyRetryAttempts = DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   const maxEmptyResponseRetryAttempts = DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT;
 
-  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(
-    profileCandidates.length,
-    params.config,
-    sessionAgentId,
-  );
+  const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   let bootstrapPromptWarningSignaturesSeen =
     params.bootstrapPromptWarningSignaturesSeen ??
@@ -194,10 +192,9 @@ export async function runPreparedEmbeddedLoop(
     cfg: params.config,
     agentId: sessionAgentId,
   });
-  const postCompactionGuard = createPostCompactionLoopGuard(
-    resolvedLoopDetectionConfig?.postCompactionGuard,
-    { enabled: resolvedLoopDetectionConfig?.enabled !== false },
-  );
+  const postCompactionGuard = createPostCompactionLoopGuard({
+    enabled: resolvedLoopDetectionConfig?.enabled !== false,
+  });
   let postCompactionAbortController: AbortController | undefined;
   let postCompactionAbortError: PostCompactionLoopPersistedError | undefined;
   const attemptTerminalToolPresentation = {
@@ -629,6 +626,7 @@ export async function runPreparedEmbeddedLoop(
       await maybeEmitFastModeAutoResetBestEffort();
     }
     forgetPromptBuildDrainCacheForRun(params.runId);
+    clearProviderPromptState(params.runId);
     stopRuntimeAuthRefreshTimer();
     await runAgentCleanupStep({
       runId: params.runId,

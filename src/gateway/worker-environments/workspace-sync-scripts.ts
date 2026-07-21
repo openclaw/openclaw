@@ -1,4 +1,9 @@
 import {
+  REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS,
+  REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS,
+} from "./workspace-manifest-remote-script.js";
+export { REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS } from "./workspace-manifest-remote-script.js";
+import {
   DERIVED_WORKSPACE_DIRECTORY_NAMES,
   DERIVED_WORKSPACE_FILE_NAMES,
   DERIVED_WORKSPACE_FILE_SUFFIXES,
@@ -257,121 +262,6 @@ function watchdogMain(watchedLeasePath, watchedNonce) {
 process.stdout.write("quiesced " + nonce + "\n");
 `;
 
-export const REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS = String.raw`const childProcess = require("node:child_process");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const os = require("node:os");
-const path = require("node:path");
-const root = fs.realpathSync(process.argv[1]);
-const nonce = process.argv[2];
-const timeoutMs = Number(process.argv[3] || 12 * 60 * 1000);
-const validationMode = process.argv[4] || "final";
-if (typeof process.getuid !== "function") throw new Error("workspace quiescence requires POSIX");
-const uid = process.getuid();
-if (!/^[a-f0-9]{32}$/.test(nonce || "")) throw new Error("invalid workspace quiescence nonce");
-if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 10 * 1000) throw new Error("invalid watchdog timeout");
-if (validationMode !== "heartbeat" && validationMode !== "final") throw new Error("invalid workspace quiescence validation mode");
-const leasePath = path.join(os.homedir(), ".openclaw-worker", "quiescence", crypto.createHash("sha256").update(root).digest("hex") + "." + nonce + ".json");
-const input = JSON.parse(fs.readFileSync(leasePath, "utf8"));
-if (
-  !input ||
-  input.version !== 1 ||
-  input.nonce !== nonce ||
-  !Array.isArray(input.processes) ||
-  input.processes.length > 4096 ||
-  input.processes.some((entry) => !entry || !Number.isSafeInteger(entry.pid) || entry.pid < 1 || typeof entry.start !== "string" || !entry.start || entry.start.length > 128) ||
-  !input.watchdog ||
-  !Number.isSafeInteger(input.watchdog.pid) ||
-  input.watchdog.pid < 1 ||
-  typeof input.watchdog.start !== "string" ||
-  !input.watchdog.start ||
-  input.watchdog.start.length > 128 ||
-  !Number.isSafeInteger(input.expiresAtMs) ||
-  input.expiresAtMs - Date.now() < 5000
-) {
-  throw new Error("workspace quiescence lease is no longer active");
-}
-function processStatus(pid) {
-  try {
-    const output = childProcess.execFileSync("ps", ["-o", "stat=,lstart=", "-p", String(pid)], { encoding: "utf8", maxBuffer: 4096 }).trim();
-    const match = /^(\S+)\s+(.+)$/u.exec(output);
-    return match ? { state: match[1], start: match[2] } : null;
-  } catch (error) {
-    if (error && error.status === 1) return null;
-    throw error;
-  }
-}
-function processes() {
-  const output = childProcess.execFileSync("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart="], {
-    encoding: "utf8",
-    maxBuffer: 4 * 1024 * 1024,
-  });
-  const rows = new Map();
-  for (const line of output.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.+)$/);
-    if (!match) continue;
-    rows.set(Number(match[1]), {
-      ppid: Number(match[2]),
-      uid: Number(match[3]),
-      state: match[4],
-      start: match[5],
-    });
-  }
-  return rows;
-}
-function ancestors(rows) {
-  const result = new Set();
-  let pid = process.pid;
-  while (pid > 0 && !result.has(pid)) {
-    result.add(pid);
-    pid = rows.get(pid)?.ppid || 0;
-  }
-  return result;
-}
-for (const entry of input.processes) {
-  const status = processStatus(entry.pid);
-  if (!status || status.start !== entry.start) continue;
-  const state = status.state;
-  if (state && !state.startsWith("T")) throw new Error("workspace quiescence process resumed unexpectedly");
-}
-const watchdogStatus = processStatus(input.watchdog.pid);
-if (!watchdogStatus || watchdogStatus.start !== input.watchdog.start) {
-  throw new Error("workspace quiescence watchdog identity changed unexpectedly");
-}
-try { process.kill(input.watchdog.pid, 0); } catch (error) {
-  if (error && error.code === "ESRCH") throw new Error("workspace quiescence watchdog exited unexpectedly");
-  throw error;
-}
-if (validationMode === "final") {
-  const rows = processes();
-  const preserved = ancestors(rows);
-  const frozen = new Map(input.processes.map((entry) => [entry.pid, entry.start]));
-  const newWritableProcess = [...rows.entries()].some(
-    ([pid, row]) =>
-      row.uid === uid &&
-      !preserved.has(pid) &&
-      row.ppid !== process.pid &&
-      pid !== input.watchdog.pid &&
-      frozen.get(pid) !== row.start &&
-      !row.state.startsWith("T") &&
-      !row.state.startsWith("Z") &&
-      !row.state.startsWith("X"),
-  );
-  if (newWritableProcess) {
-    throw new Error("workspace quiescence observed a new writable process");
-  }
-}
-const renewed = { ...input, expiresAtMs: Date.now() + timeoutMs };
-const temporary = leasePath + "." + process.pid + "." + crypto.randomBytes(8).toString("hex");
-fs.writeFileSync(temporary, JSON.stringify(renewed), { mode: 0o600, flag: "wx" });
-fs.renameSync(temporary, leasePath);
-const confirmed = JSON.parse(fs.readFileSync(leasePath, "utf8"));
-if (confirmed.nonce !== nonce || confirmed.expiresAtMs !== renewed.expiresAtMs) {
-  throw new Error("workspace quiescence renewal was not durable");
-}
-process.stdout.write("renewed " + nonce + "\n");
-`;
-
 export const REMOTE_WORKSPACE_RESUME_JS = String.raw`const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -477,11 +367,15 @@ const isDerivedWorkspacePath = ${isDerivedWorkspacePath.toString()};
 const root = fs.realpathSync(process.argv[1]);
 const requestedBaseCommit = process.argv[2] || null;
 const eligibleOnly = process.argv[3] === "eligible";
+const requestedManifestDigest = process.argv[3] === "resolve" ? process.argv[4] : null;
+const publishedManifestDigest = process.argv[3] === "publish" ? process.argv[4] : null;
+const legacyGatewayLocale = requestedManifestDigest ? process.argv[5] : null;
 const priorManifestDigests = [...new Set(process.argv.slice(4).filter(Boolean))];
 const entriesByPath = new Map();
 function fail(message) {
   throw new Error(message);
 }
+${REMOTE_WORKSPACE_MANIFEST_CANONICAL_JS}
 function addEntry(relative) {
   if (
     !relative ||
@@ -611,9 +505,7 @@ function eligiblePaths() {
   return [...selected].filter((relative) => !isDerivedWorkspacePath(relative)).sort();
 }
 async function hashFiles() {
-  const entries = [...entriesByPath.values()].sort((a, b) =>
-    a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
-  );
+  const entries = [...entriesByPath.values()];
   for (const entry of entries) {
     if (entry.type !== "file") {
       continue;
@@ -642,7 +534,27 @@ function ensurePrivateDirectory(directory) {
   }
   fs.chmodSync(directory, 0o700);
 }
+${REMOTE_WORKSPACE_MANIFEST_REGISTRY_JS}
 async function main() {
+  const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
+  const manifestRoot = path.join(workerRoot, "manifests");
+  ensurePrivateDirectory(workerRoot);
+  ensurePrivateDirectory(manifestRoot);
+  if (publishedManifestDigest) {
+    const manifest = fs.readFileSync(0, "utf8");
+    if (crypto.createHash("sha256").update(manifest).digest("hex") !== publishedManifestDigest) {
+      fail("published workspace manifest digest mismatch");
+    }
+    if (publishManifest(manifestRoot, manifest) !== publishedManifestDigest) {
+      fail("published workspace manifest reference mismatch");
+    }
+    process.stdout.write("sha256:" + publishedManifestDigest + "\n");
+    return;
+  }
+  if (requestedManifestDigest) {
+    process.stdout.write("sha256:" + resolveManifest(manifestRoot, requestedManifestDigest) + "\n");
+    return;
+  }
   if (eligibleOnly) {
     for (const relative of eligiblePaths()) addWithParents(relative);
   } else {
@@ -650,32 +562,8 @@ async function main() {
   }
   const entries = await hashFiles();
   const baseCommit = requestedBaseCommit;
-  const manifest = JSON.stringify({ version: 1, baseCommit, entries });
-  const digest = crypto.createHash("sha256").update(manifest).digest("hex");
-  const workerRoot = path.join(process.env.HOME, ".openclaw-worker");
-  const manifestRoot = path.join(workerRoot, "manifests");
-  ensurePrivateDirectory(workerRoot);
-  ensurePrivateDirectory(manifestRoot);
-  const manifestPath = path.join(manifestRoot, digest + ".json");
-  const temporaryPath = manifestPath + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
-  fs.writeFileSync(temporaryPath, manifest, { encoding: "utf8", flag: "wx", mode: 0o600 });
-  try {
-    try {
-      fs.linkSync(temporaryPath, manifestPath);
-    } catch (error) {
-      const existing = error && error.code === "EEXIST" ? fs.lstatSync(manifestPath) : null;
-      if (
-        !existing ||
-        existing.isSymbolicLink() ||
-        !existing.isFile() ||
-        fs.readFileSync(manifestPath, "utf8") !== manifest
-      ) {
-        throw error;
-      }
-    }
-  } finally {
-    fs.rmSync(temporaryPath, { force: true });
-  }
+  const manifest = serializeManifest(baseCommit, entries);
+  const digest = publishManifest(manifestRoot, manifest);
   process.stdout.write("sha256:" + digest + "\n");
 }
 main().catch((error) => {
