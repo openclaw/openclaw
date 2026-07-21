@@ -31,6 +31,7 @@ type ApplyAuthChoice = typeof import("../commands/auth-choice.js").applyAuthChoi
 type PrepareAuthChoice = typeof import("../commands/auth-choice.js").prepareAuthChoice;
 type VerifySetupInferenceConfig =
   typeof import("../system-agent/setup-inference.js").verifySetupInferenceConfig;
+type ConfigureGatewayForSetup = typeof import("./setup.gateway-config.js").configureGatewayForSetup;
 
 const ensureAuthProfileStore = vi.hoisted(() => vi.fn(() => ({ profiles: {} })));
 const keepCurrentAuthChoice = vi.hoisted(() => "__keep-current" as const);
@@ -63,7 +64,7 @@ const applyPrimaryModel = vi.hoisted(() => vi.fn((cfg) => cfg));
 const promptDefaultModel = vi.hoisted(() => vi.fn<PromptDefaultModel>(async () => ({})));
 const promptCustomApiConfig = vi.hoisted(() => vi.fn(async (args) => ({ config: args.config })));
 const configureGatewayForSetup = vi.hoisted(() =>
-  vi.fn(async (args) => ({
+  vi.fn<ConfigureGatewayForSetup>(async (args) => ({
     nextConfig: args.nextConfig,
     settings: {
       port: args.localPort ?? 18789,
