@@ -6,7 +6,7 @@ import {
 import { readConfigFileSnapshotForWrite, replaceConfigFile } from "../config/config.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 
-export type PairingCommandOwnerBootstrapResult = {
+type PairingCommandOwnerBootstrapResult = {
   ownerEntry: string | null;
   status: "configured" | "already-configured" | "unavailable";
 };
