@@ -42,18 +42,21 @@ describe("gateway prepared model catalog", () => {
 
     await expect(
       loadGatewayModelCatalogSnapshot({
+        agentId: "worker",
         agentDir: "/tmp/gateway-agent",
         getConfig: () => config,
         loadPublishedPreparedModelCatalogOwnerSnapshot,
         workspaceDir: "/tmp/gateway-workspace",
       }),
     ).resolves.toMatchObject({
+      agentId: "worker",
       agentDir: "/tmp/gateway-agent",
       config,
       workspaceDir: "/tmp/gateway-workspace",
     } satisfies Partial<GatewayModelCatalogSnapshot>);
 
     expect(loadPublishedPreparedModelCatalogOwnerSnapshot).toHaveBeenCalledWith({
+      agentId: "worker",
       agentDir: "/tmp/gateway-agent",
       config,
       readOnly: true,

@@ -138,9 +138,10 @@ function createLocalGatewayRequestContext(
       (await loadModelCatalogOwner(loadParams)).modelCatalog.entries,
     loadGatewayModelCatalogSnapshot: async (loadParams) => {
       const owner = await loadModelCatalogOwner(loadParams);
+      const agentId = owner.agentId ?? loadParams?.agentId;
       return {
         ...owner.modelCatalog,
-        ...(owner.agentId ? { agentId: owner.agentId } : {}),
+        ...(agentId ? { agentId } : {}),
         agentDir: owner.agentDir,
         ...(owner.workspaceDir ? { workspaceDir: owner.workspaceDir } : {}),
         config: owner.config,
