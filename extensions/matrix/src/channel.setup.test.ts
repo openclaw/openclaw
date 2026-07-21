@@ -100,26 +100,13 @@ describe("matrix setup post-write bootstrap", () => {
     values: Record<string, string | undefined>,
     run: () => Promise<T> | T,
   ) {
-    const previousEnv = Object.fromEntries(
-      Object.keys(values).map((key) => [key, process.env[key]]),
-    ) as Record<string, string | undefined>;
     for (const [key, value] of Object.entries(values)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
+      vi.stubEnv(key, value);
     }
     try {
       return await run();
     } finally {
-      for (const [key, value] of Object.entries(previousEnv)) {
-        if (value === undefined) {
-          delete process.env[key];
-        } else {
-          process.env[key] = value;
-        }
-      }
+      vi.unstubAllEnvs();
     }
   }
 
