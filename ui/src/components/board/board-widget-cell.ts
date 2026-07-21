@@ -361,6 +361,9 @@ class OpenClawBoardWidgetCell extends OpenClawLightDomElement {
               title=${t("board.widget.resizeHandle", { title: label })}
               @pointerdown=${(event: PointerEvent) => callbacks.resizePointerDown(widget, event)}
             ></span>`}
+        ${widget.grantState === "granted" && widget.contentKind !== "builtin"
+          ? html`<span class="board-widget__grant-dot" aria-hidden="true"></span>`
+          : nothing}
       </section>
     `;
   }
