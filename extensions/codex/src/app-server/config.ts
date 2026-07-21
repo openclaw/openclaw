@@ -550,7 +550,21 @@ export function resolveCodexAppServerNativeHookRelay(
   if (relay?.enabled === false) {
     return { enabled: false };
   }
-  return relay?.events?.length ? { enabled: true, events: relay.events } : { enabled: true };
+  if (!relay?.events?.length) {
+    return { enabled: true };
+  }
+  // Guardrail: an explicit event scope must not silently drop approval
+  // enforcement. While an approval policy is active (anything other than
+  // "never"), retain `permission_request` even when the operator omits it from
+  // the list. Fully removing the relay still requires the explicit
+  // `enabled: false` opt-out. Keys off the configured approval policy
+  // (`appServer.approvalPolicy`, default "on-request").
+  const approvalsActive = (config.appServer?.approvalPolicy ?? "on-request") !== "never";
+  const events: readonly NativeHookRelayEvent[] =
+    approvalsActive && !relay.events.includes("permission_request")
+      ? [...relay.events, "permission_request"]
+      : relay.events;
+  return { enabled: true, events };
 }
 
 function assertCodexAppServerCommandHasNoInlineArgs(params: {

@@ -809,8 +809,10 @@ describe("codex plugin", () => {
     );
   });
 
-  it("scopes the native hook relay events for attempts from the plugin config", async () => {
-    const pluginConfig = { appServer: { nativeHookRelay: { events: ["post_tool_use"] } } };
+  it("scopes the native hook relay events verbatim when the approval policy is 'never'", async () => {
+    const pluginConfig = {
+      appServer: { approvalPolicy: "never", nativeHookRelay: { events: ["post_tool_use"] } },
+    };
     const harness = createCodexAppServerAgentHarness({
       pluginConfig,
       bindingStore: testCodexAppServerBindingStore,
@@ -826,6 +828,27 @@ describe("codex plugin", () => {
         bindingStore: testCodexAppServerBindingStore,
         pluginConfig,
         nativeHookRelay: { enabled: true, events: ["post_tool_use"] },
+      },
+    );
+  });
+
+  it("retains permission_request through the harness while approvals are active", async () => {
+    const pluginConfig = { appServer: { nativeHookRelay: { events: ["post_tool_use"] } } };
+    const harness = createCodexAppServerAgentHarness({
+      pluginConfig,
+      bindingStore: testCodexAppServerBindingStore,
+    });
+    const result = { success: true };
+    runCodexAppServerAttemptMock.mockResolvedValueOnce(result);
+
+    await expect(harness.runAttempt({ prompt: "hello" } as never)).resolves.toBe(result);
+
+    expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
+      { prompt: "hello" },
+      {
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig,
+        nativeHookRelay: { enabled: true, events: ["post_tool_use", "permission_request"] },
       },
     );
   });

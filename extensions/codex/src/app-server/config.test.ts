@@ -438,6 +438,51 @@ describe("Codex app-server config", () => {
     ).toStrictEqual({ enabled: true });
   });
 
+  it("retains permission_request in a scoped event list while an approval policy is active", () => {
+    // Default approval policy ("on-request") is active: scoping to post_tool_use
+    // must not silently drop approval enforcement.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { events: ["post_tool_use"] } },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use", "permission_request"] });
+    // Explicit approval policy still active (untrusted): same guardrail.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: {
+          approvalPolicy: "untrusted",
+          nativeHookRelay: { events: ["post_tool_use"] },
+        },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use", "permission_request"] });
+    // Already present: not duplicated.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: { nativeHookRelay: { events: ["permission_request", "post_tool_use"] } },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["permission_request", "post_tool_use"] });
+  });
+
+  it("honors a scoped event list verbatim when the approval policy is 'never'", () => {
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: {
+          approvalPolicy: "never",
+          nativeHookRelay: { events: ["post_tool_use"] },
+        },
+      }),
+    ).toStrictEqual({ enabled: true, events: ["post_tool_use"] });
+    // Full opt-out wins regardless of approval policy.
+    expect(
+      resolveCodexAppServerNativeHookRelay({
+        appServer: {
+          approvalPolicy: "on-request",
+          nativeHookRelay: { enabled: false, events: ["post_tool_use"] },
+        },
+      }),
+    ).toStrictEqual({ enabled: false });
+  });
+
   it("keeps the plugin manifest configSchema in sync for appServer.nativeHookRelay", async () => {
     const { readFile } = await import("node:fs/promises");
     const manifest = JSON.parse(
