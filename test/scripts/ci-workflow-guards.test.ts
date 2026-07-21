@@ -4632,7 +4632,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Run QA profile",
     );
     expect(runProfileStep.run).toContain("--concurrency 2");
-    expect(runProfileStep.run).not.toContain("--fast");
+    expect(runProfileStep.run).toContain("--fast");
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
     expect(generateJob.if.replace(/\s+/gu, " ")).toBe(
       "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && inputs.qa_evidence_run_id == '' }}",
