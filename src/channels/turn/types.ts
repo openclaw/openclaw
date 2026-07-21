@@ -1,3 +1,4 @@
+import type { MediaKind } from "@openclaw/media-core/constants";
 import type { CommandTurnKind } from "../../auto-reply/command-turn-context.js";
 import type {
   GetReplyOptions,
@@ -138,7 +139,7 @@ export type InboundMediaFacts = {
   path?: string;
   url?: string;
   contentType?: string;
-  kind?: "image" | "video" | "audio" | "document" | "sticker" | "unknown";
+  kind?: MediaKind;
   transcribed?: boolean;
   messageId?: string;
 };

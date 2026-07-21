@@ -24,18 +24,19 @@ export type MediaPlaceholderTextFact = Readonly<
   Pick<ChannelInboundMediaInput, "contentType" | "kind" | "path" | "url">
 >;
 
-type MediaPlaceholderKind = "attachment" | "audio" | "document" | "image" | "sticker" | "video";
+type MediaPlaceholderKind =
+  | Exclude<NonNullable<InboundMediaFacts["kind"]>, "unknown">
+  | "attachment";
 
 function resolveMediaPlaceholderKind(media: MediaPlaceholderTextFact): MediaPlaceholderKind {
   if (media.kind && media.kind !== "unknown") {
     return media.kind;
   }
-  return (
+  const inferredKind =
     kindFromMime(media.contentType) ??
     kindFromMime(mimeTypeFromFilePath(media.url)) ??
-    kindFromMime(mimeTypeFromFilePath(media.path)) ??
-    "attachment"
-  );
+    kindFromMime(mimeTypeFromFilePath(media.path));
+  return inferredKind && inferredKind !== "unknown" ? inferredKind : "attachment";
 }
 
 const PLURAL_MEDIA_PLACEHOLDER_LABELS: Readonly<Record<MediaPlaceholderKind, string>> = {
