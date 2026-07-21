@@ -295,7 +295,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                       : {}),
                     ...(provider.catalog.liveModelDiscovery === true
                       ? {}
-                      : { discovery: provider.catalog.liveModelDiscovery }),
+                      : { modelDiscovery: provider.catalog.liveModelDiscovery }),
                   })
                 : buildSingleProviderApiKeyCatalog({
                     ctx,

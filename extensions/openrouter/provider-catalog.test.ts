@@ -109,7 +109,7 @@ describe("OpenRouter provider catalog", () => {
     expect(fetchGuard).toHaveBeenCalledOnce();
 
     clearLiveCatalogCacheForTests();
-    fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
+    vi.mocked(fetchGuard).mockRejectedValueOnce(new Error("network unavailable"));
     const fallback = await buildOpenrouterLiveProvider({
       apiKey: "runtime-a",
       discoveryApiKey: "discovery-a",

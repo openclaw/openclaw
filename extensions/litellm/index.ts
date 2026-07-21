@@ -101,7 +101,7 @@ export default definePluginEntry({
             providerId: PROVIDER_ID,
             buildProvider: buildLitellmProvider,
             allowExplicitBaseUrl: true,
-            discovery: { endpointPath: "v1/models" },
+            modelDiscovery: { endpointPath: "v1/models" },
           }),
       },
       staticCatalog: {

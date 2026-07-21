@@ -909,7 +909,7 @@ export function buildAnthropicProvider(): ProviderPlugin {
           ctx,
           providerId,
           buildProvider: buildAnthropicCatalogProvider,
-          discovery: {
+          modelDiscovery: {
             endpointPath: "v1/models",
             buildRequestHeaders: ({ apiKey, discoveryApiKey }) => {
               const key = discoveryApiKey ?? apiKey;

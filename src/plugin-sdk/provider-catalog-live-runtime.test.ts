@@ -851,7 +851,7 @@ describe("provider-catalog-live-runtime", () => {
         models: [buildModel("claude-current")],
       },
       apiKey: "provider-key",
-      discovery: {
+      modelDiscovery: {
         endpointPath: "v1/models",
         buildRequestHeaders: ({ apiKey }) => ({
           "anthropic-version": "2023-06-01",
@@ -881,7 +881,7 @@ describe("provider-catalog-live-runtime", () => {
         providerId: "provider",
         providerConfig,
         apiKey: "private-proxy-key",
-        discovery: {
+        modelDiscovery: {
           endpointUrl: {
             url: "https://provider.example.test/v1/models",
             requireBaseUrl: "https://provider.example.test/v1",

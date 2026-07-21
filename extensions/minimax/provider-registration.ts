@@ -146,7 +146,7 @@ async function resolveApiCatalog(ctx: ProviderCatalogContext) {
       providerConfig: buildMinimaxProvider(ctx.env),
       apiKey: auth.apiKey,
       discoveryApiKey: auth.discoveryApiKey,
-      discovery: { endpointPath: "v1/models" },
+      modelDiscovery: { endpointPath: "v1/models" },
     }),
   };
 }
@@ -176,7 +176,7 @@ async function resolvePortalCatalog(ctx: ProviderCatalogContext) {
       providerConfig,
       apiKey,
       discoveryApiKey: ctx.resolveProviderApiKey(PORTAL_PROVIDER_ID).discoveryApiKey,
-      discovery: { endpointPath: "v1/models" },
+      modelDiscovery: { endpointPath: "v1/models" },
     }),
   };
 }
