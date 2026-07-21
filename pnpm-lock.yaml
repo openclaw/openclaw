@@ -647,6 +647,22 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/cua-computer:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.29.0
+        version: 1.29.0(zod@4.4.3)
+      rastermill:
+        specifier: 0.3.1
+        version: 0.3.1
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/deepgram:
     devDependencies:
       '@openclaw/plugin-sdk':
