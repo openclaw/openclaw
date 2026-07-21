@@ -140,7 +140,9 @@ async function readPage(response: Response, timeoutMs: number): Promise<Anthropi
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Anthropic usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const payload = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
+  const payload = objectRecord(
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer)),
+  );
   if (!payload || !Array.isArray(payload.data)) {
     throw new Error("Anthropic usage response is not an object with data");
   }

@@ -121,6 +121,42 @@ describe("Anthropic provider usage", () => {
     }
   });
 
+  it("rejects an admin usage response with invalid UTF-8 instead of silently mangling it", async () => {
+    // The cost-report response is provider-controlled. A non-fatal TextDecoder
+    // would replace the invalid byte with U+FFFD, JSON.parse would still
+    // succeed, and the mangled bucket would be aggregated into cost history as
+    // if it were valid usage. fatal decoding rejects the response so it surfaces
+    // as "Usage unavailable" rather than reporting corrupted data.
+    const prefix = new TextEncoder().encode(
+      '{"data":[{"starting_at":"2026-07-06T00:00:00Z","ending_at":"2026-07-07T00:00:00Z","results":[{"amount":"1234","currency":"USD","description":"Claude',
+    );
+    const suffix = new TextEncoder().encode('API"}]}],"has_more":false}');
+    const invalidUtf8Body = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const fetchFn = vi.fn(async () => new Response(invalidUtf8Body, { status: 200 }));
+
+    const auth = await resolveAnthropicUsageAuth({
+      config: {},
+      env: { ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-test" },
+      provider: "anthropic",
+      resolveApiKeyFromConfigAndStore: () => undefined,
+      resolveOAuthToken: async () => null,
+    });
+    if (!("token" in auth) || !auth.token) {
+      throw new Error("expected encoded Anthropic Admin API credentials");
+    }
+    const result = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: auth.token,
+      timeoutMs: 5_000,
+      fetchFn: fetchFn as typeof fetch,
+    });
+
+    expect(result.error).toBe("Usage unavailable");
+    expect(result.windows).toEqual([]);
+  });
+
   it("uses explicit Admin API credentials before Claude OAuth", async () => {
     const result = await resolveAnthropicUsageAuth({
       config: {},

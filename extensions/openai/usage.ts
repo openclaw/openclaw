@@ -124,7 +124,9 @@ async function readPage(response: Response, timeoutMs: number): Promise<OpenAIUs
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`OpenAI usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const payload = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
+  const payload = objectRecord(
+    JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer)),
+  );
   if (!payload || !Array.isArray(payload.data)) {
     throw new Error("OpenAI usage response is not an object with data");
   }

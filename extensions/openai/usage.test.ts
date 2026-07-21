@@ -120,6 +120,26 @@ describe("OpenAI provider usage", () => {
     }
   });
 
+  it("rejects an admin usage response with invalid UTF-8 instead of silently mangling it", async () => {
+    // The admin usage response is provider-controlled. A non-fatal TextDecoder
+    // would replace the invalid byte with U+FFFD, JSON.parse would still
+    // succeed, and the mangled bucket would be aggregated into cost history as
+    // if it were valid usage. fatal decoding rejects the response so it surfaces
+    // as "Usage unavailable" rather than reporting corrupted data.
+    const prefix = new TextEncoder().encode(
+      '{"data":[{"start_time":1783296000,"end_time":1783382400,"results":[{"amount":{"value":"12.34","currency":"usd"},"line_item":"Responses',
+    );
+    const suffix = new TextEncoder().encode('"}]}],"has_more":false}');
+    const invalidUtf8Body = new Uint8Array([...prefix, 0xff, ...suffix]);
+    const result = await fetchAdminUsage({
+      apiKey: "sk-admin-test",
+      fetchFn: vi.fn(async () => new Response(invalidUtf8Body, { status: 200 })) as typeof fetch,
+    });
+
+    expect(result.error).toBe("Usage unavailable");
+    expect(result.windows).toEqual([]);
+  });
+
   it("reports when organization usage rejects a non-admin key", async () => {
     const result = await fetchAdminUsage({
       apiKey: "sk-proj-test",
