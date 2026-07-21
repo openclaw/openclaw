@@ -21,6 +21,7 @@ import {
   auditShortTermPromotionArtifacts,
   filterLiveShortTermRecallEntries,
   loadShortTermPromotionDreamingStats,
+  normalizeShortTermRecallStore,
   recordGroundedShortTermCandidates,
   rankShortTermPromotionCandidates,
   recordDreamingPhaseSignals,
@@ -3672,4 +3673,79 @@ describe("short-term promotion", () => {
     });
   });
 });
+describe("normalizeShortTermRecallStore", () => {
+  const nowIso = "2026-07-15T00:00:00.000Z";
+
+  function recallEntry(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      path: "memory/2026-07-15.md",
+      startLine: 10,
+      endLine: 20,
+      source: "memory",
+      ...overrides,
+    };
+  }
+
+  it("drops entries whose startLine or endLine is a non-decimal, empty, null, or non-positive value", () => {
+    const raw = {
+      entries: {
+        valid: recallEntry(),
+        hexStart: recallEntry({ startLine: "0x10" }),
+        emptyStart: recallEntry({ startLine: "" }),
+        binaryStart: recallEntry({ startLine: "0b101" }),
+        zeroStart: recallEntry({ startLine: 0 }),
+        fractionalStart: recallEntry({ startLine: "1.5" }),
+        hexEnd: recallEntry({ endLine: "0x20" }),
+        nullEnd: recallEntry({ endLine: null }),
+      },
+    };
+
+    const store = normalizeShortTermRecallStore(raw, nowIso);
+
+    expect(Object.keys(store.entries)).toEqual(["valid"]);
+  });
+
+  it("keeps valid decimal entries but sanitizes non-decimal / fractional counts to zero", () => {
+    const raw = {
+      entries: {
+        kept: recallEntry({
+          recallCount: "0x10",
+          dailyCount: "1.5",
+          groundedCount: "",
+        }),
+      },
+    };
+
+    const entryResult = normalizeShortTermRecallStore(raw, nowIso).entries["kept"];
+
+    expect(entryResult).toBeDefined();
+    expect(entryResult?.recallCount).toBe(0);
+    expect(entryResult?.dailyCount).toBe(0);
+    expect(entryResult?.groundedCount).toBe(0);
+  });
+
+  it("preserves decimal-string and numeric line numbers and counts", () => {
+    const raw = {
+      entries: {
+        kept: recallEntry({
+          startLine: "3",
+          endLine: "42",
+          recallCount: "7",
+          dailyCount: 2,
+          groundedCount: 0,
+        }),
+      },
+    };
+
+    const entryResult = normalizeShortTermRecallStore(raw, nowIso).entries["kept"];
+
+    expect(entryResult).toBeDefined();
+    expect(entryResult?.startLine).toBe(3);
+    expect(entryResult?.endLine).toBe(42);
+    expect(entryResult?.recallCount).toBe(7);
+    expect(entryResult?.dailyCount).toBe(2);
+    expect(entryResult?.groundedCount).toBe(0);
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

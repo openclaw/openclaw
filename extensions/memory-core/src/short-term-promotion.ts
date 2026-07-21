@@ -11,6 +11,10 @@ import {
   isSameMemoryDreamingDay,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -603,16 +607,16 @@ export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): Sho
       }
       const entry = value as Record<string, unknown>;
       const entryPath = typeof entry.path === "string" ? normalizeMemoryPath(entry.path) : "";
-      const startLine = Number(entry.startLine);
-      const endLine = Number(entry.endLine);
+      const startLine = parseStrictPositiveInteger(entry.startLine);
+      const endLine = parseStrictPositiveInteger(entry.endLine);
       const source = entry.source === "memory" ? "memory" : null;
-      if (!entryPath || !Number.isInteger(startLine) || !Number.isInteger(endLine) || !source) {
+      if (!entryPath || startLine === undefined || endLine === undefined || !source) {
         continue;
       }
 
-      const recallCount = Math.max(0, Math.floor(Number(entry.recallCount) || 0));
-      const dailyCount = Math.max(0, Math.floor(Number(entry.dailyCount) || 0));
-      const groundedCount = Math.max(0, Math.floor(Number(entry.groundedCount) || 0));
+      const recallCount = parseStrictNonNegativeInteger(entry.recallCount) ?? 0;
+      const dailyCount = parseStrictNonNegativeInteger(entry.dailyCount) ?? 0;
+      const groundedCount = parseStrictNonNegativeInteger(entry.groundedCount) ?? 0;
       const totalScore = Math.max(0, Number(entry.totalScore) || 0);
       const maxScore = clampScore(Number(entry.maxScore) || 0);
       const firstRecalledAt =
