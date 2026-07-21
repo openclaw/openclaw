@@ -9,8 +9,8 @@
   "type": "module",
   "dependencies": {
     "@slack/bolt": "4.7.3",
-    "@slack/types": "2.22.0",
-    "@slack/web-api": "7.19.0",
+    "@slack/types": "2.21.1",
+    "@slack/web-api": "7.18.0",
     "p-map": "7.0.5",
     "typebox": "1.3.6",
     "ws": "8.21.1",
