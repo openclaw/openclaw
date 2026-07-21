@@ -71,6 +71,7 @@ export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-co
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
+const MATRIX_TOKEN_HASH_DIRECTORY_PATTERN = /^[a-f0-9]{16}$/u;
 const MATRIX_STATE_ARCHIVE_DIRECTORY_PREFIXES = [
   ".pre-stable-token-",
   ".reset-",
@@ -163,7 +164,9 @@ async function collectLegacyMatrixStateRoots(
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isFile() && entry.name === filename) {
-        roots.push(dir);
+        if (MATRIX_TOKEN_HASH_DIRECTORY_PATTERN.test(path.basename(dir))) {
+          roots.push(dir);
+        }
         continue;
       }
       if (entry.isDirectory() && !isMatrixStateArchiveDirectory(entry.name)) {

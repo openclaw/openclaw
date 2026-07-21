@@ -182,7 +182,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -272,7 +272,7 @@ describe("matrix doctor contract state migrations", () => {
     tempDirs.push(stateDir);
     const matrixRoot = path.join(stateDir, "matrix");
     const activeRoots = [
-      path.join(matrixRoot, "accounts", "default", "matrix.example.org__bot", "token-current"),
+      path.join(matrixRoot, "accounts", "default", "matrix.example.org__bot", "095229939bddc71b"),
       path.join(
         matrixRoot,
         "accounts",
@@ -280,15 +280,46 @@ describe("matrix doctor contract state migrations", () => {
         "current",
         "nested",
         "matrix.example.org__bot",
-        "token-nested",
+        "c1aa2a8a235f5f53",
       ),
     ];
     const archivedRoots = [
-      path.join(matrixRoot, ".apr24-cutover-20260424", "accounts", "default", "token-old"),
-      path.join(matrixRoot, ".pre-stable-token-20260720", "accounts", "default", "token-old"),
-      path.join(matrixRoot, "accounts", "default", "sync-cache-backup-20260720", "token-old"),
-      path.join(matrixRoot, "accounts", "default", "crypto-backup-20260720", "token-old"),
-      path.join(matrixRoot, "accounts", "default", ".reset-20260720", "token-old"),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "default",
+        "matrix.example.org__bot",
+        "095229939bddc71b.pre-stable-token-20260716",
+      ),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "default",
+        "matrix.example.org__bot",
+        "244f8f54ac105364.apr24-cutover-20260424",
+      ),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "default",
+        "matrix.example.org__bot",
+        "244f8f54ac105364.apr9-backup-20260409",
+      ),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "default",
+        "matrix.example.org__bot",
+        "c1aa2a8a235f5f53.reset-20260720",
+      ),
+      path.join(
+        matrixRoot,
+        "accounts",
+        "default",
+        "matrix.example.org__bot",
+        "sync-cache-backup-after-limit1-20260720",
+        "244f8f54ac105364",
+      ),
     ];
     for (const [index, storageRootDir] of [...activeRoots, ...archivedRoots].entries()) {
       writeLegacySyncCache(storageRootDir, `legacy-token-${index}`);
@@ -323,7 +354,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -332,7 +363,7 @@ describe("matrix doctor contract state migrations", () => {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accountId: "default",
-        accessTokenHash: "token-hash",
+        accessTokenHash: "0123456789abcdef",
         deviceId: "DEVICE",
         currentTokenStateClaimed: true,
       }),
@@ -394,7 +425,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
@@ -436,7 +467,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     const snapshot = [
@@ -485,7 +516,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "default",
       "matrix.example.org__bot",
-      "token-hash",
+      "0123456789abcdef",
     );
     fs.mkdirSync(storageRootDir, { recursive: true });
     fs.writeFileSync(
