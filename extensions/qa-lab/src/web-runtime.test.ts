@@ -189,6 +189,8 @@ describe("qa web runtime", () => {
     const launchOptions = requireLaunchOptions();
     expect(spawnSync).toHaveBeenCalledWith("/custom/chromium", ["--version"], {
       stdio: "ignore",
+      timeout: 10_000,
+      killSignal: "SIGKILL",
     });
     expect(launchOptions?.channel).toBeUndefined();
     expect(launchOptions?.executablePath).toBe("/custom/chromium");
@@ -203,6 +205,8 @@ describe("qa web runtime", () => {
     const launchOptions = requireLaunchOptions();
     expect(spawnSync).toHaveBeenCalledWith("/usr/bin/chromium", ["--version"], {
       stdio: "ignore",
+      timeout: 10_000,
+      killSignal: "SIGKILL",
     });
     expect(launchOptions?.channel).toBeUndefined();
     expect(launchOptions?.executablePath).toBe("/usr/bin/chromium");

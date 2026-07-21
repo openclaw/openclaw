@@ -89,8 +89,17 @@ function resolveSession(pageId: string): QaWebSession {
   return session;
 }
 
+// `chromium --version` spawns a browser process that can stall on slow disks or
+// resource-constrained CI; bound the synchronous probe so a hung startup cannot
+// block qa-lab web session launch.
+const CHROMIUM_VERSION_PROBE_TIMEOUT_MS = 10_000;
+
 function canRunChromiumExecutable(executablePath: string): boolean {
-  const result = spawnSync(executablePath, ["--version"], { stdio: "ignore" });
+  const result = spawnSync(executablePath, ["--version"], {
+    stdio: "ignore",
+    timeout: CHROMIUM_VERSION_PROBE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
+  });
   return result.status === 0;
 }
 
