@@ -1,6 +1,7 @@
 // Coverage for incomplete-turn safety, retry instructions, and liveness states.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { registerAgentHarness } from "../harness/registry.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -1139,6 +1140,58 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it("preserves the incomplete-turn failure when the selected harness cannot finalize safely", async () => {
+    registerAgentHarness({
+      id: "legacy",
+      label: "Legacy harness without settled-turn finalization",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async (params) => await mockedRunEmbeddedAttempt(params),
+    });
+    try {
+      const toolUseAssistant = {
+        role: "assistant",
+        stopReason: "toolUse",
+        provider: "openai",
+        model: "gpt-5.5",
+        content: [
+          { type: "toolCall", id: "tool_1", name: "write", arguments: { path: "note.txt" } },
+        ],
+      } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+      mockedClassifyFailoverReason.mockReturnValue(null);
+      mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+        markUserMessagePersisted(attemptParams);
+        return makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+        });
+      });
+
+      const result = await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "legacy",
+        runId: "run-tool-use-no-finalization-capability",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+      expect(result.payloads?.[0]).toMatchObject({ isError: true });
+      expect(result.payloads?.[0]?.text).toContain(
+        "some tool actions may have already been executed",
+      );
+      expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
+    } finally {
+      resetRunOverflowCompactionHarnessMocks();
+    }
   });
 
   it("continues from settled side-effecting tools after an empty stop without replaying them", async () => {

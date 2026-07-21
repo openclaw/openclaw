@@ -105,6 +105,7 @@ export async function resolveEmbeddedRunTerminal(input: {
   attemptAuthProfileStore: AuthProfileStore;
   apiKeyInfo: ResolvedProviderAuth | null;
   agentHarnessId: string;
+  settledTurnFinalizationAvailable: boolean;
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
   reportedModelRef: { provider: string; model: string };
@@ -202,24 +203,27 @@ export async function resolveEmbeddedRunTerminal(input: {
     return { action: "retry" };
   }
   const availableTerminalToolPresentation = input.readTerminalToolPresentation();
-  const nextSettledToolTerminalContinuationInstruction = emptyAssistantReplyIsSilent
-    ? null
-    : resolveSettledToolTerminalContinuationInstruction({
-        provider: input.activeErrorContext.provider,
-        modelId: input.activeErrorContext.model,
-        modelApi: input.modelApi,
-        executionContract: input.executionContract,
-        allowEmptyStopContinuation:
-          runParams.trigger == null ||
-          runParams.trigger === "user" ||
-          runParams.trigger === "manual",
-        payloadCount,
-        hasTerminalToolPresentation: Boolean(availableTerminalToolPresentation),
-        aborted: input.terminalAborted,
-        promptError: input.promptError,
-        timedOut: input.terminalTimedOut,
-        attempt,
-      });
+  // Finalization is optional at the plugin boundary. Preserve the existing
+  // incomplete-turn failure when the pinned harness cannot enforce a tool-free turn.
+  const nextSettledToolTerminalContinuationInstruction =
+    emptyAssistantReplyIsSilent || !input.settledTurnFinalizationAvailable
+      ? null
+      : resolveSettledToolTerminalContinuationInstruction({
+          provider: input.activeErrorContext.provider,
+          modelId: input.activeErrorContext.model,
+          modelApi: input.modelApi,
+          executionContract: input.executionContract,
+          allowEmptyStopContinuation:
+            runParams.trigger == null ||
+            runParams.trigger === "user" ||
+            runParams.trigger === "manual",
+          payloadCount,
+          hasTerminalToolPresentation: Boolean(availableTerminalToolPresentation),
+          aborted: input.terminalAborted,
+          promptError: input.promptError,
+          timedOut: input.terminalTimedOut,
+          attempt,
+        });
   if (
     nextSettledToolTerminalContinuationInstruction &&
     retryState.settledToolContinuationAttempts < MAX_SETTLED_TOOL_TERMINAL_CONTINUATIONS
