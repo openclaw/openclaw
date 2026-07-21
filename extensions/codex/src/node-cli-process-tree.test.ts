@@ -196,7 +196,31 @@ describe("signalCodexResumeProcessTree", () => {
     }
   });
 
-  it("cancels a stalled helper and does not retry after the original child exits", () => {
+  it("lets the active taskkill finish after it causes the original child to exit", () => {
+    vi.useFakeTimers();
+    try {
+      const child = createChild();
+      const { once, runtime, taskkillKill, unref } = createRuntime();
+
+      terminateCodexResumeProcess(child, runtime);
+      child.exitCode = 0;
+      child.emit("exit", 0, null);
+      const closeHandler = once.mock.calls.find(([event]) => event === "close")?.[1] as
+        | ((code: number | null) => void)
+        | undefined;
+      closeHandler?.(0);
+      vi.advanceTimersByTime(2_000);
+
+      expect(runtime.spawn).toHaveBeenCalledOnce();
+      expect(taskkillKill).not.toHaveBeenCalled();
+      expect(unref).not.toHaveBeenCalled();
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds a stalled active helper without retrying after the original child exits", () => {
     vi.useFakeTimers();
     try {
       const child = createChild();
@@ -205,7 +229,7 @@ describe("signalCodexResumeProcessTree", () => {
       terminateCodexResumeProcess(child, runtime);
       child.exitCode = 0;
       child.emit("exit", 0, null);
-      vi.advanceTimersByTime(2_000);
+      vi.advanceTimersByTime(1_000);
 
       expect(runtime.spawn).toHaveBeenCalledOnce();
       expect(taskkillKill).toHaveBeenCalledOnce();

@@ -76,10 +76,14 @@ function terminateWindowsProcessTree(
   const taskkillPath = resolveCodexWindowsTaskkillPath(runtime.env);
   const args = ["/F", "/T", "/PID", String(pid)];
   let settled = false;
+  let childExited = false;
   let activeTaskkill: ChildProcess | undefined;
   let activeWatchdog: NodeJS.Timeout | undefined;
   function handleChildExit() {
-    finishForChildExit();
+    childExited = true;
+    if (!activeTaskkill) {
+      finishForChildExit();
+    }
   }
   const clearActiveAttempt = () => {
     if (activeWatchdog) {
@@ -98,15 +102,7 @@ function terminateWindowsProcessTree(
       clearTimeout(activeWatchdog);
       activeWatchdog = undefined;
     }
-    if (activeTaskkill) {
-      try {
-        activeTaskkill.kill("SIGKILL");
-      } catch {
-        // The helper may already have exited.
-      }
-      activeTaskkill.unref();
-      activeTaskkill = undefined;
-    }
+    activeTaskkill = undefined;
     removeChildExitListener();
   };
   const fallbackToChild = () => {
@@ -126,7 +122,7 @@ function terminateWindowsProcessTree(
     clearActiveAttempt();
     removeChildExitListener();
   };
-  const canRetryOriginalChild = () => !settled && child.exitCode === null;
+  const canRetryOriginalChild = () => !settled && !childExited && child.exitCode === null;
   const runTreeKillAttempt = (attempt: number) => {
     if (!canRetryOriginalChild()) {
       finishForChildExit();
