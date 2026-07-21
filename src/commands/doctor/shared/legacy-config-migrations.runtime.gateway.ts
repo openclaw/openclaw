@@ -14,6 +14,14 @@ import {
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
 
+const GATEWAY_PORT_OOB_RULE: LegacyConfigRule = {
+  path: ["gateway", "port"],
+  message:
+    'gateway.port is outside the valid TCP range (1–65535) and will be replaced with the default. Run "openclaw doctor --fix".',
+  match: (value) =>
+    typeof value !== "number" || !Number.isInteger(value) || value < 1 || value > 65_535,
+};
+
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
   message:
@@ -152,6 +160,30 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       gateway.bind = mapped;
       raw.gateway = gateway;
       changes.push(`Normalized gateway.bind "${escapeControlForLog(bindRaw)}" → "${mapped}".`);
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "gateway.port-oob-repair",
+    describe:
+      "Replace out-of-range gateway.port with the default to avoid post-schema-tightening startup failures",
+    legacyRules: [GATEWAY_PORT_OOB_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "port")) {
+        return;
+      }
+      const port = gateway.port;
+      // Replace the invalid value with the default port rather than deleting it
+      // so the gateway still binds to a known, working port after upgrade.
+      if (typeof port === "number" && Number.isInteger(port) && port >= 1 && port <= 65_535) {
+        return;
+      }
+      gateway.port = DEFAULT_GATEWAY_PORT;
+      raw.gateway = gateway;
+      changes.push(
+        `Replaced out-of-range gateway.port (${String(port)}) with default ${DEFAULT_GATEWAY_PORT}. ` +
+          "Valid TCP ports are 1–65535.",
+      );
     },
   }),
 ];

@@ -2858,6 +2858,77 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
   });
 });
 
+describe("gateway.port out-of-range repair migrate", () => {
+  it("replaces gateway.port above TCP max with the default port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Replaced out-of-range gateway.port (65536) with default 18789. Valid TCP ports are 1–65535.",
+    ]);
+    expect(res.config?.gateway?.port).toBe(18789);
+  });
+
+  it("replaces gateway.port zero with the default port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 0 },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Replaced out-of-range gateway.port (0) with default 18789. Valid TCP ports are 1–65535.",
+    ]);
+    expect(res.config?.gateway?.port).toBe(18789);
+  });
+
+  it("replaces negative gateway.port with the default port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: -1 },
+    });
+
+    expect(res.changes.length).toBe(1);
+    expect(res.config?.gateway?.port).toBe(18789);
+  });
+
+  it("preserves valid gateway.port values", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_535 },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("preserves valid minimum gateway.port (1)", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 1 },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toEqual([]);
+  });
+
+  it("preserves other gateway keys when replacing the port", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: { port: 65_536, bind: "loopback" },
+    });
+
+    expect(res.config?.gateway).toEqual({ port: 18789, bind: "loopback" });
+    expect(res.changes.length).toBe(1);
+  });
+
+  it("is idempotent - second migration on repaired config produces no changes", () => {
+    const first = migrateLegacyConfigForTest({
+      gateway: { port: 65_536 },
+    });
+    expect(first.changes.length).toBe(1);
+    expect(first.config?.gateway?.port).toBe(18789);
+
+    const second = migrateLegacyConfigForTest(first.config);
+    expect(second.changes).toStrictEqual([]);
+  });
+});
+
 describe("legacy model compat migrate", () => {
   it("upgrades the retired xAI quality image slug without pinning active aliases", () => {
     const raw = {
