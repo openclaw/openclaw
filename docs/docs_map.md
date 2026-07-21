@@ -3918,6 +3918,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Modes, scope, and backend
   - H2: Docker backend
   - H3: Sandboxed browser
+  - H2: Podman backend
   - H2: SSH backend
   - H2: OpenShell backend
   - H2: Workspace access
@@ -4725,6 +4726,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Prerequisites
   - H2: Quick start
+  - H2: Agent sandbox backend
   - H2: Podman and Tailscale
   - H2: Systemd (Quadlet, optional)
   - H2: Config, env, and storage

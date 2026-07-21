@@ -20,6 +20,11 @@ import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
+import {
+  DOCKER_SANDBOX_ENGINE,
+  PODMAN_SANDBOX_ENGINE,
+  resolvePodmanSandboxRuntimeInfo,
+} from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
@@ -220,7 +225,18 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
+  const configuredBackend = cfg.backend.trim().toLowerCase();
+  const containerEngine =
+    configuredBackend === "docker"
+      ? DOCKER_SANDBOX_ENGINE
+      : configuredBackend === "podman"
+        ? PODMAN_SANDBOX_ENGINE
+        : null;
+  const podmanRuntimeInfo =
+    containerEngine?.id === "podman" ? await resolvePodmanSandboxRuntimeInfo() : undefined;
   const docker = await resolveSandboxDockerUser({
+    backend: cfg.backend,
+    ...(podmanRuntimeInfo ? { podmanRootless: podmanRuntimeInfo.rootless } : {}),
     docker: cfg.docker,
     workspaceDir,
   });
@@ -273,9 +289,7 @@ export async function resolveSandboxContext(params: {
       })()
     : undefined;
   if (resolvedCfg.browser.enabled && backend.capabilities?.browser !== true) {
-    throw new Error(
-      `Sandbox backend "${resolvedCfg.backend}" does not support browser sandboxes yet.`,
-    );
+    throw new Error(`Sandbox backend "${backend.id}" does not support browser sandboxes yet.`);
   }
   const browser =
     resolvedCfg.browser.enabled && backend.capabilities?.browser === true

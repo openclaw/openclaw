@@ -158,7 +158,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
     return { sandboxed: false, workspaceAccess: sandbox.workspaceAccess };
   }
   let confinementError: string | undefined;
-  if (sandbox.backend !== "docker") {
+  if (sandbox.backend !== "docker" && sandbox.backend !== "podman") {
     confinementError = "target sandbox backend does not provide local workspace confinement.";
   } else if (sandbox.scope !== "session") {
     confinementError = "target sandbox is not exclusive to this worker session.";

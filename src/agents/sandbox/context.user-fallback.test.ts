@@ -17,6 +17,7 @@ const baseDocker: SandboxDockerConfig = {
 describe("resolveSandboxDockerUser", () => {
   it("keeps configured docker.user", async () => {
     const resolved = await resolveSandboxDockerUser({
+      backend: "docker",
       docker: { ...baseDocker, user: "2000:2000" },
       workspaceDir: "/tmp/unused",
       stat: async () => ({ uid: 1000, gid: 1000 }),
@@ -26,6 +27,38 @@ describe("resolveSandboxDockerUser", () => {
 
   it("falls back to workspace ownership when docker.user is unset", async () => {
     const resolved = await resolveSandboxDockerUser({
+      backend: "docker",
+      docker: baseDocker,
+      workspaceDir: "/tmp/workspace",
+      stat: async () => ({ uid: 1001, gid: 1002 }),
+    });
+    expect(resolved.user).toBe("1001:1002");
+  });
+
+  it("falls back to workspace ownership for mixed-case Docker backend ids", async () => {
+    const resolved = await resolveSandboxDockerUser({
+      backend: "Docker",
+      docker: baseDocker,
+      workspaceDir: "/tmp/workspace",
+      stat: async () => ({ uid: 1001, gid: 1002 }),
+    });
+    expect(resolved.user).toBe("1001:1002");
+  });
+
+  it("does not apply Docker workspace ownership fallback for Podman", async () => {
+    const resolved = await resolveSandboxDockerUser({
+      backend: "podman",
+      docker: baseDocker,
+      workspaceDir: "/tmp/workspace",
+      stat: async () => ({ uid: 1001, gid: 1002 }),
+    });
+    expect(resolved.user).toBeUndefined();
+  });
+
+  it("applies workspace ownership fallback for rootful Podman", async () => {
+    const resolved = await resolveSandboxDockerUser({
+      backend: "podman",
+      podmanRootless: false,
       docker: baseDocker,
       workspaceDir: "/tmp/workspace",
       stat: async () => ({ uid: 1001, gid: 1002 }),
@@ -35,6 +68,7 @@ describe("resolveSandboxDockerUser", () => {
 
   it("leaves docker.user unset when workspace stat fails", async () => {
     const resolved = await resolveSandboxDockerUser({
+      backend: "docker",
       docker: baseDocker,
       workspaceDir: "/tmp/workspace",
       stat: async () => {

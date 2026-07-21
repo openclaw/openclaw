@@ -26,11 +26,11 @@ Not sandboxed:
 
 Three independent settings control sandbox behavior:
 
-| Setting | Key                               | Values                       | Default  |
-| ------- | --------------------------------- | ---------------------------- | -------- |
-| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`     | `off`    |
-| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared` | `agent`  |
-| Backend | `agents.defaults.sandbox.backend` | `docker`, `ssh`, `openshell` | `docker` |
+| Setting | Key                               | Values                                 | Default  |
+| ------- | --------------------------------- | -------------------------------------- | -------- |
+| Mode    | `agents.defaults.sandbox.mode`    | `off`, `non-main`, `all`               | `off`    |
+| Scope   | `agents.defaults.sandbox.scope`   | `agent`, `session`, `shared`           | `agent`  |
+| Backend | `agents.defaults.sandbox.backend` | `docker`, `podman`, `ssh`, `openshell` | `docker` |
 
 **Mode** controls when sandboxing applies:
 
@@ -44,25 +44,25 @@ Three independent settings control sandbox behavior:
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
-**Backend** controls which runtime executes sandboxed tools. SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`.
+**Backend** controls which runtime executes sandboxed tools. Docker and Podman share `agents.defaults.sandbox.docker`; SSH-specific config lives under `agents.defaults.sandbox.ssh`; OpenShell-specific config lives under `plugins.entries.openshell.config`.
 
-|                     | Docker                           | SSH                            | OpenShell                                           |
-| ------------------- | -------------------------------- | ------------------------------ | --------------------------------------------------- |
-| **Where it runs**   | Local container                  | Any SSH-accessible host        | OpenShell managed sandbox                           |
-| **Setup**           | `scripts/sandbox-setup.sh`       | SSH key + target host          | OpenShell plugin enabled                            |
-| **Workspace model** | Bind-mount or copy               | Remote-canonical (seed once)   | `mirror` or `remote`                                |
-| **Network control** | `docker.network` (default: none) | Depends on remote host         | Depends on OpenShell                                |
-| **Browser sandbox** | Supported                        | Not supported                  | Not supported yet                                   |
-| **Bind mounts**     | `docker.binds`                   | N/A                            | N/A                                                 |
-| **Best for**        | Local dev, full isolation        | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
+|                     | Docker or Podman backend                  | SSH                            | OpenShell                                           |
+| ------------------- | ----------------------------------------- | ------------------------------ | --------------------------------------------------- |
+| **Where it runs**   | Local Docker or Podman container          | Any SSH-accessible host        | OpenShell managed sandbox                           |
+| **Setup**           | Docker and/or Podman                      | SSH key + target host          | OpenShell plugin enabled                            |
+| **Workspace model** | Bind-mount or copy                        | Remote-canonical (seed once)   | `mirror` or `remote`                                |
+| **Network control** | `docker.network` (default: none)          | Depends on remote host         | Depends on OpenShell                                |
+| **Browser sandbox** | Docker engine only                        | Not supported                  | Not supported yet                                   |
+| **Bind mounts**     | `docker.binds`                            | N/A                            | N/A                                                 |
+| **Best for**        | Local development and container isolation | Offloading to a remote machine | Managed remote sandboxes with optional two-way sync |
 
 ## Docker backend
 
-Docker is the default backend once sandboxing is enabled. It runs tools and sandbox browsers locally through the Docker daemon socket (`/var/run/docker.sock`); isolation comes from Docker namespaces.
+The Docker backend runs tools locally through the `docker` CLI. Its selection and error behavior are unchanged; it does not probe or fall back to Podman.
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:bookworm-slim`.
 
-To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to Docker's `--gpus` flag and requires a compatible host runtime such as NVIDIA Container Toolkit.
+To expose host GPUs, set `agents.defaults.sandbox.docker.gpus` (or the per-agent override) to a value like `"all"` or `"device=GPU-uuid"`. This is passed to the selected container engine's Docker-compatible `--gpus` flag and requires compatible host GPU setup.
 
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
@@ -84,6 +84,51 @@ On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `wor
 - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with the password in the URL fragment (not query string or header logs).
 - `agents.defaults.sandbox.browser.allowHostControl` (default `false`) lets sandboxed sessions target the host browser explicitly.
 - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
+
+## Podman backend
+
+Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This is a built-in backend, not a plugin. It does not probe or select Docker, even when the `docker` executable is installed.
+
+The default `docker` backend remains Docker-only, matching current releases. Policy follows the configured backend identity: Docker requires `sandbox.allowBackends: ["docker"]`, while Podman requires `sandbox.allowBackends: ["podman"]`.
+
+Both built-in container backends use the existing `sandbox.docker.*` settings: image, workdir, network, read-only root, tmpfs, capabilities, environment, resource limits, GPU requests, custom binds, and setup command. OpenClaw invokes the native `podman` command and does not add a second Podman connection configuration surface.
+
+Rootless Podman uses an engine-side `keep-id` user namespace so writable workspace bind mounts remain writable. A long-lived `keep-id` container can reserve the user's subordinate-ID range and prevent unrelated `--userns=auto` containers; remove the sandbox container before starting those workloads. Rootful Podman runs as the local workspace owner. If you set `sandbox.docker.user`, OpenClaw leaves user mapping to your Podman/image configuration.
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "podman",
+        scope: "session",
+        workspaceAccess: "rw",
+        docker: {
+          image: "openclaw-sandbox:bookworm-slim",
+          network: "none",
+          readOnlyRoot: true,
+          capDrop: ["ALL"],
+        },
+      },
+    },
+  },
+}
+```
+
+Build or pull the sandbox image into the selected Podman store before enabling the backend. From a source checkout, build the same sandbox Dockerfile with Podman:
+
+```bash
+podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
+```
+
+Podman notes:
+
+- Browser sandboxing is not supported by Podman; keep `sandbox.browser.enabled` off, or install Docker and select `backend: "docker"`.
+- Local Podman engines and Podman Machine are supported. Podman Machine bind sources must be under the host home directory, which is its default shared volume. Arbitrary remote Podman connections are rejected; use the SSH backend for remote execution.
+- OpenClaw omits the shared bare `/run` tmpfs default for Podman so the built-in init remains mounted at `/run/podman-init`. Read-only roots use Podman's native read-only tmpfs for `/run`; writable roots use the container root. Conflicting custom tmpfs or bind mounts are rejected so orphaned tool processes cannot accumulate.
+- `sandbox.docker.gpus` is forwarded through Podman's Docker-compatible `--gpus` flag; device setup and support remain host-specific.
+- OpenClaw uses the active native `podman` CLI context.
 
 ## SSH backend
 
@@ -349,7 +394,7 @@ If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker 
   </Step>
 </Steps>
 
-By default, Docker sandbox containers run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
+By default, local container sandboxes run with **no network**. Override with `agents.defaults.sandbox.docker.network`.
 
 <AccordionGroup>
   <Accordion title="Sandbox browser Chromium defaults">
@@ -403,9 +448,11 @@ Paths:
     - Default `docker.network` is `"none"` (no egress), so package installs will fail.
     - `docker.network: "container:<id>"` requires `dangerouslyAllowContainerNamespaceJoin: true` and is break-glass only.
     - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
-    - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
+    - `user` must be root for package installs. Docker can omit `user` or set
+      `user: "0:0"`; rootless Podman must set `user: "0:0"` because omission
+      defaults to the invoking user through `--userns=keep-id`.
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
-    - Values in `agents.defaults.sandbox.docker.env` are passed as explicit Docker container environment variables. Anyone with Docker daemon access can inspect them with Docker metadata commands such as `docker inspect`. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
+    - Values in `agents.defaults.sandbox.docker.env` are passed as explicit container environment variables. Anyone with access to the selected container engine can inspect them with metadata commands such as `docker inspect` or `podman inspect`. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
 
   </Accordion>
 </AccordionGroup>
