@@ -28,7 +28,6 @@ import { qqbotChannelConfigSchema } from "./config-schema.js";
 import { qqbotDoctor } from "./doctor.js";
 import { loadCredentialBackup, saveCredentialBackup } from "./engine/config/credential-backup.js";
 import { clearAccountCredentials } from "./engine/config/credentials.js";
-import { normalizeOptionalString } from "./engine/utils/string-normalize.js";
 import { chunkQQBotMarkdownText } from "./engine/messaging/markdown-table-chunking.js";
 import type { OutboundMediaAccessContext } from "./engine/messaging/outbound-types.js";
 import {
@@ -36,6 +35,7 @@ import {
   looksLikeQQBotTarget,
   parseTarget,
 } from "./engine/messaging/target-parser.js";
+import { normalizeOptionalString } from "./engine/utils/string-normalize.js";
 import { resolveQQBotGroupToolPolicy } from "./group-policy.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
