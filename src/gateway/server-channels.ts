@@ -1138,7 +1138,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           } else {
             setStoppedRuntime(channelId, id, stoppedPatch);
           }
-          if (!manual && (accountRestartPending || preserveKnownAccount)) {
+          if (!manual && hadLiveState) {
             restartDeferredToCaller.delete(rKey);
             recoveryStopTimedOut.add(rKey);
           }
@@ -1226,10 +1226,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       const listedAccountIds = plugin.config.listAccountIds(cfg);
       const listedAccountIdSet = new Set(listedAccountIds);
       const accountIds = Array.from(
-        new Set([
-          ...listedAccountIds,
-          ...listKnownLiveAccountIds(plugin.id, store),
-        ]),
+        new Set([...listedAccountIds, ...listKnownLiveAccountIds(plugin.id, store)]),
       );
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
