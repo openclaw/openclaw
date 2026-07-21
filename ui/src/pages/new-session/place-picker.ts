@@ -2,56 +2,10 @@ import { html, nothing } from "lit";
 import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
-import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import { renderCloudProfileMenuItems, renderSessionMenuItem } from "./cloud-target.ts";
 import type { BrowserTarget, DraftBranches, DraftCloudProfile, DraftNode } from "./discovery.ts";
 import { folderDisplayName } from "./path.ts";
-
-type RecentPlaceSource = {
-  execCwd?: unknown;
-  execNode?: unknown;
-  worktree?: { repoRoot?: unknown } | null;
-};
-
-type RecentPlace = {
-  folder: string;
-  execNode: string;
-};
-
-export function recentPlaces(
-  rows: readonly RecentPlaceSource[],
-  opts: {
-    workspace: string;
-    execNodes: readonly Pick<DraftNode, "nodeId">[];
-  },
-): RecentPlace[] {
-  const knownNodes = new Set(opts.execNodes.map((node) => node.nodeId));
-  const seen = new Set<string>();
-  const places: RecentPlace[] = [];
-
-  for (const row of rows) {
-    const folder =
-      normalizeOptionalString(row.execCwd) ?? normalizeOptionalString(row.worktree?.repoRoot);
-    const execNode = normalizeOptionalString(row.execNode) ?? "";
-    if (
-      !folder ||
-      (folder === opts.workspace && !execNode) ||
-      (execNode && !knownNodes.has(execNode))
-    ) {
-      continue;
-    }
-    const key = `${execNode}\0${folder}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    places.push({ folder, execNode });
-    if (places.length >= 4) {
-      break;
-    }
-  }
-  return places;
-}
+import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
 
 function renderBrowseView(params: {
   listing: FsListDirResult | null;
