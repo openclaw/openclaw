@@ -434,7 +434,7 @@ describe("sessions_spawn tool", () => {
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs.",
+      "Persistent sidebar UI session; use when the user asks to create or open a thread; subagent only; omit execution/mode/thread/thinking/lightContext/attachments/attachAs.",
     );
     expect(tool.description).toContain("`visible=true`: persistent sidebar dashboard session");
     expect(tool.description).toContain("when the user asks to create/open a thread");
@@ -708,6 +708,11 @@ describe("sessions_spawn tool", () => {
 
   it.each([
     [
+      "execution",
+      { execution: { backend: "k8s" } },
+      "Parameters unavailable with visible=true: execution: execution placement is not wired to the sessions.create path",
+    ],
+    [
       "thinking",
       { thinking: "high" },
       "Parameters unavailable with visible=true: thinking: thinking overrides are not wired to the sessions.create path",
@@ -751,6 +756,7 @@ describe("sessions_spawn tool", () => {
     await expect(
       tool.execute("visible-unsupported-many", {
         task: "inspect",
+        execution: { backend: "k8s" },
         runtime: "acp",
         thinking: "high",
         thread: true,
@@ -761,7 +767,7 @@ describe("sessions_spawn tool", () => {
         visible: true,
       }),
     ).rejects.toThrow(
-      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+      'Parameters unavailable with visible=true: execution: execution placement is not wired to the sessions.create path; runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
     );
   });
 
