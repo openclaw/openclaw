@@ -79,6 +79,9 @@ type ResourceString = {
   value: string;
 };
 
+const GENERATED_TRANSLATION_LINT_IGNORE =
+  'tools:ignore="Typos,TypographyDashes,TypographyEllipsis"';
+
 type TranslationContradiction = {
   locale: string;
   selected: string;
@@ -1114,7 +1117,7 @@ function localizeManualStrings(
         ? selectExactArtifactTranslation(source, inventoryEntry.id, artifactEntries)
         : source;
     return {
-      attrs: entry.attrs,
+      attrs: translatable ? `${entry.attrs} ${GENERATED_TRANSLATION_LINT_IGNORE}` : entry.attrs,
       key: entry.key,
       rawValue: `"${escapeAndroidResourceValue(value)}"`,
       value,
@@ -1126,8 +1129,10 @@ function renderStringsXml(
   manual: readonly ResourceString[],
   generated: ReadonlyMap<string, { source: string; value: string }>,
 ): string {
+  const usesToolsNamespace =
+    generated.size > 0 || manual.some((entry) => entry.attrs.includes("tools:"));
   const lines = [
-    generated.size > 0
+    usesToolsNamespace
       ? '<resources xmlns:tools="http://schemas.android.com/tools">'
       : "<resources>",
   ];
@@ -1144,7 +1149,7 @@ function renderStringsXml(
       // Translation-memory text intentionally preserves technical tokens and source punctuation,
       // so Android's English dictionary and typography suggestions do not apply to managed keys.
       lines.push(
-        `    <string name="${key}"${formatted} tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
+        `    <string name="${key}"${formatted} ${GENERATED_TRANSLATION_LINT_IGNORE}>"${renderAndroidResourceValue(entry.source, entry.value)}"</string>`,
       );
     }
   }
