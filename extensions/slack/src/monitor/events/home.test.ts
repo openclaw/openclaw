@@ -10,19 +10,13 @@ function createHomeContext(params?: {
   slashCommandName?: string;
   trackEvent?: () => void;
   shouldDropMismatchedSlackEvent?: (body: unknown) => boolean;
-  suggestedPromptsResult?: boolean;
 }) {
   const harness = createSlackSystemEventTestHarness();
   const publish = vi.fn().mockResolvedValue({ ok: true });
-  const setSlackSuggestedPrompts = vi.fn(async () => params?.suggestedPromptsResult ?? true);
-  const recordSlackAgentView = vi.fn(async () => undefined);
   if (params?.shouldDropMismatchedSlackEvent) {
     harness.ctx.shouldDropMismatchedSlackEvent = params.shouldDropMismatchedSlackEvent;
   }
-  harness.ctx.botToken = "test-bot-token";
-  harness.ctx.accountId = "default";
-  harness.ctx.setSlackSuggestedPrompts = setSlackSuggestedPrompts;
-  harness.ctx.recordSlackAgentView = recordSlackAgentView;
+  harness.ctx.botToken = "xoxb-test";
   (harness.ctx.app as unknown as { client: { views: { publish: typeof publish } } }).client = {
     views: { publish },
   };
@@ -33,6 +27,19 @@ function createHomeContext(params?: {
   });
   return {
     publish,
+    getHomeHandler: () => harness.getHandler("app_home_opened") as HomeHandler | null,
+  };
+}
+
+function createAgentHomeContext(params?: { suggestedPromptsResult?: boolean }) {
+  const harness = createSlackSystemEventTestHarness();
+  const setSlackSuggestedPrompts = vi.fn(async () => params?.suggestedPromptsResult ?? true);
+  const recordSlackAgentView = vi.fn(async () => undefined);
+  harness.ctx.accountId = "default";
+  harness.ctx.setSlackSuggestedPrompts = setSlackSuggestedPrompts;
+  harness.ctx.recordSlackAgentView = recordSlackAgentView;
+  registerSlackHomeEvents({ ctx: harness.ctx });
+  return {
     setSlackSuggestedPrompts,
     recordSlackAgentView,
     getHomeHandler: () => harness.getHandler("app_home_opened") as HomeHandler | null,
@@ -71,7 +78,7 @@ describe("registerSlackHomeEvents", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledTimes(1);
     expect(publish).toHaveBeenCalledWith({
-      token: "test-bot-token",
+      token: "xoxb-test",
       user_id: "U123",
       view: expect.any(Object),
     });
@@ -97,7 +104,7 @@ describe("registerSlackHomeEvents", () => {
     });
 
     expect(publish).toHaveBeenCalledWith({
-      token: "test-bot-token",
+      token: "xoxb-test",
       user_id: "U123",
       view: expect.any(Object),
     });
@@ -110,9 +117,8 @@ describe("registerSlackHomeEvents", () => {
   });
 
   it("records Agent View only after Slack accepts threadless prompts", async () => {
-    const trackEvent = vi.fn();
-    const { publish, setSlackSuggestedPrompts, recordSlackAgentView, getHomeHandler } =
-      createHomeContext({ trackEvent });
+    const { setSlackSuggestedPrompts, recordSlackAgentView, getHomeHandler } =
+      createAgentHomeContext();
 
     await getHomeHandler()!({
       event: {
@@ -124,8 +130,6 @@ describe("registerSlackHomeEvents", () => {
       body: {},
     });
 
-    expect(trackEvent).toHaveBeenCalledTimes(1);
-    expect(publish).not.toHaveBeenCalled();
     expect(setSlackSuggestedPrompts).toHaveBeenCalledWith({
       channelId: "D123",
       title: "Try asking",
@@ -145,7 +149,7 @@ describe("registerSlackHomeEvents", () => {
   });
 
   it("keeps Assistant View out of Agent mode when threadless prompts are rejected", async () => {
-    const { recordSlackAgentView, getHomeHandler } = createHomeContext({
+    const { recordSlackAgentView, getHomeHandler } = createAgentHomeContext({
       suggestedPromptsResult: false,
     });
 

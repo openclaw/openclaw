@@ -327,17 +327,15 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.GroupSpace).toBe("T_ENTERPRISE");
   });
 
-  it("routes a self-threaded Agent View root to its own session", async () => {
+  it("routes a self-threaded Agent View root before capability detection completes", async () => {
+    const ctx = createDefaultSlackCtx();
     const prepared = await prepareMessageWith(
-      createDefaultSlackCtx(),
+      ctx,
       createSlackAccount({ replyToMode: "off" }),
       createSlackMessage({
         ts: "10.000",
         thread_ts: "10.000",
         text: "new Agent View conversation",
-        app_context: {
-          entities: [{ type: "slack#/types/channel_id", value: "C123" }],
-        },
       }),
     );
 
@@ -348,6 +346,20 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.forcedReplyThreadTs).toBe("10.000");
     expect(prepared.ctxPayload.TransportThreadId).toBeUndefined();
     expect(payload.SlackAgentThread).toBe(true);
+
+    const followUp = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.100",
+        thread_ts: "10.000",
+        parent_user_id: "U1",
+        text: "follow up",
+      }),
+    );
+    assertPrepared(followUp);
+    expect(followUp.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
+    expect(followUp.forcedReplyThreadTs).toBe("10.000");
   });
 
   it("does not persist a cached Assistant View self-thread root as Agent View", async () => {
@@ -396,6 +408,24 @@ describe("slack prepareSlackMessage inbound contract", () => {
     assertPrepared(prepared);
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
     expect(prepared.ctxPayload.MessageThreadId).toBe("10.000");
+    expect(prepared.forcedReplyThreadTs).toBe("10.000");
+  });
+
+  it("uses the app-wide Agent View marker when Slack omits message context", async () => {
+    const ctx = createDefaultSlackCtx();
+    await ctx.recordSlackAgentView();
+
+    const prepared = await prepareMessageWith(
+      ctx,
+      createSlackAccount({ replyToMode: "off" }),
+      createSlackMessage({
+        ts: "10.000",
+        text: "new Agent View conversation without active context",
+      }),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:10.000");
     expect(prepared.forcedReplyThreadTs).toBe("10.000");
   });
 

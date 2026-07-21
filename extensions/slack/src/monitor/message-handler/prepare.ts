@@ -772,11 +772,37 @@ export async function prepareSlackMessage(params: {
   if (hasAgentViewMessageSignal) {
     await ctx.recordSlackAgentView();
   }
+  const managedViewThreadTs = message.thread_ts;
+  const isManagedViewRoot =
+    isDirectMessage &&
+    !opts.eventScope &&
+    !assistantThreadContext &&
+    !message.parent_user_id &&
+    Boolean(managedViewThreadTs && message.ts && managedViewThreadTs === message.ts);
+  if (isManagedViewRoot && managedViewThreadTs) {
+    // Slack-managed Agent and Assistant roots self-thread. Persist the specific
+    // root so first-message routing never waits on an app-wide capability probe.
+    await ctx.recordSlackManagedViewThread(message.channel, managedViewThreadTs);
+  }
+  const hasManagedViewThread =
+    isDirectMessage &&
+    !opts.eventScope &&
+    !assistantThreadContext &&
+    Boolean(
+      managedViewThreadTs &&
+      (await ctx.isSlackManagedViewThread(message.channel, managedViewThreadTs)),
+    );
   const isAgentViewMessage =
     isDirectMessage &&
     !opts.eventScope &&
     !assistantThreadContext &&
-    (hasAgentViewMessageSignal || (await ctx.isSlackAgentView()));
+    // Slack selects Agent View for the whole app, not individual messages.
+    // The durable marker is keyed by apiAppId so an app replacement cannot
+    // make ordinary DMs on the replacement inherit the old app's experience.
+    (hasAgentViewMessageSignal ||
+      isManagedViewRoot ||
+      hasManagedViewThread ||
+      (await ctx.isSlackAgentView()));
   const agentViewThreadTs = isAgentViewMessage ? (message.thread_ts ?? message.ts) : undefined;
   const channelReplyToMode =
     channelConfig?.replyToMode ?? resolveSlackReplyToMode(account, channelChatType);

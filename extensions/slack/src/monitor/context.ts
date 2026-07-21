@@ -203,6 +203,8 @@ export type SlackMonitorContext = {
   setSlackSuggestedPrompts: (params: SlackSuggestedPromptsInput) => Promise<boolean>;
   recordSlackAgentView: () => Promise<void>;
   isSlackAgentView: () => Promise<boolean>;
+  recordSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<void>;
+  isSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<boolean>;
 };
 
 const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -264,6 +266,7 @@ export function createSlackMonitorContext(params: {
   const agentViewState = createSlackAgentViewState({
     accountId: params.accountId,
     teamId: params.teamId,
+    apiAppId: params.apiAppId,
     warn: (action, error) =>
       logger.warn({ error: formatSlackError(error) }, `Slack Agent View state failed to ${action}`),
   });
@@ -729,5 +732,7 @@ export function createSlackMonitorContext(params: {
     setSlackSuggestedPrompts,
     recordSlackAgentView: agentViewState.record,
     isSlackAgentView: agentViewState.isEnabled,
+    recordSlackManagedViewThread: agentViewState.recordManagedThread,
+    isSlackManagedViewThread: agentViewState.isManagedThread,
   };
 }
