@@ -2,12 +2,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
+const getBundledChannelPluginMock = vi.hoisted(() => vi.fn());
+const getBundledChannelSetupPluginMock = vi.hoisted(() => vi.fn());
+const hasBundledChannelPackageSetupFeatureMock = vi.hoisted(() => vi.fn());
 const resolveBundledSurfaceMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./bundled.js", () => ({
+  getBundledChannelPlugin: getBundledChannelPluginMock,
+  getBundledChannelSetupPlugin: getBundledChannelSetupPluginMock,
+  hasBundledChannelPackageSetupFeature: hasBundledChannelPackageSetupFeatureMock,
+}));
 
 vi.mock("./registry-loaded.js", () => ({
   getLoadedChannelPluginForRead: getLoadedChannelPluginMock,
 }));
 
+import { resolveBundledChannelSetupPromotionSurface } from "./setup-promotion-bundled.js";
 import {
   resolveSingleAccountKeysToMove,
   resolveSingleAccountPromotion,
@@ -54,8 +64,24 @@ function valuesFor(keys: readonly string[]): Record<string, string> {
 
 describe("setup promotion helpers", () => {
   beforeEach(() => {
+    getBundledChannelPluginMock.mockReset();
+    getBundledChannelSetupPluginMock.mockReset();
+    hasBundledChannelPackageSetupFeatureMock.mockReset();
     getLoadedChannelPluginMock.mockReset();
     resolveBundledSurfaceMock.mockReset();
+  });
+
+  it("resolves bundled promotion from the setup-only plugin", () => {
+    hasBundledChannelPackageSetupFeatureMock.mockReturnValue(true);
+    getBundledChannelSetupPluginMock.mockReturnValue({
+      setup: { singleAccountKeysToMove: ["customAuth"] },
+    });
+
+    expect(resolveBundledChannelSetupPromotionSurface("demo")).toEqual({
+      singleAccountKeysToMove: ["customAuth"],
+    });
+    expect(getBundledChannelSetupPluginMock).toHaveBeenCalledWith("demo");
+    expect(getBundledChannelPluginMock).not.toHaveBeenCalled();
   });
 
   it("keeps static single-account migration keys cheap", () => {

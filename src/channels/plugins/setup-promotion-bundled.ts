@@ -3,7 +3,7 @@
  *
  * Kept separate so hot Plugin SDK setup helpers never import bundled discovery.
  */
-import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
+import { getBundledChannelSetupPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
 import type { ChannelSetupPromotionSurface } from "./setup-promotion-helpers.js";
 
 export function resolveBundledChannelSetupPromotionSurface(
@@ -12,6 +12,6 @@ export function resolveBundledChannelSetupPromotionSurface(
   if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {
     return null;
   }
-  const setup = getBundledChannelPlugin(channelKey)?.setup;
+  const setup = getBundledChannelSetupPlugin(channelKey)?.setup;
   return setup && typeof setup === "object" ? setup : null;
 }
