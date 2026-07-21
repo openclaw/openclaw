@@ -20,7 +20,6 @@ import {
   createDiagnosticsOtelService,
   type OpenClawPluginServiceContext,
 } from "../../../../extensions/diagnostics-otel/runtime-api.js";
-import { onAISafetyDiagnosticEvent } from "../../../../src/infra/diagnostic-ai-safety-events.js";
 import { onTrustedInternalDiagnosticEvent } from "../../../../src/infra/diagnostic-events.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
@@ -1293,7 +1292,6 @@ function createDirectProducerContext(params: {
     internalDiagnostics: {
       emit: emitTrustedDiagnosticEventWithPrivateData,
       onEvent: onTrustedInternalDiagnosticEvent,
-      onAISafetyEvent: onAISafetyDiagnosticEvent,
     },
     logger: {
       debug: (...args) => params.writeLog(`${args.map(String).join(" ")}\n`),

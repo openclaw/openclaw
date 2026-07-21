@@ -783,6 +783,7 @@ export type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
 export type DiagnosticPromptInjectionSignalEvent = DiagnosticBaseEvent & {
   type: "ai_safety.prompt_injection.signal";
   agentId?: string;
+  sessionId?: string;
   severity: "info" | "warn" | "error" | "critical";
   category: "direct" | "indirect" | "jailbreak" | "role_override" | "unknown";
   actionTaken: "blocked" | "flagged" | "allowed" | "redacted";
@@ -795,6 +796,7 @@ export type DiagnosticPromptInjectionSignalEvent = DiagnosticBaseEvent & {
 export type DiagnosticToolPolicyDecisionEvent = DiagnosticBaseEvent & {
   type: "ai_safety.tool_policy.decision";
   agentId?: string;
+  sessionId?: string;
   toolName: string;
   decision: "allowed" | "blocked" | "approval_required" | "approved" | "denied";
   policySource: "static_config" | "plugin" | "user_approval" | "hook";
@@ -807,6 +809,7 @@ export type DiagnosticToolPolicyDecisionEvent = DiagnosticBaseEvent & {
 export type DiagnosticExternalContentConsumedEvent = DiagnosticBaseEvent & {
   type: "ai_safety.external_content.consumed";
   agentId?: string;
+  sessionId?: string;
   sourceType: "web_fetch" | "file" | "mcp_tool" | "api" | "unknown";
   trusted: boolean;
   urlHash?: string;
@@ -818,6 +821,7 @@ export type DiagnosticExternalContentConsumedEvent = DiagnosticBaseEvent & {
 export type DiagnosticUserFeedbackReceivedEvent = DiagnosticBaseEvent & {
   type: "ai_safety.user_feedback.received";
   agentId?: string;
+  sessionId?: string;
   label: "positive" | "negative" | "correction" | "flag" | "other";
   score?: number;
   channel?: string;
@@ -827,6 +831,7 @@ export type DiagnosticUserFeedbackReceivedEvent = DiagnosticBaseEvent & {
 export type DiagnosticMemoryContextSelectionEvent = DiagnosticBaseEvent & {
   type: "ai_safety.memory_context.selected";
   agentId?: string;
+  sessionId?: string;
   memoryType: "short_term" | "long_term" | "project" | "workspace" | "external";
   itemCount: number;
   totalTokens?: number;
@@ -837,6 +842,7 @@ export type DiagnosticMemoryContextSelectionEvent = DiagnosticBaseEvent & {
 export type DiagnosticEvalResultEvent = DiagnosticBaseEvent & {
   type: "ai_safety.eval.result";
   agentId?: string;
+  sessionId?: string;
   evalName: string;
   score: number;
   passed: boolean;
@@ -852,6 +858,13 @@ export type DiagnosticAISafetyEventPayload =
   | DiagnosticUserFeedbackReceivedEvent
   | DiagnosticMemoryContextSelectionEvent
   | DiagnosticEvalResultEvent;
+
+/** Distributive Omit over the AI safety event union — preserves discriminated union structure. */
+export type DiagnosticAISafetyEventInput = DiagnosticAISafetyEventPayload extends infer Event
+  ? Event extends DiagnosticAISafetyEventPayload
+    ? Omit<Event, "seq" | "ts">
+    : never
+  : never;
 
 /** Metadata alias for backwards compatibility with consumers of the AI safety event channel. */
 export type AISafetyEventMetadata = {
@@ -1590,7 +1603,7 @@ export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetad
  * Carries pluginId in metadata so exporters can attribute plugin-originated emissions.
  */
 export function emitTrustedAISafetyDiagnosticEvent(
-  event: Omit<DiagnosticAISafetyEventPayload, "seq" | "ts">,
+  event: DiagnosticAISafetyEventInput,
   opts?: { pluginId?: string; trusted?: boolean },
 ): void {
   emitDiagnosticEventWithTrust(event as DiagnosticEventInput, opts?.trusted ?? true, {
