@@ -111,6 +111,7 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
+  language?: string;
   autoRespondToAudio?: boolean;
   interruptResponseOnInputAudio?: boolean;
   tools?: RealtimeVoiceTool[];
@@ -205,7 +206,7 @@ export type RealtimeVoiceBridge = {
     result: unknown,
     options?: RealtimeVoiceToolResultOptions,
   ): void | Promise<void>;
-  acknowledgeMark(): void;
+  acknowledgeMark(markName?: string): void;
   close(): void;
   isConnected(): boolean;
 };

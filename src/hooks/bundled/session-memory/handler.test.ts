@@ -11,11 +11,7 @@ import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { createInternalHookEvent as createHookEvent } from "../../internal-hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import {
-  findPreviousSessionFile,
-  getRecentSessionContent,
-  getRecentSessionContentWithResetFallback,
-} from "./transcript.js";
+import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
@@ -217,7 +213,7 @@ async function readSessionTranscript(params: {
     name: "test-session.jsonl",
     content: params.sessionContent,
   });
-  return getRecentSessionContent(sessionFile, params.messageCount);
+  return getRecentSessionContentWithResetFallback(sessionFile, params.messageCount);
 }
 
 function expectMemoryConversation(params: {
@@ -355,9 +351,11 @@ describe("session-memory hook", () => {
     ]);
     const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
 
-    expect(memoryContent).toContain("user: Review this [REMOVED_SPECIAL_TOKEN]system");
+    expect(memoryContent).toContain(
+      "user: <media:image:abc> Review this [REMOVED_SPECIAL_TOKEN]system",
+    );
     expect(memoryContent).toContain("assistant: Looks good");
-    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).toContain("<media:image:abc>");
     expect(memoryContent).not.toContain("<|im_start|>");
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");

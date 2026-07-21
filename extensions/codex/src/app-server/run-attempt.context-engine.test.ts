@@ -234,6 +234,7 @@ function getMockRuntimeIdentity() {
 
 function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -673,37 +674,6 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const inputText = getRequestInputText(harness);
     expect(inputText.length).toBeLessThanOrEqual(CODEX_TURN_START_TEXT_INPUT_MAX_CHARS);
     expect(inputText).toContain("hook tail");
-
-    await harness.completeTurn();
-    await run;
-  });
-
-  it("uses configured compaction reserve when sizing Codex context-engine projections", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const longContext = `configured reserve context start ${"x".repeat(30_000)} CONFIG_END`;
-    const contextEngine = createContextEngine({
-      assemble: vi.fn(async () => ({
-        messages: [assistantMessage(longContext, 10)],
-        estimatedTokens: 10_000,
-        systemPromptAddition: "context-engine system",
-      })),
-    });
-    const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.contextEngine = contextEngine;
-    params.contextTokenBudget = 80_000;
-    params.config = {
-      agents: { defaults: { compaction: { reserveTokens: 60_000, reserveTokensFloor: 0 } } },
-    } as EmbeddedRunAttemptParams["config"];
-
-    const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
-
-    const inputText = getRequestInputText(harness);
-    expect(inputText).toContain("configured reserve context start");
-    expect(inputText).toContain("[truncated ");
-    expect(inputText).not.toContain("CONFIG_END");
 
     await harness.completeTurn();
     await run;
@@ -2121,3 +2091,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

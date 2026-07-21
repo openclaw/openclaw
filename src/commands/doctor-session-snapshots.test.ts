@@ -12,7 +12,6 @@ import {
 } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { __testing as openClawRootTesting } from "../infra/openclaw-root.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 
@@ -38,11 +37,13 @@ vi.mock("../infra/json-files.js", async (importOriginal) => {
 import {
   detectSessionSnapshotHealthIssues,
   noteSessionSnapshotHealth,
-  resolveSessionSnapshotBundledSkillsDir,
-  scanSessionStoreForStaleRuntimeSnapshotPaths,
   sessionSnapshotIssueToHealthFinding,
   sessionSnapshotIssueToRepairEffect,
 } from "./doctor-session-snapshots.js";
+import {
+  resolveSessionSnapshotBundledSkillsDir,
+  scanSessionStoreForStaleRuntimeSnapshotPaths,
+} from "./doctor-session-snapshots.test-support.js";
 
 function sessionEntry(patch: Partial<SessionEntry>): SessionEntry {
   return {
@@ -126,7 +127,6 @@ describe("doctor session snapshot stale runtime metadata", () => {
   });
 
   afterEach(async () => {
-    openClawRootTesting.clearOpenClawPackageRootCaches();
     await fs.rm(root, { recursive: true, force: true });
   });
 

@@ -53,6 +53,7 @@ import {
   forgetActiveSessionForShutdown,
   noteActiveSessionForShutdown,
 } from "../../gateway/active-sessions-shutdown-tracker.js";
+import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import { deliverSessionMaintenanceWarning } from "../../infra/session-maintenance-warning.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -76,6 +77,10 @@ import {
   interruptSessionWorkAdmissions,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
+import {
+  classifySessionStateActor,
+  registerMainSessionGroupWatch,
+} from "../../sessions/session-state-events.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
@@ -98,6 +103,10 @@ import {
   type ReplySessionEntryHandle,
 } from "./session-entry-handle.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
+import {
+  ReplySessionInitConflictError,
+  runWithSessionInitConflictRetry,
+} from "./session-init-conflict-retry.js";
 import { prepareReplySessionParentFork } from "./session-parent-fork-prepare.js";
 import { clearSessionResetRuntimeState } from "./session-reset-cleanup.js";
 import {
@@ -174,7 +183,6 @@ export type SessionInitResult = {
 };
 
 type InitSessionStateParams = {
-  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: MsgContext;
@@ -189,6 +197,7 @@ type InitSessionStateAttemptContext = {
   agentId: string;
   conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
   isSystemEvent: boolean;
+  retargetedSession: boolean;
   sessionCtxForState: MsgContext;
   storePath: string;
 };
@@ -293,6 +302,7 @@ function resolveInitSessionStateAttemptContext(
     agentId,
     conversationBindingContext,
     isSystemEvent,
+    retargetedSession: sessionCtxForState !== ctx,
     sessionCtxForState,
     storePath: resolveStorePath(cfg.session?.store, { agentId }),
   };
@@ -337,7 +347,10 @@ export function resolveReplySessionPreprocessingState(
 
 /** Initializes or reuses the reply session state for one inbound turn. */
 export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
+  return await runWithSessionInitConflictRetry(
+    async () => await initSessionStateAttempt(params, false),
+    { signal: params.signal },
+  );
 }
 
 async function initSessionStateAttempt(
@@ -419,8 +432,14 @@ async function initSessionStateAttemptLocked(
   lifecycleMutationIdentity: { sessionId: string; sessionKey: string } | undefined,
 ): Promise<InitSessionStateAttemptOutcome> {
   const { ctx, cfg, commandAuthorized } = params;
-  const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
-    attemptContext;
+  const {
+    agentId,
+    conversationBindingContext,
+    isSystemEvent,
+    retargetedSession,
+    sessionCtxForState,
+    storePath,
+  } = attemptContext;
   const sessionCfg = cfg.session;
   const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -429,7 +448,7 @@ async function initSessionStateAttemptLocked(
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
 
   let sessionEntry: SessionEntry;
 
@@ -600,7 +619,11 @@ async function initSessionStateAttemptLocked(
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
-  const expectedExistingSessionId = params.expectedExistingSessionId?.trim() || undefined;
+  // Gateway admission pins the source session. A conversation or command target owns a
+  // different session id, so applying the source constraint there rejects valid routing.
+  const expectedExistingSessionId = retargetedSession
+    ? undefined
+    : params.expectedExistingSessionId?.trim() || undefined;
   if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
     throw new Error(`session rebound for sessionKey: ${sessionKey}`);
   }
@@ -887,6 +910,7 @@ async function initSessionStateAttemptLocked(
       ? now
       : (baseEntry?.sessionStartedAt ?? lifecycleTimestamps.sessionStartedAt),
     lastInteractionAt: isSystemEvent ? baseEntry?.lastInteractionAt : now,
+    agentStatus: isSystemEvent ? baseEntry?.agentStatus : undefined,
     systemSent,
     abortedLastRun: recoveredTerminalEntry ? undefined : abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
@@ -969,7 +993,7 @@ async function initSessionStateAttemptLocked(
   }
   const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
   const alreadyForked = sessionEntry.forkedFromParent === true;
-  if (params.abortSignal?.aborted === true) {
+  if (params.signal?.aborted === true) {
     throw new Error("reply session initialization aborted");
   }
   if (isNewSession) {
@@ -1031,7 +1055,7 @@ async function initSessionStateAttemptLocked(
         warning,
       }),
     prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
-      if (params.abortSignal?.aborted === true) {
+      if (params.signal?.aborted === true) {
         throw new Error("reply session initialization aborted");
       }
       return await prepareReplySessionParentFork({
@@ -1056,10 +1080,23 @@ async function initSessionStateAttemptLocked(
     if (!staleSnapshotRetried) {
       return await initSessionStateAttemptLocked(params, attemptContext, true, undefined);
     }
-    throw new Error(`reply session initialization conflicted for ${sessionKey}`);
+    // Propagate a typed conflict so initSessionState can retry with backoff
+    // outside the store writer lane instead of surfacing this to the caller.
+    throw new ReplySessionInitConflictError(sessionKey);
   }
   sessionEntry = committed.sessionEntry;
   sessionId = sessionEntry.sessionId;
+  if (
+    !isSystemEvent &&
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
+  ) {
+    registerMainSessionGroupWatch({
+      sessionKey,
+      agentId,
+      entry: sessionEntry,
+      dmScope: ctx.DmScope ?? sessionCfg?.dmScope ?? "main",
+    });
+  }
   const sessionStore = committed.sessionStoreView;
   const sessionEntryHandle = createReplySessionEntryHandle({
     sessionEntry,
@@ -1195,3 +1232,4 @@ async function initSessionStateAttemptLocked(
     },
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

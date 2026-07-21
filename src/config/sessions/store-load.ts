@@ -17,16 +17,11 @@ import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
   cloneSessionStoreSnapshotEntry,
-  cloneSessionStoreSnapshot,
   internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
-  readSessionStoreSnapshotCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
-  writeSessionStoreSnapshotCache,
-  type SessionStoreSnapshot,
-  type SessionStoreSnapshotEntries,
   type SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
@@ -44,7 +39,7 @@ import {
 import { applySessionStoreMigrations } from "./store-migrations.js";
 import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
-export type LoadSessionStoreOptions = {
+type LoadSessionStoreOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   runMaintenance?: boolean;
@@ -52,7 +47,7 @@ export type LoadSessionStoreOptions = {
   hydrateSkillPromptRefs?: boolean;
 };
 
-export type ReadSessionEntryOptions = {
+type ReadSessionEntryOptions = {
   hydrateSkillPromptRefs?: boolean;
 };
 
@@ -401,8 +396,7 @@ export function loadSessionStore(
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
       storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
+      ...currentFileStat,
       clone: opts.clone,
     });
     if (cached) {
@@ -414,7 +408,6 @@ export function loadSessionStore(
   // transiently invalid content while another process is swapping the file.
   let store: Record<string, SessionEntry> = {};
   const fileStat = getFileStatSnapshot(storePath);
-  const mtimeMs = fileStat?.mtimeMs;
   let serializedFromDisk: string | undefined;
   const maxReadAttempts = 3;
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
@@ -520,8 +513,7 @@ export function loadSessionStore(
     writeSessionStoreCache({
       storePath,
       store,
-      mtimeMs,
-      sizeBytes: fileStat?.sizeBytes,
+      ...fileStat,
       serialized: serializedFromDisk,
       cloneSerialized: serializedFromDisk,
       takeOwnership: serializedFromDisk !== undefined,
@@ -529,32 +521,6 @@ export function loadSessionStore(
   }
 
   return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
-}
-
-export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
-  const currentFileStat = getFileStatSnapshot(storePath);
-  const cacheEnabled = isSessionStoreCacheEnabled();
-  if (cacheEnabled) {
-    const cached = readSessionStoreSnapshotCache({
-      storePath,
-      mtimeMs: currentFileStat?.mtimeMs,
-      sizeBytes: currentFileStat?.sizeBytes,
-    });
-    if (cached) {
-      return cached;
-    }
-  }
-
-  const store = loadSessionStore(storePath, { clone: false });
-  if (!cacheEnabled) {
-    return cloneSessionStoreSnapshot(store);
-  }
-  return writeSessionStoreSnapshotCache({
-    storePath,
-    store,
-    mtimeMs: currentFileStat?.mtimeMs,
-    sizeBytes: currentFileStat?.sizeBytes,
-  });
 }
 
 export function readSessionEntry(
@@ -571,8 +537,4 @@ export function readSessionEntry(
     sessionKey,
   });
   return resolved.existing ? cloneSessionStoreSnapshotEntry(resolved.existing) : undefined;
-}
-
-export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {
-  return Object.entries(readSessionStoreSnapshot(storePath)) as SessionStoreSnapshotEntries;
 }

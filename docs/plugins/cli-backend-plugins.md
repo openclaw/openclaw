@@ -196,7 +196,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
-| `reliability.outputLimits`                                | Max raw JSONL chars/lines retained for one live CLI turn (live-session backends)  |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
@@ -219,6 +218,7 @@ only for behavior that really belongs to the backend.
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when

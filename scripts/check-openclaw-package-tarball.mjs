@@ -84,6 +84,7 @@ const REQUIRED_BUNDLED_WORKSPACE_RUNTIME_ENTRIES = new Map([
     [
       { specifier: "@openclaw/ai", entry: "dist/index.mjs" },
       { specifier: "@openclaw/ai/providers", entry: "dist/providers.mjs" },
+      { specifier: "@openclaw/ai/transports", entry: "dist/transports.mjs" },
       {
         specifier: "@openclaw/ai/internal/runtime",
         entry: "dist/internal/runtime.mjs",
@@ -258,6 +259,8 @@ function collectRequiredBundledWorkspaceDependencyErrors(
 }
 
 const phaseTimingsEnabled = process.env.OPENCLAW_PACKAGE_TARBALL_CHECK_TIMINGS !== "0";
+// Self-contained artifacts can exceed Node's 1 MiB spawnSync output default.
+const TAR_LIST_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 function runPhase(label, action) {
   const startedAt = performance.now();
   try {
@@ -273,11 +276,12 @@ function runPhase(label, action) {
 const list = runPhase("tar list", () =>
   spawnSync("tar", ["-tf", tarball], {
     encoding: "utf8",
+    maxBuffer: TAR_LIST_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
   }),
 );
 if (list.status !== 0) {
-  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.status}`);
+  fail(`tar -tf failed for ${tarball}: ${list.stderr || list.error?.message || list.status}`);
 }
 
 const extractDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-tarball-"));
@@ -306,10 +310,13 @@ const entrySet = new Set(normalized);
 const errors = [];
 const warnings = [];
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
+const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
 const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
+// 2026.7.1 shipped before the guard existed. Historical inspection may still check it.
+const LEGACY_INSTALL_GUARD_COMPAT_MAX = { year: 2026, month: 7, day: 1 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
@@ -377,6 +384,11 @@ function isLegacyShrinkwrapCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
 }
 
+function isLegacyInstallGuardCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_INSTALL_GUARD_COMPAT_MAX) <= 0 : false;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [
     path.join(extractDir, entryPath),
@@ -441,6 +453,13 @@ if (entrySet.has("package.json")) {
 }
 if (entrySet.has("package-lock.json")) {
   errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
+}
+if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+  if (isLegacyInstallGuardCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits the preinstall completion guard");
+  } else {
+    errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
+  }
 }
 if (!entrySet.has("npm-shrinkwrap.json")) {
   if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
@@ -511,6 +530,11 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     } else {
       const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
+      if (normalizedInventorySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+        errors.push(
+          `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
+        );
+      }
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({
           files: normalized,

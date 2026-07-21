@@ -20,6 +20,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "irc",
+      "configuredState": {
+        "env": {
+          "allOf": [
+            "IRC_HOST",
+            "IRC_NICK"
+          ]
+        }
+      },
       "label": "IRC",
       "selectionLabel": "IRC (Server + Nick)",
       "detailLabel": "IRC",
@@ -30,16 +38,12 @@
         "internet-relay-chat"
       ],
       "systemImage": "network",
-      "configuredState": {
-        "env": {
-          "allOf": [
-            "IRC_HOST",
-            "IRC_NICK"
-          ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasIrcConfiguredState"
-      }
+      "cliAddOptions": [
+        {
+          "flags": "--password <password>",
+          "description": "Channel password or login secret"
+        }
+      ]
     },
     "compat": {
       "pluginApi": ">=2026.7.2"

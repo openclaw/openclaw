@@ -10,15 +10,12 @@ import {
   spyRuntimeLogs,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
-} from "./dreaming-state.js";
-import {
-  readShortTermRecallEntries,
-  recordShortTermRecalls,
-  testing as shortTermTesting,
-} from "./short-term-promotion.js";
+  shortTermTestState as shortTermTesting,
+} from "./test-helpers.js";
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
@@ -42,31 +39,43 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 vi.mock("./cli.host.runtime.js", async () => {
-  const [runtimeCli, runtimeCore, runtimeFiles] = await Promise.all([
+  const [
+    {
+      defaultRuntime,
+      formatErrorMessage,
+      setVerbose,
+      shortenHomeInString,
+      shortenHomePath,
+      theme,
+      withManager,
+      withProgress,
+      withProgressTotals,
+    },
+    { resolveSessionTranscriptsDirForAgent, resolveStateDir },
+    { listMemoryFiles, normalizeExtraMemoryPaths },
+  ] = await Promise.all([
     import("openclaw/plugin-sdk/memory-core-host-runtime-cli"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-core"),
     import("openclaw/plugin-sdk/memory-core-host-runtime-files"),
   ]);
   return {
-    colorize: runtimeCli.colorize,
-    defaultRuntime: runtimeCli.defaultRuntime,
-    formatErrorMessage: runtimeCli.formatErrorMessage,
+    defaultRuntime,
+    formatErrorMessage,
     getMemorySearchManager,
-    isRich: runtimeCli.isRich,
-    listMemoryFiles: runtimeFiles.listMemoryFiles,
+    listMemoryFiles,
     getRuntimeConfig,
-    normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
+    normalizeExtraMemoryPaths,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
-    resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
-    resolveStateDir: runtimeCore.resolveStateDir,
-    setVerbose: runtimeCli.setVerbose,
-    shortenHomeInString: runtimeCli.shortenHomeInString,
-    shortenHomePath: runtimeCli.shortenHomePath,
-    theme: runtimeCli.theme,
-    withManager: runtimeCli.withManager,
-    withProgress: runtimeCli.withProgress,
-    withProgressTotals: runtimeCli.withProgressTotals,
+    resolveSessionTranscriptsDirForAgent,
+    resolveStateDir,
+    setVerbose,
+    shortenHomeInString,
+    shortenHomePath,
+    theme,
+    withManager,
+    withProgress,
+    withProgressTotals,
   };
 });
 
@@ -83,8 +92,14 @@ let qmdCaseId = 0;
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
   ({ registerMemoryCli } = await import("./cli.js"));
-  ({ defaultRuntime, isVerbose, setVerbose } =
-    await import("openclaw/plugin-sdk/memory-core-host-runtime-cli"));
+  const {
+    defaultRuntime: loadedDefaultRuntime,
+    isVerbose: loadedIsVerbose,
+    setVerbose: loadedSetVerbose,
+  } = await import("openclaw/plugin-sdk/memory-core-host-runtime-cli");
+  defaultRuntime = loadedDefaultRuntime;
+  isVerbose = loadedIsVerbose;
+  setVerbose = loadedSetVerbose;
   fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-cli-fixtures-"));
   workspaceFixtureRoot = path.join(fixtureRoot, "workspace");
   qmdFixtureRoot = path.join(fixtureRoot, "qmd");
@@ -1462,6 +1477,21 @@ describe("memory cli", () => {
     });
   });
 
+  it("passes the host SQLite lease hook to CLI memory managers", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({ search: vi.fn(async () => []), close });
+    const withLease = vi.fn();
+
+    await runMemoryCli(["search", "hello"], { withLease });
+
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: {},
+      agentId: "main",
+      purpose: "cli",
+      withLease,
+    });
+  });
+
   it("accepts --query for memory search", async () => {
     const close = vi.fn(async () => {});
     const search = vi.fn(async () => []);
@@ -2457,3 +2487,4 @@ describe("memory cli", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

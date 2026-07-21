@@ -40,7 +40,7 @@
 }
 
 .chat-group.tool .chat-group-messages {
-  max-width: min(980px, calc(100% - 46px));
+  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.user .chat-group-footer {
@@ -123,6 +123,56 @@
   text-overflow: ellipsis;
 }
 
+.chat-author-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 68%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--fg) 9%, transparent);
+  vertical-align: middle;
+}
+
+.chat-author-avatar__image,
+.chat-author-avatar__initials {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+}
+
+.chat-author-avatar__image {
+  display: block;
+  object-fit: cover;
+}
+
+.chat-author-avatar__initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(var(--chat-author-avatar-hue) 32% 42%);
+  color: white;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+
+.chat-author-avatar__fallback {
+  display: none;
+}
+
+.chat-author-avatar.is-fallback .chat-author-avatar__image {
+  display: none;
+}
+
+.chat-author-avatar.is-fallback .chat-author-avatar__fallback {
+  display: inline-flex;
+}
+
 .chat-group-timestamp {
   font-size: 12px; /* was 11px */
   color: var(--muted);
@@ -157,10 +207,17 @@
   pointer-events: auto;
 }
 
+.chat-group:hover .chat-group-footer button:disabled,
+.chat-reply-context-menu button:disabled {
+  opacity: 0.3;
+  pointer-events: none;
+}
+
 .chat-group-footer button:hover,
 .chat-message-actions-row button:hover {
   opacity: 1 !important;
   background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+  color: var(--accent);
 }
 
 .chat-group-footer button svg,
@@ -203,12 +260,22 @@
 }
 
 .chat-divider__label {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   padding: 2px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   background: rgba(255, 255, 255, 0.02);
   font-weight: 600;
   text-transform: uppercase;
+}
+
+.chat-divider__separator,
+.chat-divider__metric {
+  color: var(--muted);
+  font-weight: 500;
+  text-transform: none;
 }
 
 .chat-divider__details {
@@ -254,6 +321,35 @@
   border-color: color-mix(in srgb, var(--accent) 20%, transparent);
 }
 
+/* Attributed sender initials carry their stable identity color inline. */
+.chat-avatar.chat-avatar--sender-initials {
+  color: white;
+  font-size: 12px;
+  letter-spacing: -0.02em;
+}
+
+img.chat-avatar.user {
+  object-fit: cover;
+}
+
+/* Sender avatars pair the route image with an initials fallback; the slot
+   swaps them when the canonical route has no avatar (404). */
+.chat-avatar-slot {
+  display: contents;
+}
+
+.chat-avatar-slot > .chat-avatar--sender-initials {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > img.chat-avatar {
+  display: none;
+}
+
+.chat-avatar-slot.is-fallback > .chat-avatar--sender-initials {
+  display: grid;
+}
+
 .chat-avatar.assistant {
   background: var(--secondary);
   color: var(--muted);
@@ -293,11 +389,36 @@ img.chat-avatar {
   word-wrap: break-word;
 }
 
+.chat-group.workspace-conflict .chat-group-messages {
+  max-width: min(760px, calc(100% - 46px));
+}
+
+.chat-group.workspace-conflict .chat-avatar {
+  background: color-mix(in srgb, var(--warn) 14%, var(--secondary));
+  color: var(--warn);
+}
+
+.chat-bubble--workspace-conflict {
+  width: 100%;
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 10%, var(--card)) 0%,
+    color-mix(in srgb, var(--warn) 5%, var(--card)) 100%
+  );
+}
+
+.chat-workspace-conflict-event {
+  display: grid;
+  gap: 8px;
+}
+
 /* Tool messages render flat rows, not bubbles: the shell only constrains
    width; all bubble chrome (border/background/padding) is reset. */
 .chat-bubble--tool-shell {
   align-self: stretch;
-  width: min(100%, 760px);
+  width: 100%;
+  max-width: var(--chat-message-max-width, 760px);
   padding: 0;
   border: 0;
   background: transparent;
@@ -351,7 +472,7 @@ img.chat-avatar {
 }
 
 .chat-thread--direct .chat-group.tool .chat-group-messages {
-  max-width: min(980px, 100%);
+  max-width: var(--chat-message-max-width, min(980px, 100%));
 }
 
 .chat-duplicate-count {
@@ -402,18 +523,22 @@ img.chat-avatar {
 
   .chat-group-footer-actions .chat-copy-btn,
   .chat-group-footer-actions .chat-expand-btn,
+  .chat-group-footer-actions .chat-reply-btn,
   .chat-group-footer-actions .chat-group-delete,
   .chat-message-actions-row .chat-copy-btn,
-  .chat-message-actions-row .chat-expand-btn {
+  .chat-message-actions-row .chat-expand-btn,
+  .chat-message-actions-row .chat-reply-btn {
     min-width: 44px;
     min-height: 44px;
   }
 }
 
-/* Skins .btn/.btn--xs buttons: background and svg sizing stay with the .btn
-   base so these match every other icon button; only the muted color is bespoke. */
+/* In chat these render bare (no .btn chrome) so the ghost footer-button rules
+   above own their look; the muted color also covers .btn hosts like the file
+   preview header. */
 .chat-copy-btn,
-.chat-expand-btn {
+.chat-expand-btn,
+.chat-reply-btn {
   color: var(--muted);
 }
 
@@ -462,7 +587,8 @@ img.chat-avatar {
 }
 
 .chat-copy-btn:focus-visible,
-.chat-expand-btn:focus-visible {
+.chat-expand-btn:focus-visible,
+.chat-reply-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -508,21 +634,36 @@ img.chat-avatar {
   box-shadow: none;
 }
 
-/* Fade-in animation for new messages */
-.chat-bubble.fade-in {
-  animation: fade-in 200ms ease-out;
+/* Per-user bubble tint: --chat-sender-hue is the sender's stable identity hue
+   (same seed as their avatar initials). Only hue varies per user; saturation/
+   lightness/alpha are fixed per theme mode so bubble text keeps contrast for
+   every hue. Order contract: stays below the light-mode reset above — the
+   dark rule outranks it by specificity, so light mode needs its own skin. */
+.chat-group.user.chat-group--sender-tint .chat-bubble {
+  background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
 }
 
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
+.chat-group.user.chat-group--sender-tint .chat-bubble:hover {
+  border-color: hsl(var(--chat-sender-hue) 48% 55% / 0.4);
+}
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.chat-group.user.chat-group--sender-tint .chat-sender-name {
+  color: hsl(var(--chat-sender-hue) 45% 70%);
+}
+
+:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
+  background: hsl(var(--chat-sender-hue) 65% 94%);
+  border-color: hsl(var(--chat-sender-hue) 45% 82%);
+}
+
+/* Outranks the light skin above (it also sets border-color); without this the
+   tinted hover border never applies in light mode. */
+:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
+  border-color: hsl(var(--chat-sender-hue) 48% 62%);
+}
+
+:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
+  color: hsl(var(--chat-sender-hue) 60% 36%);
 }
 
 /* ── Message metadata (tokens, cost, model, context %) ── */
@@ -714,8 +855,28 @@ details.msg-meta:not([open]) .msg-meta__details {
   color: #fff;
 }
 
+:root[data-theme="dark"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes,
+:root[data-theme="dash"] .chat-delete-confirm__yes {
+  background: var(--destructive);
+  color: var(--destructive-foreground);
+}
+
 .chat-delete-confirm__yes:hover {
   background: #dc2626;
+}
+
+:root[data-theme="dark"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
+}
+
+:root[data-theme="openknot"] .chat-delete-confirm__yes:hover,
+:root[data-theme="dash"] .chat-delete-confirm__yes:hover {
+  background: var(--destructive-hover);
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {

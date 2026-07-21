@@ -77,9 +77,12 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       const response = await page.goto(`${server.baseUrl}chat`);
       expect(response?.status()).toBe(200);
 
-      // Pairing folded into the footer agent-chip menu.
-      await page.locator(".sidebar-agent-chip__main").click();
-      const sidebarPairingButton = page.locator(".sidebar-pair-mobile");
+      // Pairing folded into the identity-card agent menu.
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.getByRole("button", { name: /Agent menu/ }).click();
+      const sidebarPairingButton = sidebar
+        .locator("wa-dropdown.sidebar-agent-menu")
+        .locator(".sidebar-pair-mobile");
       await sidebarPairingButton.waitFor();
       await expect.poll(async () => sidebarPairingButton.isEnabled()).toBe(true);
       await gateway.deferNext("device.pair.list");
@@ -141,10 +144,10 @@ describeControlUiE2e("Control UI mobile pairing mocked Gateway E2E", () => {
       await page.locator(".device-pair-setup__close").click();
       await dialog.waitFor({ state: "hidden" });
 
-      const settingsResponse = await page.goto(`${server.baseUrl}config`);
+      const settingsResponse = await page.goto(`${server.baseUrl}settings/security`);
       expect(settingsResponse?.status()).toBe(200);
       const quickSettingsPairingButton = page
-        .locator(".qs-card--security")
+        .locator(".security-page")
         .getByRole("button", { name: "Pair mobile device" });
       await quickSettingsPairingButton.waitFor();
       const setupRequestsBeforeQuickSettings = (await gateway.getRequests("device.pair.setupCode"))

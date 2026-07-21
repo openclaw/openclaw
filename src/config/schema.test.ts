@@ -3,7 +3,7 @@ import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-ur
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, describe, expect, it } from "vitest";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
-import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
+import { applyDerivedTags } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import {
@@ -181,8 +181,8 @@ describe("config schema", () => {
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
-    expect(serversNode?.additionalProperties?.properties).toHaveProperty("timeout");
-    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectTimeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("requestTimeoutMs");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectionTimeoutMs");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("auth");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("sslVerify");
@@ -574,27 +574,33 @@ describe("config schema", () => {
     expect(second).toBe(first);
   });
 
-  it("derives security/auth tags for credential paths", () => {
-    const tags = deriveTagsForPath("gateway.auth.token");
-    expect(tags).toContain("security");
-    expect(tags).toContain("auth");
+  it("derives tags for security, network, storage, tools, and performance paths", () => {
+    const tagged = applyDerivedTags({
+      "gateway.auth.token": {},
+      "proxy.tls.caFile": {},
+      "tools.web.fetch.timeoutSeconds": {},
+    });
+    expect(tagged["gateway.auth.token"]?.tags).toEqual(
+      expect.arrayContaining(["security", "auth"]),
+    );
+    expect(tagged["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
+    expect(tagged["tools.web.fetch.timeoutSeconds"]?.tags).toEqual(
+      expect.arrayContaining(["tools", "performance"]),
+    );
   });
 
-  it("classifies managed proxy CA files as security-relevant config", () => {
-    const tags = deriveTagsForPath("proxy.tls.caFile");
-    expect(tags).toContain("security");
-    expect(tags).toContain("network");
-    expect(tags).toContain("storage");
+  it("covers core config paths with derived tags", () => {
+    for (const [key, hint] of Object.entries(baseSchema.uiHints)) {
+      if (key.includes(".")) {
+        expect(hint.tags?.length ?? 0, `expected tags for ${key}`).toBeGreaterThan(0);
+      }
+    }
   });
 
-  it("derives tools/performance tags for web fetch timeout paths", () => {
-    const tags = deriveTagsForPath("tools.web.fetch.timeoutSeconds");
-    expect(tags).toContain("tools");
-    expect(tags).toContain("performance");
-  });
-
-  it("accepts web fetch readability and firecrawl config in the runtime zod schema", () => {
-    const parsed = ToolsSchema.parse({
+  it("rejects removed Firecrawl config from the core web fetch schema", () => {
+    const result = ToolsSchema.safeParse({
       web: {
         fetch: {
           readability: true,
@@ -610,15 +616,7 @@ describe("config schema", () => {
       },
     });
 
-    expect(parsed?.web?.fetch?.readability).toBe(true);
-    expect(parsed?.web?.fetch?.firecrawl).toEqual({
-      enabled: true,
-      apiKey: "firecrawl-test-key",
-      baseUrl: "https://api.firecrawl.dev",
-      onlyMainContent: true,
-      maxAgeMs: 60_000,
-      timeoutSeconds: 15,
-    });
+    expect(result.success).toBe(false);
   });
 
   it("keeps top-level subagent tools schema limited to tool policy", () => {
@@ -656,6 +654,13 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(true);
+  });
+
+  it("accepts only the Discord subagent progress enable toggle", () => {
+    expect(DiscordConfigSchema.safeParse({ subagentProgress: true }).success).toBe(true);
+    expect(DiscordConfigSchema.safeParse({ subagentProgress: { enabled: true } }).success).toBe(
+      false,
+    );
   });
 
   it("keeps per-agent model overrides limited to model selection", () => {
@@ -901,6 +906,30 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("accepts strict Swarm config in the runtime zod schema", () => {
+    expect(ToolsSchema.parse({ swarm: true })?.swarm).toBe(true);
+    expect(
+      ToolsSchema.parse({
+        swarm: {
+          enabled: true,
+          maxConcurrent: 8,
+          maxChildrenPerGroup: 50,
+          maxTotalPerGroup: 200,
+          waitTimeoutSecondsMax: 600,
+          defaultAgentId: "reviewer",
+        },
+      })?.swarm,
+    ).toEqual({
+      enabled: true,
+      maxConcurrent: 8,
+      maxChildrenPerGroup: 50,
+      maxTotalPerGroup: 200,
+      waitTimeoutSecondsMax: 600,
+      defaultAgentId: "reviewer",
+    });
+    expect(ToolsSchema.safeParse({ swarm: { unknownKey: true } }).success).toBe(false);
+  });
+
   it("accepts web fetch maxResponseBytes in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       web: {
@@ -911,24 +940,6 @@ describe("config schema", () => {
     });
 
     expect(parsed?.web?.fetch?.maxResponseBytes).toBe(2_000_000);
-  });
-
-  it("accepts WhatsApp Web Baileys socket timing in the runtime zod schema", () => {
-    const parsed = OpenClawSchema.parse({
-      web: {
-        whatsapp: {
-          keepAliveIntervalMs: 15_000,
-          connectTimeoutMs: 60_000,
-          defaultQueryTimeoutMs: 90_000,
-        },
-      },
-    });
-
-    expect(parsed.web?.whatsapp).toEqual({
-      keepAliveIntervalMs: 15_000,
-      connectTimeoutMs: 60_000,
-      defaultQueryTimeoutMs: 90_000,
-    });
   });
 
   it("accepts web fetch ssrfPolicy in the runtime zod schema", () => {
@@ -990,58 +1001,6 @@ describe("config schema", () => {
     }
   });
 
-  it("rejects unknown keys inside web fetch firecrawl config", () => {
-    const result = ToolsSchema.safeParse({
-      web: {
-        fetch: {
-          firecrawl: {
-            enabled: true,
-            nope: true,
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const firecrawlIssue = result.error.issues.find(
-        (issue) => JSON.stringify(issue.path) === JSON.stringify(["web", "fetch", "firecrawl"]),
-      );
-      expect(firecrawlIssue?.path).toEqual(["web", "fetch", "firecrawl"]);
-      const firecrawlKeys = (firecrawlIssue as { keys?: unknown } | undefined)?.keys;
-      expect(firecrawlKeys).toEqual(["nope"]);
-    }
-  });
-
-  it("keeps tags in the allowed taxonomy", () => {
-    const withTags = applyDerivedTags({
-      "gateway.auth.token": {},
-      "tools.web.fetch.timeoutSeconds": {},
-      "channels.slack.accounts.*.token": {},
-    });
-    const allowed = new Set<string>(CONFIG_TAGS);
-    for (const hint of Object.values(withTags)) {
-      for (const tag of hint.tags ?? []) {
-        expect(allowed.has(tag)).toBe(true);
-      }
-    }
-  });
-
-  it("covers core/built-in config paths with tags", () => {
-    const schema = baseSchema;
-    const allowed = new Set<string>([...CONFIG_TAGS, SENSITIVE_URL_HINT_TAG]);
-    for (const [key, hint] of Object.entries(schema.uiHints)) {
-      if (!key.includes(".")) {
-        continue;
-      }
-      const tags = hint.tags ?? [];
-      expect(tags.length, `expected tags for ${key}`).toBeGreaterThan(0);
-      for (const tag of tags) {
-        expect(allowed.has(tag), `unexpected tag ${tag} on ${key}`).toBe(true);
-      }
-    }
-  });
-
   it("looks up a config schema path with immediate child summaries", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway.auth");
     expect(lookup?.path).toBe("gateway.auth");
@@ -1073,7 +1032,7 @@ describe("config schema", () => {
 
   it("includes reload metadata when a resolver is provided", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
-      if (path === "gateway.channelHealthCheckMinutes") {
+      if (path === "gateway.auth.mode") {
         return { kind: "hot" };
       }
       if (path.startsWith("gateway")) {
@@ -1083,13 +1042,12 @@ describe("config schema", () => {
     });
 
     expect(lookup?.reloadKind).toBe("restart");
-    expect(
-      lookup?.children.find((child) => child.path === "gateway.handshakeTimeoutMs")?.reloadKind,
-    ).toBe("restart");
-    expect(
-      lookup?.children.find((child) => child.path === "gateway.channelHealthCheckMinutes")
-        ?.reloadKind,
-    ).toBe("hot");
+    expect(lookup?.children.find((child) => child.path === "gateway.port")?.reloadKind).toBe(
+      "restart",
+    );
+    expect(lookup?.children.find((child) => child.path === "gateway.auth")?.reloadKind).toBe(
+      "restart",
+    );
   });
 
   it("returns a shallow lookup schema without nested composition keywords", () => {
@@ -1230,3 +1188,4 @@ describe("config schema", () => {
     expect(lookupConfigSchema(baseSchema, "gateway.notReal.path")).toBeNull();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

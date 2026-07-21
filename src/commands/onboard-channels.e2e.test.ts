@@ -887,7 +887,7 @@ describe("setupChannels", () => {
             ...qaChannelBase,
             meta: {
               ...qaChannelBase.meta,
-              showInSetup: false,
+              exposure: { setup: false },
             },
           },
         },
@@ -1273,3 +1273,4 @@ describe("setupChannels", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

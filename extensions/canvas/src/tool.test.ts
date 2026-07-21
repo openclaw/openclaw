@@ -114,6 +114,21 @@ describe("Canvas tool", () => {
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
   });
 
+  it("rejects malformed snapshot base64 before creating an image result", async () => {
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        format: "png",
+        base64: "Zm9=",
+      },
+    });
+    const tool = createCanvasTool();
+
+    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
+      /invalid canvas\.snapshot payload/i,
+    );
+    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
+  });
+
   it("normalizes numeric string params before invoking node canvas commands", async () => {
     mocks.callGatewayTool.mockResolvedValue({
       payload: {
@@ -184,7 +199,7 @@ describe("Canvas tool", () => {
   });
 
   it("dispatches valid A2UI v0.8 JSONL unchanged", async () => {
-    const tool = createCanvasTool();
+    const tool = createCanvasTool({ agentSessionKey: "agent:main:canvas" });
 
     await tool.execute("tool-call-1", {
       action: "a2ui_push",
@@ -200,6 +215,7 @@ describe("Canvas tool", () => {
         command: "canvas.a2ui.pushJSONL",
         params: { jsonl: VALID_A2UI_V08_JSONL },
         idempotencyKey: expect.any(String),
+        sessionKey: "agent:main:canvas",
       },
     );
   });

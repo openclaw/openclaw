@@ -43,6 +43,13 @@ import {
 } from "./worker-rpc-clients.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
+function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
+
 const SESSION_ID = "worker-session";
 const RUN_ID = "worker-run";
 const OWNER_EPOCH = 4;
@@ -128,6 +135,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
+  readonly applicationOrder: string[] = [];
 
   constructor(private readonly options: FakeGatewayOptions = {}) {
     this.httpServer = createServer();
@@ -315,6 +323,7 @@ class FakeWorkerGateway {
       return;
     }
     this.acceptedTranscriptRequests.push(structuredClone(frame.params));
+    this.applicationOrder.push(`transcript:${frame.params.seq}`);
     this.send(socket, {
       type: "res",
       id: frame.id,
@@ -331,6 +340,11 @@ class FakeWorkerGateway {
   private handleLiveEvent(socket: WebSocket, frame: WorkerLiveEventRequestFrame): void {
     this.methods.push(frame.method);
     this.liveEventRequests.push(structuredClone(frame.params));
+    this.applicationOrder.push(
+      frame.params.event.kind === "lifecycle"
+        ? `live:lifecycle:${frame.params.event.payload.phase}`
+        : `live:${frame.params.event.kind}`,
+    );
     if (this.options.silenceFirstLiveEvent && !this.droppedLiveEvent) {
       this.droppedLiveEvent = true;
       return;
@@ -584,9 +598,13 @@ class FakeWorkerGateway {
     const toolCallId = "local-exec-call";
     const args = background
       ? {
-          command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
-            "setInterval(() => undefined, 1000)",
-          )}`,
+          // POSIX sleep avoids Node startup; Windows keeps the portable Node fixture.
+          command:
+            process.platform === "win32"
+              ? `${JSON.stringify(process.execPath)} -e ${JSON.stringify(
+                  "setInterval(() => undefined, 1000)",
+                )}`
+              : "exec sleep 60",
           background: true,
         }
       : { command: "printf worker-local > local-proof.txt" };
@@ -706,6 +724,7 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
       runId: RUN_ID,
       turnId: "worker-turn",
       prompt: "Complete the worker turn.",
+      suppressPromptTranscript: false,
       workspaceDir,
       modelRef: MODEL_REF,
       inferenceOptions: { reasoning: "off" },
@@ -754,6 +773,14 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain("worker-bootstrap-marker");
     const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
     expect(toolNames).toHaveLength(6);
+    const terminalIndex = gateway.applicationOrder.findIndex(
+      (entry) => entry === "live:lifecycle:end",
+    );
+    const finalTranscriptIndex = gateway.applicationOrder.findLastIndex((entry) =>
+      entry.startsWith("transcript:"),
+    );
+    expect(finalTranscriptIndex).toBeGreaterThanOrEqual(0);
+    expect(terminalIndex).toBeGreaterThan(finalTranscriptIndex);
     expect(toolNames).toEqual(
       expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
     );
@@ -806,7 +833,7 @@ describe("worker runtime", () => {
       gateway.liveEventRequests.some(
         (request) => request.event.kind === "lifecycle" && request.event.payload.phase === "error",
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("renumbers live events after a gateway cursor reset without aborting the run", async () => {
@@ -824,10 +851,10 @@ describe("worker runtime", () => {
     expect(gateway.liveEventRequests[1]?.event).toEqual(gateway.liveEventRequests[0]?.event);
   });
 
-  it("degrades hard live-event failures without affecting inference or transcript commits", async () => {
+  it("requires authoritative terminal delivery after degrading preview live events", async () => {
     const { gateway, launch } = await setup({ liveFailure: "capacity-exceeded" });
 
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker live event rejected");
 
     expect(gateway.inferenceRequests).toHaveLength(1);
     expect(
@@ -835,7 +862,11 @@ describe("worker runtime", () => {
         .flatMap((request) => request.messages)
         .map((message) => message.role),
     ).toEqual(["user", "assistant"]);
-    expect(gateway.liveEventRequests).toHaveLength(1);
+    expect(gateway.liveEventRequests.length).toBeGreaterThanOrEqual(2);
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "end" },
+    });
   });
 
   it("degrades a repeated no-progress live resync without hanging the run", async () => {
@@ -849,7 +880,11 @@ describe("worker runtime", () => {
 
     expect(gateway.inferenceRequests).toHaveLength(1);
     expect(gateway.acceptedTranscriptRequests).toHaveLength(2);
-    expect(gateway.liveEventRequests).toHaveLength(2);
+    expect(gateway.liveEventRequests).toHaveLength(3);
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "end" },
+    });
   });
 
   it("fails closed when worker admission is rejected", async () => {
@@ -881,12 +916,16 @@ describe("worker runtime", () => {
     const { gateway, launch } = await setup({ inferencePlans: ["hold"] });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await vi.waitFor(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
 
     controller.abort(new Error("operator stopped worker"));
 
     await expect(result).rejects.toThrow("operator stopped worker");
     expect(gateway.methods).toContain("worker.inference.cancel");
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "end", aborted: true },
+    });
   });
 
   it("bounds shutdown when remote inference cancellation cannot settle", async () => {
@@ -896,23 +935,37 @@ describe("worker runtime", () => {
     });
     const controller = new AbortController();
     const result = runWorkerDescriptor(launch, { signal: controller.signal });
-    await vi.waitFor(() => expect(gateway.inferenceRequests).toHaveLength(1));
+    await waitForFast(() => expect(gateway.inferenceRequests).toHaveLength(1));
 
-    controller.abort(new Error("operator stopped worker during outage"));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const rejected = expect(result).rejects.toThrow("operator stopped worker during outage");
 
-    await expect(result).rejects.toThrow("operator stopped worker during outage");
-    expect(gateway.methods).toContain("worker.inference.cancel");
+      controller.abort(new Error("operator stopped worker during outage"));
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      await rejected;
+      expect(gateway.methods).toContain("worker.inference.cancel");
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it.each([
-    ["error", "fixture provider failed", "error", "error"],
-    ["cancelled", "fixture inference cancelled", "aborted", "end"],
+    ["error", "error", "error"],
+    ["cancelled", "aborted", "end"],
   ] as const)(
     "reports remote inference %s terminals as failed turns",
-    async (plan, message, stopReason, lifecyclePhase) => {
+    async (plan, stopReason, lifecyclePhase) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).rejects.toThrow(message);
+      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+        status: "failed",
+        reason: "turn-failed",
+      });
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
         .toReversed()
@@ -925,6 +978,19 @@ describe("worker runtime", () => {
       expect(lifecycle).toMatchObject({ payload: { phase: lifecyclePhase } });
     },
   );
+
+  it("keeps an unacknowledged failed-turn terminal as an infrastructure failure", async () => {
+    const { gateway, launch } = await setup({
+      inferencePlans: ["error"],
+      liveFailure: "capacity-exceeded",
+    });
+
+    await expect(runWorkerDescriptor(launch)).rejects.toThrow("worker live event rejected");
+    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
+      kind: "lifecycle",
+      payload: { phase: "error" },
+    });
+  });
 
   it("fails closed when a heartbeat is rejected without fencing", async () => {
     const { launch } = await setup({
@@ -958,9 +1024,10 @@ describe("worker runtime", () => {
     async (plan) => {
       const { gateway, launch } = await setup({ inferencePlans: [plan] });
 
-      await expect(runWorkerDescriptor(launch)).rejects.toThrow(
-        "Worker inference result exceeds the transcript message limit.",
-      );
+      await expect(runWorkerDescriptor(launch)).resolves.toEqual({
+        status: "failed",
+        reason: "turn-failed",
+      });
       const assistant = gateway.transcriptRequests
         .flatMap((request) => request.messages)
         .toReversed()
@@ -997,7 +1064,7 @@ describe("worker runtime", () => {
       reason: "owner-epoch-mismatch",
     });
     expect(gateway.inferenceRequests).toHaveLength(2);
-    await vi.waitFor(
+    await waitForFast(
       () => {
         expect(
           listRunningSessions().filter((session) => session.scopeKey === `worker:${SESSION_ID}`),
@@ -1139,7 +1206,7 @@ describe("worker reconnect clients", () => {
     });
     try {
       await connection.start();
-      await vi.waitFor(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
+      await waitForFast(() => expect(gateway.connectionCount).toBeGreaterThanOrEqual(2));
     } finally {
       await connection.stop();
     }
@@ -1231,7 +1298,7 @@ describe("worker reconnect clients", () => {
           timestamp: 1,
         },
       ]);
-      await vi.waitFor(() => expect(gateway.transcriptRequests).toHaveLength(1));
+      await waitForFast(() => expect(gateway.transcriptRequests).toHaveLength(1));
 
       await connection.stop();
       await expect(commit).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
@@ -1251,3 +1318,4 @@ describe("worker reconnect clients", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

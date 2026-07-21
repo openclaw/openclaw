@@ -30,22 +30,16 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type {
   DeviceAuthToken,
-  DevicePairingPendingRecord,
   DevicePairingPendingRequest,
   PairedDevice,
-  PairedDeviceApprovalKind,
-  PairedDeviceNodeSurface,
   PairedDevicePendingNodeSurface,
 } from "./device-pairing.types.js";
 
 /** Pending request summary returned when a replacement supersedes older requests. */
-export type DevicePairingSupersededRequest = Pick<
-  DevicePairingPendingRequest,
-  "requestId" | "deviceId"
->;
+type DevicePairingSupersededRequest = Pick<DevicePairingPendingRequest, "requestId" | "deviceId">;
 
 /** Result for creating or refreshing a pending device pairing request. */
-export type RequestDevicePairingResult = {
+type RequestDevicePairingResult = {
   status: "pending";
   request: DevicePairingPendingRequest;
   created: boolean;
@@ -70,19 +64,19 @@ export type RotateDeviceTokenDenyReason =
   | "caller-missing-scope";
 
 /** Token rotation result with the replacement token entry on success. */
-export type RotateDeviceTokenResult =
+type RotateDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RotateDeviceTokenDenyReason; scope?: string };
 
 export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-missing-scope";
 
 /** Token revocation result with the revoked entry on success. */
-export type RevokeDeviceTokenResult =
+type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
 
 /** Metadata fields a device may refresh without changing approval or token state. */
-export type PairedDeviceMetadataPatch = Pick<
+type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
   | "displayName"
   | "operatorLabel"
@@ -95,19 +89,19 @@ export type PairedDeviceMetadataPatch = Pick<
 >;
 
 /** Paired-device access metadata refreshed when an existing device reconnects. */
-export type DevicePairingAccessMetadata = Pick<
+type DevicePairingAccessMetadata = Pick<
   PairedDevice,
   "displayName" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
 >;
 
 /** Combined pending/paired view returned by pairing list APIs. */
-export type DevicePairingList = {
+type DevicePairingList = {
   pending: DevicePairingPendingRequest[];
   paired: PairedDevice[];
 };
 
 /** Authorization failure categories for owner approval and bootstrap approval flows. */
-export type DevicePairingForbiddenReason =
+type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
   | "scope-outside-requested-roles"
@@ -115,7 +109,7 @@ export type DevicePairingForbiddenReason =
   | "bootstrap-scope-not-allowed";
 
 /** Structured forbidden result with the missing/disallowed role or scope when known. */
-export type DevicePairingForbiddenResult = {
+type DevicePairingForbiddenResult = {
   status: "forbidden";
   reason: DevicePairingForbiddenReason;
   scope?: string;
@@ -123,7 +117,7 @@ export type DevicePairingForbiddenResult = {
 };
 
 /** Pairing approval outcome: approved, forbidden with reason, or request not found. */
-export type ApproveDevicePairingResult =
+type ApproveDevicePairingResult =
   | { status: "approved"; requestId: string; device: PairedDevice }
   | DevicePairingForbiddenResult
   | null;
@@ -314,6 +308,9 @@ function samePendingApprovalSnapshot(
   if (existing.publicKey !== incoming.publicKey) {
     return false;
   }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
+    return false;
+  }
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
     return false;
   }
@@ -344,6 +341,9 @@ function incomingApprovalCoveredByExisting(
   incoming: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
 ): boolean {
   if (existing.publicKey !== incoming.publicKey) {
+    return false;
+  }
+  if (existing.browserOrigin !== incoming.browserOrigin) {
     return false;
   }
   if (normalizeRole(existing.role) !== normalizeRole(incoming.role)) {
@@ -382,6 +382,7 @@ function refreshPendingDevicePairingRequest(
     deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
+    browserOrigin: existing.browserOrigin,
     remoteIp: incoming.remoteIp ?? existing.remoteIp,
     // If either request is interactive, keep the pending request visible for approval.
     silent: Boolean(existing.silent && incoming.silent),
@@ -427,6 +428,7 @@ function buildPendingDevicePairingRequest(params: {
     deviceFamily: params.req.deviceFamily,
     clientId: params.req.clientId,
     clientMode: params.req.clientMode,
+    browserOrigin: params.req.browserOrigin,
     role,
     roles: mergeRoles(params.req.roles, role),
     scopes: mergeScopes(params.req.scopes),
@@ -530,6 +532,7 @@ function buildApprovedPairedDevice(params: {
     deviceFamily: params.pending.deviceFamily,
     clientId: params.pending.clientId,
     clientMode: params.pending.clientMode,
+    browserOrigin: params.pending.browserOrigin,
     role: params.pending.role,
     roles: params.roles,
     scopes: params.approvedScopes,
@@ -786,8 +789,16 @@ export async function approveDevicePairing(
     accessMetadata?: DevicePairingAccessMetadata;
     approvedVia?: Extract<
       PairedDeviceApprovalKind,
-      "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+      "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
     >;
+    /**
+     * Replace the pending scopes only for a brand-new operator device, or — under
+     * trusted-proxy approval — for a known operator device re-requesting with its
+     * already-paired public key. The live role set is rechecked under the pairing
+     * lock so a merged request cannot inherit non-operator access through browser
+     * auto-approval.
+     */
+    autoApproveNewDeviceScopes?: readonly string[];
   },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
@@ -799,8 +810,9 @@ export async function approveDevicePairing(
         accessMetadata?: DevicePairingAccessMetadata;
         approvedVia?: Extract<
           PairedDeviceApprovalKind,
-          "owner" | "silent" | "trusted-cidr" | "ssh-verified"
+          "owner" | "silent" | "trusted-cidr" | "trusted-proxy" | "ssh-verified"
         >;
+        autoApproveNewDeviceScopes?: readonly string[];
       }
     | string,
   maybeBaseDir?: string,
@@ -812,11 +824,33 @@ export async function approveDevicePairing(
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withLock(async () => {
     const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
+    const pendingRecord = state.pendingById[requestId];
+    if (!pendingRecord) {
       return null;
     }
-    const requestedRoles = mergeRoles(pending.roles, pending.role) ?? [];
+    const autoApproveScopes = options?.autoApproveNewDeviceScopes;
+    const requestedRoles = resolveRequestedRoles(pendingRecord);
+    const knownDevice = state.pairedByDeviceId[pendingRecord.deviceId];
+    // Trusted-proxy connects carry an SSO-authenticated user, and the connect
+    // handshake has already proven possession of the pending public key. A
+    // matching key on the paired record is therefore the same physical device
+    // re-requesting (typically a scope upgrade) and may auto-approve; a key
+    // mismatch is a real repair — possibly a deviceId squat — and stays a
+    // manual owner decision.
+    const trustedProxySameKeyDevice =
+      options?.approvedVia === "trusted-proxy" &&
+      knownDevice !== undefined &&
+      knownDevice.publicKey === pendingRecord.publicKey;
+    if (
+      autoApproveScopes &&
+      (((pendingRecord.isRepair || knownDevice) && !trustedProxySameKeyDevice) ||
+        !sameStringSet(requestedRoles, [OPERATOR_ROLE]))
+    ) {
+      return null;
+    }
+    const pending = autoApproveScopes
+      ? { ...pendingRecord, scopes: [...autoApproveScopes] }
+      : pendingRecord;
     const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
     const roleMismatchScope = resolveScopeOutsideRequestedRoles({
       requestedRoles,
@@ -948,6 +982,7 @@ export async function approveBootstrapDevicePairing(
     if (missingScope) {
       return { status: "forbidden", reason: "bootstrap-scope-not-allowed", scope: missingScope };
     }
+
     const now = Date.now();
     const existing = state.pairedByDeviceId[pending.deviceId];
     const grantedRoles = requestedRoles;
@@ -1541,3 +1576,4 @@ export async function revokeDeviceToken(params: {
     return { ok: true, entry };
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

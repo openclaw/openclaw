@@ -30,7 +30,7 @@ const expectedClientLevels: ProtocolLevels = {
   max: PROTOCOL_VERSION,
 };
 
-const expectedAndroidLevels: ProtocolLevels = {
+const expectedNodeLevels: ProtocolLevels = {
   min: MIN_NODE_PROTOCOL_VERSION,
   max: PROTOCOL_VERSION,
 };
@@ -140,6 +140,24 @@ describe("native Gateway protocol levels", () => {
         "GATEWAY_PROTOCOL_VERSION",
       ),
     });
+    assertLevelsMatch(
+      swiftGeneratedPath,
+      {
+        min: extractInteger(
+          swiftGenerated,
+          /public let GATEWAY_MIN_NODE_PROTOCOL_VERSION = (\d+)/,
+          swiftGeneratedPath,
+          "GATEWAY_MIN_NODE_PROTOCOL_VERSION",
+        ),
+        max: extractInteger(
+          swiftGenerated,
+          /public let GATEWAY_PROTOCOL_VERSION = (\d+)/,
+          swiftGeneratedPath,
+          "GATEWAY_PROTOCOL_VERSION",
+        ),
+      },
+      expectedNodeLevels,
+    );
 
     const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewayProtocol.kt";
     const android = await readRepoFile(androidPath);
@@ -159,30 +177,61 @@ describe("native Gateway protocol levels", () => {
           "GATEWAY_PROTOCOL_VERSION",
         ),
       },
-      expectedAndroidLevels,
+      expectedNodeLevels,
     );
   });
 
   it("uses the min constant for native connect compatibility ranges", async () => {
-    const swiftConnectFiles = [
-      "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift",
-      "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift",
-    ];
-    for (const relativePath of swiftConnectFiles) {
-      const content = await readRepoFile(relativePath);
-      assertPattern(
-        content,
-        relativePath,
-        /"minProtocol": ProtoAnyCodable\(GATEWAY_MIN_PROTOCOL_VERSION\)/,
-        "connect params must advertise GATEWAY_MIN_PROTOCOL_VERSION as minProtocol.",
-      );
-      assertPattern(
-        content,
-        relativePath,
-        /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
-        "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
-      );
-    }
+    const swiftChannelPath = "apps/shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift";
+    const swiftChannel = await readRepoFile(swiftChannelPath);
+    assertPattern(
+      swiftChannel,
+      swiftChannelPath,
+      /if role == "node", clientMode == "node" \{\s+return GATEWAY_MIN_NODE_PROTOCOL_VERSION\s+\}\s+return GATEWAY_MIN_PROTOCOL_VERSION/,
+      "node connections must use the node compatibility floor without changing operator clients.",
+    );
+    assertPattern(
+      swiftChannel,
+      swiftChannelPath,
+      /"minProtocol": ProtoAnyCodable\(minProtocol\)/,
+      "connect params must advertise the role-specific minimum as minProtocol.",
+    );
+    assertPattern(
+      swiftChannel,
+      swiftChannelPath,
+      /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
+      "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
+    );
+
+    const watchPath = "apps/ios/WatchApp/Sources/WatchDirectNode.swift";
+    const watch = await readRepoFile(watchPath);
+    assertPattern(
+      watch,
+      watchPath,
+      /minprotocol: GATEWAY_MIN_PROTOCOL_VERSION/,
+      "Direct Watch HTTP connects must keep the current client protocol floor.",
+    );
+    assertPattern(
+      watch,
+      watchPath,
+      /maxprotocol: GATEWAY_PROTOCOL_VERSION/,
+      "Watch node connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
+    );
+
+    const swiftWizardPath = "apps/macos/Sources/OpenClawMacCLI/WizardCommand.swift";
+    const swiftWizard = await readRepoFile(swiftWizardPath);
+    assertPattern(
+      swiftWizard,
+      swiftWizardPath,
+      /"minProtocol": ProtoAnyCodable\(GATEWAY_MIN_PROTOCOL_VERSION\)/,
+      "operator connects must advertise GATEWAY_MIN_PROTOCOL_VERSION as minProtocol.",
+    );
+    assertPattern(
+      swiftWizard,
+      swiftWizardPath,
+      /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
+      "operator connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
+    );
 
     const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt";
     const android = await readRepoFile(androidPath);

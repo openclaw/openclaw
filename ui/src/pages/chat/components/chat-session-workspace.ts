@@ -190,7 +190,7 @@ function basenameForPath(filePath: string): string {
   return filePath.split(/[\\/]/).findLast((part) => part) ?? filePath;
 }
 
-export function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
+function workspaceBrowserFilePath(root: string | undefined, filePath: string): string {
   if (!root) {
     return filePath;
   }
@@ -774,7 +774,7 @@ function renderWorkspaceRailSection(
 
 /** Changed-file count shown on the collapsed-rail toggles (pane header /
  * floating opener); 0 until the workspace list has loaded. */
-export function sessionWorkspaceModifiedCount(
+function sessionWorkspaceModifiedCount(
   sessionWorkspace: SessionWorkspaceProps | undefined,
 ): number {
   return sessionWorkspace?.list?.files.filter((file) => file.kind === "modified").length ?? 0;
@@ -1270,3 +1270,4 @@ export function renderSessionWorkspaceRail(
     </aside>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

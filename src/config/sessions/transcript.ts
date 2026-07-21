@@ -31,6 +31,7 @@ import {
   type SessionTranscriptTurnWriteContext,
   type SessionTranscriptTurnExpectedState,
 } from "./session-accessor.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "./session-transcript-turn-lifecycle.types.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
 import { resolveSessionStoreEntry } from "./store.js";
 import {
@@ -38,6 +39,12 @@ import {
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  isWithinTranscriptWindow,
+  normalizeRecentTranscriptLimit,
+  normalizeTranscriptTimestamp,
+  readPreferredUpstreamUserText,
+} from "./transcript-recent-window.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import {
   scanSessionTranscriptTree,
@@ -65,6 +72,15 @@ export type SessionTranscriptDeliveryMirror =
       sourceMessageId?: string;
     };
 
+type InternalSessionTranscriptDeliveryMirror =
+  | SessionTranscriptDeliveryMirror
+  | {
+      kind: "message-tool-source-reply";
+      final: boolean;
+      sourceTurnId?: string;
+      toolCallId?: string;
+    };
+
 export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
   role: "assistant";
 };
@@ -83,20 +99,22 @@ export type SessionRecentConversationText = {
   sourceChannel?: string;
 };
 
-export type ReadRecentSessionConversationTextOptions = {
+type ReadRecentSessionConversationTextOptions = {
   beforeTimestampMs?: number;
   limit?: number;
   minTimestampMs?: number;
+  role?: "user" | "assistant";
+  preferUpstreamUserText?: boolean;
 };
 
-export type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
+type ReadRecentSessionConversationTextParams = ReadRecentSessionConversationTextOptions & {
   agentId?: string;
   sessionKey: string;
   storePath?: string;
 };
 
 export type LatestAssistantTranscriptText = AssistantTranscriptText;
-export type TailAssistantTranscriptText = AssistantTranscriptText;
+type TailAssistantTranscriptText = AssistantTranscriptText;
 
 export { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 
@@ -140,36 +158,15 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
   return isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model);
 }
 
-function normalizeTranscriptTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function isBeforeTranscriptTimestamp(
-  timestamp: number | undefined,
-  beforeTimestampMs: number | undefined,
-): boolean {
-  return (
-    beforeTimestampMs === undefined || timestamp === undefined || timestamp < beforeTimestampMs
-  );
-}
-
-function isAtOrAfterTranscriptTimestamp(
-  timestamp: number | undefined,
-  minTimestampMs: number | undefined,
-): boolean {
-  return minTimestampMs === undefined || timestamp === undefined || timestamp >= minTimestampMs;
-}
-
-function normalizeRecentTranscriptLimit(limit: number | undefined): number {
-  return Math.max(1, Math.floor(limit ?? 10));
-}
-
 type SessionConversationTranscriptTarget = {
   sessionFile?: string;
   sqliteScope?: SqliteSessionFileMarker;
 };
 
-function parseRecentConversationText(line: string): SessionRecentConversationText | undefined {
+function parseRecentConversationText(
+  line: string,
+  options: ReadRecentSessionConversationTextOptions = {},
+): SessionRecentConversationText | undefined {
   const parsed = JSON.parse(line) as {
     id?: unknown;
     message?: unknown;
@@ -181,18 +178,30 @@ function parseRecentConversationText(line: string): SessionRecentConversationTex
         provenance?: unknown;
         provider?: unknown;
         model?: unknown;
+        __openclaw?: unknown;
       }
     | undefined;
-  if (!message || (message.role !== "user" && message.role !== "assistant")) {
+  if (
+    !message ||
+    (message.role !== "user" && message.role !== "assistant") ||
+    (options.role && message.role !== options.role)
+  ) {
     return undefined;
   }
   if (message.role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(message)) {
     return undefined;
   }
+  const upstreamUserText =
+    options.preferUpstreamUserText && message.role === "user"
+      ? readPreferredUpstreamUserText(message)
+      : undefined;
+  if (upstreamUserText === null) {
+    return undefined;
+  }
   const text =
     message.role === "assistant"
       ? extractAssistantVisibleText(message)
-      : extractFirstTextBlock(message)?.trim();
+      : (upstreamUserText ?? extractFirstTextBlock(message)?.trim());
   if (!text) {
     return undefined;
   }
@@ -232,14 +241,11 @@ async function readRecentUserAssistantTextFromSqliteTranscriptWithPresence(
   const limit = normalizeRecentTranscriptLimit(options.limit);
   const recent: SessionRecentConversationText[] = [];
   for (const event of events.toReversed()) {
-    const entry = parseRecentConversationText(JSON.stringify(event));
+    const entry = parseRecentConversationText(JSON.stringify(event), options);
     if (!entry) {
       continue;
     }
-    if (!isBeforeTranscriptTimestamp(entry.timestamp, options.beforeTimestampMs)) {
-      continue;
-    }
-    if (!isAtOrAfterTranscriptTimestamp(entry.timestamp, options.minTimestampMs)) {
+    if (!isWithinTranscriptWindow(entry.timestamp, options)) {
       continue;
     }
     recent.push(entry);
@@ -278,7 +284,7 @@ function resolveSessionConversationTranscriptTarget(params: {
   };
 }
 
-export async function readRecentUserAssistantTextFromSessionTranscript(
+async function readRecentUserAssistantTextFromSessionTranscript(
   sessionFile: string | undefined,
   options: ReadRecentSessionConversationTextOptions = {},
 ): Promise<SessionRecentConversationText[]> {
@@ -293,14 +299,11 @@ export async function readRecentUserAssistantTextFromSessionTranscript(
   const recent: SessionRecentConversationText[] = [];
   for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
-      const entry = parseRecentConversationText(line);
+      const entry = parseRecentConversationText(line, options);
       if (!entry) {
         continue;
       }
-      if (!isBeforeTranscriptTimestamp(entry.timestamp, options.beforeTimestampMs)) {
-        continue;
-      }
-      if (!isAtOrAfterTranscriptTimestamp(entry.timestamp, options.minTimestampMs)) {
+      if (!isWithinTranscriptWindow(entry.timestamp, options)) {
         continue;
       }
       recent.push(entry);
@@ -433,10 +436,11 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
-  deliveryMirror?: SessionTranscriptDeliveryMirror;
+  deliveryMirror?: InternalSessionTranscriptDeliveryMirror;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
@@ -464,6 +468,9 @@ export async function appendAssistantMessageToSessionTranscript(params: {
       ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
       : {}),
     ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
+    ...(params.sessionLifecyclePatch
+      ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
+      : {}),
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
     updateMode: params.updateMode,
@@ -502,6 +509,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
   expectedSessionState?: SessionTranscriptTurnExpectedState;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
   storePath?: string;
@@ -599,6 +607,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
           : {}),
         ...(params.expectedSessionState
           ? { expectedSessionState: params.expectedSessionState }
+          : {}),
+        ...(params.sessionLifecyclePatch
+          ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
           : {}),
         ...(params.config ? { config: params.config } : {}),
         updateMode: params.updateMode ?? "inline",
@@ -752,11 +763,13 @@ async function readLatestVisibleTranscriptMessage(scope: {
 }
 
 function isIdentifiedDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
-  const marker = (message as { openclawDeliveryMirror?: SessionTranscriptDeliveryMirror })
+  const marker = (message as { openclawDeliveryMirror?: InternalSessionTranscriptDeliveryMirror })
     .openclawDeliveryMirror;
   return (
     isRedundantDeliveryMirror(message) &&
-    (marker?.kind === "channel-final" || marker?.kind === "channel-final-suppressed")
+    (marker?.kind === "channel-final" ||
+      marker?.kind === "channel-final-suppressed" ||
+      marker?.kind === "message-tool-source-reply")
   );
 }
 
@@ -847,3 +860,4 @@ async function findLatestEquivalentAssistantMessageId(
 
   return undefined;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -512,6 +512,9 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Default model available: openai/gpt-5.5 (use --set-default to apply)",
     );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Configure the `web_search` tool with `openclaw configure --section web`. Docs: https://docs.openclaw.ai/tools/web",
+    );
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "models.authStatus",
       params: { refresh: true },
@@ -1473,6 +1476,21 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized piped auth input before buffering it", async () => {
+    const runtime = createRuntime();
+    restoreStdin?.();
+    const oversized = "x".repeat(1024 * 1024 + 1);
+    restoreStdin = withPipedStdin(oversized);
+
+    await expect(modelsAuthPasteApiKeyCommand({ provider: "openai" }, runtime)).rejects.toThrow(
+      "Piped auth input exceeds 1048576 bytes.",
+    );
+
+    expect(mocks.clackPassword).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("writes pasted API keys to the requested agent store", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
@@ -1738,3 +1756,4 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

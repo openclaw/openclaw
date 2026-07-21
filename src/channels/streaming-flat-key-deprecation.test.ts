@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetFlatStreamingKeyDeprecationWarningsForTest } from "./streaming-flat-key-deprecation.js";
 import {
+  resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
@@ -55,5 +56,16 @@ describe("flat streaming key deprecation warning", () => {
     );
     expect(resolveChannelStreamingBlockCoalesce({})).toBeUndefined();
     expect(loggerMocks.warn).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scalar: "block", expected: "block" },
+    { scalar: true, expected: "partial" },
+  ])("warns once when the scalar streaming fallback is used", ({ scalar, expected }) => {
+    expect(resolveChannelPreviewStreamMode({ streaming: scalar }, "off")).toBe(expected);
+    expect(resolveChannelPreviewStreamMode({ streaming: scalar }, "off")).toBe(expected);
+    expect(loggerMocks.warn).toHaveBeenCalledTimes(1);
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain('"streaming"');
+    expect(loggerMocks.warn.mock.calls[0]?.[0]).toContain("streaming.mode");
   });
 });

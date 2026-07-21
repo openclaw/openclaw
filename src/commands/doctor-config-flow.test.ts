@@ -1427,6 +1427,7 @@ vi.mock("./doctor-config-analysis.js", () => {
     noteImplicitFallbackClobberWarnings: noteImplicitFallbackClobberWarningsMock,
     noteIncludeConfinementWarning: vi.fn(),
     noteOpencodeProviderOverrides: vi.fn(),
+    noteSandboxOriginProxyWarning: vi.fn(),
     resolveConfigPathTarget,
     stripUnknownConfigKeys: vi.fn((config: Record<string, unknown>) => {
       const next = structuredClone(config);
@@ -1538,30 +1539,6 @@ describe("doctor config flow", () => {
     runDoctorConfigPreflightOptionsMock.mockClear();
   });
 
-  it("grants config preflight cross-state imports only with repair and direct capability", async () => {
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: ({ options, confirm }) =>
-        loadAndMaybeMigrateDoctorConfig({
-          options: { ...options, crossStateDirImports: true },
-          confirm: async () => confirm(),
-        }),
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: true }),
-    );
-
-    await runDoctorConfigWithInput({
-      config: {},
-      repair: true,
-      run: loadAndMaybeMigrateDoctorConfig,
-    });
-    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({ crossStateDirImports: false }),
-    );
-  });
-
   it("preserves invalid config for doctor repairs", async () => {
     const result = await runDoctorConfigWithInput({
       config: {
@@ -1574,6 +1551,25 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("enables Doctor-only state migrations only for explicit repair", async () => {
+    await runDoctorConfigWithInput({
+      config: {},
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: false }),
+    );
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+    expect(runDoctorConfigPreflightOptionsMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ doctorOnlyStateMigrations: true }),
+    );
   });
 
   it("collects plugin blocker previews from the pre-auto-enable config", async () => {
@@ -3109,7 +3105,7 @@ describe("doctor config flow", () => {
                     },
                   },
                   model: "gpt-realtime",
-                  voice: "cedar",
+                  speakerVoice: "cedar",
                   mode: "realtime",
                   transport: "gateway-relay",
                   brain: "agent-consult",
@@ -3166,3 +3162,4 @@ describe("doctor config flow", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -205,6 +205,7 @@ const OPENAI_RESPONSES_APIS = new Set([
   "azure-openai-responses",
   "openai-chatgpt-responses",
   "openclaw-openai-responses-transport",
+  "openclaw-openai-chatgpt-responses-transport",
   "openclaw-azure-openai-responses-transport",
 ]);
 const GOOGLE_REASONING_APIS = new Set([
@@ -239,9 +240,8 @@ function isAnthropicReasoningRoute(route: TranscriptAssistantRoute | undefined):
   return typeof route?.api === "string" && ANTHROPIC_REASONING_APIS.has(route.api);
 }
 
-function isOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_COMPLETIONS_APIS.has(route.api);
-}
+const isOpenAICompletionsRoute = (route?: TranscriptAssistantRoute) =>
+  OPENAI_COMPLETIONS_APIS.has(route?.api ?? "");
 
 function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
   return (
@@ -310,7 +310,7 @@ function resolveTranscriptAssistantRoute(
     ? findNormalizedProviderValue(cfg?.models?.providers, provider)
     : undefined;
   const modelConfig = model
-    ? providerConfig?.models.find((candidate) => candidate.id === model)
+    ? providerConfig?.models?.find((candidate) => candidate.id === model)
     : undefined;
   const baseUrl = modelConfig?.baseUrl ?? providerConfig?.baseUrl;
   const endpointClass = baseUrl ? resolveProviderEndpoint(baseUrl).endpointClass : undefined;

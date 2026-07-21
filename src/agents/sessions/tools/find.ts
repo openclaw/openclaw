@@ -47,8 +47,6 @@ const findSchema = Type.Object({
   path: Type.Optional(Type.String({ description: "Search dir; default cwd." })),
   limit: Type.Optional(Type.Number({ description: "Max results; default 1000." })),
 });
-export type { FindToolDetails, FindToolInput } from "./tool-contracts.js";
-
 const DEFAULT_LIMIT = 1000;
 
 /**
@@ -304,7 +302,10 @@ export function createFindToolDefinition(
               settle(() => reject(new Error(`fd ${stream} error: ${error.message}`)));
             };
 
-            child.stderr?.on("data", (chunk) => {
+            // Decode stderr as UTF-8 at the stream so pipe chunk boundaries
+            // cannot split multibyte characters into U+FFFD replacement noise.
+            child.stderr?.setEncoding("utf8");
+            child.stderr?.on("data", (chunk: string) => {
               stderr = appendBoundedTextTail(stderr, chunk);
             });
             // Readline re-emits input failures, while the stream listener also catches

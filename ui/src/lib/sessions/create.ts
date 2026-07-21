@@ -7,12 +7,16 @@ export type SessionCreateOutcome = {
 };
 
 export type SessionCreateParams = {
+  key?: string;
   agentId?: string;
+  catalogId?: string;
   currentSessionKey?: string;
   parentSessionKey?: string;
   fork?: boolean;
+  succeedsParent?: boolean;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   worktree?: boolean;
   /** Base ref for the managed worktree branch; requires worktree. */
   worktreeBaseRef?: string;
@@ -24,6 +28,8 @@ export type SessionCreateParams = {
   cwd?: string;
   /** First message; the gateway creates the session and starts the run in one call. */
   message?: string;
+  /** Attachments for the first message, using the chat.send wire format. */
+  attachments?: unknown[];
   task?: string;
 };
 
@@ -35,7 +41,9 @@ export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
       : undefined;
   return {
     ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
-    ...(parentSessionKey ? { parentSessionKey, emitCommandHooks: true } : {}),
+    ...(parentSessionKey
+      ? { parentSessionKey, emitCommandHooks: true, succeedsParent: false }
+      : {}),
   };
 }
 
@@ -58,7 +66,7 @@ export async function requestSessionCreate(
       key,
       initialRun: {
         status: "rejected",
-        error: message || "The session was created, but its first message could not be sent.",
+        error: message || "The thread was created, but its first message could not be sent.",
       },
     };
   }

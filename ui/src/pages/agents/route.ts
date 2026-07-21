@@ -2,15 +2,17 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import { selectableAgentsList } from "../../lib/agents/display.ts";
 import type { AgentsRouteData } from "./agents-page.ts";
 
-export async function loadAgentsRouteData(
+async function loadAgentsRouteData(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<AgentsRouteData> {
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
-  const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
+  const rawAgentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
+  const agentsList = rawAgentsList ? selectableAgentsList(rawAgentsList) : null;
   const requestedAgentId = new URLSearchParams(location.search).get("agent")?.trim() || null;
   const requestedAgent = requestedAgentId
     ? (agentsList?.agents.find((entry) => entry.id === requestedAgentId)?.id ?? null)

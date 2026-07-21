@@ -658,19 +658,8 @@ describe("argv helpers", () => {
       expected: ["bun", "src/entry.ts", "status"],
     },
   ] as const)("builds parse argv from raw args: $name", ({ rawArgs, expected }) => {
-    const parsed = buildParseArgv({
-      programName: "openclaw",
-      rawArgs: [...rawArgs],
-    });
+    const parsed = buildParseArgv([...rawArgs]);
     expect(parsed).toEqual([...expected]);
-  });
-
-  it("builds parse argv from fallback args", () => {
-    const fallbackArgv = buildParseArgv({
-      programName: "openclaw",
-      fallbackArgv: ["status"],
-    });
-    expect(fallbackArgv).toEqual(["node", "openclaw", "status"]);
   });
 
   it.each([

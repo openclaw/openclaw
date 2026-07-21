@@ -9,14 +9,17 @@ import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import type { Logger } from "./service/state.js";
-import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
+import { sweepCronRunSessions } from "./session-reaper.js";
+import { resetReaperThrottle } from "./session-reaper.test-support.js";
 
 const { listSessionEntries, patchSessionEntry, replaceSessionEntry } = sessionAccessor;
 
-const taskStatusMocks = vi.hoisted(() => ({ hasPendingGeneratedMediaTask: vi.fn() }));
+const taskStatusMocks = vi.hoisted(() => ({
+  buildPendingSet: vi.fn<() => Set<string>>(() => new Set()),
+}));
 
 vi.mock("../tasks/task-status-access.js", () => ({
-  hasPendingGeneratedMediaTaskForSessionKey: taskStatusMocks.hasPendingGeneratedMediaTask,
+  buildPendingGeneratedMediaSessionKeySet: taskStatusMocks.buildPendingSet,
 }));
 
 function createTestLogger(): Logger {
@@ -42,30 +45,6 @@ function readSessionEntries(storePath: string): Record<string, SessionEntry> {
     listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
-
-describe("resolveRetentionMs", () => {
-  it("returns 24h default when no config", () => {
-    expect(resolveRetentionMs()).toBe(24 * 3_600_000);
-  });
-
-  it("returns 24h default when config is empty", () => {
-    expect(resolveRetentionMs({})).toBe(24 * 3_600_000);
-  });
-
-  it("parses duration string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "1h" })).toBe(3_600_000);
-    expect(resolveRetentionMs({ sessionRetention: "7d" })).toBe(7 * 86_400_000);
-    expect(resolveRetentionMs({ sessionRetention: "30m" })).toBe(30 * 60_000);
-  });
-
-  it("returns null when disabled", () => {
-    expect(resolveRetentionMs({ sessionRetention: false })).toBeNull();
-  });
-
-  it("falls back to default on invalid string", () => {
-    expect(resolveRetentionMs({ sessionRetention: "abc" })).toBe(24 * 3_600_000);
-  });
-});
 
 describe("isCronRunSessionKey", () => {
   it("matches cron run session keys", () => {
@@ -99,7 +78,7 @@ describe("sweepCronRunSessions", () => {
 
   beforeEach(async () => {
     resetReaperThrottle();
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReset().mockReturnValue(false);
+    taskStatusMocks.buildPendingSet.mockReset().mockReturnValue(new Set());
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cron-reaper-"));
     storePath = path.join(tmpDir, "sessions.json");
   });
@@ -109,7 +88,7 @@ describe("sweepCronRunSessions", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:cron:job1": {
         sessionId: "base-session",
-        updatedAt: now,
+        updatedAt: now - 25 * 3_600_000, // stale base row — preserve
       },
       "agent:main:cron:job1:run:old-run": {
         sessionId: "old-run",
@@ -153,7 +132,7 @@ describe("sweepCronRunSessions", () => {
     ]);
     expect(updated["agent:main:cron:job1"]).toMatchObject({
       sessionId: "base-session",
-      updatedAt: now,
+      updatedAt: now - 25 * 3_600_000,
     });
     expect(updated["agent:main:cron:job1:run:recent-run"]).toMatchObject({
       sessionId: "recent-run",
@@ -169,6 +148,26 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
+  it("falls back to the default retention when the configured duration is invalid", async () => {
+    const now = Date.now();
+    await seedSessionEntries(storePath, {
+      "agent:main:cron:job1:run:old-run": {
+        sessionId: "old-run",
+        updatedAt: now - 25 * 3_600_000,
+      },
+    });
+
+    const result = await sweepCronRunSessions({
+      cronConfig: { sessionRetention: "not-a-duration" },
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result).toEqual({ swept: true, pruned: 1 });
+  });
+
   it("preserves expired continuation rows while generated media is pending", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:cron:job1:run:pending-run";
@@ -180,7 +179,7 @@ describe("sweepCronRunSessions", () => {
       },
     };
     await seedSessionEntries(storePath, store);
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -208,7 +207,7 @@ describe("sweepCronRunSessions", () => {
         },
       },
     });
-    taskStatusMocks.hasPendingGeneratedMediaTask.mockReturnValue(true);
+    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([sessionKey]));
 
     const result = await sweepCronRunSessions({
       sessionStorePath: storePath,
@@ -450,5 +449,67 @@ describe("sweepCronRunSessions", () => {
     } finally {
       listSpy.mockRestore();
     }
+  });
+
+  it("does not build the pending-media snapshot without an expired continuation", async () => {
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      "agent:main:cron:job1:run:recent-1": {
+        sessionId: "recent-1",
+        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+        cronRunContinuation: { lifecycleRevision: "revision-1", phase: "ready" },
+      },
+      "agent:main:cron:job1:run:expired": {
+        sessionId: "expired",
+        updatedAt: now - 25 * 3_600_000,
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-dm",
+        updatedAt: now - 50 * 3_600_000, // old, but not cron run
+      },
+    };
+    await seedSessionEntries(storePath, store);
+    taskStatusMocks.buildPendingSet.mockClear();
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(taskStatusMocks.buildPendingSet).not.toHaveBeenCalled();
+  });
+
+  it("builds one pending-media snapshot for multiple expired continuations", async () => {
+    const now = Date.now();
+    const keptKey = "agent:main:cron:job1:run:kept";
+    const prunedKey = "agent:main:cron:job1:run:pruned";
+    const continuation = { lifecycleRevision: "revision-1", phase: "ready" } as const;
+    await seedSessionEntries(storePath, {
+      [keptKey]: {
+        sessionId: "kept",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: continuation,
+      },
+      [prunedKey]: {
+        sessionId: "pruned",
+        updatedAt: now - 25 * 3_600_000,
+        cronRunContinuation: continuation,
+      },
+    });
+    taskStatusMocks.buildPendingSet.mockReturnValue(new Set([keptKey]));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.pruned).toBe(1);
+    expect(taskStatusMocks.buildPendingSet).toHaveBeenCalledOnce();
+    expect(Object.keys(readSessionEntries(storePath))).toEqual([keptKey]);
   });
 });

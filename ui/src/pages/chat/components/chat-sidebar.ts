@@ -3,6 +3,7 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/web-awesome.ts";
 import {
   handleMarkdownCodeBlockCopy,
   markdownFileLinkFromEvent,
@@ -17,16 +18,18 @@ import {
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
-import {
-  EDITOR_IDS,
-  EDITOR_LABELS,
-  type EditorId,
-  editorOpenUrl,
-} from "../../../lib/editor-links.ts";
+import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import "./session-discussion-panel.ts";
 import "./session-diff-panel.ts";
+import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 import type { SessionDiffLoader } from "./session-diff-panel.ts";
+import type {
+  SessionDiscussionInfoLoader,
+  SessionDiscussionOpener,
+  SessionDiscussionStateListener,
+} from "./session-discussion-panel.ts";
 
 export const CHAT_DETAIL_FULL_MESSAGE_MAX_CHARS = 500_000;
 
@@ -84,19 +87,31 @@ type SessionDiffSidebarContent = {
   unavailableReason?: DetailUnavailableReason | null;
 };
 
-export type FileSaveOutcome =
+type SessionDiscussionSidebarContent = {
+  kind: "session-discussion";
+  sessionKey: string;
+  canOpen: boolean;
+  loadInfo: SessionDiscussionInfoLoader;
+  openDiscussion: SessionDiscussionOpener;
+  onStateChange: SessionDiscussionStateListener;
+  rawText?: string | null;
+  fullMessageRequest?: SidebarFullMessageRequest;
+  unavailableReason?: DetailUnavailableReason | null;
+};
+
+type FileSaveOutcome =
   | { ok: true; hash: string; updatedAtMs?: number }
   | { ok: false; code: "conflict"; currentHash?: string }
   | { ok: false; code: "error"; message: string };
 
-export type FileSidebarEdit = {
+type FileSidebarEdit = {
   hash: string;
   save: (params: { content: string; expectedHash: string }) => Promise<FileSaveOutcome>;
   /** `editable: false` means the latest content no longer qualifies for edit mode. */
   fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
 };
 
-export type FileSidebarContent = {
+type FileSidebarContent = {
   kind: "file";
   path: string;
   name: string;
@@ -137,6 +152,7 @@ export type SidebarContent =
   | CanvasSidebarContent
   | ImageSidebarContent
   | FileSidebarContent
+  | SessionDiscussionSidebarContent
   | SessionDiffSidebarContent;
 
 function hasFullMessageRequest(content: SidebarContent): content is SidebarContent & {
@@ -174,9 +190,7 @@ function toPlainTextCodeFence(value: string, language = ""): string {
   return `${fenceHeader}\n${value}\n\`\`\``;
 }
 
-export function buildRawSidebarContent(
-  content: SidebarContent | null | undefined,
-): SidebarContent | null {
+function buildRawSidebarContent(content: SidebarContent | null | undefined): SidebarContent | null {
   if (!content) {
     return null;
   }
@@ -219,7 +233,7 @@ export function hasUniformLineEndings(content: string): boolean {
   return [crlf, bareCr, bareLf].filter((count) => count > 0).length <= 1;
 }
 
-export function computeFileSearchMatches(content: string, query: string): number[] {
+function computeFileSearchMatches(content: string, query: string): number[] {
   const normalizedQuery = query.toLocaleLowerCase();
   if (!normalizedQuery) {
     return [];
@@ -270,7 +284,7 @@ type FileViewControls = {
   onSave: () => void;
   onSearchInput: (query: string) => void;
   onSearchKeydown: (event: KeyboardEvent) => void;
-  onToggleEditorMenu: () => void;
+  onEditorMenuOpenChange: (open: boolean) => void;
   onToggleSearch: () => void;
 };
 
@@ -360,41 +374,12 @@ function renderFileSidebarContent(
                             </openclaw-tooltip>
                           `
                         : nothing}
-                      <div class="sidebar-file-view__editor">
-                        <openclaw-tooltip
-                          .content=${absolutePath ? "Open in editor" : "Workspace root unknown"}
-                        >
-                          <button
-                            class="btn btn--sm sidebar-file-view__action"
-                            type="button"
-                            aria-label=${absolutePath ? "Open in editor" : "Workspace root unknown"}
-                            aria-haspopup="menu"
-                            aria-expanded=${String(controls.editorMenuOpen)}
-                            ?disabled=${!absolutePath}
-                            @click=${controls.onToggleEditorMenu}
-                          >
-                            ${icons.externalLink}
-                          </button>
-                        </openclaw-tooltip>
-                        ${controls.editorMenuOpen && absolutePath
-                          ? html`
-                              <div class="sidebar-file-view__editor-menu" role="menu">
-                                ${EDITOR_IDS.map(
-                                  (editor) => html`
-                                    <button
-                                      class="sidebar-file-view__editor-item"
-                                      type="button"
-                                      role="menuitem"
-                                      @click=${() => controls.onOpenEditor(editor)}
-                                    >
-                                      ${EDITOR_LABELS[editor]}
-                                    </button>
-                                  `,
-                                )}
-                              </div>
-                            `
-                          : nothing}
-                      </div>
+                      ${renderChatSidebarEditorMenu({
+                        absolutePath,
+                        open: controls.editorMenuOpen,
+                        onOpenChange: controls.onEditorMenuOpenChange,
+                        onOpenEditor: controls.onOpenEditor,
+                      })}
                       <openclaw-tooltip content="Copy file contents">
                         <button
                           class="btn btn--sm sidebar-file-view__action ${controls.copied
@@ -520,7 +505,7 @@ type MarkdownSidebarProps = {
   allowExternalEmbedUrls?: boolean;
 };
 
-export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
+function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
@@ -547,9 +532,11 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           ? content.name.trim() || "File"
           : content?.kind === "session-diff"
             ? t("chat.sessionDiff.title")
-            : content?.kind === "markdown"
-              ? "Markdown Preview"
-              : "Tool Details";
+            : content?.kind === "session-discussion"
+              ? t("chat.sessionDiscussion.title")
+              : content?.kind === "markdown"
+                ? "Markdown Preview"
+                : "Tool Details";
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
@@ -565,7 +552,11 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           </button>
         </openclaw-tooltip>
       </div>
-      <div class="sidebar-content">
+      <div
+        class="sidebar-content ${content?.kind === "session-discussion"
+          ? "sidebar-content--discussion"
+          : ""}"
+      >
         ${props.error
           ? html`
               <div class="callout danger">${props.error}</div>
@@ -587,46 +578,34 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
               ? renderFileSidebarContent(content, props.onViewRawText, props.fileView)
               : content.kind === "session-diff"
                 ? html`<openclaw-session-diff .loader=${content.load}></openclaw-session-diff>`
-                : content.kind === "canvas"
+                : content.kind === "session-discussion"
                   ? html`
-                      <div class="chat-tool-card__preview" data-kind="canvas">
-                        <div class="chat-tool-card__preview-panel" data-side="front">
-                          ${keyed(
-                            `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
-                            html`
-                              <iframe
-                                class="chat-tool-card__preview-frame"
-                                title=${content.title?.trim() || "Render preview"}
-                                sandbox=${canvasSandbox}
-                                src=${canvasSrc ?? nothing}
-                                style=${content.preferredHeight
-                                  ? `height:${content.preferredHeight}px`
-                                  : ""}
-                              ></iframe>
-                            `,
-                          )}
-                        </div>
-                        ${content.rawText?.trim()
-                          ? html`
-                              <div style="margin-top: 12px;">
-                                <button @click=${props.onViewRawText} class="btn" type="button">
-                                  ${t("chat.detailPanel.viewRawText")}
-                                </button>
-                              </div>
-                            `
-                          : nothing}
-                      </div>
+                      <openclaw-session-discussion
+                        .sessionKey=${content.sessionKey}
+                        .canOpen=${content.canOpen}
+                        .loadInfo=${content.loadInfo}
+                        .openDiscussion=${content.openDiscussion}
+                        .onStateChange=${content.onStateChange}
+                      ></openclaw-session-discussion>
                     `
-                  : content.kind === "image"
+                  : content.kind === "canvas"
                     ? html`
-                        <div class="chat-tool-card__preview" data-kind="image">
+                        <div class="chat-tool-card__preview" data-kind="canvas">
                           <div class="chat-tool-card__preview-panel" data-side="front">
-                            <img
-                              class="chat-tool-card__preview-image"
-                              src=${content.src}
-                              alt=${title}
-                              style="display:block;max-width:100%;height:auto;border-radius:8px;"
-                            />
+                            ${keyed(
+                              `${canvasSandbox}\u0000${canvasSrc ?? ""}\u0000${content.preferredHeight ?? ""}`,
+                              html`
+                                <iframe
+                                  class="chat-tool-card__preview-frame"
+                                  title=${content.title?.trim() || "Render preview"}
+                                  sandbox=${canvasSandbox}
+                                  src=${canvasSrc ?? nothing}
+                                  style=${content.preferredHeight
+                                    ? `height:${content.preferredHeight}px`
+                                    : ""}
+                                ></iframe>
+                              `,
+                            )}
                           </div>
                           ${content.rawText?.trim()
                             ? html`
@@ -639,35 +618,61 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                             : nothing}
                         </div>
                       `
-                    : html`
-                        <section class="sidebar-markdown-shell">
-                          <div class="sidebar-markdown-shell__toolbar">
-                            <div class="sidebar-markdown-shell__intro">
-                              <div class="sidebar-markdown-shell__eyebrow">
-                                ${icons.scrollText}
-                                <span>${t("chat.detailPanel.renderedMarkdown")}</span>
-                              </div>
-                              <div class="sidebar-markdown-shell__hint">
-                                ${t("chat.detailPanel.renderedMarkdownHint")}
-                              </div>
+                    : content.kind === "image"
+                      ? html`
+                          <div class="chat-tool-card__preview" data-kind="image">
+                            <div class="chat-tool-card__preview-panel" data-side="front">
+                              <img
+                                class="chat-tool-card__preview-image"
+                                src=${content.src}
+                                alt=${title}
+                                style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                              />
                             </div>
-                            <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                              ${t("chat.detailPanel.viewRawText")}
-                            </button>
+                            ${content.rawText?.trim()
+                              ? html`
+                                  <div style="margin-top: 12px;">
+                                    <button @click=${props.onViewRawText} class="btn" type="button">
+                                      ${t("chat.detailPanel.viewRawText")}
+                                    </button>
+                                  </div>
+                                `
+                              : nothing}
                           </div>
-                          ${markdownHtml
-                            ? html`
-                                <article class="sidebar-markdown-reader sidebar-markdown">
-                                  ${unsafeHTML(markdownHtml)}
-                                </article>
-                              `
-                            : html`
-                                <div class="sidebar-markdown-empty">
-                                  ${t("chat.detailPanel.noPreviewableMarkdown")}
+                        `
+                      : html`
+                          <section class="sidebar-markdown-shell">
+                            <div class="sidebar-markdown-shell__toolbar">
+                              <div class="sidebar-markdown-shell__intro">
+                                <div class="sidebar-markdown-shell__eyebrow">
+                                  ${icons.scrollText}
+                                  <span>${t("chat.detailPanel.renderedMarkdown")}</span>
                                 </div>
-                              `}
-                        </section>
-                      `
+                                <div class="sidebar-markdown-shell__hint">
+                                  ${t("chat.detailPanel.renderedMarkdownHint")}
+                                </div>
+                              </div>
+                              <button
+                                @click=${props.onViewRawText}
+                                class="btn btn--sm"
+                                type="button"
+                              >
+                                ${t("chat.detailPanel.viewRawText")}
+                              </button>
+                            </div>
+                            ${markdownHtml
+                              ? html`
+                                  <article class="sidebar-markdown-reader sidebar-markdown">
+                                    ${unsafeHTML(markdownHtml)}
+                                  </article>
+                                `
+                              : html`
+                                  <div class="sidebar-markdown-empty">
+                                    ${t("chat.detailPanel.noPreviewableMarkdown")}
+                                  </div>
+                                `}
+                          </section>
+                        `
             : html` <div class="muted">${t("chat.detailPanel.noContent")}</div> `}
       </div>
     </div>
@@ -971,8 +976,7 @@ class ChatDetailPanel extends OpenClawLightDomElement {
       return;
     }
     this.fileEditorMenuOpen = false;
-    // A custom-scheme window hands off to the OS without navigating this page.
-    window.open(editorOpenUrl(editor, absPath, content.line));
+    openEditor(editor, absPath, content.line);
   };
 
   private readonly copyFileContents = () => {
@@ -1269,8 +1273,11 @@ class ChatDetailPanel extends OpenClawLightDomElement {
     const currentMatchIndex = matches.length
       ? Math.min(this.fileSearchMatchIndex, matches.length - 1)
       : 0;
+    // The discussion iframe has no intrinsic height, so its host wrapper must
+    // stretch; content-sized kinds (files, tool details) keep auto height.
+    const fillHost = this.visibleContent?.kind === "session-discussion";
     return html`
-      <div @click=${this.handlePanelClick}>
+      <div class=${fillHost ? "sidebar-panel-host--fill" : ""} @click=${this.handlePanelClick}>
         ${renderMarkdownSidebar({
           content: this.visibleContent,
           error: this.error,
@@ -1299,8 +1306,8 @@ class ChatDetailPanel extends OpenClawLightDomElement {
             onSave: this.saveFile,
             onSearchInput: this.updateFileSearch,
             onSearchKeydown: this.handleFileSearchKeydown,
-            onToggleEditorMenu: () => {
-              this.fileEditorMenuOpen = !this.fileEditorMenuOpen;
+            onEditorMenuOpenChange: (open) => {
+              this.fileEditorMenuOpen = open;
             },
             onToggleSearch: this.toggleFileSearch,
           },
@@ -1318,3 +1325,4 @@ class ChatDetailPanel extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-chat-detail-panel")) {
   customElements.define("openclaw-chat-detail-panel", ChatDetailPanel);
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

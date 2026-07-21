@@ -1,11 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
-import {
-  createCronExitWatchers,
-  type CronExitResult,
-  resolveExitWatchShell,
-} from "./cron-exit-watchers.js";
+import { resolveExitWatchShell } from "./cron-exit-watch-shell.js";
+import { createCronExitWatchers, type CronExitResult } from "./cron-exit-watchers.js";
 
 type Deferred = {
   resolve: (exit: { exitCode: number | null; reason: string }) => void;
@@ -440,13 +437,22 @@ describe("createCronExitWatchers", () => {
 });
 
 describe("resolveExitWatchShell", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   it("uses cmd.exe on Windows so native gateways without bash can run on-exit", () => {
     const shell = resolveExitWatchShell("win32");
     expect(shell.command).toMatch(/cmd\.exe$/i);
     expect(shell.argsFor("echo hi")).toEqual(["/d", "/s", "/c", "echo hi"]);
   });
 
-  it("uses bash -lc on POSIX (unchanged from prior behavior)", () => {
+  it("uses cmd.exe when ComSpec is blank", () => {
+    vi.stubEnv("ComSpec", "   ");
+    expect(resolveExitWatchShell("win32").command).toBe("cmd.exe");
+  });
+
+  it("uses bash -lc on POSIX", () => {
     expect(resolveExitWatchShell("linux").command).toBe("bash");
     expect(resolveExitWatchShell("linux").argsFor("echo hi")).toEqual(["-lc", "echo hi"]);
     expect(resolveExitWatchShell("darwin").command).toBe("bash");
