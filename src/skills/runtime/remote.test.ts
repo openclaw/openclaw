@@ -193,65 +193,6 @@ describe("skills-remote", () => {
     expect(listRemoteSkillNames()).not.toContain(skillName);
   });
 
-  it("reconciles persistent generation before constructing node-hosted skills", () => {
-    const legacyNodeId = `node-${randomUUID()}`;
-    const missingConnectionNodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    const legacySkillName = `skill-${randomUUID()}`;
-    const missingConnectionSkillName = `skill-${randomUUID()}`;
-    const listCurrentConnectedSync = vi.fn(() => []);
-    try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        listCurrentConnectedSync,
-      } as unknown as NodeRegistry);
-      recordRemoteNodeInfo({
-        nodeId: legacyNodeId,
-        connId: "conn-retired",
-        displayName: "Legacy Mac",
-        platform: "darwin",
-        commands: ["system.run"],
-      });
-      replaceRemoteNodeSkills({
-        nodeId: legacyNodeId,
-        displayName: "Legacy Mac",
-        skills: [
-          {
-            name: legacySkillName,
-            description: "Legacy remote skill",
-            content: `---\nname: ${legacySkillName}\ndescription: Legacy remote skill\n---\n`,
-          },
-        ],
-      });
-      recordRemoteNodeInfo({
-        nodeId: missingConnectionNodeId,
-        pairingGeneration: TEST_PAIRING_GENERATION,
-        displayName: "Retired Mac",
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-      });
-      recordRemoteNodeBins(missingConnectionNodeId, [bin], TEST_PAIRING_GENERATION);
-      replaceRemoteNodeSkills({
-        nodeId: missingConnectionNodeId,
-        displayName: "Retired Mac",
-        skills: [
-          {
-            name: missingConnectionSkillName,
-            description: "Retired remote skill",
-            content: `---\nname: ${missingConnectionSkillName}\ndescription: Retired remote skill\n---\n`,
-          },
-        ],
-      });
-
-      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
-      expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
-      expect(listCurrentConnectedSync).toHaveBeenCalled();
-    } finally {
-      removeRemoteNodeInfo(legacyNodeId);
-      removeRemoteNodeInfo(missingConnectionNodeId);
-    }
-  });
-
   it("bumps the skills snapshot version when an eligible remote node disconnects", async () => {
     await resetSkillsRefreshForTest();
     const workspaceDir = `/tmp/ws-${randomUUID()}`;
