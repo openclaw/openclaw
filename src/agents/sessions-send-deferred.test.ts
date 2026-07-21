@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { recoverStartupOrphanedMainSessions } from "./main-session-restart-recovery.js";
 import { claimSessionsSendDeferredCompletion } from "./sessions-send-deferred-store.js";
 import {
   armSessionsSendDeferredCompletion,
   disarmSessionsSendDeferredCompletion,
+  finishSessionsSendDeferredContinuationAfterTranscript,
   maybeCompleteSessionsSendDeferred,
   prepareSessionsSendDeferredCompletion,
   recoverSessionsSendDeferredCompletions,
@@ -29,6 +38,7 @@ describe("sessions_send deferred completion", () => {
 
   afterEach(() => {
     testing.resetPendingRunIds();
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabase();
   });
 
@@ -65,6 +75,7 @@ describe("sessions_send deferred completion", () => {
         options,
       ),
     ).toBe(true);
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabase();
     testing.resetPendingRunIds();
     const dispatch = vi.fn(async (_params: Record<string, unknown>) => ({ status: "accepted" }));
@@ -90,12 +101,121 @@ describe("sessions_send deferred completion", () => {
     expect(dispatch.mock.calls[0]?.[0]?.message).toContain(
       "The deployment failed during migration.",
     );
+    expect(
+      finishSessionsSendDeferredContinuationAfterTranscript(
+        String(dispatch.mock.calls[0]?.[0]?.idempotencyKey),
+        options,
+      ),
+    ).toBe(true);
 
     await expect(recoverSessionsSendDeferredCompletions({ dispatch }, options)).resolves.toEqual({
       recovered: 0,
       failed: 0,
     });
     expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not readmit a continuation whose user turn survived gateway restart", async () => {
+    arm();
+    const acceptedRuns: string[] = [];
+    const dispatch = vi.fn(async (params: Record<string, unknown>) => {
+      const continuationRunId = String(params.idempotencyKey);
+      acceptedRuns.push(continuationRunId);
+      await upsertSessionEntry(
+        {
+          agentId: "main",
+          env: options.env,
+          sessionKey: requesterSessionKey,
+        },
+        {
+          sessionId: requesterSessionId,
+          status: "running",
+          updatedAt: Date.now(),
+          restartRecoveryDeliveryRunId: continuationRunId,
+          restartRecoveryDeliveryContext: {
+            channel: "telegram",
+            to: "7504982318",
+            accountId: "primary",
+            threadId: "42",
+          },
+          deliveryContext: {
+            channel: "telegram",
+            to: "7504982318",
+            accountId: "primary",
+            threadId: "42",
+          },
+        },
+      );
+      await appendTranscriptMessage(
+        {
+          agentId: "main",
+          env: options.env,
+          sessionId: requesterSessionId,
+          sessionKey: requesterSessionKey,
+        },
+        {
+          message: {
+            role: "user",
+            content: String(params.message),
+            timestamp: Date.now(),
+            idempotencyKey: buildRunUserTurnIdempotencyKey(continuationRunId),
+          },
+          idempotencyLookup: "scan",
+        },
+      );
+      return { runId: continuationRunId, status: "accepted" };
+    });
+    await expect(
+      maybeCompleteSessionsSendDeferred(
+        {
+          targetRunId,
+          targetSessionKey,
+          terminalOutcome: { status: "ok", reason: "completed" },
+          result: { payloads: [{ text: "Durable result" }] },
+          dispatch,
+        },
+        options,
+      ),
+    ).resolves.toBe(true);
+    expect(acceptedRuns).toHaveLength(1);
+
+    // Simulate process death after Gateway acceptance and transcript commit,
+    // but before the transcript observer retires the deferred SQLite row.
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabase();
+    testing.resetPendingRunIds();
+    dispatch.mockClear();
+
+    await expect(recoverSessionsSendDeferredCompletions({ dispatch }, options)).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+    });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(acceptedRuns).toHaveLength(1);
+    const postRestartAdmissions: Record<string, unknown>[] = [];
+    const gatewayRuntime: GatewayRecoveryRuntime = {
+      dispatchAgent: async <T>(params: Record<string, unknown>) => {
+        postRestartAdmissions.push(params);
+        return { runId: "restart-recovery-run" } as T;
+      },
+      waitForAgent: async <T>() => ({ status: "ok" }) as T,
+      sendRecoveryNotice: async <T>() => ({ ok: true }) as T,
+    };
+    await expect(
+      recoverStartupOrphanedMainSessions({
+        activeSessionIds: [],
+        activeSessionKeys: [],
+        cfg: {},
+        gatewayRuntime,
+        stateDir,
+        updatedBeforeMs: Date.now() + 1,
+      }),
+    ).resolves.toMatchObject({ marked: 1, recovered: 1, failed: 0 });
+    expect(postRestartAdmissions).toHaveLength(1);
+    await expect(recoverSessionsSendDeferredCompletions({ dispatch }, options)).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+    });
   });
 
   it("replays a claimed dispatch after restart with the same idempotency key", async () => {
@@ -111,7 +231,21 @@ describe("sessions_send deferred completion", () => {
     );
     const claimed = claimSessionsSendDeferredCompletion({ targetRunId, targetSessionKey }, options);
     expect(claimed?.continuationRunId).toBeTruthy();
+    await upsertSessionEntry(
+      {
+        agentId: "main",
+        env: options.env,
+        sessionKey: requesterSessionKey,
+      },
+      {
+        sessionId: requesterSessionId,
+        status: "running",
+        updatedAt: Date.now(),
+        restartRecoveryDeliveryRunId: claimed?.continuationRunId,
+      },
+    );
 
+    closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabase();
     testing.resetPendingRunIds();
     const dispatch = vi.fn(async (_params: Record<string, unknown>) => ({ status: "accepted" }));

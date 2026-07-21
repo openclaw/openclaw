@@ -14,6 +14,7 @@ import {
 } from "../../agents/main-session-recovery-store.js";
 import {
   dispatchPreparedSessionsSendDeferredCompletion,
+  finishSessionsSendDeferredContinuationAfterTranscript,
   prepareSessionsSendDeferredCompletion,
 } from "../../agents/sessions-send-deferred.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
@@ -237,6 +238,9 @@ export function startAgentRunExecution(params: {
                 params.context.logGateway.warn(
                   `gateway agent user transcript persistence failed: ${formatForLog(error)}`,
                 );
+              },
+              onMessagePersisted: () => {
+                finishSessionsSendDeferredContinuationAfterTranscript(params.runId);
               },
             })
           : undefined;

@@ -1,5 +1,12 @@
 /** Origin-bound deferred completion for opt-in sessions_send calls. */
 import crypto from "node:crypto";
+import {
+  findTranscriptEvent,
+  loadSessionEntry,
+  type TranscriptEvent,
+} from "../config/sessions/session-accessor.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   type DeliveryContext,
@@ -16,16 +23,20 @@ import {
   cancelSessionsSendDeferredCompletion,
   claimSessionsSendDeferredCompletion,
   finishSessionsSendDeferredCompletion,
+  finishSessionsSendDeferredContinuation,
   listDispatchableSessionsSendDeferredRunIds,
+  listOpenSessionsSendDeferredContinuationRunIds,
   listOpenSessionsSendDeferredRunIds,
   prepareSessionsSendDeferredCompletion as prepareSessionsSendDeferredCompletionStore,
   registerSessionsSendDeferredCompletion,
+  type PreparedSessionsSendDeferredRegistration,
   type SessionsSendDeferredRegistration,
 } from "./sessions-send-deferred-store.js";
 
 export const SESSIONS_SEND_DEFERRED_TTL_MS = 24 * 60 * 60_000;
 
 const openRunIds = new Set<string>();
+const openContinuationRunIds = new Set<string>();
 let openRunIdsLoaded = false;
 
 type DeferredCompletionDispatch = (params: Record<string, unknown>) => Promise<unknown>;
@@ -83,6 +94,7 @@ export function armSessionsSendDeferredCompletion(
   };
   registerSessionsSendDeferredCompletion(registration, options);
   openRunIds.add(params.targetRunId);
+  openContinuationRunIds.add(registration.continuationRunId);
   return { expiresAt };
 }
 
@@ -162,7 +174,72 @@ function ensureOpenRunIdsLoaded(options: OpenClawStateDatabaseOptions): void {
   for (const runId of listOpenSessionsSendDeferredRunIds(options)) {
     openRunIds.add(runId);
   }
+  for (const runId of listOpenSessionsSendDeferredContinuationRunIds(options)) {
+    openContinuationRunIds.add(runId);
+  }
   openRunIdsLoaded = true;
+}
+
+function readTranscriptMessageIdempotencyKey(event: TranscriptEvent): string | undefined {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return undefined;
+  }
+  const message = (event as { message?: unknown }).message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const idempotencyKey = (message as { idempotencyKey?: unknown }).idempotencyKey;
+  return typeof idempotencyKey === "string" ? idempotencyKey : undefined;
+}
+
+async function hasDurableContinuationTurn(
+  registration: PreparedSessionsSendDeferredRegistration,
+  options: OpenClawStateDatabaseOptions,
+): Promise<boolean> {
+  const entry = loadSessionEntry({
+    agentId: resolveAgentIdFromSessionKey(registration.requesterSessionKey),
+    env: options.env,
+    sessionKey: registration.requesterSessionKey,
+  });
+  const ownsContinuation =
+    entry?.sessionId === registration.requesterSessionId &&
+    (entry.restartRecoveryDeliveryRunId === registration.continuationRunId ||
+      entry.restartRecoveryTerminalRunIds?.includes(registration.continuationRunId) === true);
+  if (!ownsContinuation) {
+    return false;
+  }
+  const idempotencyKeys = new Set([
+    buildRunUserTurnIdempotencyKey(registration.continuationRunId),
+    `hook-block:before_agent_run:user:${registration.continuationRunId}`,
+  ]);
+  const match = await findTranscriptEvent(
+    {
+      agentId: resolveAgentIdFromSessionKey(registration.requesterSessionKey),
+      env: options.env,
+      sessionId: registration.requesterSessionId,
+      sessionKey: registration.requesterSessionKey,
+    },
+    (event) => idempotencyKeys.has(readTranscriptMessageIdempotencyKey(event) ?? ""),
+  );
+  return match !== undefined;
+}
+
+/** Retire a deferred row only after its continuation user turn is durable. */
+export function finishSessionsSendDeferredContinuationAfterTranscript(
+  continuationRunId: string,
+  options: OpenClawStateDatabaseOptions = {},
+): boolean {
+  ensureOpenRunIdsLoaded(options);
+  if (!openContinuationRunIds.has(continuationRunId)) {
+    return false;
+  }
+  const targetRunId = finishSessionsSendDeferredContinuation({ continuationRunId }, options);
+  if (!targetRunId) {
+    return false;
+  }
+  openContinuationRunIds.delete(continuationRunId);
+  openRunIds.delete(targetRunId);
+  return true;
 }
 
 /** Persist the target result before its run is allowed to settle. */
@@ -215,11 +292,14 @@ export async function dispatchPreparedSessionsSendDeferredCompletion(
   }
   openRunIds.delete(params.targetRunId);
   try {
+    if (await hasDurableContinuationTurn(registration, options)) {
+      finishSessionsSendDeferredContinuationAfterTranscript(
+        registration.continuationRunId,
+        options,
+      );
+      return true;
+    }
     await (params.dispatch ?? dispatchContinuation)(buildContinuationParams({ registration }));
-    finishSessionsSendDeferredCompletion(
-      { targetRunId: params.targetRunId, delivered: true },
-      options,
-    );
     return true;
   } catch (error) {
     finishSessionsSendDeferredCompletion(
@@ -276,6 +356,7 @@ export async function recoverSessionsSendDeferredCompletions(
 export const testing = {
   resetPendingRunIds() {
     openRunIds.clear();
+    openContinuationRunIds.clear();
     openRunIdsLoaded = false;
   },
 };

@@ -259,6 +259,42 @@ export function finishSessionsSendDeferredCompletion(
   );
 }
 
+/** Retire a dispatch after its continuation user turn becomes durable. */
+export function finishSessionsSendDeferredContinuation(
+  params: { continuationRunId: string; now?: number },
+  options: OpenClawStateDatabaseOptions = {},
+): string | undefined {
+  const now = params.now ?? Date.now();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const kysely = getDeferredCompletionKysely(db);
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("sessions_send_deferred_completions")
+          .select("target_run_id")
+          .where("continuation_run_id", "=", params.continuationRunId)
+          .where("state", "=", "dispatching"),
+      );
+      if (!row) {
+        return undefined;
+      }
+      const finished = executeSqliteQuerySync(
+        db,
+        kysely
+          .updateTable("sessions_send_deferred_completions")
+          .set({ state: "completed", completed_at: now, last_error: null })
+          .where("target_run_id", "=", row.target_run_id)
+          .where("continuation_run_id", "=", params.continuationRunId)
+          .where("state", "=", "dispatching"),
+      );
+      return finished.numAffectedRows === 1n ? row.target_run_id : undefined;
+    },
+    options,
+    { operationLabel: "sessions-send.deferred.finish-continuation" },
+  );
+}
+
 /** List open rows so terminal observers avoid per-run database reads. */
 export function listOpenSessionsSendDeferredRunIds(
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
@@ -273,6 +309,22 @@ export function listOpenSessionsSendDeferredRunIds(
       .where("state", "in", ["pending", "dispatching"])
       .where("expires_at", ">", now),
   ).rows.map((row) => row.target_run_id);
+}
+
+/** List open continuation ids for the hot transcript-persistence callback. */
+export function listOpenSessionsSendDeferredContinuationRunIds(
+  options: OpenClawStateDatabaseOptions & { now?: number } = {},
+): string[] {
+  const now = options.now ?? Date.now();
+  const { db } = openOpenClawStateDatabase(options);
+  return executeSqliteQuerySync(
+    db,
+    getDeferredCompletionKysely(db)
+      .selectFrom("sessions_send_deferred_completions")
+      .select("continuation_run_id")
+      .where("state", "in", ["pending", "dispatching"])
+      .where("expires_at", ">", now),
+  ).rows.map((row) => row.continuation_run_id);
 }
 
 /** List prepared pending and interrupted dispatch rows for startup reconciliation. */
