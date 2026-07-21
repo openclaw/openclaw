@@ -16,9 +16,9 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // Historical envelopes contain untrusted routing metadata that should not be
     // replayed as user instructions.
     const historicalEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
+      'Conversation info:\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender:\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
     const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+      'Conversation info:\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message:\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       {
         role: "user",
@@ -48,9 +48,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // blocks preserved for the LLM.
     const currentContent = output[2]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(currentContent).toContain("Reply target of current user message:");
     expect(JSON.stringify(input)).toContain("Conversation info");
   });
 
@@ -58,8 +56,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const input = [
       {
         role: "user",
-        content:
-          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
+        content: 'Conversation info:\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
         timestamp: 1,
       },
       {
@@ -110,7 +107,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     expect(output[0]?.content).toBe(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         '{\n  "sender": {\n    "id": "alice-id",\n    "name": "Alice",\n    "username": "alice"\n  }\n}',
         "```",
@@ -120,7 +117,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     );
     expect(output[2]?.content).toBe(
       [
-        "Conversation info (untrusted metadata):",
+        "Conversation info:",
         "```json",
         '{\n  "sender": {\n    "id": "bob-id",\n    "name": "Bob"\n  }\n}',
         "```",
@@ -200,7 +197,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // `timestamp` using the supplied timezone — so the same message is
     // byte-identical whether sent current or replayed historical.
     const historicalBareWithMeta =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nOld ask';
+      'Conversation info:\n```json\n{"channel":"telegram"}\n```\n\nOld ask';
     const input = [
       {
         role: "user",
@@ -375,7 +372,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
   it("does not mutate transcript messages while leaving disabled timestamp output bare", () => {
     const historicalContent =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nStored bare ask';
+      'Conversation info:\n```json\n{"channel":"telegram"}\n```\n\nStored bare ask';
     const input = [
       {
         role: "user",
@@ -626,7 +623,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     const runtimeMessage = {
       role: "user",
       content:
-        'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nCurrent ask',
+        'Conversation info:\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nCurrent ask',
       timestamp: 3,
     } as AgentMessage;
     const transcriptMessage = {
@@ -641,17 +638,16 @@ describe("normalizeMessagesForLlmBoundary", () => {
     }) as unknown as Array<{ content?: string }>;
     const content = output[0]?.content ?? "";
 
-    expect(content.match(/Conversation info \(untrusted metadata\):/g)).toHaveLength(1);
+    expect(content.match(/Conversation info:/g)).toHaveLength(1);
     expect(content).toContain('"channel": "discord"');
     expect(content).toContain('"name": "Alice"');
     expect(content).toContain("Current ask");
   });
 
   it("preserves inbound metadata on the current user turn", () => {
-    const historicalEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
+    const historicalEnvelope = 'Conversation info:\n```json\n{"channel":"discord"}\n```\n\nOld ask';
     const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+      'Conversation info:\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message:\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       {
         role: "user",
@@ -679,15 +675,13 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // Current: form-canonicalized to plain string; metadata blocks preserved.
     const currentContent = output[2]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(currentContent).toContain("Reply target of current user message:");
     expect(currentContent).toContain("quoted status body");
   });
 
   it("preserves current user inbound metadata through tool-result continuation", () => {
     const currentEnvelope =
-      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+      'Conversation info:\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message:\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
     const input = [
       {
         role: "user",
@@ -716,9 +710,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     // metadata blocks preserved for the LLM.
     const currentContent = output[0]?.content;
     expect(typeof currentContent).toBe("string");
-    expect(currentContent).toContain(
-      "Reply target of current user message (untrusted, for context):",
-    );
+    expect(currentContent).toContain("Reply target of current user message:");
     expect(currentContent).toContain("quoted status body");
   });
 

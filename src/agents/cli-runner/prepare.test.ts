@@ -1720,7 +1720,7 @@ describe("prepareCliRunContext", () => {
         prompt: "latest ask",
         transcriptPrompt: "latest ask",
         currentInboundContext: {
-          text: "Sender (untrusted metadata):\nsender_id=U123",
+          text: "Sender:\nsender_id=U123",
           promptJoiner: " ",
         },
         provider: "test-cli",
@@ -1731,7 +1731,7 @@ describe("prepareCliRunContext", () => {
       });
 
       expect(context.params.prompt).toBe(
-        "Sender (untrusted metadata):\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
+        "Sender:\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
       );
       expect(context.params.transcriptPrompt).toBe("latest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
@@ -2395,7 +2395,7 @@ describe("prepareCliRunContext", () => {
         workspaceDir: dir,
         prompt: "latest ask",
         currentInboundContext: {
-          text: "Conversation info (untrusted metadata):\nchannel=telegram",
+          text: "Conversation info:\nchannel=telegram",
         },
         provider: "test-cli",
         model: "test-model",

@@ -1,9 +1,6 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import {
-  normalizeInboundTextNewlines,
-  sanitizeInboundSystemTags,
-} from "../../auto-reply/reply/inbound-text.js";
+import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import {
   createAckReactionHandle,
   removeAckReactionAfterReply,
@@ -82,7 +79,7 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
+  const normalized = normalizeInboundTextNewlines(value);
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 

@@ -267,9 +267,7 @@ function sanitizeTranscriptBody(value: unknown): string | undefined {
 
 function formatUntrustedStructuredContextLabel(label: unknown): string {
   const normalized = normalizePromptMetadataString(label);
-  return normalized
-    ? `${normalized} (untrusted metadata):`
-    : "Structured object (untrusted metadata):";
+  return normalized ? `${normalized}:` : "Structured object:";
 }
 
 function buildConversationMentionMetadataPayload(
@@ -353,7 +351,7 @@ function formatChatWindowStructuredContext(
   const label = sanitizeTranscriptField(entry.label) ?? "Chat window";
   const relation = formatStructuredContextRelation(entry.payload["relation"]);
   const order = sanitizeTranscriptField(entry.payload["order"]);
-  const qualifiers = ["untrusted", order, relation].filter(Boolean).join(", ");
+  const qualifiers = [order, relation].filter(Boolean).join(", ");
   return [`${label} (${qualifiers}):`, ...lines].join("\n");
 }
 
@@ -707,15 +705,13 @@ export function buildInboundUserContextPrefix(
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(
-      formatUntrustedJsonBlock("Conversation info (untrusted metadata):", conversationInfo),
-    );
+    blocks.push(formatUntrustedJsonBlock("Conversation info:", conversationInfo));
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
     blocks.push(
-      formatUntrustedJsonBlock("Thread starter (untrusted, for context):", {
+      formatUntrustedJsonBlock("Thread starter:", {
         body: threadStarterBody,
       }),
     );
@@ -726,13 +722,13 @@ export function buildInboundUserContextPrefix(
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
       formatUntrustedJsonBlock(
-        "Reply chain of current user message (untrusted, nearest first):",
+        "Reply chain of current user message (nearest first):",
         replyChainPayload,
       ),
     );
   } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
-      formatUntrustedJsonBlock("Reply target of current user message (untrusted, for context):", {
+      formatUntrustedJsonBlock("Reply target of current user message:", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
         body: replyToBody,
@@ -751,14 +747,12 @@ export function buildInboundUserContextPrefix(
     date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
   };
   if (forwardedFrom) {
-    blocks.push(
-      formatUntrustedJsonBlock("Forwarded message context (untrusted metadata):", forwardedContext),
-    );
+    blocks.push(formatUntrustedJsonBlock("Forwarded message context:", forwardedContext));
   }
 
   const locationContext = buildLocationContextPayload(ctx);
   if (locationContext) {
-    blocks.push(formatUntrustedJsonBlock("Location (untrusted metadata):", locationContext));
+    blocks.push(formatUntrustedJsonBlock("Location:", locationContext));
   }
 
   for (const entry of structuredContext) {
@@ -801,9 +795,7 @@ export function buildInboundUserContextPrefix(
       return line ? [line] : [];
     });
     if (historyLines.length > 0) {
-      blocks.push(
-        ["Chat history since last reply (untrusted, for context):", ...historyLines].join("\n"),
-      );
+      blocks.push(["Chat history since last reply:", ...historyLines].join("\n"));
     }
   }
 

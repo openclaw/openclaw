@@ -11,7 +11,7 @@ import {
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
-const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info (untrusted metadata):
+const COPIED_INBOUND_METADATA_ONLY_TEXT = `Conversation info:
 \`\`\`json
 {"message_id":"msg-abc","sender":"+1555000"}
 \`\`\``;

@@ -911,12 +911,12 @@ describe("buildSessionEntry", () => {
         message: {
           role: "user",
           content: [
-            { type: "text", text: "Conversation info (untrusted metadata):" },
+            { type: "text", text: "Conversation info:" },
             { type: "text", text: "```json" },
             { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
             { type: "text", text: "```" },
             { type: "text", text: "" },
-            { type: "text", text: "Sender (untrusted metadata):" },
+            { type: "text", text: "Sender:" },
             { type: "text", text: "```json" },
             { type: "text", text: '{"label":"Chris","id":"42"}' },
             { type: "text", text: "```" },

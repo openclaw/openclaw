@@ -139,7 +139,7 @@ function makeWhatsAppStructuredUserInput(text: string, mediaKind?: "sticker") {
     return makeUserInput(text);
   }
   const mediaContext = [
-    "WhatsApp media (untrusted metadata):",
+    "WhatsApp media:",
     "```json",
     JSON.stringify({ source: "whatsapp", type: "media", payload: { kind: mediaKind } }),
     "```",
@@ -4165,7 +4165,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info:",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -4180,11 +4180,7 @@ describe("qa mock openai server", () => {
       input: [
         setupInput,
         previousExactMarkerInput,
-        makeUserInput(
-          ["Sender (untrusted metadata):", "```json", '{"name":"QA"}', "```", "", "<contact>"].join(
-            "\n",
-          ),
-        ),
+        makeUserInput(["Sender:", "```json", '{"name":"QA"}', "```", "", "<contact>"].join("\n")),
       ],
     });
     const stickerResponse = await postResponses(server, {
@@ -4194,7 +4190,7 @@ describe("qa mock openai server", () => {
         previousExactMarkerInput,
         makeWhatsAppStructuredUserInput(
           [
-            "Conversation info (untrusted metadata):",
+            "Conversation info:",
             "```json",
             '{"inbound_event_kind":"user_request"}',
             "```",
@@ -4346,7 +4342,7 @@ describe("qa mock openai server", () => {
         "Sticker note: <media:sticker>",
       ].join("\n"),
       [
-        "WhatsApp media (untrusted metadata):",
+        "WhatsApp media:",
         "```json",
         '{"source":"whatsapp","type":"media","payload":{"kind":"image"}}',
         "```",
@@ -5184,7 +5180,7 @@ describe("qa mock openai server", () => {
             content: [
               {
                 type: "input_text",
-                text: 'Conversation info (untrusted metadata): {"is_group_chat": true}\n\nhello team, no bot ping here',
+                text: 'Conversation info: {"is_group_chat": true}\n\nhello team, no bot ping here',
               },
             ],
           },
