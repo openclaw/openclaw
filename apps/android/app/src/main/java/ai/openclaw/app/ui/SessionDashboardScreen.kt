@@ -98,15 +98,19 @@ internal fun SessionDashboardScreen(
   }
 }
 
-/** Builds the one-shot dashboard route without placing credentials in the URL. */
+/**
+ * Builds the one-shot dashboard route without placing credentials in the URL.
+ * Appends to the served base like the terminal screen so a Control UI mounted
+ * under gateway.controlUi.basePath keeps its prefix.
+ */
 internal fun sessionDashboardUrl(
   baseUrl: String,
   sessionKey: String,
 ): String =
   Uri
-    .parse(baseUrl)
+    .parse(baseUrl.trimEnd('/'))
     .buildUpon()
-    .path("/chat")
+    .appendPath("chat")
     .clearQuery()
     .fragment(null)
     .appendQueryParameter("session", sessionKey)
