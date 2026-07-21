@@ -7,13 +7,25 @@ import {
   resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import {
+  buildApprovalReactionHint,
+  buildApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { resolveIMessageAccount } from "./accounts.js";
+import {
+  buildApprovalPollOptions,
+  mapSentPollOptionsToDecisions,
+  registerIMessageApprovalPollTarget,
+  unregisterIMessageApprovalPollTarget,
+} from "./approval-polls.js";
 import {
   buildIMessageApprovalConversationKeyForTarget,
   registerIMessageApprovalReactionTarget,
@@ -21,14 +33,25 @@ import {
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
+import { getCachedIMessagePrivateApiStatus } from "./probe.js";
 import { sendMessageIMessage } from "./send.js";
 import { parseIMessageTarget } from "./targets.js";
 
 const log = createSubsystemLogger("imessage/approvals");
 
+const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
+  () => import("./actions.runtime.js"),
+  "imessageActionsRuntime",
+);
+
+const DEFAULT_PROBE_TIMEOUT_MS = 5_000;
+
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type IMessagePendingDelivery = {
+  /** Prompt text carrying the tapback hint; used when no poll will be sent. */
   text: string;
+  /** Same prompt without the hint; used when the poll supplies the controls. */
+  hintlessText: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
 type PreparedIMessageApprovalTarget = {
@@ -40,6 +63,12 @@ type PendingIMessageApprovalEntry = {
   to: string;
   conversation: IMessageApprovalConversationKey;
   messageId: string;
+  /** Follow-up carrying the tapback hint when an expected poll failed to send. */
+  hintMessageId?: string;
+  poll?: {
+    pollGuid: string;
+    optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
+  };
 };
 type IMessageFinalPayload = {
   text: string;
@@ -58,8 +87,187 @@ function buildPendingPayload(params: {
   });
   return {
     text: pendingContent.reactionPayload.text ?? "",
+    // manualFallbackPayload is the same prompt minus the "React with:" block,
+    // so the poll can own the controls without re-deriving the prompt text.
+    hintlessText: pendingContent.manualFallbackPayload.text ?? "",
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
+}
+
+/**
+ * Cache-only capability check, run before the prompt is sent so the tapback hint
+ * can be omitted up front. Deliberately never probes: a probe spawns imsg and
+ * would put seconds of latency in front of an approval prompt. An available
+ * bridge status is cached for the process lifetime (see probe.ts), so the only
+ * cost of a cold cache is that the first approval after start uses tapbacks.
+ */
+function canIMessageApprovalUsePoll(params: {
+  cfg: OpenClawConfig;
+  target: PreparedIMessageApprovalTarget;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): boolean {
+  // Messages requires at least two options; a single-decision approval stays
+  // text-only rather than being padded with a fake choice.
+  if (buildApprovalPollOptions({ allowedDecisions: params.allowedDecisions }).length < 2) {
+    return false;
+  }
+  try {
+    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.target.accountId });
+    const cliPath = account.config.cliPath?.trim() || "imsg";
+    return getCachedIMessagePrivateApiStatus(cliPath)?.selectors?.pollPayloadMessage === true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveIMessageApprovalCliOptions(params: {
+  cfg: OpenClawConfig;
+  target: PreparedIMessageApprovalTarget;
+}): { cliPath: string; dbPath?: string; timeoutMs?: number } {
+  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.target.accountId });
+  return {
+    cliPath: account.config.cliPath?.trim() || "imsg",
+    dbPath: account.config.dbPath?.trim() || undefined,
+    timeoutMs: account.config.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Send the poll balloon threaded under the already-delivered prompt. Runs AFTER
+ * the prompt so no bridge call ever delays approval delivery; a failure here
+ * leaves the prompt intact and the caller restores the tapback hint.
+ *
+ * The question stays short on purpose: imsg echoes it as a separate best-effort
+ * caption message and the poll payload is capped at 4096 bytes, so the full
+ * approval text must remain on the prompt message instead.
+ */
+async function deliverIMessageApprovalPoll(params: {
+  cfg: OpenClawConfig;
+  target: PreparedIMessageApprovalTarget;
+  promptMessageId: string;
+  approvalSlug: string;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): Promise<{
+  pollGuid: string;
+  chatGuid: string;
+  optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
+} | null> {
+  const options = buildApprovalPollOptions({ allowedDecisions: params.allowedDecisions });
+  try {
+    const cliOptions = resolveIMessageApprovalCliOptions({
+      cfg: params.cfg,
+      target: params.target,
+    });
+    const chatGuid = await resolveIMessageApprovalChatGuid({
+      to: params.target.to,
+      cliOptions,
+    });
+    if (!chatGuid) {
+      return null;
+    }
+    const runtime = await loadIMessageActionsRuntime();
+    const sent = await runtime.sendPoll({
+      chatGuid,
+      question: `Approve ${params.approvalSlug}?`,
+      choices: options.map((option) => option.text),
+      replyToMessageId: params.promptMessageId,
+      options: { ...cliOptions, chatGuid },
+    });
+    const pollGuid = sent.messageId.trim();
+    // resolveMessageId falls back to "ok" when the bridge returns no id; without
+    // a real GUID an inbound vote can never be correlated back to this poll.
+    if (!pollGuid || pollGuid === "ok" || pollGuid === "unknown") {
+      return null;
+    }
+    const optionDecisions = mapSentPollOptionsToDecisions({
+      requested: options,
+      sent: sent.pollOptions,
+    });
+    return optionDecisions.length > 0 ? { pollGuid, chatGuid, optionDecisions } : null;
+  } catch (error) {
+    log.warn(`imessage approvals: poll send failed, falling back to tapbacks: ${String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Polls must target a chat Messages already knows. Unlike send, we never
+ * synthesize an unregistered DM identifier here: the bridge would reject it and
+ * the poll would be lost.
+ */
+async function resolveIMessageApprovalChatGuid(params: {
+  to: string;
+  cliOptions: { cliPath: string; dbPath?: string; timeoutMs?: number };
+}): Promise<string | null> {
+  const target = parseIMessageTarget(params.to);
+  if (target.kind === "chat_guid") {
+    return target.chatGuid;
+  }
+  const runtime = await loadIMessageActionsRuntime();
+  if (target.kind === "chat_id" || target.kind === "chat_identifier") {
+    return await runtime.resolveChatGuidForTarget({ target, options: params.cliOptions });
+  }
+  if (target.kind !== "handle") {
+    return null;
+  }
+  const service = target.service === "sms" ? "SMS" : "iMessage";
+  return await runtime.resolveChatGuidForTarget({
+    target: { kind: "chat_identifier", chatIdentifier: `${service};-;${target.to}` },
+    options: params.cliOptions,
+  });
+}
+
+/**
+ * The prompt already went out without its tapback hint because a poll was
+ * expected. Send the hint as a threaded follow-up and return its GUID so the
+ * caller can bind a reaction target to it — an unbound hint would invite a
+ * tapback that resolves nothing.
+ */
+async function recoverIMessageApprovalReactionHint(params: {
+  cfg: OpenClawConfig;
+  target: PreparedIMessageApprovalTarget;
+  promptMessageId: string;
+  allowedDecisions: readonly ExecApprovalReplyDecision[];
+}): Promise<string | undefined> {
+  const hint = buildApprovalReactionHint({ allowedDecisions: params.allowedDecisions });
+  if (!hint) {
+    return undefined;
+  }
+  try {
+    const result = await sendMessageIMessage(params.target.to, hint, {
+      config: params.cfg,
+      ...(params.target.accountId ? { accountId: params.target.accountId } : {}),
+      replyToId: params.promptMessageId,
+    });
+    return result.guid;
+  } catch (error) {
+    log.error(`imessage approvals: reaction-hint recovery failed: ${String(error)}`);
+    return undefined;
+  }
+}
+
+/** Clear both controls together; a stale binding would resolve a dead approval. */
+function clearIMessageApprovalBindings(entry: PendingIMessageApprovalEntry): void {
+  const accountId = entry.accountId?.trim();
+  if (!accountId) {
+    return;
+  }
+  for (const messageId of [entry.messageId, entry.hintMessageId]) {
+    if (messageId) {
+      unregisterIMessageApprovalReactionTarget({
+        accountId,
+        conversation: entry.conversation,
+        messageId,
+      });
+    }
+  }
+  if (entry.poll) {
+    unregisterIMessageApprovalPollTarget({
+      accountId,
+      conversation: entry.conversation,
+      pollGuid: entry.poll.pollGuid,
+    });
+  }
 }
 
 function shouldThreadApprovalUpdate(to: string): boolean {
@@ -119,7 +327,16 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       };
     },
     deliverPending: async ({ cfg, preparedTarget, pendingPayload, view }) => {
-      const result = await sendMessageIMessage(preparedTarget.to, pendingPayload.text, {
+      // Cache-only, so nothing here delays the prompt. When true we drop the
+      // tapback hint because the poll will carry the controls; if the poll then
+      // fails we send the hint as a bound follow-up below.
+      const expectPoll = canIMessageApprovalUsePoll({
+        cfg,
+        target: preparedTarget,
+        allowedDecisions: pendingPayload.allowedDecisions,
+      });
+      const promptText = expectPoll ? pendingPayload.hintlessText : pendingPayload.text;
+      const result = await sendMessageIMessage(preparedTarget.to, promptText, {
         config: cfg,
         approvalKind: view.approvalKind,
         ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
@@ -128,6 +345,8 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       // inbound tapback's `reacted_to_guid`). When the bridge only returned a
       // numeric ROWID / `ok` / `unknown`, `result.guid` is undefined — refuse
       // to bind so the reaction shortcut won't silently miss a real tap.
+      // Bailing here after a hintless prompt is not a dead end: that text still
+      // carries the `/approve <id> <decision>` line.
       const guid = result.guid;
       if (!guid) {
         return null;
@@ -136,11 +355,35 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       if (!conversation) {
         return null;
       }
+      const poll = expectPoll
+        ? await deliverIMessageApprovalPoll({
+            cfg,
+            target: preparedTarget,
+            promptMessageId: guid,
+            approvalSlug: view.approvalId.slice(0, 8),
+            allowedDecisions: pendingPayload.allowedDecisions,
+          })
+        : null;
+      const hintMessageId =
+        expectPoll && !poll
+          ? await recoverIMessageApprovalReactionHint({
+              cfg,
+              target: preparedTarget,
+              promptMessageId: guid,
+              allowedDecisions: pendingPayload.allowedDecisions,
+            })
+          : undefined;
       return {
         ...(preparedTarget.accountId ? { accountId: preparedTarget.accountId } : {}),
         to: preparedTarget.to,
-        conversation,
+        // The poll knows the canonical chat GUID; fold it in so an inbound vote
+        // keyed by chat still matches a binding registered from a bare handle.
+        conversation: poll ? { ...conversation, chatGuid: poll.chatGuid } : conversation,
         messageId: guid,
+        ...(hintMessageId ? { hintMessageId } : {}),
+        ...(poll
+          ? { poll: { pollGuid: poll.pollGuid, optionDecisions: poll.optionDecisions } }
+          : {}),
       };
     },
     updateEntry: async ({ cfg, entry, payload }) => {
@@ -174,39 +417,40 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         );
         return null;
       }
-      return registerIMessageApprovalReactionTarget({
-        accountId,
-        conversation: entry.conversation,
-        messageId: entry.messageId,
-        approvalId: request.id,
-        approvalKind: view.approvalKind,
-        allowedDecisions: pendingPayload.allowedDecisions,
-        ttlMs,
-      })
-        ? true
-        : null;
+      // Bind the prompt and, when the poll failed, the hint follow-up too: the
+      // hint tells the approver to react, so that message must be reactable.
+      const reactionBound = [entry.messageId, entry.hintMessageId]
+        .filter((messageId): messageId is string => Boolean(messageId))
+        .map((messageId) =>
+          registerIMessageApprovalReactionTarget({
+            accountId,
+            conversation: entry.conversation,
+            messageId,
+            approvalId: request.id,
+            approvalKind: view.approvalKind,
+            allowedDecisions: pendingPayload.allowedDecisions,
+            ttlMs,
+          }),
+        )
+        .some(Boolean);
+      const pollBound = entry.poll
+        ? registerIMessageApprovalPollTarget({
+            accountId,
+            conversation: entry.conversation,
+            pollGuid: entry.poll.pollGuid,
+            approvalId: request.id,
+            approvalKind: view.approvalKind,
+            optionDecisions: entry.poll.optionDecisions,
+            expiresAtMs: view.expiresAtMs,
+          })
+        : false;
+      return reactionBound || pollBound ? true : null;
     },
     unbindPending: ({ entry }) => {
-      const accountId = entry.accountId?.trim();
-      if (!accountId) {
-        return;
-      }
-      unregisterIMessageApprovalReactionTarget({
-        accountId,
-        conversation: entry.conversation,
-        messageId: entry.messageId,
-      });
+      clearIMessageApprovalBindings(entry);
     },
     cancelDelivered: ({ entry }) => {
-      const accountId = entry.accountId?.trim();
-      if (!accountId) {
-        return;
-      }
-      unregisterIMessageApprovalReactionTarget({
-        accountId,
-        conversation: entry.conversation,
-        messageId: entry.messageId,
-      });
+      clearIMessageApprovalBindings(entry);
     },
   },
   observe: {
