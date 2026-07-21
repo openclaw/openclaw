@@ -210,7 +210,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 }
 ```
 
-The manifest ids are plugin-local. Widget grants use `<plugin-id>.<id>`, such as `example.items.list` and `example.refresh`. `paramShape` is an optional JSON Schema applied to the action params object before OpenClaw invokes the plugin RPC.
+The manifest ids are plugin-local. Widget grants use `<plugin-id>.<id>`, such as `example.items.list` and `example.refresh`. To keep the persisted grant namespace unambiguous, OpenClaw escapes `%` and `.` in the plugin-id segment as `%25` and `%2E`; ordinary plugin ids keep the natural form. `paramShape` is an optional JSON Schema applied to the action params object before OpenClaw invokes the plugin RPC.
 
 ## catalog reference
 

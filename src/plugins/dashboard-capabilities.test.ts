@@ -183,7 +183,7 @@ describe("plugin dashboard declarations", () => {
     );
   });
 
-  it("rejects data bindings that collide with dynamic cron grants", () => {
+  it("escapes plugin ids that would otherwise overlap dynamic cron grants", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "cron.trigger:nightly",
@@ -211,15 +211,98 @@ describe("plugin dashboard declarations", () => {
 
     const registry = loadFixture(plugin);
     const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    expect(record).toMatchObject({ status: "error", failurePhase: "register" });
-    expect(record?.error).toContain('capability id "cron.trigger:nightly.run" is reserved by core');
-    expect(registry.dashboardDataBindings.size).toBe(0);
-    expect(registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        pluginId: plugin.id,
-        code: "dashboard-declaration-invalid",
-      }),
-    );
+    expect(record?.status).toBe("loaded");
+    expect(registry.dashboardDataBindings.has("cron%2Etrigger:nightly.run")).toBe(true);
+  });
+
+  it("keeps dotted plugin owners and literal escape markers distinct", () => {
+    useNoBundledPlugins();
+    const dataPlugin = writePlugin({
+      id: "dashboard",
+      filename: "dashboard-data.cjs",
+      body: `module.exports = {
+        id: "dashboard",
+        register(api) {
+          api.registerGatewayMethod(
+            "dashboard.items",
+            ({ respond }) => respond(true, { items: [] }),
+            { scope: "operator.read" },
+          );
+        },
+      };`,
+    });
+    updateDashboardManifest(dataPlugin, {
+      dataBindings: [
+        {
+          id: "segmented.refresh",
+          method: "dashboard.items",
+          description: "Read segmented items",
+        },
+      ],
+    });
+    const actionPlugin = writePlugin({
+      id: "dashboard.segmented",
+      filename: "dashboard-segmented-action.cjs",
+      body: `module.exports = {
+        id: "dashboard.segmented",
+        register(api) {
+          api.registerGatewayMethod(
+            "dashboard.segmented.refresh",
+            ({ respond }) => respond(true, { ok: true }),
+            { scope: "operator.write" },
+          );
+        },
+      };`,
+    });
+    updateDashboardManifest(actionPlugin, {
+      actionVerbs: [
+        {
+          id: "refresh",
+          method: "dashboard.segmented.refresh",
+          description: "Refresh segmented items",
+        },
+      ],
+    });
+    const literalEscapePlugin = writePlugin({
+      id: "dashboard%2Esegmented",
+      filename: "dashboard-literal-escape.cjs",
+      body: `module.exports = {
+        id: "dashboard%2Esegmented",
+        register(api) {
+          api.registerGatewayMethod(
+            "dashboard.literal-escape.items",
+            ({ respond }) => respond(true, { items: [] }),
+            { scope: "operator.read" },
+          );
+        },
+      };`,
+    });
+    updateDashboardManifest(literalEscapePlugin, {
+      dataBindings: [
+        {
+          id: "refresh",
+          method: "dashboard.literal-escape.items",
+          description: "Read literal-escape items",
+        },
+      ],
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: dataPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [dataPlugin.file, actionPlugin.file, literalEscapePlugin.file] },
+          allow: [dataPlugin.id, actionPlugin.id, literalEscapePlugin.id],
+        },
+      },
+      onlyPluginIds: [dataPlugin.id, actionPlugin.id, literalEscapePlugin.id],
+    });
+
+    expect(registry.plugins.filter((entry) => entry.status === "loaded")).toHaveLength(3);
+    expect(registry.dashboardDataBindings.has("dashboard.segmented.refresh")).toBe(true);
+    expect(registry.dashboardActionVerbs.has("dashboard%2Esegmented.refresh")).toBe(true);
+    expect(registry.dashboardDataBindings.has("dashboard%252Esegmented.refresh")).toBe(true);
   });
 
   it("publishes validated dashboard bindings and action verbs", () => {

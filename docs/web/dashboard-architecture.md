@@ -166,11 +166,13 @@ Shared infrastructure underneath (this is where the simplification lands):
 Enabled plugins can extend the widget host through `dashboard.dataBindings`
 and `dashboard.actionVerbs` in `openclaw.plugin.json`. Plugin-local ids become
 grant names prefixed by the plugin id, such as `workboard.cards.list` and
-`workboard.dispatch`. During plugin registration, OpenClaw verifies that every
-binding targets an RPC registered by the same plugin with `operator.read` and
-every action targets one with `operator.write`; invalid declarations fail the
-plugin load. The validated registry is rebuilt only with plugin lifecycle
-changes, while widget grants remain per-widget and byte-and-revision-bound.
+`workboard.dispatch`; `%` and `.` in the plugin-id segment are escaped so a
+different plugin/local-id split cannot inherit the same persisted grant. During
+plugin registration, OpenClaw verifies that every binding targets an RPC
+registered by the same plugin with `operator.read` and every action targets one
+with `operator.write`; invalid declarations fail the plugin load. The validated
+registry is rebuilt only with plugin lifecycle changes, while widget grants
+remain per-widget and byte-and-revision-bound.
 
 ### Modeled residual: WebRTC data channels
 

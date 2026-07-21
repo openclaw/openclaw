@@ -30,7 +30,10 @@ function buildCapabilityId(params: {
   localId: string;
   maxLength: number;
 }): string {
-  const capabilityId = `${params.pluginId}.${params.localId}`;
+  // Grants outlive plugin activation. Escape the owner delimiter and escape marker so
+  // different plugin/local-id splits cannot reuse one persisted authorization string.
+  const pluginIdSegment = params.pluginId.replaceAll("%", "%25").replaceAll(".", "%2E");
+  const capabilityId = `${pluginIdSegment}.${params.localId}`;
   if (capabilityId.length > params.maxLength) {
     return fail(
       params.pluginId,
