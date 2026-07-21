@@ -85,6 +85,14 @@ export async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+  // Optional shell precheck #112371 runs first — cheapest gate, no code-mode
+  // executor and no trigger evaluation cost when there is no work.
+  if (job.precheck?.command) {
+    const precheckResult = await runCronJobPrecheck(job.precheck, { abortSignal });
+    if (precheckResult.decision !== "run") {
+      return cronRunOutcomeFromPrecheck(precheckResult, () => state.deps.nowMs());
+    }
+  }
   if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
     // Defense in depth over the locked admission checks: stream-origin work must
     // carry both the source definition and logical identity, and both must still
@@ -139,16 +147,6 @@ export async function executeJobCore(
     }
     if (evaluation.message !== undefined) {
       effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
-    }
-  }
-  // Optional shell precheck #112371 — skip LLM when a cheap gate says no work.
-  if (effectiveJob.precheck?.command) {
-    const precheckResult = await runCronJobPrecheck(effectiveJob.precheck, {
-      abortSignal,
-    });
-    if (precheckResult.decision !== "run") {
-      const outcome = cronRunOutcomeFromPrecheck(precheckResult, () => state.deps.nowMs());
-      return triggerEval ? { ...outcome, triggerEval } : outcome;
     }
   }
   if (effectiveJob.payload.kind === "script") {

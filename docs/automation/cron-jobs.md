@@ -743,3 +743,31 @@ openclaw cron add --name inbox-poll --cron "*/15 * * * *" \
 
 Use this for poller-style jobs that are usually quiet. Prefer **condition triggers** (`--trigger-script`) when you need JSON state, tool calls, or richer watchers — those use the code-mode executor and require `cron.triggers.enabled`. Prefer **command** / **script** payloads when the whole job is non-LLM automation rather than “maybe then think.”
 
+### Choosing a gate: precheck vs trigger vs command/script
+
+OpenClaw has four ways to avoid or replace an LLM turn. Pick by what the job needs:
+
+| Need | Use | Runs LLM? | Requires `cron.triggers.enabled`? |
+|------|-----|:--------:|:--------------------------------:|
+| "Only wake the model when a cheap shell check says there's work" | **`precheck`** (this feature) | Only when gate passes | No |
+| "Watch a condition with JS + persisted state, fire payload on change" | **`trigger` script** (`--trigger-script`) | Only on `fire:true` | Yes |
+| "The whole job is a shell command; deliver its stdout" | **`command` payload** | Never | No |
+| "The whole job is a JS script in the code-mode executor" | **`script` payload** | Never (runs headless) | Yes |
+
+Rules of thumb:
+
+- **Poller that is usually quiet, real work needs the agent** → `precheck` + `agentTurn`. Cheapest to reason about; no code-mode gate to enable.
+- **Need JSON state / dedupe across runs / tool calls in the gate** → condition `trigger` (it exposes `trigger.state` and the tool API).
+- **No model ever, just run a thing and maybe post output** → `command` (argv/shell) or `script` (JS) payload.
+- `precheck` and a `trigger` can coexist: the precheck runs first (skip early, zero code-mode cost), then the trigger evaluates. A firing `trigger` message is still appended to the payload as before.
+
+Recipe — gate an isolated agent poller on a `gh` check with zero tokens when clean:
+
+```bash
+openclaw cron add --name pr-triage --cron "*/30 * * * *" \
+  --session isolated \
+  --precheck-command 'test "$(gh pr list --repo owner/repo --state open --json number -q "length")" -gt 0 && echo WORK_NEEDED || echo NO_WORK' \
+  --message "Review open PRs and post a summary."
+```
+
+
