@@ -382,7 +382,7 @@ struct SettingsProTab: View {
     }
 
     func openNotificationsRouteFromApprovals() {
-        guard self.directRoute == nil else { return }
+        guard self.directRoute == nil || (!self.ownsNavigationStack && self.navigateToRoute != nil) else { return }
         if let approvalID = ExecApprovalIdentifier.exact(self.appModel.pendingExecApprovalPrompt?.id) {
             self.onApprovalNotificationsRoute?(approvalID)
         }
