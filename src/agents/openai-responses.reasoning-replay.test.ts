@@ -3,7 +3,7 @@ import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin
 import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { resolveReplayableResponsesMessageId } from "./openai-responses-replay.js";
+import { resolveReplayableResponsesMessageId } from "../../packages/ai/src/transports/openai-responses-replay.js";
 
 function buildModel(): Model<"openai-responses"> {
   return {

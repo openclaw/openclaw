@@ -3,7 +3,7 @@
  * Verifies complete, split, full-width, and unterminated DSML markup handling.
  */
 import { describe, expect, it } from "vitest";
-import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
+import { createDeepSeekTextFilter } from "../../packages/ai/src/transports/deepseek-text-filter.js";
 
 function filteredText(chunks: readonly string[]) {
   const filter = createDeepSeekTextFilter();

@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
-} from "./anthropic-payload-policy.js";
+} from "../../packages/ai/src/transports/anthropic-payload-policy.js";
 
 type TestPayload = {
   messages: Array<{ role: string; content: unknown }>;

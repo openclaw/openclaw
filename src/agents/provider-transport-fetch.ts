@@ -36,8 +36,8 @@ import {
   SECRET_SENTINEL_PATTERN,
   swapSecretSentinelsInText,
 } from "../secrets/sentinel.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
-import { formatModelTransportDebugUrl } from "./model-transport-url.js";
+import { emitModelTransportDebug } from "../../packages/ai/src/transports/model-transport-debug.js";
+import { formatModelTransportDebugUrl } from "../../packages/ai/src/transports/model-transport-url.js";
 import { ProviderHttpError, readResponseTextLimited } from "./provider-http-errors.js";
 import {
   ensureModelProviderLocalService,

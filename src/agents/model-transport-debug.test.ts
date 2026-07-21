@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { emitModelTransportDebug } from "../../packages/ai/src/transports/model-transport-debug.js";
 
 describe("emitModelTransportDebug", () => {
   function createLogger() {

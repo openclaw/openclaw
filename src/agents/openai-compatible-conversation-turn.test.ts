@@ -1,6 +1,6 @@
 // Verifies OpenAI-compatible payloads contain at least one sendable conversation turn.
 import { describe, expect, it } from "vitest";
-import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
+import { hasOpenAICompatibleConversationTurn } from "../../packages/ai/src/transports/openai-compatible-conversation-turn.js";
 
 describe("hasOpenAICompatibleConversationTurn", () => {
   it("rejects missing, system-only, and tool-only payloads", () => {

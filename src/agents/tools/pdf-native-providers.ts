@@ -12,7 +12,7 @@ import {
 import { normalizeProviderTransportWithPlugin } from "../../plugins/provider-runtime.js";
 import { isRecord } from "../../utils.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
-import { resolveAnthropicMessagesUrl } from "../anthropic-transport-stream.js";
+import { resolveAnthropicMessagesUrl } from ".../../packages/ai/src/transports/anthropic-transport-stream.js";
 import type { ModelProviderRequestTransportOverrides } from "../provider-request-config.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../provider-secret-egress.js";
 import { resolveProviderTransportSsrFPolicy } from "../provider-transport-fetch.js";

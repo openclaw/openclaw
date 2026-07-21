@@ -5,14 +5,14 @@
  * established imports stable while sharing only transport-neutral primitives between them.
  */
 import type { Context } from "../llm/types.js";
-import { buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl } from "./openai-completions-transport.js";
-import type { OpenAICompletionsOptions, OpenAIModeModel } from "./openai-transport-shared.js";
+import { buildOpenAICompletionsParams as buildOpenAICompletionsParamsImpl } from "../../packages/ai/src/transports/openai-completions-transport.js";
+import type { OpenAICompletionsOptions, OpenAIModeModel } from "../../packages/ai/src/transports/openai-transport-shared.js";
 
-export { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
+export { createOpenAICompletionsTransportStreamFn } from "../../packages/ai/src/transports/openai-completions-transport.js";
 export {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
-} from "./openai-responses-transport.js";
+} from "../../packages/ai/src/transports/openai-responses-transport.js";
 
 // Keep this SDK-exported declaration anchored to the long-lived facade while the
 // completions implementation remains independently owned.

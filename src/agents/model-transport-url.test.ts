@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatModelTransportDebugBaseUrl,
   formatModelTransportDebugUrl,
-} from "./model-transport-url.js";
+} from "../../packages/ai/src/transports/model-transport-url.js";
 import { testing as openAITesting } from "./openai-transport-stream.test-support.js";
 
 describe("model transport diagnostic URLs", () => {
