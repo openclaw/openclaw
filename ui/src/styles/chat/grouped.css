@@ -628,6 +628,38 @@ img.chat-avatar {
   box-shadow: none;
 }
 
+/* Per-user bubble tint: --chat-sender-hue is the sender's stable identity hue
+   (same seed as their avatar initials). Only hue varies per user; saturation/
+   lightness/alpha are fixed per theme mode so bubble text keeps contrast for
+   every hue. Order contract: stays below the light-mode reset above — the
+   dark rule outranks it by specificity, so light mode needs its own skin. */
+.chat-group.user.chat-group--sender-tint .chat-bubble {
+  background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
+}
+
+.chat-group.user.chat-group--sender-tint .chat-bubble:hover {
+  border-color: hsl(var(--chat-sender-hue) 48% 55% / 0.4);
+}
+
+.chat-group.user.chat-group--sender-tint .chat-sender-name {
+  color: hsl(var(--chat-sender-hue) 45% 70%);
+}
+
+:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
+  background: hsl(var(--chat-sender-hue) 65% 94%);
+  border-color: hsl(var(--chat-sender-hue) 45% 82%);
+}
+
+/* Outranks the light skin above (it also sets border-color); without this the
+   tinted hover border never applies in light mode. */
+:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
+  border-color: hsl(var(--chat-sender-hue) 48% 62%);
+}
+
+:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-sender-name {
+  color: hsl(var(--chat-sender-hue) 60% 36%);
+}
+
 /* ── Message metadata (tokens, cost, model, context %) ── */
 .msg-meta {
   display: inline-flex;

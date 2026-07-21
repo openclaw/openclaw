@@ -47,6 +47,7 @@ import {
   formatTimeAgo,
 } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
+import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import {
   openExternalUrlSafe,
@@ -991,8 +992,19 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
 
+  // Attributed (logged-in) senders tint their bubbles with the same stable
+  // identity hue as their avatar initials; CSS owns per-theme lightness so
+  // the tint stays readable in both light and dark modes. Unattributed local
+  // messages keep the accent skin.
+  const senderHue =
+    normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
+
   return html`
-    <div class="chat-group ${roleClass}" data-chat-row-key=${group.key}>
+    <div
+      class="chat-group ${roleClass}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
+      data-chat-row-key=${group.key}
+    >
       ${renderChatAvatar(
         group.role,
         {

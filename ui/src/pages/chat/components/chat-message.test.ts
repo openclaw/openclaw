@@ -1451,6 +1451,45 @@ describe("grouped chat rendering", () => {
     });
   });
 
+  it("tints attributed user groups with the sender's stable identity hue", () => {
+    const renderGroupFor = (sender?: { id: string; name: string }) => {
+      const container = document.createElement("div");
+      render(
+        renderMessageGroup(
+          {
+            kind: "group",
+            key: "tint-group",
+            role: "user",
+            ...(sender ? { sender, senderLabel: sender.name } : {}),
+            messages: [
+              { key: "tint-message", message: { role: "user", content: "hi", timestamp: 1000 } },
+            ],
+            timestamp: 1000,
+            isStreaming: false,
+          },
+          { showReasoning: true, showToolCalls: true },
+        ),
+        container,
+      );
+      return container.querySelector<HTMLElement>(".chat-group.user");
+    };
+
+    const attributed = renderGroupFor({ id: "profile-1", name: "Alice Example" });
+    expect(attributed?.classList.contains("chat-group--sender-tint")).toBe(true);
+    const hue = Number(attributed?.style.getPropertyValue("--chat-sender-hue"));
+    expect(Number.isInteger(hue)).toBe(true);
+    expect(hue).toBeGreaterThanOrEqual(0);
+    expect(hue).toBeLessThan(360);
+
+    // Same sender always lands on the same hue; the local unattributed viewer
+    // keeps the accent skin.
+    const again = renderGroupFor({ id: "profile-1", name: "Alice Example" });
+    expect(again?.style.getPropertyValue("--chat-sender-hue")).toBe(String(hue));
+    const local = renderGroupFor();
+    expect(local?.classList.contains("chat-group--sender-tint")).toBe(false);
+    expect(local?.style.getPropertyValue("--chat-sender-hue")).toBe("");
+  });
+
   it("uses the current profile display name for the signed-in user's historical messages", () => {
     const container = document.createElement("div");
     render(
