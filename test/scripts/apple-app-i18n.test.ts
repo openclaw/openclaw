@@ -91,9 +91,11 @@ describe("Apple app i18n catalogs", () => {
     expect(keys).toEqual(
       expect.arrayContaining([
         "Browse ClawHub",
+        "Done in %@",
         "Enable debug tools",
         "Everyday OpenClaw app behavior.",
         "General",
+        "Shelling",
         "Voice Wake requires macOS 26 or newer",
       ]),
     );
