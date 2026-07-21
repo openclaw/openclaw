@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  ReplySessionInitConflictError,
-  runWithSessionInitConflictRetry,
-} from "./session-init-conflict-retry.js";
+import { ReplySessionInitConflictError } from "./session-init-conflict-error.js";
+import { runWithSessionInitConflictRetry } from "./session-init-conflict-retry.js";
 import { initSessionState } from "./session.js";
 
 const commitConflictControl = vi.hoisted(() => ({
