@@ -231,12 +231,7 @@ describe("claws cli", () => {
     expect(mocks.logs).toContain("Capability escalations (2):");
     expect(mocks.logs.some((line) => line.startsWith("  ! agent:demo-agent"))).toBe(true);
     expect(mocks.logs.some((line) => line.startsWith("  ! mcpServer:docs"))).toBe(true);
-    expect(
-      mocks.logs.some(
-        (line) =>
-          line.includes('"name":"API_TOKEN"') && line.includes('"reference":"GITHUB_TOKEN"'),
-      ),
-    ).toBe(true);
+    expect(mocks.logs.some((line) => line.includes('"env":["API_TOKEN"]'))).toBe(true);
     expect(mocks.logs).toContain("The plan integrity binds every capability line above.");
   });
 
