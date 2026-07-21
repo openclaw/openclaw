@@ -18,12 +18,45 @@ function queuedUserTurnIdempotencyKeys(item: ChatQueueItem): string[] {
   return item.sendRunId ? [item.sendRunId, `${item.sendRunId}:user`] : [];
 }
 
+/** Read delivery idempotency from either top-level or `__openclaw` (gateway vs local shapes). */
+export function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const record = message as Record<string, unknown>;
+  const marker = record["__openclaw"];
+  const metadata =
+    marker && typeof marker === "object" && !Array.isArray(marker)
+      ? (marker as Record<string, unknown>)
+      : undefined;
+  const fromMeta = metadata?.idempotencyKey;
+  if (typeof fromMeta === "string" && fromMeta) {
+    return fromMeta;
+  }
+  const topLevel = record.idempotencyKey;
+  return typeof topLevel === "string" && topLevel ? topLevel : undefined;
+}
+
+function messageMatchesQueuedUserTurnIdempotency(message: unknown, item: ChatQueueItem): boolean {
+  const idempotencyKeys = queuedUserTurnIdempotencyKeys(item);
+  if (idempotencyKeys.length === 0) {
+    return false;
+  }
+  const idempotencyKey = readMessageIdempotencyKey(message);
+  if (!idempotencyKey) {
+    return false;
+  }
+  return (
+    idempotencyKeys.includes(idempotencyKey) ||
+    (item.sendRunId != null && idempotencyKey.startsWith(`${item.sendRunId}:`))
+  );
+}
+
 export function chatMessagesContainQueuedUserTurn(
   messages: readonly unknown[],
   item: ChatQueueItem,
 ): boolean {
-  const idempotencyKeys = queuedUserTurnIdempotencyKeys(item);
-  if (idempotencyKeys.length === 0) {
+  if (!item.sendRunId) {
     return false;
   }
   return messages.some((message) => {
@@ -35,12 +68,7 @@ export function chatMessagesContainQueuedUserTurn(
     if ((message as { role?: unknown }).role !== "user") {
       return false;
     }
-    const marker = (message as { __openclaw?: unknown })["__openclaw"];
-    const idempotencyKey =
-      marker && typeof marker === "object" && !Array.isArray(marker)
-        ? (marker as { idempotencyKey?: unknown }).idempotencyKey
-        : undefined;
-    return typeof idempotencyKey === "string" && idempotencyKeys.includes(idempotencyKey);
+    return messageMatchesQueuedUserTurnIdempotency(message, item);
   });
 }
 

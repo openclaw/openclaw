@@ -21,6 +21,7 @@ import type {
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { extractSideQuestionDisplayText } from "../../lib/chat/side-question.ts";
 import {
   retirePendingChatSideQuestion,
@@ -97,7 +98,11 @@ import {
   type ChatInputHistoryState,
 } from "./input-history.ts";
 import { controlUiNowMs, roundedControlUiDurationMs } from "./performance.ts";
-import { chatMessagesContainQueuedUserTurn, preserveQueuedUserTurn } from "./queued-user-turn.ts";
+import {
+  chatMessagesContainQueuedUserTurn,
+  preserveQueuedUserTurn,
+  readMessageIdempotencyKey,
+} from "./queued-user-turn.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   handleAbortChat,
@@ -120,6 +125,8 @@ export type ChatHost = ChatInputHistoryState &
     chatAttachments: ChatAttachment[];
     chatQueue: ChatQueueItem[];
     chatQueueByScope?: Record<string, ChatQueueItem[]>;
+    /** Loaded transcript for the visible session; used as secondary delivery proof. */
+    chatMessages?: unknown[];
     chatRunId: string | null;
     chatSending: boolean;
     chatSendingScopeKey?: string | null;
@@ -1621,35 +1628,64 @@ function sameQueuedDeliveryVersion(left: ChatQueueItem, right: ChatQueueItem): b
   );
 }
 
-function historyContainsQueuedSend(history: ChatHistoryResult, item: ChatQueueItem): boolean {
-  if (!item.sendRunId) {
+function normalizeQueuedUserText(text: string): string {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function historyMessageMatchesQueuedUserText(message: unknown, item: ChatQueueItem): boolean {
+  if (!item.text?.trim()) {
     return false;
   }
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "user") {
+    return false;
+  }
+  const extracted = extractText(message);
+  if (!extracted) {
+    return false;
+  }
+  return normalizeQueuedUserText(extracted) === normalizeQueuedUserText(item.text);
+}
+
+function historyContainsQueuedSend(history: ChatHistoryResult, item: ChatQueueItem): boolean {
   const messages = Array.isArray(history.messages) ? history.messages : [];
   const runId = item.sendRunId;
-  return messages.some((message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return false;
+  if (runId) {
+    const byIdempotency = messages.some((message) => {
+      const idempotencyKey = readMessageIdempotencyKey(message);
+      if (!idempotencyKey) {
+        return false;
+      }
+      // Exact user-turn keys, plus any later transcript mirror keyed under the
+      // same client run (assistant/media). Orphan repair can briefly hide the
+      // `:user` leaf while the run itself is already durable.
+      return (
+        idempotencyKey === runId ||
+        idempotencyKey === `${runId}:user` ||
+        idempotencyKey.startsWith(`${runId}:`)
+      );
+    });
+    if (byIdempotency) {
+      return true;
     }
-    const record = message as Record<string, unknown>;
-    const marker = record["__openclaw"];
-    const metadata =
-      marker && typeof marker === "object" && !Array.isArray(marker)
-        ? (marker as Record<string, unknown>)
-        : undefined;
-    const idempotencyKey = metadata?.idempotencyKey ?? record.idempotencyKey;
-    if (typeof idempotencyKey !== "string" || !idempotencyKey) {
-      return false;
-    }
-    // Exact user-turn keys, plus any later transcript mirror keyed under the
-    // same client run (assistant/media). Orphan repair can briefly hide the
-    // `:user` leaf while the run itself is already durable.
-    return (
-      idempotencyKey === runId ||
-      idempotencyKey === `${runId}:user` ||
-      idempotencyKey.startsWith(`${runId}:`)
-    );
-  });
+  }
+  // After history rebuild races, idempotency can lag while the durable user
+  // text is already visible. Exact text proof is enough to retire Needs review
+  // so a completed turn cannot block the FIFO outbox forever.
+  return messages.some((message) => historyMessageMatchesQueuedUserText(message, item));
+}
+
+function localTranscriptContainsQueuedSend(host: ChatHost, item: ChatQueueItem): boolean {
+  const messages = Array.isArray(host.chatMessages) ? host.chatMessages : [];
+  if (messages.length === 0) {
+    return false;
+  }
+  if (chatMessagesContainQueuedUserTurn(messages, item)) {
+    return true;
+  }
+  return messages.some((message) => historyMessageMatchesQueuedUserText(message, item));
 }
 
 function historySessionIsIdle(history: ChatHistoryResult): boolean {
@@ -1716,7 +1752,7 @@ async function reconcileStoredChatOutboxHead(
     return "continue";
   }
   syncChatQueueFromStoredOutbox(host, currentOutbox);
-  if (historyContainsQueuedSend(history, item)) {
+  if (historyContainsQueuedSend(history, item) || localTranscriptContainsQueuedSend(host, item)) {
     return removeHistoryProvenQueuedSend(host, outbox, item) ? "continue" : "blocked";
   }
   if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) && isChatBusy(host)) {
@@ -1725,7 +1761,7 @@ async function reconcileStoredChatOutboxHead(
   if (!historySessionIsIdle(history)) {
     return "blocked";
   }
-  if ((item.sendAttempts ?? 0) > 0) {
+  if ((item.sendAttempts ?? 0) > 0 || item.sendState === "unconfirmed") {
     // History messages and active-run metadata are not captured atomically.
     // Re-read after the first idle snapshot before classifying delivery as unknown.
     let verifiedHistory: ChatHistoryResult;
@@ -1758,10 +1794,21 @@ async function reconcileStoredChatOutboxHead(
       return "continue";
     }
     syncChatQueueFromStoredOutbox(host, verifiedOutbox);
-    if (historyContainsQueuedSend(verifiedHistory, item)) {
+    if (
+      historyContainsQueuedSend(verifiedHistory, item) ||
+      localTranscriptContainsQueuedSend(host, item)
+    ) {
       return removeHistoryProvenQueuedSend(host, outbox, item) ? "continue" : "blocked";
     }
     if (!historySessionIsIdle(verifiedHistory)) {
+      return "blocked";
+    }
+    // Already parked and still ambiguous: keep Needs review without rewriting
+    // the row (avoids thrash). First-time ambiguity still parks once.
+    if (item.sendState === "unconfirmed") {
+      if (visibleSessionMatches(host, outbox.sessionKey, outbox.agentId)) {
+        setChatError(host, item.sendError ?? UNCONFIRMED_CHAT_SEND_ERROR);
+      }
       return "blocked";
     }
     const parked = updateQueuedMessageForSession(host, outbox.sessionKey, item.id, (entry) => ({
