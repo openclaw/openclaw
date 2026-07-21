@@ -421,6 +421,9 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
     OLLAMA_GLM52_CLOUD_MODEL_ID,
     { apiKey },
   );
+  if (showInfo.showInspectionFailed) {
+    return discovered;
+  }
   if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
     return discovered;
   }
@@ -432,6 +435,7 @@ async function buildOllamaCloudProvider(apiKey?: string): Promise<ModelProviderC
         OLLAMA_GLM52_CLOUD_MODEL_ID,
         showInfo.contextWindow,
         showInfo.capabilities,
+        { showInspectionFailed: showInfo.showInspectionFailed },
       ),
     ],
   };
@@ -448,6 +452,12 @@ async function resolveRequestedDynamicOllamaModel(params: {
   const showInfo = params.showApiKey
     ? await queryOllamaModelShowInfo(showBaseUrl, params.modelId, { apiKey: params.showApiKey })
     : await queryOllamaModelShowInfo(showBaseUrl, params.modelId);
+  // Catalog-missing dynamic resolve (/models add) treats /api/show as the
+  // existence probe. Failed inspection must stay unresolved so typos/404s do
+  // not become accepted config; tag-discovered + setup still use the marker.
+  if (showInfo.showInspectionFailed) {
+    return undefined;
+  }
   if (typeof showInfo.contextWindow !== "number" && (showInfo.capabilities?.length ?? 0) === 0) {
     return undefined;
   }
@@ -455,6 +465,7 @@ async function resolveRequestedDynamicOllamaModel(params: {
     params.modelId,
     showInfo.contextWindow,
     showInfo.capabilities,
+    { showInspectionFailed: showInfo.showInspectionFailed },
   );
   const model = params.capContextTokens ? capLocalOllamaModelContext(definition) : definition;
   return toDynamicOllamaModel({

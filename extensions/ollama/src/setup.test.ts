@@ -638,6 +638,31 @@ describe("ollama setup", () => {
     ).toMatchObject({ compat: { supportsTools: false } });
   });
 
+  it("keeps reasoning heuristics when setup /api/show inspection fails", async () => {
+    const prompter = {
+      ...createLocalPrompter(),
+      confirm: vi.fn(),
+    } as unknown as WizardPrompter;
+    const baseFetch = createOllamaFetchMock({ tags: ["deepseek-r1:14b"] });
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      if (requestUrl(input).endsWith("/api/show")) {
+        return new Response("boom", { status: 500 });
+      }
+      return await baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await promptAndConfigureOllama({ cfg: {}, prompter });
+    const model = result.config.models?.providers?.ollama?.models?.find(
+      (entry) => entry.id === "deepseek-r1:14b",
+    );
+
+    expect(model).toMatchObject({
+      reasoning: true,
+      compat: { supportsTools: false },
+    });
+  });
+
   it("checks all installed Ollama models before offering a recommended pull", async () => {
     const prompter = {
       ...createLocalPrompter(),

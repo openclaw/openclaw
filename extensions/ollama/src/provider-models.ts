@@ -34,6 +34,8 @@ export type OllamaTagsResponse = {
 export type OllamaModelWithContext = OllamaTagModel & {
   contextWindow?: number;
   capabilities?: string[];
+  /** Set when /api/show failed; distinct from authoritative capabilities: []. */
+  showInspectionFailed?: boolean;
 };
 
 const OLLAMA_SHOW_CONCURRENCY = 8;
@@ -74,8 +76,21 @@ export function resolveOllamaApiBase(configuredBaseUrl?: string): string {
 
 export type OllamaModelShowInfo = {
   contextWindow?: number;
+  /** Present after a successful /api/show that returned a capabilities array. */
   capabilities?: string[];
+  /**
+   * True when /api/show failed (HTTP error / throw). Must stay distinct from
+   * `capabilities: []` (successful show reporting no capabilities): failed
+   * inspection is conservative for tools but still allows model-name reasoning
+   * heuristics; authoritative empty capabilities disable both.
+   */
+  showInspectionFailed?: boolean;
 };
+
+// Failed inspection is not the same as capabilities: [] — see OllamaModelShowInfo.
+const OLLAMA_FAILED_SHOW_INFO: OllamaModelShowInfo = Object.freeze({
+  showInspectionFailed: true,
+});
 
 function buildOllamaModelShowCacheKey(
   apiBase: string,
@@ -151,7 +166,7 @@ export async function queryOllamaModelShowInfo(
     });
     try {
       if (!response.ok) {
-        return {};
+        return OLLAMA_FAILED_SHOW_INFO;
       }
       const data = await readProviderJsonResponse<{
         model_info?: Record<string, unknown>;
@@ -190,7 +205,7 @@ export async function queryOllamaModelShowInfo(
       await release();
     }
   } catch {
-    return {};
+    return OLLAMA_FAILED_SHOW_INFO;
   }
 }
 
@@ -247,6 +262,7 @@ export async function enrichOllamaModelsWithContext(
         return Object.assign({}, model, {
           contextWindow: showInfo.contextWindow,
           capabilities: showInfo.capabilities,
+          ...(showInfo.showInspectionFailed ? { showInspectionFailed: true as const } : {}),
         });
       }),
     );
@@ -271,19 +287,25 @@ export function buildOllamaModelDefinition(
   modelId: string,
   contextWindow?: number,
   capabilities?: string[],
+  opts?: { showInspectionFailed?: boolean },
 ): ModelDefinitionConfig {
+  const showInspectionFailed = opts?.showInspectionFailed === true;
+  // Three capability states:
+  // 1) undefined + not failed → uninspected / show omitted field (optimistic tools + name heuristics)
+  // 2) string[] (incl. []) → successful show, authoritative
+  // 3) showInspectionFailed → tools conservative; keep reasoning name heuristics
   const hasVision = capabilities?.includes("vision") ?? false;
   const input: ("text" | "image")[] = hasVision ? ["text", "image"] : ["text"];
   const reasoning =
     isKnownOllamaCloudReasoningModel(modelId) ||
-    (capabilities === undefined
+    (capabilities === undefined || showInspectionFailed
       ? isReasoningModelHeuristic(modelId)
       : capabilities.includes("thinking"));
   const compat =
-    capabilities === undefined
+    capabilities === undefined && !showInspectionFailed
       ? { supportsTools: true, supportsUsageInStreaming: true }
       : {
-          supportsTools: capabilities.includes("tools"),
+          supportsTools: capabilities?.includes("tools") === true,
           supportsUsageInStreaming: true,
         };
   return {
@@ -373,7 +395,9 @@ export async function buildOllamaProvider(
     baseUrl: apiBase,
     api: "ollama",
     models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
+      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities, {
+        showInspectionFailed: model.showInspectionFailed,
+      }),
     ),
   };
 }
