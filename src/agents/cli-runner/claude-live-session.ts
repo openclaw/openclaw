@@ -1174,7 +1174,11 @@ function handleClaudeLiveLine(session: ClaudeLiveSession, line: string): void {
 
 function handleClaudeStdout(session: ClaudeLiveSession, chunk: string) {
   session.currentTurn?.onCliOutput?.(chunk, "stdout");
-  resetNoOutputTimer(session);
+  // NOTE: the no-output watchdog is intentionally NOT reset here. Resetting on
+  // every stdout chunk (stream progress, tool events, heartbeats) let a turn
+  // that emitted noise but never real assistant text run forever. The timer is
+  // now re-armed only on genuine assistant-token / thinking progress via the
+  // parser's onAssistantDelta / onThinkingDelta hooks (see createTurn).
   session.stdoutBuffer += chunk;
   const maxPendingLineChars =
     session.currentTurn?.outputLimits.maxPendingLineChars ??
@@ -1337,7 +1341,10 @@ async function createClaudeLiveSession(params: {
             );
             return;
           }
-          resetNoOutputTimer(session);
+          // Intentionally do NOT reset the no-output watchdog on stderr bytes:
+          // stderr is progress/diagnostic noise, not assistant-token progress.
+          // The watchdog re-arms only on real assistant/thinking deltas (see
+          // createTurn).
         }
       },
     });
@@ -1431,8 +1438,25 @@ function createTurn(params: {
     streamingParser: createCliJsonlStreamingParser({
       backend: params.context.preparedBackend.backend,
       providerId: params.context.backendResolved.id,
-      onAssistantDelta: params.onAssistantDelta,
-      onThinkingDelta: params.onThinkingDelta,
+      // Re-arm the no-output watchdog only on real assistant-token progress
+      // (a parsed content_block_delta / assistant-text delta), NOT on every
+      // stdout/stderr byte. A hung-but-chatty turn that streams tool/heartbeat
+      // noise but never produces assistant text or a result must be allowed to
+      // trip the watchdog; the previous byte-level reset in handleClaudeStdout
+      // / the stderr handler kept re-arming it forever, so such a turn hung
+      // indefinitely with no abort emitted and the model-downgrade failover
+      // never fired.
+      onAssistantDelta: (delta) => {
+        resetNoOutputTimer(params.session);
+        params.onAssistantDelta(delta);
+      },
+      // Thinking deltas are genuine model progress too: a turn actively
+      // emitting reasoning tokens is alive and must not be killed by the
+      // token-silence watchdog.
+      onThinkingDelta: (delta) => {
+        resetNoOutputTimer(params.session);
+        params.onThinkingDelta?.(delta);
+      },
       onThinkingProgress: params.onThinkingProgress,
       onToolUseStart: (delta) => {
         markClaudeLiveToolStarted(turn, delta);
