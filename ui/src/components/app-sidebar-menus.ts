@@ -318,6 +318,7 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       sidebarEntries: this.sidebarEntries,
       isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
       workboardBoards: this.workboardBoards,
+      workboardRenderers: this.workboardRenderers,
       onTabAway: () => trigger?.focus(),
       onClose: (restoreFocus) => {
         if (this.customizeMenuPosition !== position) {

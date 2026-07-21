@@ -16,12 +16,10 @@ import {
 } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
-import { workboardBoardLabel } from "../lib/workboard/board-presentation.ts";
-import type { WorkboardBoardSummary } from "../lib/workboard/index.ts";
 import { pluginTabSearch } from "../pages/plugin/route.ts";
+import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 import { icons, type IconName } from "./icons.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
-import { renderWorkboardBoardGlyph } from "./workboard-board-glyph.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
 
@@ -257,7 +255,8 @@ type SidebarCustomizeMenuParams = {
   position: SidebarMenuPosition | null;
   sidebarEntries: readonly string[];
   isRouteEnabled: (routeId: NavigationRouteId) => boolean;
-  workboardBoards: readonly WorkboardBoardSummary[];
+  workboardBoards: readonly SidebarWorkboardBoard[];
+  workboardRenderers?: SidebarWorkboardRenderers;
   onToggleRoute: (routeId: SidebarNavRoute) => void;
   onToggleWorkboardBoard: (boardId: string) => void;
   onReset: () => void;
@@ -324,25 +323,10 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
           `;
         })}
         ${params.isRouteEnabled("workboard") && params.workboardBoards.length > 0
-          ? html`
-              <div class="sidebar-customize-menu__group-title">${t("nav.workboardGroup")}</div>
-              ${params.workboardBoards.map((board) => {
-                const entry = serializeSidebarEntry({ type: "workboard", boardId: board.id });
-                return html`
-                  <wa-dropdown-item
-                    class="sidebar-customize-menu__item"
-                    type="checkbox"
-                    value=${entry}
-                    .checked=${params.sidebarEntries.includes(entry)}
-                  >
-                    <span slot="icon" class="nav-item__icon" aria-hidden="true"
-                      >${renderWorkboardBoardGlyph(board, "workboard-board-glyph--sidebar")}</span
-                    >
-                    <span class="sidebar-customize-menu__text">${workboardBoardLabel(board)}</span>
-                  </wa-dropdown-item>
-                `;
-              })}
-            `
+          ? params.workboardRenderers?.renderCustomize(
+              params.workboardBoards,
+              params.sidebarEntries,
+            )
           : nothing}
         <div class="sidebar-customize-menu__separator" role="separator"></div>
         <wa-dropdown-item class="sidebar-customize-menu__item" value="reset">

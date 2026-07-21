@@ -4,7 +4,7 @@ import {
   type SidebarNavRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import type { WorkboardBoardSummary } from "./workboard/index.ts";
+import type { SidebarWorkboardBoard } from "../components/app-sidebar-workboard.ts";
 
 type SidebarPinnedSession = { key: string };
 
@@ -21,7 +21,7 @@ export function reconcileSidebarZone(
   pinnedSessions: readonly SidebarPinnedSession[],
   validRoutes: readonly SidebarNavRoute[],
   knownUnpinnedKeys: ReadonlySet<string> = new Set(),
-  workboardBoards: readonly WorkboardBoardSummary[] = [],
+  workboardBoards: readonly SidebarWorkboardBoard[] = [],
   workboardEnabled = false,
   workboardBoardsReady = false,
 ): { entries: SidebarZoneEntry[]; sidebarEntries: string[] } {

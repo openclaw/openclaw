@@ -10,9 +10,9 @@ import {
 } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
-import type { WorkboardBoardSummary } from "../lib/workboard/index.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { SidebarWorkboardBoard, SidebarWorkboardRenderers } from "./app-sidebar-workboard.ts";
 
 /** Stable custom-element inputs. Behavior is layered in focused sidebar modules. */
 export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
@@ -27,8 +27,9 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) canPairDevice = false;
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) sidebarEntries: readonly string[] = DEFAULT_SIDEBAR_ENTRIES;
-  @property({ attribute: false }) workboardBoards: readonly WorkboardBoardSummary[] = [];
+  @property({ attribute: false }) workboardBoards: readonly SidebarWorkboardBoard[] = [];
   @property({ attribute: false }) workboardBoardsReady = false;
+  @property({ attribute: false }) workboardRenderers?: SidebarWorkboardRenderers;
   @property({ attribute: false }) sidebarLiveActivity = true;
   /** Agents surfaced first in the chip quick switcher when many exist. */
   @property({ attribute: false }) pinnedAgentIds: readonly string[] = [];

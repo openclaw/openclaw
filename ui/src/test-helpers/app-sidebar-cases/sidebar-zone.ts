@@ -2,6 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { APP_ROUTE_IDS } from "../../app-route-paths.ts";
 import {
+  renderSidebarWorkboardCustomize,
+  renderSidebarWorkboardEntry,
+} from "../../components/app-sidebar-workboard.runtime.ts";
+import {
   createGateway,
   createGatewayHarness,
   createSessionsHarness,
@@ -55,6 +59,10 @@ async function mountZone() {
   ]);
   const { sidebar } = await mountSidebar(gateway, sessions.sessions);
   sidebar.connected = true;
+  sidebar.workboardRenderers = {
+    renderEntry: renderSidebarWorkboardEntry,
+    renderCustomize: renderSidebarWorkboardCustomize,
+  };
   return { sidebar, sessions };
 }
 

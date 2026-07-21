@@ -6,7 +6,7 @@ import {
   type NavigationRouteId,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { pathForRoute, pathForWorkboardBoard } from "../app-route-paths.ts";
+import { pathForRoute } from "../app-route-paths.ts";
 import { sessionHasPendingApproval } from "../app/approval-presentation.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
@@ -27,8 +27,6 @@ import { sessionHasBoard } from "../lib/board/provider.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { workboardBoardLabel } from "../lib/workboard/board-presentation.ts";
-import type { WorkboardBoardSummary } from "../lib/workboard/index.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import {
   renderSidebarPluginTab,
@@ -37,6 +35,7 @@ import {
 } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import type { SidebarWorkboardBoard } from "./app-sidebar-workboard.ts";
 import { icons } from "./icons.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -45,7 +44,6 @@ import {
   resolveLobsterRunOutcome,
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
-import { renderWorkboardBoardGlyph } from "./workboard-board-glyph.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -422,7 +420,7 @@ class AppSidebar extends AppSidebarSessionListElement {
   private renderSidebarZoneEntry(
     entry: SidebarZoneEntry,
     sessionRows: ReadonlyMap<string, SidebarRecentSession>,
-    workboardRows: ReadonlyMap<string, WorkboardBoardSummary>,
+    workboardRows: ReadonlyMap<string, SidebarWorkboardBoard>,
   ) {
     if (
       (entry.type === "route" && !this.isRouteEnabled(entry.route)) ||
@@ -480,29 +478,16 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
-  private renderWorkboardBoard(board: WorkboardBoardSummary) {
+  private renderWorkboardBoard(board: SidebarWorkboardBoard) {
     const active = this.activeRouteId === "workboard" && this.activeWorkboardBoardId === board.id;
-    return html`
-      <a
-        href=${pathForWorkboardBoard(board.id, this.basePath)}
-        class="nav-item nav-item--workboard-board ${active ? "nav-item--active" : ""}"
-        aria-current=${active ? "page" : nothing}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          this.onNavigate?.("workboard", {
-            pathname: pathForWorkboardBoard(board.id, this.basePath),
-          });
-        }}
-      >
-        <span class="nav-item__icon" aria-hidden="true"
-          >${renderWorkboardBoardGlyph(board, "workboard-board-glyph--sidebar")}</span
-        >
-        <span class="nav-item__text">${workboardBoardLabel(board)}</span>
-      </a>
-    `;
+    return (
+      this.workboardRenderers?.renderEntry({
+        board,
+        basePath: this.basePath,
+        active,
+        onNavigate: (pathname) => this.onNavigate?.("workboard", { pathname }),
+      }) ?? nothing
+    );
   }
 
   override render() {
