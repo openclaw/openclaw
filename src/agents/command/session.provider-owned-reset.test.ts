@@ -141,7 +141,7 @@ describe("command resolveSession provider-owned daily reset", () => {
     expect(result.persistedVerbose).toBe("full");
   });
 
-  it("does not carry preferences when terminal recovery overlaps a daily reset", () => {
+  it("carries preferences when terminal recovery overlaps a daily reset", () => {
     const sessionKey = "agent:main:cli";
     const startedAt = Date.now() - 2 * DAY_MS;
     hoisted.store = {
@@ -157,18 +157,18 @@ describe("command resolveSession provider-owned daily reset", () => {
     hoisted.terminalTranscriptNewer = true;
 
     const result = resolveSession({
-      cfg: { session: {} } as OpenClawConfig,
+      cfg: { session: { reset: { mode: "daily" } } } as OpenClawConfig,
       sessionKey,
       agentId: "main",
     });
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("daily-expired-session-id");
-    expect(result.persistedThinking).toBeUndefined();
-    expect(result.persistedVerbose).toBeUndefined();
+    expect(result.persistedThinking).toBe("high");
+    expect(result.persistedVerbose).toBe("full");
   });
 
-  it("does not carry preferences when terminal recovery overlaps an idle reset", () => {
+  it("carries preferences when terminal recovery overlaps an idle reset", () => {
     const sessionKey = "agent:main:cli";
     const now = Date.now();
     const lastInteractionAt = now - 60 * 60 * 1000;
@@ -196,7 +196,7 @@ describe("command resolveSession provider-owned daily reset", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(result.sessionId).not.toBe("idle-expired-session-id");
-    expect(result.persistedThinking).toBeUndefined();
-    expect(result.persistedVerbose).toBeUndefined();
+    expect(result.persistedThinking).toBe("high");
+    expect(result.persistedVerbose).toBe("on");
   });
 });
