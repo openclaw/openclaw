@@ -47,11 +47,8 @@ describe("gateway tool", () => {
 
     await createGatewayTool().execute("tool-call", params, controller.signal);
 
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      method,
-      expect.anything(),
-      expect.anything(),
-      { signal: controller.signal },
-    );
+    expect(callGatewayToolMock).toHaveBeenCalledWith(method, expect.anything(), expect.anything(), {
+      signal: controller.signal,
+    });
   });
 });
