@@ -131,7 +131,7 @@ export async function waitForCdpCommittedNavigationUrl(opts: {
   signal?: AbortSignal;
   timeouts?: CdpActionTimeouts;
 }): Promise<string | undefined> {
-  await assertCdpEndpointAllowed(opts.wsUrl, opts.cdpPolicy, {
+  const pinned = await assertCdpEndpointAllowed(opts.wsUrl, opts.cdpPolicy, {
     source: "discovered",
     configuredUrl: opts.configuredCdpUrl,
   });
@@ -148,6 +148,7 @@ export async function waitForCdpCommittedNavigationUrl(opts: {
         commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS,
         handshakeTimeoutMs: opts.timeouts?.handshakeTimeoutMs,
         handshakeRetries: 0,
+        lookup: pinned?.lookup,
       },
     );
   } catch {

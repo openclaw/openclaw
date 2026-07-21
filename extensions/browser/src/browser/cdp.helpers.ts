@@ -14,8 +14,8 @@ import { isLoopbackHost } from "../gateway/net.js";
 import {
   SsrFBlockedError,
   isPrivateNetworkAllowedByPolicy,
-  type SsrFPolicy,
   resolvePinnedHostnameWithPolicy,
+  type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -95,6 +95,7 @@ export function scopeCdpPolicyToConfiguredEndpoint(
 type CdpEndpointSource =
   | { source?: "configured" }
   | { source: "discovered"; configuredUrl: string };
+type CdpEndpointPin = Awaited<ReturnType<typeof resolvePinnedHostnameWithPolicy>>;
 
 function cdpEndpointAuthority(url: string): string {
   const parsed = new URL(url);
@@ -124,12 +125,12 @@ export async function assertCdpEndpointAllowed(
   cdpUrl: string,
   ssrfPolicy?: SsrFPolicy,
   options?: CdpEndpointSource,
-): Promise<void> {
+): Promise<CdpEndpointPin | undefined> {
   if (options?.source === "discovered") {
     assertDiscoveredCdpEndpointMatchesConfigured(cdpUrl, options.configuredUrl, ssrfPolicy);
   }
   if (!ssrfPolicy) {
-    return;
+    return undefined;
   }
   const parsed = new URL(cdpUrl);
   if (!["http:", "https:", "ws:", "wss:"].includes(parsed.protocol)) {
@@ -143,7 +144,7 @@ export async function assertCdpEndpointAllowed(
       isLoopbackHost(parsed.hostname) && options?.source !== "discovered"
         ? withExactHostnamePolicy(ssrfPolicy, parsed.hostname)
         : ssrfPolicy;
-    await resolvePinnedHostnameWithPolicy(parsed.hostname, {
+    return await resolvePinnedHostnameWithPolicy(parsed.hostname, {
       policy,
     });
   } catch (error) {
@@ -321,9 +322,11 @@ type CdpTabOwnershipParams = {
   ssrfPolicy?: SsrFPolicy;
 };
 
-async function resolveCdpTabOwnershipContext(
-  params: CdpTabOwnershipParams,
-): Promise<{ ownership: BrowserTabOwnership; browserWebSocketUrl?: string }> {
+async function resolveCdpTabOwnershipContext(params: CdpTabOwnershipParams): Promise<{
+  ownership: BrowserTabOwnership;
+  browserWebSocketUrl?: string;
+  browserWebSocketLookup?: CdpEndpointPin["lookup"];
+}> {
   params.signal?.throwIfAborted();
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(params.cdpUrl);
   let version: { webSocketDebuggerUrl?: unknown };
@@ -352,7 +355,7 @@ async function resolveCdpTabOwnershipContext(
     return { ownership: { status: "non-durable", reason: "browser-identity-unavailable" } };
   }
   try {
-    await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
+    const pinned = await assertCdpEndpointAllowed(browserWebSocketUrl, params.ssrfPolicy, {
       source: "discovered",
       configuredUrl: params.cdpUrl,
     });
@@ -367,6 +370,7 @@ async function resolveCdpTabOwnershipContext(
         }),
       },
       browserWebSocketUrl,
+      browserWebSocketLookup: pinned?.lookup,
     };
   } catch (error) {
     if (error instanceof BrowserCdpEndpointBlockedError) {
@@ -470,6 +474,7 @@ export async function closeTrackedCdpTarget(
         commandTimeoutMs: params.timeoutMs,
         handshakeTimeoutMs: params.timeoutMs,
         handshakeRetries: 0,
+        lookup: resolved.browserWebSocketLookup,
       },
     );
   } catch (error) {
@@ -668,7 +673,11 @@ export async function fetchOk(
 /** Open a CDP WebSocket with URL basic-auth and proxy bypass handling. */
 export function openCdpWebSocket(
   wsUrl: string,
-  opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
+  opts?: {
+    headers?: Record<string, string>;
+    handshakeTimeoutMs?: number;
+    lookup?: CdpEndpointPin["lookup"];
+  },
 ): WebSocket {
   const headers = getHeadersWithAuth(wsUrl, opts?.headers ?? {});
   const handshakeTimeoutMs =
@@ -684,6 +693,7 @@ export function openCdpWebSocket(
         handshakeTimeout: handshakeTimeoutMs,
         ...(Object.keys(headers).length ? { headers } : {}),
         ...(agent ? { agent } : {}),
+        ...(opts?.lookup ? { lookup: opts.lookup } : {}),
       }),
   );
 }
@@ -695,6 +705,7 @@ type CdpSocketOptions = {
   handshakeRetries?: number;
   handshakeRetryDelayMs?: number;
   handshakeMaxRetryDelayMs?: number;
+  lookup?: CdpEndpointPin["lookup"];
 };
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {

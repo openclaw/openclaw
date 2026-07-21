@@ -204,7 +204,7 @@ export async function createTargetViaCdp(opts: {
     url: opts.url,
     ...withBrowserNavigationPolicy(opts.ssrfPolicy),
   });
-  await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
+  const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
 
   let wsUrl: string;
@@ -257,7 +257,10 @@ export async function createTargetViaCdp(opts: {
         candidateWsUrl === opts.cdpUrl
           ? ({ source: "configured" } as const)
           : ({ source: "discovered", configuredUrl: opts.cdpUrl } as const);
-      await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
+      const candidateCdpPin =
+        candidateWsUrl === opts.cdpUrl
+          ? configuredCdpPin
+          : await assertCdpEndpointAllowed(candidateWsUrl, cdpControlPolicy, endpointSource);
       opts.signal?.throwIfAborted();
       return await withCdpSocket(
         candidateWsUrl,
@@ -283,6 +286,7 @@ export async function createTargetViaCdp(opts: {
         {
           commandTimeoutMs: opts.timeouts?.httpTimeoutMs ?? 5000,
           handshakeTimeoutMs: opts.timeouts?.handshakeTimeoutMs,
+          lookup: candidateCdpPin?.lookup,
         },
       );
     } catch (err) {

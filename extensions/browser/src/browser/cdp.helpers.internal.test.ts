@@ -96,7 +96,10 @@ describe("cdp.helpers internal", () => {
         assertCdpEndpointAllowed("http://93.184.216.34:443/cdp", {
           allowPrivateNetwork: true,
         }),
-      ).resolves.toBeUndefined();
+      ).resolves.toMatchObject({
+        addresses: ["93.184.216.34"],
+        hostname: "93.184.216.34",
+      });
     });
   });
 
@@ -572,6 +575,43 @@ describe("openCdpWebSocket option handling", () => {
     expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
+  });
+
+  it("uses a pinned lookup for websocket connections", async () => {
+    const server = await startWsServer();
+    try {
+      const url = server.url.replace("127.0.0.1", "cdp.test.local");
+      const lookup = vi.fn((hostname: string, options: unknown, callback?: unknown) => {
+        const cb = typeof options === "function" ? options : callback;
+        expect(hostname).toBe("cdp.test.local");
+        if (typeof cb === "function") {
+          const wantsAll =
+            typeof options === "object" && options !== null && (options as { all?: boolean }).all;
+          if (wantsAll) {
+            cb(null, [{ address: "127.0.0.1", family: 4 }]);
+            return;
+          }
+          cb(null, "127.0.0.1", 4);
+        }
+      });
+
+      const ws = openCdpWebSocket(url, {
+        handshakeTimeoutMs: 500,
+        lookup: lookup as never,
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        ws.once("open", () => resolve());
+        ws.once("error", reject);
+      });
+
+      expect(lookup).toHaveBeenCalled();
+      ws.close();
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.wss.close(() => resolve());
+      });
+    }
   });
 });
 
