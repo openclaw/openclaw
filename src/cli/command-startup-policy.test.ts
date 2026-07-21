@@ -25,6 +25,12 @@ describe("command-startup-policy", () => {
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["docs"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["skills"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["skills", "check"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["skills", "info"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["skills", "list"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["skills", "install"])).toBe(false);
+    expect(shouldBypassConfigGuardForCommandPath(["skills", "search"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });

@@ -455,11 +455,27 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     policy: { loadPlugins: "never", networkProxy: "bypass" },
     route: { id: "channels-list" },
   },
-  { commandPath: ["skills"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["skills", "check"], exact: true, policy: { networkProxy: "bypass" } },
-  { commandPath: ["skills", "info"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["skills"],
+    exact: true,
+    policy: { bypassConfigGuard: true, networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["skills", "check"],
+    exact: true,
+    policy: { bypassConfigGuard: true, networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["skills", "info"],
+    exact: true,
+    policy: { bypassConfigGuard: true, networkProxy: "bypass" },
+  },
   { commandPath: ["skills", "install"], exact: true },
-  { commandPath: ["skills", "list"], exact: true, policy: { networkProxy: "bypass" } },
+  {
+    commandPath: ["skills", "list"],
+    exact: true,
+    policy: { bypassConfigGuard: true, networkProxy: "bypass" },
+  },
   { commandPath: ["skills", "search"], exact: true },
   { commandPath: ["skills", "update"], exact: true },
 ];
