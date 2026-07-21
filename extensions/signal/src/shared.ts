@@ -17,6 +17,7 @@ import {
 } from "./accounts.js";
 import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
+import { signalDoctor } from "./doctor.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
@@ -34,7 +35,7 @@ const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalA
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
   defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-  clearBaseFields: ["account", "configPath", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+  clearBaseFields: ["account", "accountUuid", "transport", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringifiedEntries(allowFrom)
@@ -94,6 +95,7 @@ export function createSignalPluginBase(params: {
   | "security"
   | "setup"
   | "messaging"
+  | "doctor"
 > {
   const base = createChannelPluginBase({
     id: SIGNAL_CHANNEL,
@@ -111,6 +113,7 @@ export function createSignalPluginBase(params: {
     },
     reload: { configPrefixes: ["channels.signal"] },
     configSchema: SignalChannelConfigSchema,
+    doctor: signalDoctor,
     config: {
       ...signalConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -144,5 +147,6 @@ export function createSignalPluginBase(params: {
     | "security"
     | "setup"
     | "messaging"
+    | "doctor"
   >;
 }

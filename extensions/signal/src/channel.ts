@@ -582,7 +582,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           const baseUrl = account.baseUrl;
           const { probeSignal } = await loadSignalProbeModule();
           return await probeSignal(baseUrl, timeoutMs, {
-            apiMode: account.config?.apiMode ?? "auto",
+            transportKind: account.transport.kind,
           });
         },
         formatCapabilitiesProbe: ({ probe }) =>

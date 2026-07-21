@@ -16,8 +16,20 @@ export const signalChannelConfigUiHints = {
     label: "Signal Account",
     help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
   },
-  configPath: {
+  transport: {
+    label: "Signal Transport",
+    help: "Account-owned native process or external endpoint configuration. Named accounts do not inherit this value.",
+  },
+  "transport.kind": {
+    label: "Signal Transport Kind",
+    help: "Use managed-native to let OpenClaw start signal-cli, external-native for an existing native daemon, or container for signal-cli-rest-api.",
+  },
+  "transport.configPath": {
     label: "Signal CLI Config Path",
     help: "Optional directory passed to signal-cli via --config when the service needs a non-default signal-cli data path.",
+  },
+  "transport.url": {
+    label: "Signal Transport URL",
+    help: "Base URL for an external-native or container transport, or the connection endpoint for a managed-native daemon when it differs from the bind address.",
   },
 } satisfies Record<string, ChannelConfigUiHint>;

@@ -110,6 +110,7 @@ export type ChannelSetupInput = {
   identity?: "bot" | "user";
   mode?: "socket" | "http" | "relay";
   signalNumber?: string;
+  signalTransport?: "external-native" | "container";
   cliPath?: string;
   dbPath?: string;
   service?: "imessage" | "sms" | "auto";

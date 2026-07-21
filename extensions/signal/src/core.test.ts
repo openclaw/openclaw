@@ -11,7 +11,8 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { listSignalAccountIds } from "./accounts.js";
 import {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
@@ -36,8 +37,13 @@ import {
   normalizeSignalAccountInput,
   signalDmPolicy,
 } from "./setup-core.js";
+import * as transportDetectionModule from "./transport-detection.js";
 
 const getSignalSetupStatus = createPluginSetupWizardStatus(signalPlugin);
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("looksLikeUuid", () => {
   it("accepts hyphenated UUIDs", () => {
@@ -153,6 +159,14 @@ describe("probeSignal", () => {
         enabled: true,
         configured: true,
         baseUrl: "http://127.0.0.1:8080",
+        transport: {
+          kind: "managed-native",
+          baseUrl: "http://127.0.0.1:8080",
+          cliPath: "signal-cli",
+          httpHost: "127.0.0.1",
+          httpPort: 8080,
+          startupTimeoutMs: 30_000,
+        },
       } as never,
       timeoutMs: 1000,
     };
@@ -196,15 +210,31 @@ describe("probeSignal", () => {
     expect(res.version).toBe(null);
   });
 
+  it("returns auto transport detection failures as probe data", async () => {
+    vi.spyOn(transportDetectionModule, "detectSignalTransport").mockRejectedValueOnce(
+      new Error("Signal transport not reachable at http://127.0.0.1:8080"),
+    );
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000, { apiMode: "auto" });
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: null,
+      error: "Signal transport not reachable at http://127.0.0.1:8080",
+      version: null,
+    });
+    expect(res.elapsedMs).toBeGreaterThanOrEqual(0);
+  });
+
   it("setup status lines use the selected account cliPath", async () => {
     const status = await getSignalSetupStatus({
       cfg: {
         channels: {
           signal: {
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             accounts: {
               work: {
-                cliPath: "/tmp/work-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/work-signal-cli" },
               },
             },
           },
@@ -221,11 +251,11 @@ describe("probeSignal", () => {
       cfg: {
         channels: {
           signal: {
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             defaultAccount: "work",
             accounts: {
               work: {
-                cliPath: "/tmp/work-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/work-signal-cli" },
               },
             },
           },
@@ -243,16 +273,13 @@ describe("probeSignal", () => {
         channels: {
           signal: {
             defaultAccount: "work",
-            cliPath: "/tmp/root-signal-cli",
+            transport: { kind: "managed-native", cliPath: "/tmp/root-signal-cli" },
             accounts: {
               alerts: {
-                cliPath: "/tmp/alerts-signal-cli",
+                transport: { kind: "managed-native", cliPath: "/tmp/alerts-signal-cli" },
               },
               work: {
-                cliPath: "",
                 account: "",
-                httpHost: "",
-                httpUrl: "",
               },
             },
           },
@@ -1160,6 +1187,24 @@ describe("signal outbound", () => {
 });
 
 describe("signal setup parsing", () => {
+  it("removes an accountUuid-only default account when named accounts remain", () => {
+    const next = signalPlugin.config?.deleteAccount?.({
+      cfg: {
+        channels: {
+          signal: {
+            accountUuid: "123e4567-e89b-12d3-a456-426614174000",
+            transport: { kind: "managed-native" },
+            accounts: { work: { account: "+15555550123" } },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(next?.channels?.signal?.accountUuid).toBeUndefined();
+    expect(listSignalAccountIds(next ?? {})).toEqual(["work"]);
+  });
+
   it("accepts already normalized numbers", () => {
     expect(normalizeSignalAccountInput("+15555550123")).toBe("+15555550123");
   });
