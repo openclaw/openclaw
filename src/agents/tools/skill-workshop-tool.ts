@@ -6,10 +6,7 @@
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  applySkillProposal,
   listSkillProposals,
-  proposeCreateSkill,
-  proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
   resolvePendingSkillProposal,
@@ -22,6 +19,7 @@ import type {
   SkillWorkshopProposalMutationBudget,
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
+import { skillsWriteService } from "../../skills/write-service.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   asToolParamsRecord,
@@ -239,7 +237,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "apply") {
-        const applied = await applySkillProposal({
+        const applied = await skillsWriteService.applyProposal({
           workspaceDir: options.workspaceDir,
           config: options.config,
           env: options.env,
@@ -309,7 +307,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         let proposal: SkillProposalReadResult;
         let contentText: string;
         if (action === "create") {
-          proposal = await proposeCreateSkill({
+          proposal = await skillsWriteService.propose({
+            kind: "create",
             workspaceDir: options.workspaceDir,
             config: options.config,
             env: options.env,
@@ -324,7 +323,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           });
           contentText = proposalMutationText("Created skill proposal", proposal.record);
         } else if (action === "update") {
-          proposal = await proposeUpdateSkill({
+          proposal = await skillsWriteService.propose({
+            kind: "update",
             workspaceDir: options.workspaceDir,
             config: options.config,
             env: options.env,

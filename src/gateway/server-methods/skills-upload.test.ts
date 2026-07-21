@@ -290,6 +290,8 @@ describe("skill upload gateway handlers", () => {
 
   it("uploads, installs, cleans up, and reports the skill from status", async () => {
     const { handlers, stateDir, workspaceDir } = await makeHarness();
+    const { getSkillsSnapshotVersion } = await import("../../skills/runtime/refresh-state.js");
+    const versionBefore = getSkillsSnapshotVersion(workspaceDir);
     const archive = await makeSkillArchive({
       name: "Uploaded Demo",
       rootDir: "archive-internal-name",
@@ -310,6 +312,7 @@ describe("skill upload gateway handlers", () => {
     expect((install.payload as { ok?: unknown }).ok).toBe(true);
     expect((install.payload as { slug?: unknown }).slug).toBe("uploaded-demo");
     expect((install.payload as { sha256?: unknown }).sha256).toBe(digest);
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBefore);
     await expect(
       fs.readFile(path.join(workspaceDir, "skills", "uploaded-demo", "SKILL.md"), "utf8"),
     ).resolves.toContain("Uploaded Demo");

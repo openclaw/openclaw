@@ -6,6 +6,10 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../runtime/refresh-state.js";
 
 const fetchClawHubSkillDetailMock = vi.fn();
 const fetchClawHubSkillInstallResolutionMock = vi.fn();
@@ -179,6 +183,7 @@ describe("skills-clawhub", () => {
   });
 
   beforeEach(() => {
+    resetSkillsRefreshStateForTest();
     fetchClawHubSkillDetailMock.mockReset();
     fetchClawHubSkillInstallResolutionMock.mockReset();
     fetchClawHubSkillVerificationMock.mockReset();
@@ -772,6 +777,7 @@ describe("skills-clawhub", () => {
 
   it("installs owner-qualified ClawHub skills without using owner as a local path", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-skill-");
+    const snapshotVersionBeforeInstall = getSkillsSnapshotVersion(workspaceDir);
     fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
       schema: "clawhub.skill.security-verdicts.v1",
       items: [
@@ -859,6 +865,7 @@ describe("skills-clawhub", () => {
       version: "1.0.0",
       targetDir: path.join(workspaceDir, "skills", "weather"),
     });
+    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(snapshotVersionBeforeInstall);
     await expect(fs.access(path.join(workspaceDir, "skills", "@demo-owner"))).rejects.toThrow();
 
     const lock = JSON.parse(

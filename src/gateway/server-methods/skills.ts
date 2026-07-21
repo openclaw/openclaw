@@ -52,15 +52,13 @@ import {
   unpinCuratedSkill,
 } from "../../skills/workshop/curator.js";
 import {
-  applySkillProposal,
   inspectSkillProposal,
   listSkillProposals,
-  proposeCreateSkill,
-  proposeUpdateSkill,
   quarantineSkillProposal,
   rejectSkillProposal,
   reviseSkillProposal,
 } from "../../skills/workshop/service.js";
+import { skillsWriteService } from "../../skills/write-service.js";
 import { skillProposalHistoryHandlers } from "./skills-proposal-history.js";
 import { skillsUploadHandlers } from "./skills-upload.js";
 import {
@@ -406,7 +404,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalCreateParams,
       run: (parsedParams, resolved) =>
-        proposeCreateSkill({
+        skillsWriteService.propose({
+          kind: "create",
           workspaceDir: resolved.workspaceDir,
           config: resolved.cfg,
           name: parsedParams.name,
@@ -427,7 +426,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalUpdateParams,
       run: (parsedParams, resolved) =>
-        proposeUpdateSkill({
+        skillsWriteService.propose({
+          kind: "update",
           workspaceDir: resolved.workspaceDir,
           config: resolved.cfg,
           agentId: resolved.agentId,
@@ -518,7 +518,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       context,
       validate: validateSkillsProposalActionParams,
       run: (parsedParams, resolved) =>
-        applySkillProposal({
+        skillsWriteService.applyProposal({
           workspaceDir: resolved.workspaceDir,
           config: resolved.cfg,
           proposalId: parsedParams.proposalId,

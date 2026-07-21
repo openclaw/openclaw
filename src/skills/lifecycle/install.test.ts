@@ -11,6 +11,10 @@ import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "../loading/local-loader.js";
+import {
+  getSkillsSnapshotVersion,
+  resetSkillsRefreshStateForTest,
+} from "../runtime/refresh-state.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry } from "../types.js";
 import { installSkill } from "./install.js";
@@ -113,6 +117,7 @@ async function withWorkspaceCase(
 describe("installSkill before_install hooks", () => {
   beforeEach(() => {
     resetGlobalHookRunner();
+    resetSkillsRefreshStateForTest();
     runCommandWithTimeoutMock.mockClear();
     skillsInstallTesting.setDepsForTest({
       loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
@@ -136,6 +141,7 @@ describe("installSkill before_install hooks", () => {
   it("runs npm node installs with an OpenClaw-managed user prefix", async () => {
     await withWorkspaceCase(async ({ workspaceDir, stateDir }) => {
       await writeInstallableSkill(workspaceDir, "node-prefix-skill");
+      const versionBefore = getSkillsSnapshotVersion(workspaceDir);
 
       const result = await installSkill({
         workspaceDir,
@@ -144,6 +150,7 @@ describe("installSkill before_install hooks", () => {
       });
 
       expect(result.ok).toBe(true);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(versionBefore);
       const npmPrefix = path.join(stateDir, "tools", "node", "npm");
       const call = lastRunCommandCall();
       expect(call?.[0]).toEqual(["npm", "install", "-g", "--ignore-scripts", "example-package"]);
