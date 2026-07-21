@@ -197,6 +197,10 @@ async function buildResponsesPayload(
   const hasEmptyResponseRetryInstruction =
     allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE) ||
     allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE);
+  const isActiveEmptyResponseSideEffectRecovery =
+    QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(prompt) ||
+    (prompt.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE) &&
+      QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText));
   const canCallMockSubagentTool =
     QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE.test(allInputText) ||
     /subagent fanout synthesis check/i.test(allInputText) ||
@@ -363,6 +367,20 @@ async function buildResponsesPayload(
   if (/remember this fact/i.test(prompt)) {
     return buildAssistantEvents(buildAssistantText(input, body, scenarioState));
   }
+  if (isActiveEmptyResponseSideEffectRecovery) {
+    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
+      return buildAssistantEvents(
+        exactMarkerDirective ?? exactReplyDirective ?? "TELEGRAM-EMPTY-WRITE-RECOVERED-OK",
+      );
+    }
+    if (!toolOutput) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "qa-empty-response-side-effect.txt",
+        content: "side effect completed once\n",
+      });
+    }
+    return buildAssistantEvents("");
+  }
   if (isHeartbeatPrompt(prompt)) {
     return buildAssistantEvents("HEARTBEAT_OK");
   }
@@ -436,18 +454,6 @@ async function buildResponsesPayload(
   if (QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE.test(allInputText)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });
-    }
-    return buildAssistantEvents("");
-  }
-  if (QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE.test(allInputText)) {
-    if (allInputText.includes(QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE)) {
-      return buildAssistantEvents("TELEGRAM-EMPTY-WRITE-RECOVERED-OK");
-    }
-    if (!toolOutput) {
-      return buildToolCallEventsWithArgs("write", {
-        path: "qa-empty-response-side-effect.txt",
-        content: "side effect completed once\n",
-      });
     }
     return buildAssistantEvents("");
   }

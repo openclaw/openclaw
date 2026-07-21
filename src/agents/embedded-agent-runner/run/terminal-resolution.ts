@@ -214,9 +214,11 @@ export async function resolveEmbeddedRunTerminal(input: {
           modelApi: input.modelApi,
           executionContract: input.executionContract,
           allowEmptyStopContinuation:
-            runParams.trigger == null ||
-            runParams.trigger === "user" ||
-            runParams.trigger === "manual",
+            runParams.terminalReplyExpectation === "required" ||
+            (runParams.terminalReplyExpectation == null &&
+              (runParams.trigger == null ||
+                runParams.trigger === "user" ||
+                runParams.trigger === "manual")),
           payloadCount,
           hasTerminalToolPresentation: Boolean(availableTerminalToolPresentation),
           aborted: input.terminalAborted,

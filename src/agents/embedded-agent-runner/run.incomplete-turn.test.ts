@@ -1222,6 +1222,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
+      trigger: "cron",
+      terminalReplyExpectation: "required",
       provider: "openai",
       model: "gpt-5.5",
       runId: "run-empty-stop-settled-tool-continuation",
@@ -1233,6 +1235,52 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(runAttemptCall(1).disableTools).toBe(true);
     expectNoWarnMessageWith("empty response detected");
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
+  });
+
+  it.each([
+    {
+      label: "explicit optional expectation",
+      trigger: "user" as const,
+      terminalReplyExpectation: "optional" as const,
+    },
+    {
+      label: "heartbeat default",
+      trigger: "heartbeat" as const,
+      terminalReplyExpectation: undefined,
+    },
+  ])("does not continue settled tools for $label", async (runPolicy) => {
+    const emptyStopAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async (attemptParams) => {
+      markUserMessagePersisted(attemptParams);
+      return makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "write", meta: "path=note.txt" }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        lastAssistant: emptyStopAssistant,
+        currentAttemptAssistant: emptyStopAssistant,
+      });
+    });
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      trigger: runPolicy.trigger,
+      terminalReplyExpectation: runPolicy.terminalReplyExpectation,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-optional-empty-stop-settled-tool",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]).toMatchObject({ isError: true });
+    expectNoWarnMessageWith("settled post-tool turn lacked a final answer");
   });
 
   it("surfaces failure without cascading when the settled-tool continuation is also empty", async () => {
