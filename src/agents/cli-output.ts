@@ -8,6 +8,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentPlanStep } from "../channels/streaming.js";
 import type { CliBackendConfig } from "../config/types.js";
+import type { CliBackendParseJsonlEvent, CliBackendParsedJsonlEvent } from "../plugins/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
 import type {
@@ -171,7 +172,11 @@ function isClaudeStreamJsonDialect(params: {
   return isClaudeCliProvider(params.providerId);
 }
 
-function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: string }): boolean {
+function isStreamJsonDialect(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
+}): boolean {
   return supportsCliJsonlToolEvents(params);
 }
 
@@ -179,8 +184,10 @@ function isStreamJsonDialect(params: { backend: CliBackendConfig; providerId: st
 function supportsCliJsonlToolEvents(params: {
   backend: CliBackendConfig;
   providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
 }): boolean {
   return (
+    params.parseJsonlEvent !== undefined ||
     params.backend.jsonlDialect === "claude-stream-json" ||
     isClaudeCliProvider(params.providerId) ||
     isGeminiStreamJsonDialect(params)
@@ -1176,12 +1183,15 @@ function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): string |
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onThinkingDelta?: (delta: CliThinkingDelta) => void;
   onThinkingProgress?: (progress: CliThinkingProgress) => void;
   onPlanUpdate?: (update: CliPlanUpdate) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
   onSessionId?: (sessionId: string) => void;
   onAssistantMessage?: (message: unknown) => void;
@@ -1230,6 +1240,93 @@ export function createCliJsonlStreamingParser(params: {
     if (text) {
       params.onCommentaryText?.(text);
     }
+  };
+
+  const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
+    if (event.kind === "sessionId") {
+      const nextSessionId = event.sessionId.trim();
+      if (nextSessionId) {
+        sessionId = nextSessionId;
+      }
+      return;
+    }
+    if (event.kind === "text") {
+      if (!event.text) {
+        return;
+      }
+      assistantText = `${assistantText}${event.text}`;
+      params.onAssistantDelta({
+        text: assistantText,
+        delta: event.text,
+        sessionId,
+        usage,
+      });
+      return;
+    }
+    if (event.kind === "thinking") {
+      if (!event.text || !params.onThinkingDelta) {
+        return;
+      }
+      const streamed = thinkingTracker.streamedByIndex.get(0) ?? "";
+      emitClaudeThinking(thinkingTracker, 0, streamed, event.text, params.onThinkingDelta);
+      return;
+    }
+    if (event.kind === "toolStart") {
+      emitToolStartOnce(
+        toolTracker,
+        event.toolCallId,
+        event.name,
+        // Plugin JSONL tool cards describe the CLI's own native execution and do
+        // not carry a producer kind; default to the local tool_use shape so the
+        // start delta stays assignable to CliToolUseStartDelta.
+        "tool_use",
+        event.args ?? {},
+        params.onDisplayToolUseStart ?? params.onToolUseStart,
+      );
+      return;
+    }
+    if (event.kind === "toolResult") {
+      if (event.name) {
+        toolTracker.nameById.set(event.toolCallId, event.name);
+      }
+      emitToolResultOnce(
+        toolTracker,
+        event.toolCallId,
+        event.isError === true,
+        event.result,
+        params.onDisplayToolResult ?? params.onToolResult,
+      );
+      return;
+    }
+    if (event.sessionId?.trim()) {
+      sessionId = event.sessionId.trim();
+    }
+    usage = event.usage ?? usage;
+    const text = typeof event.text === "string" ? event.text : assistantText;
+    output = {
+      text: text.trim(),
+      sessionId,
+      usage,
+      ...(event.errorText ? { errorText: event.errorText } : {}),
+    };
+  };
+
+  const handleCustomJsonlLine = (line: string): boolean => {
+    if (!params.parseJsonlEvent) {
+      return false;
+    }
+    const parsed = params.parseJsonlEvent(line, {
+      backendId: params.providerId,
+      backend: params.backend,
+    });
+    if (parsed == null) {
+      return false;
+    }
+    const events = Array.isArray(parsed) ? parsed : [parsed];
+    for (const event of events) {
+      handleCustomJsonlEvent(event);
+    }
+    return true;
   };
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
@@ -1455,6 +1552,9 @@ export function createCliJsonlStreamingParser(params: {
         lineBuffer = "";
         return;
       }
+      if (handleCustomJsonlLine(line)) {
+        continue;
+      }
       for (const parsed of parseJsonRecordCandidates(line)) {
         handleParsedRecord(parsed);
       }
@@ -1465,6 +1565,9 @@ export function createCliJsonlStreamingParser(params: {
     const tail = lineBuffer.trim();
     lineBuffer = "";
     if (!tail) {
+      return;
+    }
+    if (handleCustomJsonlLine(tail)) {
       return;
     }
     for (const parsed of parseJsonRecordCandidates(tail)) {

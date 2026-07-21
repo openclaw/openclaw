@@ -9,8 +9,12 @@ export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   CliBackendAuthEpochMode,
   CliBackendExecutionMode,
+  CliBackendJsonlUsage,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
+  CliBackendParseJsonlEvent,
+  CliBackendParseJsonlEventContext,
+  CliBackendParsedJsonlEvent,
   CliBackendPlugin,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,

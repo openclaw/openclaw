@@ -1848,6 +1848,142 @@ describe("createCliJsonlStreamingParser", () => {
     });
   });
 
+  it("streams plugin-parsed JSONL text, thinking stream, and native tool events", () => {
+    const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const thinking: Array<{ text: string; delta: string; isReasoningSnapshot?: boolean }> = [];
+    const starts: CliToolUseStartDelta[] = [];
+    const results: CliToolResultDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "cursor-agent", output: "jsonl", sessionIdFields: ["session_id"] },
+      providerId: "cursor-agent-cli",
+      parseJsonlEvent: (line) => {
+        const parsed = JSON.parse(line) as {
+          type: string;
+          subtype?: string;
+          session_id?: string;
+          text?: string;
+          result?: string;
+          call_id?: string;
+          tool_call?: Record<string, { args?: Record<string, unknown>; result?: unknown }>;
+        };
+        if (parsed.session_id) {
+          return { kind: "sessionId", sessionId: parsed.session_id };
+        }
+        if (parsed.type === "text") {
+          return { kind: "text", text: parsed.text ?? "" };
+        }
+        if (parsed.type === "thinking") {
+          return { kind: "thinking", text: parsed.text ?? "" };
+        }
+        if (parsed.type === "tool_call" && parsed.call_id && parsed.tool_call) {
+          const entry = Object.entries(parsed.tool_call)[0];
+          if (!entry) {
+            return undefined;
+          }
+          const [name, payload] = entry;
+          return parsed.subtype === "completed"
+            ? {
+                kind: "toolResult",
+                toolCallId: parsed.call_id,
+                name,
+                isError:
+                  typeof payload.result === "object" &&
+                  payload.result !== null &&
+                  "success" in payload.result &&
+                  payload.result.success === false,
+                result: payload.result,
+              }
+            : {
+                kind: "toolStart",
+                toolCallId: parsed.call_id,
+                name,
+                args: payload.args ?? {},
+              };
+        }
+        if (parsed.type === "result") {
+          return {
+            kind: "result",
+            text: parsed.result,
+            usage: { input: 4, output: 6, total: 10 },
+          };
+        }
+        return undefined;
+      },
+      onAssistantDelta: (delta) => deltas.push(delta),
+      onThinkingDelta: (delta) => thinking.push(delta),
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "cursor-session-1" }),
+        JSON.stringify({ type: "thinking", text: "Need a file read" }),
+        JSON.stringify({ type: "text", text: "Reading. " }),
+        JSON.stringify({
+          type: "tool_call",
+          subtype: "started",
+          call_id: "call-1",
+          tool_call: { read_file: { args: { path: "README.md" } } },
+        }),
+        JSON.stringify({
+          type: "tool_call",
+          subtype: "completed",
+          call_id: "call-1",
+          tool_call: { read_file: { result: { success: true, content: "hello" } } },
+        }),
+        JSON.stringify({ type: "text", text: "Done." }),
+        JSON.stringify({ type: "result", result: "Reading. Done." }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([
+      {
+        text: "Reading. ",
+        delta: "Reading. ",
+        sessionId: "cursor-session-1",
+        usage: undefined,
+      },
+      {
+        text: "Reading. Done.",
+        delta: "Done.",
+        sessionId: "cursor-session-1",
+        usage: undefined,
+      },
+    ]);
+    expect(thinking).toEqual([
+      { text: "Need a file read", delta: "Need a file read", isReasoningSnapshot: true },
+    ]);
+    expect(starts).toEqual([
+      {
+        toolCallId: "call-1",
+        name: "read_file",
+        kind: "tool_use",
+        args: { path: "README.md" },
+      },
+    ]);
+    expect(results).toEqual([
+      {
+        toolCallId: "call-1",
+        name: "read_file",
+        isError: false,
+        result: { success: true, content: "hello" },
+      },
+    ]);
+    expect(parser.getOutput()).toEqual({
+      text: "Reading. Done.",
+      sessionId: "cursor-session-1",
+      usage: {
+        input: 4,
+        output: 6,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        total: 10,
+      },
+    });
+  });
+
   it("streams Gemini result errors as provider errors", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
     const parser = createCliJsonlStreamingParser({

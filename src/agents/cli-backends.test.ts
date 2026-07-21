@@ -8,6 +8,7 @@ import type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.typ
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
+  CliBackendParseJsonlEvent,
   CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
@@ -36,6 +37,7 @@ function createBackendEntry(params: {
   ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
   normalizeConfig?: (
     config: CliBackendConfig,
@@ -60,6 +62,7 @@ function createBackendEntry(params: {
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
+      ...(params.parseJsonlEvent ? { parseJsonlEvent: params.parseJsonlEvent } : {}),
       ...(params.runtimeArtifact ? { runtimeArtifact: params.runtimeArtifact } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
@@ -493,6 +496,35 @@ describe("resolveCliBackendConfig reliability merge", () => {
       'service_tier="fast"',
       "--skip-git-repo-check",
     ]);
+  });
+
+  it("deep-merges reliability watchdog overrides for codex", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "codex-cli": {
+              command: "codex",
+              reliability: {
+                watchdog: {
+                  resume: {
+                    noOutputTimeoutRatio: 0.42,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const resolved = requireCliBackendConfig("codex-cli", cfg);
+
+    expect(resolved.config.reliability?.watchdog?.resume?.noOutputTimeoutRatio).toBe(0.42);
+    // Ensure defaults are retained when only one field is overridden.
+    expect(resolved.config.reliability?.watchdog?.resume?.minMs).toBe(60_000);
+    expect(resolved.config.reliability?.watchdog?.resume?.maxMs).toBe(180_000);
+    expect(resolved.config.reliability?.watchdog?.fresh?.noOutputTimeoutRatio).toBe(0.8);
   });
 });
 
@@ -1080,6 +1112,28 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     const resolved = requireCliBackendConfig("claude-cli");
 
     expect(resolved?.resolveExecutionArgs).toBe(resolveExecutionArgs);
+  });
+
+  it("preserves backend-owned JSONL line parsers", () => {
+    const parseJsonlEvent: CliBackendParseJsonlEvent = () => ({
+      kind: "text",
+      text: "hello",
+    });
+    runtimeBackendEntries = [
+      createRuntimeBackendEntry({
+        pluginId: "custom",
+        id: "custom-cli",
+        config: {
+          command: "custom-cli",
+          output: "jsonl",
+        },
+        parseJsonlEvent,
+      }),
+    ];
+
+    const resolved = requireCliBackendConfig("custom-cli");
+
+    expect(resolved?.parseJsonlEvent).toBe(parseJsonlEvent);
   });
 });
 
