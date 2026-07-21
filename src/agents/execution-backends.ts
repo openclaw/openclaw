@@ -1,9 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export const AGENT_EXECUTION_BACKEND_TYPES = ["process", "container", "kubernetes"] as const;
+const AGENT_EXECUTION_BACKEND_TYPES = ["process", "container", "kubernetes"] as const;
 
-export type AgentExecutionBackendType = (typeof AGENT_EXECUTION_BACKEND_TYPES)[number];
+type AgentExecutionBackendType = (typeof AGENT_EXECUTION_BACKEND_TYPES)[number];
 
 export type AgentExecutionPlacementRequest = {
   backend?: string;
@@ -16,7 +16,7 @@ export type AgentExecutionPlacement = {
   profile?: string;
 };
 
-export type AgentExecutionPlacementResult =
+type AgentExecutionPlacementResult =
   | { ok: true; execution: AgentExecutionPlacement }
   | { ok: false; error: string };
 

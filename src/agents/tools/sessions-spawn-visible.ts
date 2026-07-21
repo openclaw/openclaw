@@ -31,7 +31,7 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
   visible: Type.Optional(
     Type.Boolean({
       description:
-        "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+        "Persistent UI session; subagent only; omit execution/mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     }),
   ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
@@ -114,6 +114,11 @@ export async function maybeSpawnVisibleSession(params: {
   const requestedCwd = readStringParam(params.raw, "cwd");
   const spawnedCwd = requestedCwd ? resolveUserPath(requestedCwd) : undefined;
   const unsupported = [
+    [
+      "execution",
+      params.raw.execution,
+      "execution placement is not wired to the sessions.create path",
+    ],
     [
       "runtime",
       params.runtime === "subagent" ? undefined : params.runtime,

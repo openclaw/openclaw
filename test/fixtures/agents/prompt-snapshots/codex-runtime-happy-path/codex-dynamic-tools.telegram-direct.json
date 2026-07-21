@@ -191,14 +191,14 @@
           "type": "string"
         },
         "execution": {
-          "description": "Optional execution placement request. This release supports local process execution and rejects non-process backend types at spawn time.",
+          "description": "Execution placement request. Only process backends are executable in this release.",
           "properties": {
             "backend": {
-              "description": "Execution placement backend id. Defaults to the built-in \"local\" process backend.",
+              "description": "Backend id; defaults to \"local\".",
               "type": "string"
             },
             "profile": {
-              "description": "Optional profile id within the selected execution backend. Profiles are validated and recorded for status/readback.",
+              "description": "Optional backend profile id.",
               "type": "string"
             }
           },
@@ -240,7 +240,7 @@
           "type": "string"
         },
         "visible": {
-          "description": "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
+          "description": "Persistent UI session; subagent only; omit execution/mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
           "type": "boolean"
         },
         "worktree": {
