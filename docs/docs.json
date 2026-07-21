@@ -462,15 +462,15 @@
     },
     {
       "source": "/clawdhub",
-      "destination": "/clawhub"
+      "destination": "/clawhub/cli"
     },
     {
       "source": "/tools/clawhub",
-      "destination": "/clawhub"
+      "destination": "/clawhub/cli"
     },
     {
       "source": "/tools/clawdhub",
-      "destination": "/clawhub"
+      "destination": "/clawhub/cli"
     },
     {
       "source": "/configuration",
