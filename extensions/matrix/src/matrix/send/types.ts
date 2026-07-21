@@ -102,6 +102,16 @@ export type MatrixSendOpts = {
   extraContent?: MatrixExtraContentFields;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   audioAsVoice?: boolean;
+  /** Opaque core queue identity used only for provider-idempotent durable sends. */
+  deliveryQueueId?: string;
+  /** State root owning the durable queue row when recovery uses an explicit root. */
+  deliveryQueueStateDir?: string;
+  /** Stable queue-local payload index. */
+  deliveryPayloadIndex?: number;
+  /** Stable platform-send index within the payload. */
+  deliveryPartIndex?: number;
+  /** Runs after a durable event plan is committed and before timeline I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
   /** Persist each concrete platform send before any later event can fail. */
   onDeliveryResult?: (result: MatrixSendResult) => Promise<void> | void;
 };

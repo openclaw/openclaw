@@ -28,6 +28,7 @@ import { resolveMatrixAccountConfig } from "../account-config.js";
 import { resolveConfiguredMatrixBotUserIds } from "../accounts.js";
 import { setActiveMatrixClient } from "../active-client.js";
 import {
+  acquireSharedMatrixClient,
   backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime,
   resolveMatrixAuth,
@@ -35,6 +36,7 @@ import {
   resolveSharedMatrixClient,
 } from "../client.js";
 import { releaseSharedClientInstance } from "../client/shared.js";
+import { ensureMatrixDeliveryPlanGarbageCollection } from "../delivery-plan.js";
 import type { MatrixClient } from "../sdk.js";
 import { isMatrixStartupAbortError } from "../startup-abort.js";
 import {
@@ -136,6 +138,17 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   }
 
   const logger = core.logging.getChildLogger({ module: "matrix-auto-reply" });
+  try {
+    const pruned = await ensureMatrixDeliveryPlanGarbageCollection();
+    if (pruned.deleted > 0 || pruned.invalid > 0) {
+      logger.info(
+        `matrix: durable delivery plan cleanup deleted=${pruned.deleted} retained=${pruned.retained} invalid=${pruned.invalid}`,
+      );
+    }
+  } catch (error) {
+    // The next durable send retries this sweep; startup should not lose channel availability.
+    logger.warn(`matrix: durable delivery plan cleanup failed (${String(error)})`);
+  }
   const formatRuntimeMessage = (...args: Parameters<RuntimeEnv["log"]>) => format(...args);
   const runtime: RuntimeEnv = opts.runtime ?? {
     log: (...args) => {
@@ -322,7 +335,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   };
 
   try {
-    client = await resolveSharedMatrixClient({
+    // The monitor owns a persistent shared-client lease. Active-client lookup is
+    // only a send fast path; a recovery lease must never become free to stop sync.
+    client = await acquireSharedMatrixClient({
       cfg,
       auth: authWithLimit,
       startClient: false,

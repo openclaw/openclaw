@@ -239,6 +239,7 @@ type MatrixJsClientStub = {
   initRustCrypto: ReturnType<typeof vi.fn>;
   getUserId: ReturnType<typeof vi.fn>;
   getDeviceId: ReturnType<typeof vi.fn>;
+  getVersions: ReturnType<typeof vi.fn>;
   getJoinedRooms: ReturnType<typeof vi.fn>;
   getJoinedRoomMembers: ReturnType<typeof vi.fn>;
   getStateEvent: ReturnType<typeof vi.fn>;
@@ -247,6 +248,7 @@ type MatrixJsClientStub = {
   setAccountData: ReturnType<typeof vi.fn>;
   getRoomIdForAlias: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
+  resendEvent: ReturnType<typeof vi.fn>;
   sendEvent: ReturnType<typeof vi.fn>;
   sendStateEvent: ReturnType<typeof vi.fn>;
   redactEvent: ReturnType<typeof vi.fn>;
@@ -276,6 +278,10 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
   client.initRustCrypto = vi.fn(async () => {});
   client.getUserId = vi.fn(() => "@bot:example.org");
   client.getDeviceId = vi.fn(() => "DEVICE123");
+  client.getVersions = vi.fn(async () => ({
+    versions: ["v1.11"],
+    unstable_features: {},
+  }));
   client.getJoinedRooms = vi.fn(async () => ({ joined_rooms: [] }));
   client.getJoinedRoomMembers = vi.fn(async () => ({ joined: {} }));
   client.getStateEvent = vi.fn(async () => ({}));
@@ -284,6 +290,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
   client.setAccountData = vi.fn(async () => {});
   client.getRoomIdForAlias = vi.fn(async () => ({ room_id: "!resolved:example.org" }));
   client.sendMessage = vi.fn(async () => ({ event_id: "$sent" }));
+  client.resendEvent = vi.fn(async () => ({ event_id: "$resent" }));
   client.sendEvent = vi.fn(async () => ({ event_id: "$sent-event" }));
   client.sendStateEvent = vi.fn(async () => ({ event_id: "$state" }));
   client.redactEvent = vi.fn(async () => ({ event_id: "$redact" }));
@@ -595,6 +602,209 @@ describe("MatrixClient request hardening", () => {
     await expect(first).resolves.toBe("$message");
     await expect(second).resolves.toBe("$event");
     expect(started).toEqual(["message", "event"]);
+  });
+
+  it("reuses explicit transaction ids and resends the SDK pending event", async () => {
+    const pendingEvent = {
+      status: "not_sent",
+      getId: () => "~!room:example.org:oc_txn",
+    };
+    const room = {
+      hasEncryptionStateEvent: () => false,
+      getEventForTxnId: vi.fn(() => pendingEvent),
+    };
+    matrixJsClient.getRoom = vi.fn(() => room);
+    matrixJsClient.resendEvent = vi.fn(async () => ({ event_id: "$original" }));
+    const client = new MatrixClient("https://matrix.example.org", "token");
+
+    await expect(
+      client.sendMessage(
+        "!room:example.org",
+        { msgtype: "m.text", body: "hello" },
+        { transactionId: "oc_txn" },
+      ),
+    ).resolves.toBe("$original");
+
+    expect(room.getEventForTxnId).toHaveBeenCalledWith("oc_txn");
+    expect(matrixJsClient.resendEvent).toHaveBeenCalledWith(pendingEvent, room);
+    expect(matrixJsClient.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a changed durable wire endpoint at the SDK fetch boundary", async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ event_id: "$sent" })));
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch;
+    matrixJsClient.sendMessage = vi.fn(async (_roomId, _content, transactionId) => {
+      await fetchFn(
+        `http://127.0.0.1:8008/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.encrypted/${transactionId}`,
+        { method: "PUT" },
+      );
+      return { event_id: "$sent" };
+    });
+    const onBeforeTimelineDispatch = vi.fn();
+    const onTimelineDispatchRejected = vi.fn();
+
+    await expect(
+      client.sendMessage(
+        "!room:example.org",
+        { msgtype: "m.text", body: "hello" },
+        {
+          transactionId: "oc_txn",
+          expectedWireEventType: "m.room.message",
+          onBeforeTimelineDispatch,
+          onTimelineDispatchRejected,
+        },
+      ),
+    ).rejects.toThrow("Matrix room encryption state changed after durable delivery planning");
+
+    expect(onBeforeTimelineDispatch).not.toHaveBeenCalled();
+    expect(onTimelineDispatchRejected).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("marks durable dispatch immediately before the SDK fetch", async () => {
+    const order: string[] = [];
+    const fetchMock = vi.fn(async () => {
+      order.push("native-fetch");
+      return new Response(JSON.stringify({ event_id: "$sent" }));
+    });
+    stubRuntimeFetch(fetchMock as unknown as typeof fetch);
+    const client = new MatrixClient("http://127.0.0.1:8008", "token", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    const fetchFn = lastCreateClientOpts?.fetchFn as typeof fetch;
+    matrixJsClient.sendMessage = vi.fn(async (_roomId, _content, transactionId) => {
+      order.push("sdk-send");
+      const response = await fetchFn(
+        `http://127.0.0.1:8008/_matrix/client/v3/rooms/!room%3Aexample.org/send/m.room.message/${transactionId}`,
+        { method: "PUT" },
+      );
+      return (await response.json()) as { event_id: string };
+    });
+    const onBeforeTimelineDispatch = vi.fn(async () => {
+      order.push("dispatch-marker");
+    });
+
+    await expect(
+      client.sendMessage(
+        "!room:example.org",
+        { msgtype: "m.text", body: "hello" },
+        {
+          transactionId: "oc_txn",
+          expectedWireEventType: "m.room.message",
+          onBeforeTimelineDispatch,
+        },
+      ),
+    ).resolves.toBe("$sent");
+
+    expect(onBeforeTimelineDispatch).toHaveBeenCalledOnce();
+    expect(order).toEqual(["sdk-send", "dispatch-marker", "native-fetch"]);
+  });
+
+  it("scopes transactions to the Matrix device across access-token refresh", async () => {
+    const identity = { userId: "@bot:example.org", deviceId: "DEVICE-1" };
+    const first = new MatrixClient("https://matrix.example.org", "token-one", identity);
+    const refreshed = new MatrixClient("https://matrix.example.org", "token-two", identity);
+    const otherDevice = new MatrixClient("https://matrix.example.org", "token-two", {
+      ...identity,
+      deviceId: "DEVICE-2",
+    });
+    for (const [client, deviceId] of [
+      [first, "DEVICE-1"],
+      [refreshed, "DEVICE-1"],
+      [otherDevice, "DEVICE-2"],
+    ] as const) {
+      vi.spyOn(client, "doRequest").mockResolvedValue({
+        user_id: identity.userId,
+        device_id: deviceId,
+      });
+    }
+
+    const firstScope = await first.getTransactionScopeId();
+    expect(firstScope).toBe(await refreshed.getTransactionScopeId());
+    expect(firstScope).not.toBe(await otherDevice.getTransactionScopeId());
+    expect(firstScope).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstScope).not.toContain("DEVICE-1");
+    expect(firstScope).not.toContain("token-one");
+  });
+
+  it("keeps pre-v1.7 homeservers scoped to the configured access token", async () => {
+    matrixJsClient.getVersions.mockResolvedValue({
+      versions: ["r0.6.1", "v1.6"],
+      unstable_features: {},
+    });
+    const identity = { userId: "@bot:example.org", deviceId: "DEVICE-1" };
+    const first = new MatrixClient("https://matrix.example.org", "token-one", identity);
+    const replacement = new MatrixClient("https://matrix.example.org", "token-two", identity);
+    for (const client of [first, replacement]) {
+      vi.spyOn(client, "doRequest").mockResolvedValue({
+        user_id: identity.userId,
+        device_id: identity.deviceId,
+      });
+    }
+
+    expect(await first.getTransactionScopeId()).not.toBe(await replacement.getTransactionScopeId());
+  });
+
+  it("retries transaction scope discovery when homeserver versions are temporarily unavailable", async () => {
+    matrixJsClient.getVersions.mockRejectedValueOnce(new Error("versions unavailable"));
+    const identity = { userId: "@bot:example.org", deviceId: "DEVICE-1" };
+    const client = new MatrixClient("https://matrix.example.org", "token-one", identity);
+    vi.spyOn(client, "doRequest").mockResolvedValue({
+      user_id: identity.userId,
+      device_id: identity.deviceId,
+    });
+
+    await expect(client.getTransactionScopeId()).rejects.toThrow("versions unavailable");
+    await expect(client.getTransactionScopeId()).resolves.toMatch(/^[a-f0-9]{64}$/);
+    expect(matrixJsClient.getVersions).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a stale configured device for a replaced access token", async () => {
+    const client = new MatrixClient("https://matrix.example.org", "replacement-token", {
+      userId: "@bot:example.org",
+      deviceId: "STALE-DEVICE",
+    });
+    vi.spyOn(client, "doRequest").mockResolvedValue({
+      user_id: "@bot:example.org",
+      device_id: "ACTUAL-DEVICE",
+    });
+
+    await expect(client.getTransactionScopeId()).rejects.toThrow(
+      "Matrix access token device does not match the configured deviceId",
+    );
+  });
+
+  it("resolves a missing transaction device identity through whoami", async () => {
+    matrixJsClient.getUserId.mockReturnValue(null);
+    matrixJsClient.getDeviceId.mockReturnValue(null);
+    const client = new MatrixClient("https://matrix.example.org", "token-one");
+    vi.spyOn(client, "doRequest").mockResolvedValue({
+      user_id: "@bot:example.org",
+      device_id: "DEVICE-1",
+    });
+
+    await expect(client.getTransactionScopeId()).resolves.toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("keeps device-less access-token sessions sendable with token-scoped transactions", async () => {
+    matrixJsClient.getDeviceId.mockReturnValue(null);
+    const identity = { userId: "@bot:example.org" };
+    const first = new MatrixClient("https://matrix.example.org", "token-one", identity);
+    const sameSession = new MatrixClient("https://matrix.example.org", "token-one", identity);
+    const differentSession = new MatrixClient("https://matrix.example.org", "token-two", identity);
+    for (const client of [first, sameSession, differentSession]) {
+      vi.spyOn(client, "doRequest").mockResolvedValue({ user_id: identity.userId });
+    }
+
+    const firstScope = await first.getTransactionScopeId();
+    expect(firstScope).toBe(await sameSession.getTransactionScopeId());
+    expect(firstScope).not.toBe(await differentSession.getTransactionScopeId());
+    expect(firstScope).toMatch(/^[a-f0-9]{64}$/);
+    expect(firstScope).not.toContain("token-one");
   });
 
   it("does not serialize sends across different rooms", async () => {

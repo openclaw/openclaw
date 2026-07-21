@@ -1,13 +1,20 @@
 // Matrix plugin module implements send behavior.
-import {
-  createMessageReceiptFromOutboundResults,
-  type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-outbound";
-import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
 import { getMatrixRuntime } from "../runtime.js";
 import type { CoreConfig } from "../types.js";
+import {
+  loadMatrixDeliveryPlan,
+  markMatrixDeliveryPlanDispatchStarted,
+  persistMatrixDeliveryPlan,
+  resetMatrixDeliveryPlanAfterRejectedDispatch,
+  resolveMatrixDeliveryPlanDispatchState,
+  resolveMatrixDurableDeliveryIdentity,
+  resolveMatrixDurableDeliveryTransactionScopeId,
+  type MatrixPlannedEvent,
+} from "./delivery-plan.js";
 import { loadOutboundMediaFromUrl } from "./outbound-media-runtime.js";
 import { buildPollStartContent, M_POLL_START } from "./poll-types.js";
 import { buildMatrixReactionContent } from "./reaction-common.js";
@@ -34,7 +41,9 @@ import {
   resolveMediaDurationMs,
   uploadMediaMaybeEncrypted,
 } from "./send/media.js";
+import { createMatrixSendReceipt } from "./send/receipt.js";
 import { normalizeThreadId, resolveMatrixRoomId } from "./send/targets.js";
+import { chunkMatrixText, prepareMatrixSingleText } from "./send/text.js";
 import {
   EventType,
   MSC4357_LIVE_KEY,
@@ -47,22 +56,11 @@ import {
   type MatrixTextMsgType,
 } from "./send/types.js";
 
-const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
 export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
-
-type MatrixPreparedSingleText = {
-  trimmedText: string;
-  convertedText: string;
-  singleEventLimit: number;
-  fitsInSingleEvent: boolean;
-};
-
-type MatrixPreparedChunkedText = MatrixPreparedSingleText & {
-  chunks: string[];
-};
+export { chunkMatrixText, prepareMatrixSingleText } from "./send/text.js";
 
 type MatrixClientResolveOpts = {
   client?: MatrixClient;
@@ -70,25 +68,6 @@ type MatrixClientResolveOpts = {
   timeoutMs?: number;
   accountId?: string | null;
 };
-
-function createMatrixSendReceipt(params: {
-  roomId: string;
-  platformMessageIds: readonly string[];
-  kind: MessageReceiptPartKind;
-  replyToId?: string;
-  threadId?: string | null;
-}) {
-  return createMessageReceiptFromOutboundResults({
-    kind: params.kind,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.threadId ? { threadId: params.threadId } : {}),
-    results: params.platformMessageIds.map((messageId) => ({
-      channel: "matrix",
-      messageId,
-      roomId: params.roomId,
-    })),
-  });
-}
 
 function isMatrixClient(value: MatrixClient | MatrixClientResolveOpts): value is MatrixClient {
   return typeof (value as { sendEvent?: unknown }).sendEvent === "function";
@@ -179,57 +158,6 @@ async function resolvePreviousEditMentions(params: {
   });
 }
 
-export function prepareMatrixSingleText(
-  text: string,
-  opts: {
-    cfg: CoreConfig;
-    accountId?: string;
-    tableMode?: MarkdownTableMode;
-  },
-): MatrixPreparedSingleText {
-  const trimmedText = text.trim();
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text preparation") as CoreConfig;
-  const tableMode =
-    opts.tableMode ??
-    getCore().channel.text.resolveMarkdownTableMode({
-      cfg,
-      channel: "matrix",
-      accountId: opts.accountId,
-    });
-  const convertedText = getCore().channel.text.convertMarkdownTables(trimmedText, tableMode);
-  const singleEventLimit = Math.min(
-    getCore().channel.text.resolveTextChunkLimit(cfg, "matrix", opts.accountId),
-    MATRIX_TEXT_LIMIT,
-  );
-  return {
-    trimmedText,
-    convertedText,
-    singleEventLimit,
-    fitsInSingleEvent: convertedText.length <= singleEventLimit,
-  };
-}
-
-export function chunkMatrixText(
-  text: string,
-  opts: {
-    cfg: CoreConfig;
-    accountId?: string;
-    tableMode?: MarkdownTableMode;
-  },
-): MatrixPreparedChunkedText {
-  const preparedText = prepareMatrixSingleText(text, opts);
-  const cfg = requireRuntimeConfig(opts.cfg, "Matrix text chunking") as CoreConfig;
-  const chunkMode = getCore().channel.text.resolveChunkMode(cfg, "matrix", opts.accountId);
-  return {
-    ...preparedText,
-    chunks: getCore().channel.text.chunkMarkdownTextWithMode(
-      preparedText.convertedText,
-      preparedText.singleEventLimit,
-      chunkMode,
-    ),
-  };
-}
-
 export async function sendMessageMatrix(
   to: string,
   message: string | undefined,
@@ -239,30 +167,230 @@ export async function sendMessageMatrix(
   if (!trimmedMessage && !opts.mediaUrl) {
     throw new Error("Matrix send requires text or media");
   }
-  return await withResolvedMatrixSendClient(
-    {
-      client: opts.client,
-      cfg: opts.cfg,
-      timeoutMs: opts.timeoutMs,
-      accountId: opts.accountId,
-    },
-    async (client) => {
-      const roomId = await resolveMatrixRoomId(client, to);
-      const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
-      const { chunks } = chunkMatrixText(trimmedMessage, {
-        cfg,
+  const durableIdentity = resolveMatrixDurableDeliveryIdentity({
+    queueId: opts.deliveryQueueId,
+    payloadIndex: opts.deliveryPayloadIndex,
+    partIndex: opts.deliveryPartIndex,
+  });
+  let timelineDispatchStarted = false;
+  let providerResultObserved = false;
+  try {
+    return await withResolvedMatrixSendClient(
+      {
+        client: opts.client,
+        cfg: opts.cfg,
+        timeoutMs: opts.timeoutMs,
         accountId: opts.accountId,
-      });
-      const threadId = normalizeThreadId(opts.threadId);
-      const relation = threadId
-        ? buildThreadRelation(threadId, opts.replyToId)
-        : buildReplyRelation(opts.replyToId);
-      let pendingExtraContent = opts.extraContent;
-      const sendContent = async (content: MatrixOutboundContent, kind: MessageReceiptPartKind) => {
-        const contentWithExtra = withMatrixExtraContentFields(content, pendingExtraContent);
-        pendingExtraContent = undefined;
-        const eventId = await client.sendMessage(roomId, contentWithExtra);
-        if (eventId) {
+      },
+      async (client) => {
+        const roomId = await resolveMatrixRoomId(client, to);
+        const cfg = requireRuntimeConfig(opts.cfg, "Matrix send") as CoreConfig;
+        const threadId = normalizeThreadId(opts.threadId);
+        const transactionScopeId = durableIdentity
+          ? await resolveMatrixDurableDeliveryTransactionScopeId(client)
+          : undefined;
+        const wireEventType = durableIdentity
+          ? await client.getMessageWireEventType(roomId)
+          : undefined;
+        let storedPlan: Awaited<ReturnType<typeof loadMatrixDeliveryPlan>> = null;
+        if (durableIdentity) {
+          storedPlan = await loadMatrixDeliveryPlan({
+            identity: durableIdentity,
+            accountId: opts.accountId,
+            roomId,
+            transactionScopeId: transactionScopeId!,
+            wireEventType: wireEventType!,
+          });
+        }
+
+        let plannedEvents: MatrixPlannedEvent[];
+        if (storedPlan) {
+          plannedEvents = storedPlan.events;
+        } else {
+          const { chunks } = chunkMatrixText(trimmedMessage, {
+            cfg,
+            accountId: opts.accountId,
+          });
+          const relation = threadId
+            ? buildThreadRelation(threadId, opts.replyToId)
+            : buildReplyRelation(opts.replyToId);
+          let pendingExtraContent = opts.extraContent;
+          const preparedEvents: Omit<MatrixPlannedEvent, "transactionId">[] = [];
+          const prepareContent = (
+            content: MatrixOutboundContent,
+            receiptKind: MessageReceiptPartKind,
+          ) => {
+            preparedEvents.push({
+              content: withMatrixExtraContentFields(content, pendingExtraContent),
+              receiptKind,
+            });
+            pendingExtraContent = undefined;
+          };
+
+          if (opts.mediaUrl) {
+            const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
+            const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
+              maxBytes,
+              mediaAccess: opts.mediaAccess,
+              mediaLocalRoots: opts.mediaLocalRoots,
+              mediaReadFile: opts.mediaReadFile,
+            });
+            const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
+              contentType: media.contentType,
+              filename: media.fileName,
+            });
+            const durationMs = await resolveMediaDurationMs({
+              buffer: media.buffer,
+              contentType: media.contentType,
+              fileName: media.fileName,
+              kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
+            });
+            const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
+            const { useVoice } = resolveMatrixVoiceDecision({
+              wantsVoice: opts.audioAsVoice === true,
+              contentType: media.contentType,
+              fileName: media.fileName,
+            });
+            const msgtype = useVoice ? MsgType.Audio : baseMsgType;
+            const receiptKind: MessageReceiptPartKind = useVoice ? "voice" : "media";
+            const isImage = msgtype === MsgType.Image;
+            const imageInfo = isImage
+              ? await prepareImageInfo({
+                  buffer: media.buffer,
+                  client,
+                  encrypted: Boolean(uploaded.file),
+                })
+              : undefined;
+            const [firstChunk, ...rest] = chunks;
+            const captionMarkdown = useVoice ? "" : (firstChunk ?? "");
+            const body = useVoice ? "Voice message" : captionMarkdown || media.fileName || "(file)";
+            const content = buildMediaContent({
+              msgtype,
+              body,
+              url: uploaded.url,
+              file: uploaded.file,
+              filename: media.fileName,
+              mimetype: media.contentType,
+              size: media.buffer.byteLength,
+              durationMs,
+              relation,
+              isVoice: useVoice,
+              imageInfo,
+            });
+            await enrichMatrixFormattedContent({
+              client,
+              content,
+              markdown: captionMarkdown,
+            });
+            prepareContent(content, receiptKind);
+            const textChunks = useVoice ? chunks : rest;
+            // Voice messages use a generic media body ("Voice message"), so keep any
+            // transcript follow-up attached to the same reply/thread context.
+            const followupRelation = useVoice || threadId ? relation : undefined;
+            for (const chunk of textChunks) {
+              const text = chunk.trim();
+              if (!text) {
+                continue;
+              }
+              const followup = buildTextContent(text, followupRelation);
+              await enrichMatrixFormattedContent({
+                client,
+                content: followup,
+                markdown: text,
+              });
+              prepareContent(followup, "text");
+            }
+          } else {
+            for (const chunk of chunks.length ? chunks : [""]) {
+              const text = chunk.trim();
+              if (!text) {
+                continue;
+              }
+              const content = buildTextContent(text, relation);
+              await enrichMatrixFormattedContent({
+                client,
+                content,
+                markdown: text,
+              });
+              prepareContent(content, "text");
+            }
+          }
+          if (durableIdentity) {
+            const registration = await persistMatrixDeliveryPlan({
+              identity: durableIdentity,
+              queueStateDir: opts.deliveryQueueStateDir,
+              accountId: opts.accountId,
+              roomId,
+              transactionScopeId: transactionScopeId!,
+              wireEventType: wireEventType!,
+              events: preparedEvents,
+            });
+            plannedEvents = registration.plan.events;
+          } else {
+            plannedEvents = preparedEvents.map((event) => ({
+              content: event.content,
+              receiptKind: event.receiptKind,
+              transactionId: "",
+            }));
+          }
+        }
+
+        const onBeforeTimelineDispatch = async () => {
+          if (timelineDispatchStarted) {
+            return;
+          }
+          try {
+            await opts.onPlatformSendDispatch?.();
+            if (durableIdentity) {
+              // The immutable plan already makes a crash after the core marker
+              // replay-safe. Mark timeline dispatch only after fallible core work.
+              await markMatrixDeliveryPlanDispatchStarted(durableIdentity);
+            }
+          } catch (error) {
+            if (durableIdentity) {
+              let dispatchState: Awaited<ReturnType<typeof resolveMatrixDeliveryPlanDispatchState>>;
+              try {
+                dispatchState = await resolveMatrixDeliveryPlanDispatchState(durableIdentity);
+              } catch {
+                // State that cannot prove this durable plan never dispatched must
+                // retain ambiguity from any earlier attempt.
+                throw error;
+              }
+              if (dispatchState !== "not_started") {
+                throw error;
+              }
+            }
+            // The SDK invokes this callback before timeline I/O, so any failure
+            // here with a never-dispatched plan keeps ordinary queue retry safe.
+            throw new PlatformMessageNotDispatchedError(
+              "Matrix dispatch preparation failed before timeline dispatch",
+              { cause: error },
+            );
+          }
+          timelineDispatchStarted = true;
+        };
+        const onTimelineDispatchRejected = async () => {
+          if (!timelineDispatchStarted || providerResultObserved) {
+            return;
+          }
+          if (durableIdentity) {
+            await resetMatrixDeliveryPlanAfterRejectedDispatch(durableIdentity);
+          }
+          timelineDispatchStarted = false;
+        };
+        const platformMessageIds: string[] = [];
+        for (const planned of plannedEvents) {
+          const eventId = await client.sendMessage(roomId, planned.content, {
+            transactionId: planned.transactionId || undefined,
+            expectedWireEventType: durableIdentity ? wireEventType : undefined,
+            onBeforeTimelineDispatch,
+            onTimelineDispatchRejected,
+          });
+          providerResultObserved ||= Boolean(eventId);
+          if (!eventId) {
+            continue;
+          }
+          platformMessageIds.push(eventId);
           await opts.onDeliveryResult?.({
             messageId: eventId,
             roomId,
@@ -270,133 +398,57 @@ export async function sendMessageMatrix(
             receipt: createMatrixSendReceipt({
               roomId,
               platformMessageIds: [eventId],
-              kind,
+              kind: planned.receiptKind,
               replyToId: opts.replyToId,
               threadId,
             }),
           });
         }
-        return eventId;
-      };
 
-      const platformMessageIds: string[] = [];
-      let lastMessageId = "";
-      let receiptKind: MessageReceiptPartKind = "text";
-      if (opts.mediaUrl) {
-        const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
-        const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
-          maxBytes,
-          mediaAccess: opts.mediaAccess,
-          mediaLocalRoots: opts.mediaLocalRoots,
-          mediaReadFile: opts.mediaReadFile,
-        });
-        const uploaded = await uploadMediaMaybeEncrypted(client, roomId, media.buffer, {
-          contentType: media.contentType,
-          filename: media.fileName,
-        });
-        const durationMs = await resolveMediaDurationMs({
-          buffer: media.buffer,
-          contentType: media.contentType,
-          fileName: media.fileName,
-          kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
-        });
-        const baseMsgType = resolveMatrixMsgType(media.contentType, media.fileName);
-        const { useVoice } = resolveMatrixVoiceDecision({
-          wantsVoice: opts.audioAsVoice === true,
-          contentType: media.contentType,
-          fileName: media.fileName,
-        });
-        const msgtype = useVoice ? MsgType.Audio : baseMsgType;
-        receiptKind = useVoice ? "voice" : "media";
-        const isImage = msgtype === MsgType.Image;
-        const imageInfo = isImage
-          ? await prepareImageInfo({
-              buffer: media.buffer,
-              client,
-              encrypted: Boolean(uploaded.file),
-            })
-          : undefined;
-        const [firstChunk, ...rest] = chunks;
-        const captionMarkdown = useVoice ? "" : (firstChunk ?? "");
-        const body = useVoice ? "Voice message" : captionMarkdown || media.fileName || "(file)";
-        const content = buildMediaContent({
-          msgtype,
-          body,
-          url: uploaded.url,
-          file: uploaded.file,
-          filename: media.fileName,
-          mimetype: media.contentType,
-          size: media.buffer.byteLength,
-          durationMs,
-          relation,
-          isVoice: useVoice,
-          imageInfo,
-        });
-        await enrichMatrixFormattedContent({
-          client,
-          content,
-          markdown: captionMarkdown,
-        });
-        const eventId = await sendContent(content, receiptKind);
-        lastMessageId = eventId ?? lastMessageId;
-        if (eventId) {
-          platformMessageIds.push(eventId);
-        }
-        const textChunks = useVoice ? chunks : rest;
-        // Voice messages use a generic media body ("Voice message"), so keep any
-        // transcript follow-up attached to the same reply/thread context.
-        const followupRelation = useVoice || threadId ? relation : undefined;
-        for (const chunk of textChunks) {
-          const text = chunk.trim();
-          if (!text) {
-            continue;
-          }
-          const followup = buildTextContent(text, followupRelation);
-          await enrichMatrixFormattedContent({
-            client,
-            content: followup,
-            markdown: text,
-          });
-          const followupEventId = await sendContent(followup, "text");
-          lastMessageId = followupEventId ?? lastMessageId;
-          if (followupEventId) {
-            platformMessageIds.push(followupEventId);
-          }
-        }
-      } else {
-        for (const chunk of chunks.length ? chunks : [""]) {
-          const text = chunk.trim();
-          if (!text) {
-            continue;
-          }
-          const content = buildTextContent(text, relation);
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: text,
-          });
-          const eventId = await sendContent(content, "text");
-          lastMessageId = eventId ?? lastMessageId;
-          if (eventId) {
-            platformMessageIds.push(eventId);
-          }
-        }
-      }
+        const lastMessageId = platformMessageIds.at(-1) ?? "";
+        const receiptKind = plannedEvents[0]?.receiptKind ?? "text";
 
-      return {
-        messageId: lastMessageId || "unknown",
-        roomId,
-        primaryMessageId: platformMessageIds[0] ?? (lastMessageId || "unknown"),
-        receipt: createMatrixSendReceipt({
+        return {
+          messageId: lastMessageId || "unknown",
           roomId,
-          platformMessageIds,
-          kind: receiptKind,
-          replyToId: opts.replyToId,
-          threadId,
-        }),
-      };
-    },
-  );
+          primaryMessageId: platformMessageIds[0] ?? (lastMessageId || "unknown"),
+          receipt: createMatrixSendReceipt({
+            roomId,
+            platformMessageIds,
+            kind: receiptKind,
+            replyToId: opts.replyToId,
+            threadId,
+          }),
+        };
+      },
+    );
+  } catch (error) {
+    if (
+      !durableIdentity ||
+      timelineDispatchStarted ||
+      providerResultObserved ||
+      error instanceof PlatformMessageNotDispatchedError
+    ) {
+      throw error;
+    }
+    let dispatchState: Awaited<ReturnType<typeof resolveMatrixDeliveryPlanDispatchState>>;
+    try {
+      dispatchState = await resolveMatrixDeliveryPlanDispatchState(durableIdentity);
+    } catch {
+      // If durable state cannot prove that no prior attempt started, retain the
+      // original ambiguity instead of authorizing an unsafe ordinary replay.
+      throw error;
+    }
+    if (dispatchState === "started") {
+      throw error;
+    }
+    // No persisted attempt reached the Matrix timeline boundary, so queue
+    // recovery can retry without recipient-visible duplication.
+    throw new PlatformMessageNotDispatchedError(
+      "Matrix delivery planning failed before timeline dispatch",
+      { cause: error },
+    );
+  }
 }
 
 export async function sendPollMatrix(

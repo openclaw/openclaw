@@ -1,3 +1,4 @@
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 // Matrix tests cover send plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
@@ -33,6 +34,34 @@ const resolveTextChunkLimitMock = vi.fn<
 const resolveMarkdownTableModeMock = vi.fn(() => "code");
 const convertMarkdownTablesMock = vi.fn((text: string) => text);
 const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
+const deliveryPlanRecords = new Map<string, { value: unknown; createdAt: number }>();
+const deliveryPlanStore = {
+  register: vi.fn(async (key: string, value: unknown) => {
+    deliveryPlanRecords.set(key, { value: structuredClone(value), createdAt: Date.now() });
+  }),
+  registerIfAbsent: vi.fn(async (key: string, value: unknown) => {
+    if (deliveryPlanRecords.has(key)) {
+      return false;
+    }
+    deliveryPlanRecords.set(key, { value: structuredClone(value), createdAt: Date.now() });
+    return true;
+  }),
+  lookup: vi.fn(async (key: string) => structuredClone(deliveryPlanRecords.get(key)?.value)),
+  consume: vi.fn(async (key: string) => {
+    const value = deliveryPlanRecords.get(key)?.value;
+    deliveryPlanRecords.delete(key);
+    return structuredClone(value);
+  }),
+  delete: vi.fn(async (key: string) => deliveryPlanRecords.delete(key)),
+  entries: vi.fn(async () =>
+    [...deliveryPlanRecords.entries()].map(([key, entry]) => ({
+      key,
+      value: entry.value,
+      createdAt: entry.createdAt,
+    })),
+  ),
+  clear: vi.fn(async () => deliveryPlanRecords.clear()),
+};
 
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
@@ -75,6 +104,10 @@ const runtimeStub = {
       convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
     },
   },
+  state: {
+    getOutboundDeliveryQueueStatus: vi.fn(async () => "pending" as const),
+    openKeyedStore: () => deliveryPlanStore,
+  },
 } as unknown as PluginRuntime;
 
 function applyMatrixSendRuntimeStub() {
@@ -100,7 +133,21 @@ function createEncryptedMediaPayload() {
 }
 
 const makeClient = () => {
-  const sendMessage = vi.fn().mockResolvedValue("evt1");
+  const sendMessage = vi.fn(
+    async (
+      _roomId: string,
+      _content: unknown,
+      opts?: {
+        transactionId?: string;
+        expectedWireEventType?: "m.room.message" | "m.room.encrypted";
+        onBeforeTimelineDispatch?: () => Promise<void> | void;
+        onTimelineDispatchRejected?: () => Promise<void> | void;
+      },
+    ) => {
+      await opts?.onBeforeTimelineDispatch?.();
+      return "evt1";
+    },
+  );
   const sendEvent = vi.fn().mockResolvedValue("evt-poll-vote");
   const getEvent = vi.fn();
   const getJoinedRoomMembers = vi.fn().mockResolvedValue([]);
@@ -111,6 +158,8 @@ const makeClient = () => {
     getEvent,
     getJoinedRoomMembers,
     uploadContent,
+    getTransactionScopeId: vi.fn(() => "SCOPE-1"),
+    getMessageWireEventType: vi.fn(async () => "m.room.message" as const),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
@@ -169,6 +218,10 @@ function expectTextReceiptPart(value: unknown, platformMessageId: string) {
 
 function resetMatrixSendRuntimeMocks() {
   setMatrixRuntime(runtimeStub);
+  deliveryPlanRecords.clear();
+  for (const operation of Object.values(deliveryPlanStore)) {
+    operation.mockClear();
+  }
   loadOutboundMediaFromUrlMock.mockReset().mockImplementation(
     async (
       mediaUrl: string,
@@ -217,6 +270,408 @@ function resetMatrixSendRuntimeMocks() {
     .mockImplementation((text: string) => (text ? [text] : []));
   applyMatrixSendRuntimeStub();
 }
+
+describe("sendMessageMatrix durable replay", () => {
+  beforeEach(() => {
+    resetMatrixSendRuntimeMocks();
+  });
+
+  it("commits the event plan before dispatch and reuses its transaction id and content", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage.mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+      await sendOpts?.onBeforeTimelineDispatch?.();
+      throw new Error("response lost");
+    });
+    const dispatch = vi.fn(async () => {
+      if (dispatch.mock.calls.length === 1) {
+        expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+          dispatchStarted: false,
+        });
+      }
+    });
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-1",
+      deliveryQueueStateDir: "/custom-state",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+      onPlatformSendDispatch: dispatch,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "original content", opts)).rejects.toThrow(
+      "response lost",
+    );
+    const firstContent = structuredClone(sendMessage.mock.calls[0]?.[1]);
+    const firstTransactionId = sendMessage.mock.calls[0]?.[2]?.transactionId;
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: true,
+      queueStateDir: "/custom-state",
+    });
+
+    chunkMarkdownTextWithModeMock.mockImplementationOnce(() => ["changed by config drift"]);
+    await expect(
+      sendMessageMatrix("room:!room:example", "changed input", opts),
+    ).resolves.toMatchObject({ messageId: "evt1" });
+
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[1]?.[1]).toEqual(firstContent);
+    expect(sendMessage.mock.calls[1]?.[2]?.transactionId).toBe(firstTransactionId);
+    expect(firstTransactionId).toMatch(/^oc_/);
+  });
+
+  it("keeps the durable plan pre-dispatch when the core dispatch callback rejects", async () => {
+    const { client, sendMessage } = makeClient();
+    const clientMocks = client as unknown as {
+      getMessageWireEventType: ReturnType<typeof vi.fn>;
+    };
+    const dispatch = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("queue state unavailable"))
+      .mockResolvedValue(undefined);
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-dispatch-callback",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+      onPlatformSendDispatch: dispatch,
+    };
+
+    const error = await sendMessageMatrix("room:!room:example", "hello", opts).then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "Matrix dispatch preparation failed before timeline dispatch",
+    });
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: false,
+    });
+
+    clientMocks.getMessageWireEventType.mockResolvedValue("m.room.encrypted");
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).resolves.toMatchObject({
+      messageId: "evt1",
+    });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[1]?.[2]?.transactionId).toBe(
+      sendMessage.mock.calls[0]?.[2]?.transactionId,
+    );
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: true,
+      wireEventType: "m.room.encrypted",
+    });
+  });
+
+  it("preserves an earlier ambiguous dispatch when replay preparation rejects", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage.mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+      await sendOpts?.onBeforeTimelineDispatch?.();
+      throw new Error("first response lost");
+    });
+    const preparationError = new Error("queue state unavailable during replay");
+    const dispatch = vi
+      .fn<() => Promise<void>>()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(preparationError);
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-replay-dispatch-callback",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+      onPlatformSendDispatch: dispatch,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toThrow(
+      "first response lost",
+    );
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({ dispatchStarted: true });
+
+    const replayError = await sendMessageMatrix("room:!room:example", "hello", opts).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(replayError).toBe(preparationError);
+    expect(replayError).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({ dispatchStarted: true });
+  });
+
+  it("resets the dispatch marker when the final endpoint guard rejects before the first PUT", async () => {
+    const { client, sendMessage } = makeClient();
+    const clientMocks = client as unknown as {
+      getMessageWireEventType: ReturnType<typeof vi.fn>;
+    };
+    sendMessage.mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+      await sendOpts?.onBeforeTimelineDispatch?.();
+      await sendOpts?.onTimelineDispatchRejected?.();
+      throw new Error("Matrix room encryption state changed after durable delivery planning");
+    });
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-final-endpoint-guard",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: false,
+      wireEventType: "m.room.message",
+    });
+
+    clientMocks.getMessageWireEventType.mockResolvedValue("m.room.encrypted");
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).resolves.toMatchObject({
+      messageId: "evt1",
+    });
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: true,
+      wireEventType: "m.room.encrypted",
+    });
+  });
+
+  it("retains ambiguity when a later event endpoint guard rejects after an earlier PUT", async () => {
+    const { client, sendMessage } = makeClient();
+    chunkMarkdownTextWithModeMock.mockReturnValue(["first", "second"]);
+    sendMessage
+      .mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+        await sendOpts?.onBeforeTimelineDispatch?.();
+        return "evt-first";
+      })
+      .mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+        await sendOpts?.onBeforeTimelineDispatch?.();
+        await sendOpts?.onTimelineDispatchRejected?.();
+        throw new Error("Matrix room encryption state changed after durable delivery planning");
+      });
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "long message", {
+        client,
+        cfg: {} as never,
+        deliveryQueueId: "queue-later-endpoint-guard",
+        deliveryPayloadIndex: 0,
+        deliveryPartIndex: 0,
+      }),
+    ).rejects.toThrow("Matrix room encryption state changed after durable delivery planning");
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: true,
+    });
+  });
+
+  it("classifies delivery-plan lookup failure as pre-dispatch", async () => {
+    const { client, sendMessage } = makeClient();
+    deliveryPlanStore.lookup.mockRejectedValueOnce(new Error("state store unavailable"));
+
+    const error = await sendMessageMatrix("room:!room:example", "hello", {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-lookup-failure",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    }).then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "Matrix delivery planning failed before timeline dispatch",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("classifies client startup failure as pre-dispatch", async () => {
+    withResolvedRuntimeMatrixClientMock.mockRejectedValueOnce(
+      new Error("temporary client startup failure"),
+    );
+
+    const error = await sendMessageMatrix("room:!room:example", "hello", {
+      cfg: {} as never,
+      deliveryQueueId: "queue-client-failure",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    }).then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+    expect(error).toMatchObject({
+      message: "Matrix delivery planning failed before timeline dispatch",
+    });
+  });
+
+  it("preserves ambiguity when startup fails after an earlier timeline dispatch", async () => {
+    const { client, sendMessage } = makeClient();
+    sendMessage.mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+      await sendOpts?.onBeforeTimelineDispatch?.();
+      throw new Error("response lost");
+    });
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-startup-after-dispatch",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toThrow(
+      "response lost",
+    );
+    withResolvedRuntimeMatrixClientMock.mockRejectedValueOnce(
+      new Error("temporary client startup failure"),
+    );
+
+    const error = await sendMessageMatrix("room:!room:example", "hello", {
+      ...opts,
+      client: undefined,
+    }).then(
+      () => null,
+      (failure: unknown) => failure,
+    );
+
+    expect(error).toEqual(new Error("temporary client startup failure"));
+    expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  });
+
+  it("rebuilds a newly persisted plan when the wire endpoint changes before dispatch", async () => {
+    const { client, sendMessage } = makeClient();
+    const clientMocks = client as unknown as {
+      getMessageWireEventType: ReturnType<typeof vi.fn>;
+    };
+    const dispatch = vi.fn();
+    sendMessage.mockRejectedValueOnce(
+      new Error("Matrix room encryption state changed after durable delivery planning"),
+    );
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-pre-dispatch-encryption-transition",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+      onPlatformSendDispatch: dispatch,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: false,
+      wireEventType: "m.room.message",
+    });
+
+    clientMocks.getMessageWireEventType.mockResolvedValue("m.room.encrypted");
+    deliveryPlanStore.delete.mockRejectedValueOnce(new Error("temporary state store failure"));
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    expect(dispatch).not.toHaveBeenCalled();
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).resolves.toMatchObject({
+      messageId: "evt1",
+    });
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect([...deliveryPlanRecords.values()][0]?.value).toMatchObject({
+      dispatchStarted: true,
+      wireEventType: "m.room.encrypted",
+    });
+  });
+
+  it("reuses uploaded media descriptors instead of uploading again after response loss", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    sendMessage.mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+      await sendOpts?.onBeforeTimelineDispatch?.();
+      throw new Error("response lost");
+    });
+    const opts = {
+      client,
+      cfg: {} as never,
+      mediaUrl: "file:///tmp/photo.png",
+      deliveryQueueId: "queue-media",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "caption", opts)).rejects.toThrow(
+      "response lost",
+    );
+    await expect(sendMessageMatrix("room:!room:example", "caption", opts)).resolves.toMatchObject({
+      messageId: "evt1",
+    });
+
+    expect(loadOutboundMediaFromUrlMock).toHaveBeenCalledOnce();
+    expect(uploadContent).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[1]?.[1]).toEqual(sendMessage.mock.calls[0]?.[1]);
+    expect(sendMessage.mock.calls[1]?.[2]?.transactionId).toBe(
+      sendMessage.mock.calls[0]?.[2]?.transactionId,
+    );
+  });
+
+  it("refuses replay when room encryption changes the Matrix endpoint", async () => {
+    const { client, sendMessage } = makeClient();
+    const clientMocks = client as unknown as {
+      getMessageWireEventType: ReturnType<typeof vi.fn>;
+    };
+    sendMessage.mockImplementationOnce(async (_roomId, _content, sendOpts) => {
+      await sendOpts?.onBeforeTimelineDispatch?.();
+      throw new Error("response lost");
+    });
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-encryption-transition",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toThrow(
+      "response lost",
+    );
+    clientMocks.getMessageWireEventType.mockResolvedValue("m.room.encrypted");
+
+    await expect(sendMessageMatrix("room:!room:example", "hello", opts)).rejects.toThrow(
+      "Matrix durable delivery plan endpoint changed after timeline dispatch",
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays every long-message event with the same ordered transaction ids", async () => {
+    const { client, sendMessage } = makeClient();
+    chunkMarkdownTextWithModeMock.mockReturnValue(["first", "second"]);
+    sendMessage
+      .mockResolvedValueOnce("evt-first")
+      .mockRejectedValueOnce(new Error("second response lost"))
+      .mockResolvedValueOnce("evt-first")
+      .mockResolvedValueOnce("evt-second");
+    const opts = {
+      client,
+      cfg: {} as never,
+      deliveryQueueId: "queue-long",
+      deliveryPayloadIndex: 0,
+      deliveryPartIndex: 0,
+    };
+
+    await expect(sendMessageMatrix("room:!room:example", "long input", opts)).rejects.toThrow(
+      "second response lost",
+    );
+    await expect(
+      sendMessageMatrix("room:!room:example", "changed input", opts),
+    ).resolves.toMatchObject({ messageId: "evt-second" });
+
+    const transactionIds = sendMessage.mock.calls.map((call) => call[2]?.transactionId);
+    expect(transactionIds.slice(2)).toEqual(transactionIds.slice(0, 2));
+    expect(sendMessage.mock.calls.slice(2).map((call) => call[1])).toEqual(
+      sendMessage.mock.calls.slice(0, 2).map((call) => call[1]),
+    );
+  });
+});
 
 describe("sendMessageMatrix media", () => {
   beforeEach(() => {

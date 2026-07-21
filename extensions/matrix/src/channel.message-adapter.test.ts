@@ -77,6 +77,7 @@ describe("matrix channel message adapter", () => {
     }
     const sendText = adapter.send.text;
     const sendMedia = adapter.send.media;
+    const sendPayload = adapter.send.payload;
 
     const proveText = async () => {
       mocks.sendMessageMatrix.mockClear();
@@ -139,14 +140,50 @@ describe("matrix channel message adapter", () => {
       expect(result.receipt.threadId).toBe("$thread");
     };
 
+    const provePayload = async () => {
+      if (!sendPayload) {
+        throw new Error("Expected Matrix payload sender");
+      }
+      mocks.sendMessageMatrix.mockClear();
+      await sendPayload({
+        cfg,
+        to: "room:!room:example",
+        text: "payload",
+        payload: { text: "payload" },
+        accountId: "default",
+        deliveryQueueId: "queue-1",
+        deliveryPayloadIndex: 0,
+        deliveryPartIndex: 0,
+      });
+      expect(lastMatrixSendOptions()).toMatchObject({
+        deliveryQueueId: "queue-1",
+        deliveryPayloadIndex: 0,
+        deliveryPartIndex: 0,
+      });
+    };
+
     await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "matrixMessageAdapter",
       adapter,
       proofs: {
         text: proveText,
         media: proveMedia,
+        payload: provePayload,
         replyTo: proveReplyThread,
         thread: proveReplyThread,
+        batch: async () => {
+          await provePayload();
+          expect(adapter.durableFinal?.replaySafeDeliveryId).toBe(true);
+          expect(adapter.durableFinal?.durableDeliveryProtocol).toBe("matrix-delivery-plan-v1");
+          expect(adapter.durableFinal?.reconcileUnknownSendKinds?.batch).toBe(true);
+        },
+        reconcileUnknownSend: () => {
+          expect(adapter.durableFinal?.reconcileUnknownSend).toBeTypeOf("function");
+          expect(adapter.durableFinal?.afterTerminalFailure).toBeTypeOf("function");
+        },
+        afterCommit: () => {
+          expect(adapter.send?.lifecycle?.afterCommit).toBeTypeOf("function");
+        },
         messageSendingHooks: () => {
           expect(adapter.send?.text).toBeTypeOf("function");
         },

@@ -1,4 +1,5 @@
 // Matrix plugin module implements sdk behavior.
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
   ClientEvent,
@@ -10,6 +11,7 @@ import {
   type MatrixClient as MatrixJsClient,
   type MatrixEvent,
 } from "matrix-js-sdk/lib/matrix.js";
+import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
@@ -116,6 +118,65 @@ export type MatrixRoomKeyBackupStatus = {
 
 const MATRIX_STATUS_DIAGNOSTIC_TIMEOUT_MS = 10_000;
 const DEFAULT_MATRIX_LOCAL_TIMEOUT_MS = 60_000;
+const MATRIX_DEVICE_SCOPED_TRANSACTION_VERSION = { major: 1, minor: 7 } as const;
+
+function supportsDeviceScopedTransactions(versions: readonly string[]): boolean {
+  return versions.some((version) => {
+    const match = /^v(\d+)\.(\d+)(?:\.\d+)?$/u.exec(version.trim());
+    if (!match) {
+      return false;
+    }
+    const major = Number(match[1]);
+    const minor = Number(match[2]);
+    return (
+      major > MATRIX_DEVICE_SCOPED_TRANSACTION_VERSION.major ||
+      (major === MATRIX_DEVICE_SCOPED_TRANSACTION_VERSION.major &&
+        minor >= MATRIX_DEVICE_SCOPED_TRANSACTION_VERSION.minor)
+    );
+  });
+}
+
+type MatrixTimelineDispatchPreparation = {
+  expectedWireEventType?: "m.room.message" | "m.room.encrypted";
+  onBeforeTimelineDispatch?: () => Promise<void> | void;
+  onTimelineDispatchRejected?: () => Promise<void> | void;
+};
+
+function resolveTimelineSendEndpoint(
+  resource: RequestInfo | URL,
+  init?: RequestInit,
+): { eventType: string; transactionId: string } | null {
+  const method = (
+    init?.method ??
+    (typeof Request !== "undefined" && resource instanceof Request ? resource.method : "GET")
+  ).toUpperCase();
+  if (method !== "PUT") {
+    return null;
+  }
+  const rawUrl =
+    resource instanceof URL
+      ? resource.toString()
+      : typeof resource === "string"
+        ? resource
+        : resource.url;
+  try {
+    const match = /\/rooms\/[^/]+\/send\/([^/]+)\/([^/]+)$/u.exec(new URL(rawUrl).pathname);
+    if (!match) {
+      return null;
+    }
+    const eventType = match[1];
+    const transactionId = match[2];
+    if (!eventType || !transactionId) {
+      return null;
+    }
+    return {
+      eventType: decodeURIComponent(eventType),
+      transactionId: decodeURIComponent(transactionId),
+    };
+  } catch {
+    return null;
+  }
+}
 
 function resolveMatrixLocalTimeoutMs(raw: number | undefined): number {
   if (typeof raw !== "number" || !Number.isFinite(raw)) {
@@ -332,10 +393,19 @@ export class MatrixClient {
   private readonly syncStore?: SqliteBackedMatrixSyncStore;
   private readonly idbSnapshotPath?: string;
   private readonly cryptoDatabasePrefix?: string;
+  private readonly transactionScopeHomeserver: string;
+  private readonly transactionScopeAccessTokenHash: string;
+  private transactionScopeDeviceId: string | null;
+  private readonly timelineDispatchPreparations = new Map<
+    string,
+    MatrixTimelineDispatchPreparation
+  >();
   private bridgeRegistered = false;
   private started = false;
   private cryptoBootstrapped = false;
   private selfUserId: string | null;
+  private transactionScopeId: string | null = null;
+  private transactionScopePromise: Promise<string> | null = null;
   private readonly dmRoomIds = new Set<string>();
   private cryptoInitialized = false;
   private decryptBridge?: MatrixDecryptBridge<MatrixRawEvent>;
@@ -396,11 +466,18 @@ export class MatrixClient {
     this.idbSnapshotPath = opts.idbSnapshotPath;
     this.cryptoDatabasePrefix = opts.cryptoDatabasePrefix;
     this.selfUserId = opts.userId?.trim() || null;
+    this.transactionScopeHomeserver = homeserver.trim().replace(/\/+$/u, "");
+    this.transactionScopeAccessTokenHash = createHash("sha256").update(accessToken).digest("hex");
+    this.transactionScopeDeviceId = opts.deviceId?.trim() || null;
     this.autoBootstrapCrypto = opts.autoBootstrapCrypto !== false;
     this.recoveryKeyStore = new MatrixRecoveryKeyStore(opts.recoveryKeyPath);
     const cryptoCallbacks = this.encryptionEnabled
       ? this.recoveryKeyStore.buildCryptoCallbacks()
       : undefined;
+    const guardedFetch = createMatrixGuardedFetch({
+      ssrfPolicy: opts.ssrfPolicy,
+      dispatcherPolicy: opts.dispatcherPolicy,
+    });
     this.client = createMatrixJsClient({
       baseUrl: homeserver,
       accessToken,
@@ -408,10 +485,10 @@ export class MatrixClient {
       deviceId: opts.deviceId,
       logger: createMatrixJsSdkClientLogger("MatrixClient"),
       localTimeoutMs: this.localTimeoutMs,
-      fetchFn: createMatrixGuardedFetch({
-        ssrfPolicy: opts.ssrfPolicy,
-        dispatcherPolicy: opts.dispatcherPolicy,
-      }),
+      fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
+        await this.prepareTimelineDispatchAtFetch(resource, init);
+        return await guardedFetch(resource, init);
+      }) as typeof fetch,
       store: this.syncStore,
       cryptoCallbacks: cryptoCallbacks as never,
       verificationMethods: [
@@ -864,6 +941,67 @@ export class MatrixClient {
     return resolved;
   }
 
+  getDeviceId(): string | null {
+    return this.client.getDeviceId()?.trim() || null;
+  }
+
+  async getTransactionScopeId(): Promise<string> {
+    if (this.transactionScopeId) {
+      return this.transactionScopeId;
+    }
+    const active =
+      this.transactionScopePromise ??
+      (async () => {
+        const configuredUserId = this.client.getUserId()?.trim() || this.selfUserId;
+        const configuredDeviceId =
+          this.transactionScopeDeviceId || this.client.getDeviceId()?.trim() || null;
+        const whoami = (await this.doRequest("GET", "/_matrix/client/v3/account/whoami")) as {
+          user_id?: string;
+          device_id?: string;
+        };
+        const userId = whoami.user_id?.trim() || null;
+        const deviceId = whoami.device_id?.trim() || null;
+        if (configuredUserId && userId && configuredUserId !== userId) {
+          throw new Error("Matrix access token user does not match the configured userId");
+        }
+        if (configuredDeviceId && deviceId && configuredDeviceId !== deviceId) {
+          throw new Error("Matrix access token device does not match the configured deviceId");
+        }
+        if (!userId) {
+          return "";
+        }
+        this.selfUserId = userId;
+        this.transactionScopeDeviceId = deviceId;
+        // Device-scoped transaction IDs only became a server contract in Matrix v1.7.
+        // OpenClaw does not accept refresh lineage, so older servers must use the configured
+        // token. A versions lookup failure aborts: falling back would change persisted plan identity.
+        const canUseDeviceScope =
+          deviceId !== null &&
+          supportsDeviceScopedTransactions((await this.client.getVersions()).versions);
+        const sessionKind = canUseDeviceScope ? "device" : "access-token";
+        const sessionId = canUseDeviceScope ? deviceId : this.transactionScopeAccessTokenHash;
+        return createHash("sha256")
+          .update(this.transactionScopeHomeserver)
+          .update("\0")
+          .update(userId)
+          .update("\0")
+          .update(sessionKind)
+          .update("\0")
+          .update(sessionId)
+          .digest("hex");
+      })();
+    this.transactionScopePromise = active;
+    try {
+      const resolved = await active;
+      this.transactionScopeId = resolved || null;
+      return resolved;
+    } finally {
+      if (this.transactionScopePromise === active) {
+        this.transactionScopePromise = null;
+      }
+    }
+  }
+
   async getJoinedRooms(): Promise<string[]> {
     const joined = (await this.doRequest("GET", "/_matrix/client/v3/joined_rooms")) as {
       joined_rooms?: unknown;
@@ -946,11 +1084,107 @@ export class MatrixClient {
     return result.room_id;
   }
 
-  async sendMessage(roomId: string, content: MessageEventContent): Promise<string> {
+  async sendMessage(
+    roomId: string,
+    content: MessageEventContent,
+    opts: {
+      transactionId?: string;
+      expectedWireEventType?: "m.room.message" | "m.room.encrypted";
+      onBeforeTimelineDispatch?: () => Promise<void> | void;
+      onTimelineDispatchRejected?: () => Promise<void> | void;
+    } = {},
+  ): Promise<string> {
     return await this.runSerializedRoomSend(roomId, async () => {
-      const sent = await this.client.sendMessage(roomId, content as never);
+      if (opts.transactionId) {
+        const room = this.client.getRoom(roomId);
+        const existing = room?.getEventForTxnId?.(opts.transactionId);
+        if (existing) {
+          const existingId = existing.getId();
+          if (existing.status === EventStatus.SENT && existingId && !existingId.startsWith("~")) {
+            return existingId;
+          }
+          if (existing.status === EventStatus.NOT_SENT && room) {
+            const resent = await this.runWithTimelineDispatchPreparation(
+              opts.transactionId,
+              opts,
+              async () => await this.client.resendEvent(existing, room),
+            );
+            return resent.event_id;
+          }
+          throw new Error(
+            `Matrix transaction ${opts.transactionId} is already active with status ${existing.status ?? "unknown"}`,
+          );
+        }
+      }
+      const sent = await this.runWithTimelineDispatchPreparation(
+        opts.transactionId,
+        opts,
+        async () => await this.client.sendMessage(roomId, content as never, opts.transactionId),
+      );
       return sent.event_id;
     });
+  }
+
+  private async runWithTimelineDispatchPreparation<T>(
+    transactionId: string | undefined,
+    preparation: MatrixTimelineDispatchPreparation,
+    send: () => Promise<T>,
+  ): Promise<T> {
+    if (
+      !transactionId ||
+      (!preparation.expectedWireEventType &&
+        !preparation.onBeforeTimelineDispatch &&
+        !preparation.onTimelineDispatchRejected)
+    ) {
+      return await send();
+    }
+    if (this.timelineDispatchPreparations.has(transactionId)) {
+      throw new Error(`Matrix transaction ${transactionId} already has dispatch preparation`);
+    }
+    this.timelineDispatchPreparations.set(transactionId, preparation);
+    try {
+      return await send();
+    } finally {
+      if (this.timelineDispatchPreparations.get(transactionId) === preparation) {
+        this.timelineDispatchPreparations.delete(transactionId);
+      }
+    }
+  }
+
+  private async prepareTimelineDispatchAtFetch(
+    resource: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<void> {
+    const endpoint = resolveTimelineSendEndpoint(resource, init);
+    if (!endpoint) {
+      return;
+    }
+    const preparation = this.timelineDispatchPreparations.get(endpoint.transactionId);
+    if (!preparation) {
+      return;
+    }
+    if (
+      preparation.expectedWireEventType &&
+      preparation.expectedWireEventType !== endpoint.eventType
+    ) {
+      await preparation.onTimelineDispatchRejected?.();
+      throw new Error("Matrix room encryption state changed after durable delivery planning");
+    }
+    // matrix-js-sdk may encrypt and queue before fetch. This injected fetch is the
+    // last owned boundary before native I/O, so durable dispatch starts exactly here.
+    await preparation.onBeforeTimelineDispatch?.();
+  }
+
+  async getMessageWireEventType(roomId: string): Promise<"m.room.message" | "m.room.encrypted"> {
+    const roomHasEncryptionState = this.client.getRoom(roomId)?.hasEncryptionStateEvent() === true;
+    if (roomHasEncryptionState) {
+      return "m.room.encrypted";
+    }
+    const crypto = this.client.getCrypto();
+    const cryptoHasEncryptionState = crypto
+      ? await crypto.isEncryptionEnabledInRoom(roomId)
+      : false;
+    return cryptoHasEncryptionState ? "m.room.encrypted" : "m.room.message";
   }
 
   async sendEvent(

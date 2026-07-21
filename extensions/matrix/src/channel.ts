@@ -58,6 +58,7 @@ import {
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
+import { MATRIX_DURABLE_DELIVERY_PROTOCOL } from "./matrix/durable-delivery.js";
 import { normalizeMatrixUserId } from "./matrix/monitor/allowlist.js";
 import type { MatrixProbe } from "./matrix/probe.js";
 import {
@@ -345,9 +346,13 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
     durableFinal: {
       text: true,
       media: true,
+      payload: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
+      batch: true,
+      reconcileUnknownSend: true,
+      afterCommit: true,
     },
   },
   presentationCapabilities: {
@@ -394,7 +399,7 @@ const matrixChannelOutbound: ChannelOutboundAdapter = {
   }),
 };
 
-const matrixMessageAdapter = createChannelMessageAdapterFromOutbound({
+const matrixMessageAdapterBase = createChannelMessageAdapterFromOutbound({
   id: "matrix",
   outbound: matrixChannelOutbound,
   live: {
@@ -414,6 +419,40 @@ const matrixMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
   },
 });
+
+const matrixMessageAdapter = {
+  ...matrixMessageAdapterBase,
+  durableFinal: {
+    ...matrixMessageAdapterBase.durableFinal,
+    capabilities: {
+      ...matrixMessageAdapterBase.durableFinal?.capabilities,
+      payload: true,
+      batch: true,
+      reconcileUnknownSend: true,
+      afterCommit: true,
+    },
+    replaySafeDeliveryId: true,
+    durableDeliveryProtocol: MATRIX_DURABLE_DELIVERY_PROTOCOL,
+    reconcileUnknownSendKinds: {
+      text: true,
+      media: true,
+      payload: true,
+      batch: true,
+    },
+    reconcileUnknownSend: async (ctx) =>
+      await (await loadMatrixChannelRuntime()).reconcileMatrixUnknownSend(ctx),
+    afterTerminalFailure: async (ctx) =>
+      await (await loadMatrixChannelRuntime()).cleanupMatrixDeliveryPlansAfterTerminalFailure(ctx),
+  },
+  send: {
+    ...matrixMessageAdapterBase.send,
+    lifecycle: {
+      ...matrixMessageAdapterBase.send?.lifecycle,
+      afterCommit: async (ctx) =>
+        await (await loadMatrixChannelRuntime()).cleanupMatrixDeliveryPlanAfterCommit(ctx),
+    },
+  },
+} satisfies typeof matrixMessageAdapterBase;
 
 export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
   createChatChannelPlugin<ResolvedMatrixAccount, MatrixProbe>({

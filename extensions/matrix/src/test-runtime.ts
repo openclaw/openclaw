@@ -25,7 +25,7 @@ type MatrixRuntimeStub = {
   logging?: PluginRuntime["logging"];
   state: Pick<
     NonNullable<PluginRuntime["state"]>,
-    "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
+    "getOutboundDeliveryQueueStatus" | "openKeyedStore" | "openSyncKeyedStore" | "resolveStateDir"
   >;
 };
 
@@ -89,6 +89,7 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
     ...(logging ? { logging } : {}),
     state: {
       resolveStateDir: defaultStateDirResolver,
+      getOutboundDeliveryQueueStatus: vi.fn(async () => "pending" as const),
       openKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("matrix", {
           ...storeOptions,

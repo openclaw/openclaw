@@ -74,6 +74,28 @@ describe("matrixMessageActions", () => {
     expect(supportsAction({ action: "poll-vote" } as never)).toBe(true);
   });
 
+  it("prepares standard message-tool sends for durable core delivery", async () => {
+    const prepareSendPayload = matrixMessageActions.prepareSendPayload;
+    expect(prepareSendPayload).toBeTypeOf("function");
+    const payload = {
+      text: "hello",
+      mediaUrls: ["mxc://example.org/image"],
+    };
+
+    const prepared = await prepareSendPayload?.({
+      ctx: {
+        channel: "matrix",
+        action: "send",
+        params: { to: "!room:example.org", message: "hello" },
+        cfg: createConfiguredMatrixConfig(),
+      },
+      to: "!room:example.org",
+      payload,
+    });
+
+    expect(prepared).toEqual(payload);
+  });
+
   it("exposes and describes self-profile updates", () => {
     const describeMessageTool = matrixMessageActions.describeMessageTool;
     const supportsAction = matrixMessageActions.supportsAction ?? (() => false);

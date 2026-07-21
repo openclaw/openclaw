@@ -295,6 +295,38 @@ describe("resolveSharedMatrixClient", () => {
     expect(mainClient.stop).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps a persistent owner alive when a transient lease releases", async () => {
+    const mainAuth = authFor("main");
+    const mainClient = {
+      ...createMockClient("main"),
+      stopAndPersist: vi.fn(async () => undefined),
+    };
+
+    resolveMatrixAuthMock.mockResolvedValue(mainAuth);
+    createMatrixClientMock.mockResolvedValue(mainClient);
+
+    const owner = await acquireSharedMatrixClient({
+      cfg: TEST_CFG,
+      accountId: "main",
+      startClient: false,
+    });
+    await resolveSharedMatrixClient({ cfg: TEST_CFG, accountId: "main" });
+    const transient = await acquireSharedMatrixClient({
+      cfg: TEST_CFG,
+      accountId: "main",
+      startClient: false,
+    });
+
+    expect(owner).toBe(mainClient);
+    expect(transient).toBe(mainClient);
+    expect(await releaseSharedClientInstance(transient, "persist")).toBe(false);
+    expect(mainClient.stop).not.toHaveBeenCalled();
+    expect(mainClient.stopAndPersist).not.toHaveBeenCalled();
+
+    expect(await releaseSharedClientInstance(owner, "persist")).toBe(true);
+    expect(mainClient.stopAndPersist).toHaveBeenCalledOnce();
+  });
+
   it("rejects mismatched explicit account ids when auth is already resolved", async () => {
     await expect(
       resolveSharedMatrixClient({

@@ -143,6 +143,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    deliveryQueueStateDir,
+    deliveryPayloadIndex,
+    deliveryPartIndex,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -160,7 +165,7 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       const lastResult = await sendPayloadMediaSequence({
         text: payloadText,
         mediaUrls: urls,
-        send: async ({ text, mediaUrl, isFirst }) =>
+        send: async ({ text, mediaUrl, index, isFirst }) =>
           await send(to, text, {
             cfg,
             mediaUrl,
@@ -171,6 +176,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
             threadId: resolvedThreadId,
             accountId: accountId ?? undefined,
             audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+            deliveryQueueId,
+            ...(deliveryQueueStateDir !== undefined ? { deliveryQueueStateDir } : {}),
+            deliveryPayloadIndex,
+            deliveryPartIndex: index,
+            onPlatformSendDispatch,
             extraContent: isFirst ? resolveMatrixExtraContent(payload) : undefined,
             onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
           }),
@@ -192,6 +202,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice: payload.audioAsVoice ?? audioAsVoice,
+      deliveryQueueId,
+      ...(deliveryQueueStateDir !== undefined ? { deliveryQueueStateDir } : {}),
+      deliveryPayloadIndex,
+      deliveryPartIndex: deliveryPartIndex ?? 0,
+      onPlatformSendDispatch,
       extraContent: resolveMatrixExtraContent(payload),
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
@@ -210,6 +225,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    deliveryQueueStateDir,
+    deliveryPayloadIndex,
+    deliveryPartIndex,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -222,6 +242,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice,
+      deliveryQueueId,
+      ...(deliveryQueueStateDir !== undefined ? { deliveryQueueStateDir } : {}),
+      deliveryPayloadIndex,
+      deliveryPartIndex,
+      onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
     return {
@@ -242,6 +267,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
     threadId,
     accountId,
     audioAsVoice,
+    deliveryQueueId,
+    deliveryQueueStateDir,
+    deliveryPayloadIndex,
+    deliveryPartIndex,
+    onPlatformSendDispatch,
     onDeliveryResult,
   }) => {
     const send =
@@ -257,6 +287,11 @@ export const matrixOutbound: ChannelOutboundAdapter = {
       threadId: resolvedThreadId,
       accountId: accountId ?? undefined,
       audioAsVoice,
+      deliveryQueueId,
+      ...(deliveryQueueStateDir !== undefined ? { deliveryQueueStateDir } : {}),
+      deliveryPayloadIndex,
+      deliveryPartIndex,
+      onPlatformSendDispatch,
       onDeliveryResult: resolveMatrixDeliveryProgress(onDeliveryResult),
     });
     return {

@@ -2818,7 +2818,7 @@ describe("matrix monitor handler draft streaming", () => {
       replyToId?: string;
     },
     info: { kind: string },
-  ) => Promise<void>;
+  ) => Promise<{ visibleReplySent: boolean }>;
   type ReplyOpts = {
     onReplyStart?: () => Promise<void> | void;
     onPartialReply?: (payload: { text: string }) => void;
@@ -2974,8 +2974,9 @@ describe("matrix monitor handler draft streaming", () => {
     });
 
     deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Single block" }, { kind: "final" });
+    const result = await deliver({ text: "Single block" }, { kind: "final" });
 
+    expect(result).toEqual({ visibleReplySent: true });
     expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
     expectFinalizedPreviewEdit("$draft1", "Single block");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
@@ -3722,8 +3723,9 @@ describe("matrix monitor handler draft streaming", () => {
 
     editMessageMatrixMock.mockRejectedValueOnce(new Error("rate limited"));
 
-    await deliver({ text: "Hello world" }, { kind: "block" });
+    const result = await deliver({ text: "Hello world" }, { kind: "block" });
 
+    expect(result).toEqual({ visibleReplySent: true });
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     await finish();
   });
@@ -4075,8 +4077,9 @@ describe("matrix monitor handler draft streaming", () => {
 
     deliverMatrixRepliesMock.mockClear();
     deliverMatrixRepliesMock.mockResolvedValue(false);
-    await deliver({}, { kind: "final" });
+    const result = await deliver({}, { kind: "final" });
 
+    expect(result).toEqual({ visibleReplySent: false });
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     expect(redactEventMock).not.toHaveBeenCalled();
 
@@ -4096,8 +4099,12 @@ describe("matrix monitor handler draft streaming", () => {
 
     // Compaction notice should bypass draft path and go to normal delivery.
     deliverMatrixRepliesMock.mockClear();
-    await deliver({ text: "Compacting...", isCompactionNotice: true }, { kind: "block" });
+    const result = await deliver(
+      { text: "Compacting...", isCompactionNotice: true },
+      { kind: "block" },
+    );
 
+    expect(result).toEqual({ visibleReplySent: true });
     expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
     // Edit should NOT have been called for the compaction notice.
     expect(editMessageMatrixMock).not.toHaveBeenCalled();

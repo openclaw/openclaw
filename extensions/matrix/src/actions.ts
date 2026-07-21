@@ -150,6 +150,9 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
+  // Standard sends use the channel outbound adapter so durable queueing,
+  // lifecycle hooks, and finalized Matrix event ids stay on one path.
+  prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
   handleAction: async (ctx: ChannelMessageActionContext) => {
     const { handleMatrixAction } = await import("./tool-actions.runtime.js");
     const { action, params, cfg, accountId, mediaLocalRoots } = ctx;

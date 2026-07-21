@@ -89,6 +89,10 @@ const hoisted = vi.hoisted(() => {
   };
   const stopThreadBindingManager = vi.fn();
   const releaseSharedClientInstance = vi.fn(async () => true);
+  const acquireSharedMatrixClient = vi.fn(async () => {
+    callOrder.push("prepare-client");
+    return client;
+  });
   const resolveSharedMatrixClient = vi.fn(async (params: { startClient?: boolean }) => {
     if (params.startClient === false) {
       callOrder.push("prepare-client");
@@ -105,6 +109,11 @@ const hoisted = vi.hoisted(() => {
   });
   const setActiveMatrixClient = vi.fn();
   const setMatrixRuntime = vi.fn();
+  const ensureMatrixDeliveryPlanGarbageCollection = vi.fn(async () => ({
+    deleted: 0,
+    retained: 0,
+    invalid: 0,
+  }));
   const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
   const runMatrixStartupMaintenance = vi.fn<
     (params: { abortSignal?: AbortSignal }) => Promise<void>
@@ -114,6 +123,7 @@ const hoisted = vi.hoisted(() => {
     backfillMatrixAuthDeviceIdAfterStartup,
     callOrder,
     accountConfig,
+    acquireSharedMatrixClient,
     client,
     createDirectRoomTracker,
     createMatrixInboundEventDeduper,
@@ -130,6 +140,7 @@ const hoisted = vi.hoisted(() => {
     runMatrixStartupMaintenance,
     registeredHealthySyncGetter: undefined as undefined | (() => number | undefined),
     setActiveMatrixClient,
+    ensureMatrixDeliveryPlanGarbageCollection,
     setMatrixRuntime,
     setStatus,
     state,
@@ -260,6 +271,7 @@ vi.mock("../active-client.js", () => ({
 }));
 
 vi.mock("../client.js", () => ({
+  acquireSharedMatrixClient: hoisted.acquireSharedMatrixClient,
   backfillMatrixAuthDeviceIdAfterStartup: hoisted.backfillMatrixAuthDeviceIdAfterStartup,
   isBunRuntime: () => false,
   resolveMatrixAuth: vi.fn(async () => ({
@@ -288,6 +300,10 @@ vi.mock("../device-health.js", () => ({
   summarizeMatrixDeviceHealth: vi.fn(() => ({
     staleOpenClawDevices: [],
   })),
+}));
+
+vi.mock("../delivery-plan.js", () => ({
+  ensureMatrixDeliveryPlanGarbageCollection: hoisted.ensureMatrixDeliveryPlanGarbageCollection,
 }));
 
 vi.mock("../profile.js", () => ({
@@ -442,6 +458,10 @@ describe("monitorMatrixProvider", () => {
     delete (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms;
     hoisted.resolveTextChunkLimit.mockReset().mockReturnValue(4000);
     hoisted.releaseSharedClientInstance.mockReset().mockResolvedValue(true);
+    hoisted.acquireSharedMatrixClient.mockReset().mockImplementation(async () => {
+      hoisted.callOrder.push("prepare-client");
+      return hoisted.client;
+    });
     hoisted.resolveSharedMatrixClient
       .mockReset()
       .mockImplementation(async (params: { startClient?: boolean }) => {
@@ -470,6 +490,11 @@ describe("monitorMatrixProvider", () => {
     hoisted.registeredOnRoomMessage = null;
     hoisted.registeredHealthySyncGetter = undefined;
     hoisted.setActiveMatrixClient.mockReset();
+    hoisted.ensureMatrixDeliveryPlanGarbageCollection.mockReset().mockResolvedValue({
+      deleted: 0,
+      retained: 0,
+      invalid: 0,
+    });
     hoisted.stopThreadBindingManager.mockReset();
     hoisted.client.removeAllListeners();
     hoisted.client.hasPersistedSyncState.mockReset().mockReturnValue(false);
@@ -529,8 +554,22 @@ describe("monitorMatrixProvider", () => {
       };
       expect(handlerParams.streaming).toBe(expectedMode);
       expect(handlerParams.previewToolProgressEnabled).toBe(expectedPreviewToolProgressEnabled);
+      expect(hoisted.ensureMatrixDeliveryPlanGarbageCollection).toHaveBeenCalledOnce();
     },
   );
+
+  it("continues startup when durable delivery plan cleanup fails", async () => {
+    hoisted.ensureMatrixDeliveryPlanGarbageCollection.mockRejectedValueOnce(
+      new Error("queue status unavailable"),
+    );
+
+    await startMonitorAndAbortAfterStartup();
+
+    expect(hoisted.logger.warn).toHaveBeenCalledWith(
+      "matrix: durable delivery plan cleanup failed (Error: queue status unavailable)",
+    );
+    expect(hoisted.callOrder).toContain("start-client");
+  });
 
   it("returns immediately when the abort signal is already canceled", async () => {
     const abortController = new AbortController();
@@ -684,15 +723,7 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("marks early startup failures as error before the monitor loop starts", async () => {
-    hoisted.resolveSharedMatrixClient.mockImplementation(
-      async (params: { startClient?: boolean }) => {
-        if (params.startClient === false) {
-          throw new Error("prepare failed");
-        }
-        hoisted.callOrder.push("start-client");
-        return hoisted.client;
-      },
-    );
+    hoisted.acquireSharedMatrixClient.mockRejectedValueOnce(new Error("prepare failed"));
 
     await expect(
       monitorMatrixProvider({
@@ -804,6 +835,18 @@ describe("monitorMatrixProvider", () => {
       "start-client",
     ]);
     expect(hoisted.stopThreadBindingManager).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds a shared owner lease for the full monitor lifetime", async () => {
+    await startMonitorAndAbortAfterStartup();
+
+    expect(hoisted.acquireSharedMatrixClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        startClient: false,
+      }),
+    );
+    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(hoisted.client, "persist");
   });
 
   it("resolves text chunk limit for the effective Matrix account", async () => {
