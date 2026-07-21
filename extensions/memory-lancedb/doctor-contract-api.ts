@@ -21,7 +21,9 @@ const LEGACY_ENVELOPE_DELETE_BATCH_SIZE = 500;
 
 // Deletion predicate mirrors the recall filter shipped BEFORE the plain-label
 // rename (index.ts sentinel/label/header rules): doctor only deletes rows that
-// filter already permanently hid at recall, so no user-visible memory is lost.
+// filter already hid from agent recall, and that capture sanitization would
+// never store today. Accepted tradeoff: raw `ltm list/search` output loses
+// these sludge rows too, including any salvageable trailer text.
 // Mid-line mentions of the old wording (colon not at end of line) survive.
 const LEGACY_ENVELOPE_SENTINELS = [
   "Conversation info (untrusted metadata):",
