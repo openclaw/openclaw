@@ -10,7 +10,7 @@ import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
  * own private runtime tables while the shared registry can still discover them.
  */
 /** Inputs for resolving one agent SQLite path or directory. */
-export type OpenClawAgentSqlitePathOptions = {
+type OpenClawAgentSqlitePathOptions = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   path?: string;
@@ -29,9 +29,4 @@ export function resolveOpenClawAgentSqlitePath(options: OpenClawAgentSqlitePathO
         "openclaw-agent.sqlite",
       ),
   );
-}
-
-/** Resolve the containing directory for one agent's SQLite database. */
-export function resolveOpenClawAgentSqliteDir(options: OpenClawAgentSqlitePathOptions): string {
-  return path.dirname(resolveOpenClawAgentSqlitePath(options));
 }

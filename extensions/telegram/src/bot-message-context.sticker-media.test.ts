@@ -1,6 +1,9 @@
 // Telegram tests cover bot message context.sticker media plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { TelegramInboundBodyResult } from "./bot-message-context.body.js";
+
+type ResolveTelegramInboundBody =
+  typeof import("./bot-message-context.body.js").resolveTelegramInboundBody;
+type TelegramInboundBodyResult = NonNullable<Awaited<ReturnType<ResolveTelegramInboundBody>>>;
 
 type InboundBodyMock = (arg: unknown) => Promise<TelegramInboundBodyResult>;
 
@@ -11,6 +14,13 @@ const inboundBodyMock = vi.hoisted(() =>
     historyKey: undefined,
     commandAuthorized: false,
     effectiveWasMentioned: false,
+    inboundEventKind: "user_request",
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: false,
+      effectiveWasMentioned: false,
+      requireMention: false,
+    },
     canDetectMention: true,
     shouldBypassMention: false,
     hasControlCommand: false,
@@ -51,6 +61,7 @@ describe("buildTelegramMessageContext sticker media", () => {
         {
           path: stickerPath,
           contentType: "image/webp",
+          kind: "sticker",
           stickerMetadata: {
             emoji: "🔥",
             setName: "NewSet",

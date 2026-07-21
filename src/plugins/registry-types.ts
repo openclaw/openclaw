@@ -1,6 +1,5 @@
 /** Shared registration types that make up the in-memory plugin registry. */
 import type { AgentHarness } from "../agents/harness/types.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -29,47 +28,60 @@ import type {
   PluginDiagnostic,
   PluginFormat,
 } from "./manifest-types.js";
-import type { PluginManifestContracts } from "./manifest.js";
+import type {
+  PluginManifestContracts,
+  PluginManifestDashboard,
+  PluginManifestDashboardActionVerb,
+  PluginManifestDashboardDataBinding,
+} from "./manifest.js";
 import type { MemoryEmbeddingProviderAdapter } from "./memory-embedding-providers.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import type { PluginDependencyStatus } from "./status-dependencies.js";
+import type { SessionCatalogProvider } from "./session-catalog.js";
+import type { PluginDependencyStatus } from "./status-dependencies-core.js";
 import type {
-  CliBackendPlugin,
-  ImageGenerationProviderPlugin,
-  MediaUnderstandingProviderPlugin,
-  TranscriptSourceProvider,
-  MusicGenerationProviderPlugin,
-  OpenClawPluginChannelRegistration,
-  OpenClawPluginCliCommandDescriptor,
-  OpenClawPluginCliRegistrar,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginGatewayRuntimeScopeSurface,
-  OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
-  OpenClawPluginHttpRouteHandler,
   OpenClawPluginHttpRouteUpgradeHandler,
-  OpenClawPluginHttpRouteMatch,
-  OpenClawPluginHostedMediaResolver,
-  OpenClawPluginReloadRegistration,
-  OpenClawPluginSecurityAuditCollector,
-  OpenClawPluginService,
-  OpenClawPluginToolFactory,
-  PluginConversationBindingResolvedEvent,
-  PluginHookRegistration as TypedPluginHookRegistration,
-  PluginLogger,
-  PluginOrigin,
-  PluginTextTransformRegistration,
-  MigrationProviderPlugin,
-  ProviderPlugin,
-  RealtimeTranscriptionProviderPlugin,
-  RealtimeVoiceProviderPlugin,
-  SpeechProviderPlugin,
-  VideoGenerationProviderPlugin,
-  WebFetchProviderPlugin,
-  WebSearchProviderPlugin,
-  UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
+import type { PluginMcpServerConnectionResolverRegistration } from "./types.mcp-connection.js";
+type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type CliBackendPlugin = import("./types.js").CliBackendPlugin;
+type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
+type MediaUnderstandingProviderPlugin = import("./types.js").MediaUnderstandingProviderPlugin;
+type TranscriptSourceProvider = import("./types.js").TranscriptSourceProvider;
+type MusicGenerationProviderPlugin = import("./types.js").MusicGenerationProviderPlugin;
+type OpenClawPluginCliCommandDescriptor = import("./types.js").OpenClawPluginCliCommandDescriptor;
+type OpenClawPluginCliRegistrar = import("./types.js").OpenClawPluginCliRegistrar;
+type OpenClawPluginCommandDefinition = import("./types.js").OpenClawPluginCommandDefinition;
+type PluginInteractiveHandlerRegistration =
+  import("./types.js").PluginInteractiveHandlerRegistration;
+type OpenClawPluginGatewayRuntimeScopeSurface =
+  import("./types.js").OpenClawPluginGatewayRuntimeScopeSurface;
+type OpenClawGatewayDiscoveryService = import("./types.js").OpenClawGatewayDiscoveryService;
+type OpenClawPluginHttpRouteHandler = import("./types.js").OpenClawPluginHttpRouteHandler;
+type OpenClawPluginHttpRouteMatch = import("./types.js").OpenClawPluginHttpRouteMatch;
+type OpenClawPluginHostedMediaResolver = import("./types.js").OpenClawPluginHostedMediaResolver;
+type OpenClawPluginReloadRegistration = import("./types.js").OpenClawPluginReloadRegistration;
+type OpenClawPluginSecurityAuditCollector =
+  import("./types.js").OpenClawPluginSecurityAuditCollector;
+type OpenClawPluginService = import("./types.js").OpenClawPluginService;
+type OpenClawPluginToolFactory = import("./types.js").OpenClawPluginToolFactory;
+type PluginConversationBindingResolvedEvent =
+  import("./types.js").PluginConversationBindingResolvedEvent;
+type TypedPluginHookRegistration = import("./types.js").PluginHookRegistration;
+type PluginLogger = import("./types.js").PluginLogger;
+type PluginOrigin = import("./types.js").PluginOrigin;
+type PluginTextTransformRegistration = import("./types.js").PluginTextTransformRegistration;
+type MigrationProviderPlugin = import("./types.js").MigrationProviderPlugin;
+type ProviderPlugin = import("./types.js").ProviderPlugin;
+type RealtimeTranscriptionProviderPlugin = import("./types.js").RealtimeTranscriptionProviderPlugin;
+type RealtimeVoiceProviderPlugin = import("./types.js").RealtimeVoiceProviderPlugin;
+type SpeechProviderPlugin = import("./types.js").SpeechProviderPlugin;
+type VideoGenerationProviderPlugin = import("./types.js").VideoGenerationProviderPlugin;
+type WebFetchProviderPlugin = import("./types.js").WebFetchProviderPlugin;
+type WebSearchProviderPlugin = import("./types.js").WebSearchProviderPlugin;
+type WorkerProvider = import("./types.js").WorkerProvider;
+type UnifiedModelCatalogProviderPlugin = import("./types.js").UnifiedModelCatalogProviderPlugin;
 
 /** Agent tool factory registered by one plugin runtime. */
 export type PluginToolRegistration = {
@@ -79,11 +91,12 @@ export type PluginToolRegistration = {
   names: string[];
   declaredNames?: string[];
   optional: boolean;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
 };
-
-export type PluginCliRegistration = {
+type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
@@ -111,7 +124,7 @@ export type PluginHttpRouteRegistration = {
   source?: string;
 };
 
-export type PluginHostedMediaResolverRegistration = {
+type PluginHostedMediaResolverRegistration = {
   pluginId: string;
   pluginName?: string;
   resolver: OpenClawPluginHostedMediaResolver;
@@ -123,20 +136,24 @@ export type PluginChannelRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   rootDir?: string;
 };
 
-export type PluginChannelSetupRegistration = {
+type PluginChannelSetupRegistration = {
   pluginId: string;
   pluginName?: string;
   plugin: ChannelPlugin;
+  /** Loader-owned provenance. Missing values are conservative legacy registrations. */
+  origin?: PluginOrigin;
   source: string;
   enabled: boolean;
   rootDir?: string;
 };
 
-export type PluginProviderRegistration = {
+type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
@@ -144,7 +161,7 @@ export type PluginProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginModelCatalogProviderRegistration = {
+type PluginModelCatalogProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: UnifiedModelCatalogProviderPlugin;
@@ -152,7 +169,27 @@ export type PluginModelCatalogProviderRegistration = {
   rootDir?: string;
 };
 
-export type PluginCliBackendRegistration = {
+type PluginSessionCatalogRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: SessionCatalogProvider;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginDashboardDataBindingRegistration = PluginManifestDashboardDataBinding & {
+  pluginId: string;
+  capabilityId: string;
+  handler: GatewayRequestHandlers[string];
+};
+
+export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActionVerb & {
+  pluginId: string;
+  capabilityId: string;
+  handler: GatewayRequestHandlers[string];
+};
+
+type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
   backend: CliBackendPlugin;
@@ -176,33 +213,30 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
   rootDir?: string;
 };
 
-export type PluginSpeechProviderRegistration =
-  PluginOwnedProviderRegistration<SpeechProviderPlugin>;
-export type PluginEmbeddingProviderRegistration =
+type PluginSpeechProviderRegistration = PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+type PluginEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<EmbeddingProviderAdapter>;
-export type PluginRealtimeTranscriptionProviderRegistration =
+type PluginRealtimeTranscriptionProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
-export type PluginRealtimeVoiceProviderRegistration =
+type PluginRealtimeVoiceProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeVoiceProviderPlugin>;
-export type PluginMediaUnderstandingProviderRegistration =
+type PluginMediaUnderstandingProviderRegistration =
   PluginOwnedProviderRegistration<MediaUnderstandingProviderPlugin>;
-export type PluginTranscriptsSourceProviderRegistration =
+type PluginTranscriptsSourceProviderRegistration =
   PluginOwnedProviderRegistration<TranscriptSourceProvider>;
-export type PluginImageGenerationProviderRegistration =
+type PluginImageGenerationProviderRegistration =
   PluginOwnedProviderRegistration<ImageGenerationProviderPlugin>;
-export type PluginVideoGenerationProviderRegistration =
+type PluginVideoGenerationProviderRegistration =
   PluginOwnedProviderRegistration<VideoGenerationProviderPlugin>;
-export type PluginMusicGenerationProviderRegistration =
+type PluginMusicGenerationProviderRegistration =
   PluginOwnedProviderRegistration<MusicGenerationProviderPlugin>;
-export type PluginWebFetchProviderRegistration =
-  PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
-export type PluginWebSearchProviderRegistration =
-  PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
-export type PluginMigrationProviderRegistration =
-  PluginOwnedProviderRegistration<MigrationProviderPlugin>;
-export type PluginMemoryEmbeddingProviderRegistration =
+type PluginWebFetchProviderRegistration = PluginOwnedProviderRegistration<WebFetchProviderPlugin>;
+type PluginWebSearchProviderRegistration = PluginOwnedProviderRegistration<WebSearchProviderPlugin>;
+type PluginWorkerProviderRegistration = PluginOwnedProviderRegistration<WorkerProvider>;
+type PluginMigrationProviderRegistration = PluginOwnedProviderRegistration<MigrationProviderPlugin>;
+type PluginMemoryEmbeddingProviderRegistration =
   PluginOwnedProviderRegistration<MemoryEmbeddingProviderAdapter>;
-export type PluginCodexAppServerExtensionFactoryRegistration = {
+type PluginCodexAppServerExtensionFactoryRegistration = {
   pluginId: string;
   pluginName?: string;
   rawFactory: CodexAppServerExtensionFactory;
@@ -219,7 +253,7 @@ export type PluginAgentToolResultMiddlewareRegistration = {
   source: string;
   rootDir?: string;
 };
-export type PluginAgentHarnessRegistration = {
+type PluginAgentHarnessRegistration = {
   pluginId: string;
   pluginName?: string;
   harness: AgentHarness;
@@ -227,7 +261,7 @@ export type PluginAgentHarnessRegistration = {
   rootDir?: string;
 };
 
-export type PluginHookRegistration = {
+type PluginHookRegistration = {
   pluginId: string;
   entry: HookEntry;
   events: string[];
@@ -253,7 +287,7 @@ export type PluginGatewayDiscoveryServiceRegistration = {
   rootDir?: string;
 };
 
-export type PluginReloadRegistration = {
+type PluginReloadRegistration = {
   pluginId: string;
   pluginName?: string;
   registration: OpenClawPluginReloadRegistration;
@@ -269,7 +303,7 @@ export type PluginNodeHostCommandRegistration = {
   rootDir?: string;
 };
 
-export type PluginNodeInvokePolicyRegistration = {
+type PluginNodeInvokePolicyRegistration = {
   pluginId: string;
   pluginName?: string;
   policy: import("./types.js").OpenClawPluginNodeInvokePolicy;
@@ -278,7 +312,7 @@ export type PluginNodeInvokePolicyRegistration = {
   rootDir?: string;
 };
 
-export type PluginSecurityAuditCollectorRegistration = {
+type PluginSecurityAuditCollectorRegistration = {
   pluginId: string;
   pluginName?: string;
   collector: OpenClawPluginSecurityAuditCollector;
@@ -294,7 +328,13 @@ export type PluginCommandRegistration = {
   rootDir?: string;
 };
 
-export type PluginSessionExtensionRegistryRegistration = {
+type PluginInteractiveHandlerRegistryRegistration = PluginInteractiveHandlerRegistration & {
+  pluginId: string;
+  pluginName?: string;
+  pluginRoot?: string;
+};
+
+type PluginSessionExtensionRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   extension: PluginSessionExtensionRegistration;
@@ -311,7 +351,7 @@ export type PluginTrustedToolPolicyRegistryRegistration = {
   rootDir?: string;
 };
 
-export type PluginToolMetadataRegistryRegistration = {
+type PluginToolMetadataRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   metadata: PluginToolMetadataRegistration;
@@ -319,7 +359,7 @@ export type PluginToolMetadataRegistryRegistration = {
   rootDir?: string;
 };
 
-export type PluginControlUiDescriptorRegistryRegistration = {
+type PluginControlUiDescriptorRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   descriptor: PluginControlUiDescriptor;
@@ -327,7 +367,7 @@ export type PluginControlUiDescriptorRegistryRegistration = {
   rootDir?: string;
 };
 
-export type PluginRuntimeLifecycleRegistryRegistration = {
+type PluginRuntimeLifecycleRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   lifecycle: PluginRuntimeLifecycleRegistration;
@@ -335,7 +375,7 @@ export type PluginRuntimeLifecycleRegistryRegistration = {
   rootDir?: string;
 };
 
-export type PluginAgentEventSubscriptionRegistryRegistration = {
+type PluginAgentEventSubscriptionRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   subscription: PluginAgentEventSubscriptionRegistration;
@@ -343,7 +383,7 @@ export type PluginAgentEventSubscriptionRegistryRegistration = {
   rootDir?: string;
 };
 
-export type PluginSessionSchedulerJobRegistryRegistration = {
+type PluginSessionSchedulerJobRegistryRegistration = {
   pluginId: string;
   pluginName?: string;
   job: PluginSessionSchedulerJobRegistration;
@@ -360,7 +400,7 @@ export type PluginSessionActionRegistryRegistration = {
   rootDir?: string;
 };
 
-export type PluginConversationBindingResolvedHandlerRegistration = {
+type PluginConversationBindingResolvedHandlerRegistration = {
   pluginId: string;
   pluginName?: string;
   pluginRoot?: string;
@@ -426,6 +466,7 @@ export type PluginRecord = {
   configUiHints?: Record<string, PluginConfigUiHint>;
   configJsonSchema?: JsonSchemaObject;
   contracts?: PluginManifestContracts;
+  dashboard?: PluginManifestDashboard;
   memorySlotSelected?: boolean;
   dependencyStatus?: PluginDependencyStatus;
 };
@@ -439,7 +480,8 @@ export type PluginRegistry = {
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
   modelCatalogProviders: PluginModelCatalogProviderRegistration[];
-  cliBackends?: PluginCliBackendRegistration[];
+  sessionCatalogs: PluginSessionCatalogRegistration[];
+  cliBackends: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   embeddingProviders: PluginEmbeddingProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
@@ -452,6 +494,7 @@ export type PluginRegistry = {
   musicGenerationProviders: PluginMusicGenerationProviderRegistration[];
   webFetchProviders: PluginWebFetchProviderRegistration[];
   webSearchProviders: PluginWebSearchProviderRegistration[];
+  workerProviders: Map<string, PluginWorkerProviderRegistration>;
   migrationProviders: PluginMigrationProviderRegistration[];
   codexAppServerExtensionFactories: PluginCodexAppServerExtensionFactoryRegistration[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
@@ -459,25 +502,29 @@ export type PluginRegistry = {
   agentHarnesses: PluginAgentHarnessRegistration[];
   gatewayHandlers: GatewayRequestHandlers;
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
-  coreGatewayMethodNames?: string[];
+  dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
+  dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
+  coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
-  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
+  hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
+  mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
-  reloads?: PluginReloadRegistration[];
-  nodeHostCommands?: PluginNodeHostCommandRegistration[];
-  nodeInvokePolicies?: PluginNodeInvokePolicyRegistration[];
-  securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
+  reloads: PluginReloadRegistration[];
+  nodeHostCommands: PluginNodeHostCommandRegistration[];
+  nodeInvokePolicies: PluginNodeInvokePolicyRegistration[];
+  securityAuditCollectors: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];
   commands: PluginCommandRegistration[];
-  sessionExtensions?: PluginSessionExtensionRegistryRegistration[];
-  trustedToolPolicies?: PluginTrustedToolPolicyRegistryRegistration[];
-  toolMetadata?: PluginToolMetadataRegistryRegistration[];
-  controlUiDescriptors?: PluginControlUiDescriptorRegistryRegistration[];
-  runtimeLifecycles?: PluginRuntimeLifecycleRegistryRegistration[];
-  agentEventSubscriptions?: PluginAgentEventSubscriptionRegistryRegistration[];
-  sessionSchedulerJobs?: PluginSessionSchedulerJobRegistryRegistration[];
-  sessionActions?: PluginSessionActionRegistryRegistration[];
+  interactiveHandlers: PluginInteractiveHandlerRegistryRegistration[];
+  sessionExtensions: PluginSessionExtensionRegistryRegistration[];
+  trustedToolPolicies: PluginTrustedToolPolicyRegistryRegistration[];
+  toolMetadata: PluginToolMetadataRegistryRegistration[];
+  controlUiDescriptors: PluginControlUiDescriptorRegistryRegistration[];
+  runtimeLifecycles: PluginRuntimeLifecycleRegistryRegistration[];
+  agentEventSubscriptions: PluginAgentEventSubscriptionRegistryRegistration[];
+  sessionSchedulerJobs: PluginSessionSchedulerJobRegistryRegistration[];
+  sessionActions: PluginSessionActionRegistryRegistration[];
   conversationBindingResolvedHandlers: PluginConversationBindingResolvedHandlerRegistration[];
   diagnostics: PluginDiagnostic[];
 };
@@ -493,13 +540,3 @@ export type PluginRegistryParams = {
   };
   activateGlobalSideEffects?: boolean;
 };
-
-export type PluginRegistrationMode = import("./types.js").PluginRegistrationMode;
-export type OpenClawPluginNodeHostCommand = import("./types.js").OpenClawPluginNodeHostCommand;
-export type OpenClawPluginToolContext = import("./types.js").OpenClawPluginToolContext;
-export type OpenClawPluginHttpRouteParams = import("./types.js").OpenClawPluginHttpRouteParams;
-export type OpenClawPluginHookOptions = import("./types.js").OpenClawPluginHookOptions;
-export type PluginHookHandlerMap = import("./types.js").PluginHookHandlerMap;
-export type OpenClawPluginApi = import("./types.js").OpenClawPluginApi;
-export type TypedPluginHook = TypedPluginHookRegistration;
-export type OpenClawPluginChannelReg = OpenClawPluginChannelRegistration;

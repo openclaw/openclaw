@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Plugin MCP tool handlers route plugin tool calls through the active runtime.
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -12,6 +14,35 @@ type CallPluginToolParams = {
   name: string;
   arguments?: unknown;
 };
+
+function toMcpContentBlock(block: unknown): unknown {
+  if (!isRecord(block)) {
+    return { type: "text", text: coerceChatContentText(block) };
+  }
+  if (block.type !== "image") {
+    return block;
+  }
+
+  if (typeof block.data === "string" && typeof block.mimeType === "string") {
+    return block;
+  }
+
+  const source = block.source;
+  if (
+    isRecord(source) &&
+    source.type === "base64" &&
+    typeof source.data === "string" &&
+    typeof source.media_type === "string"
+  ) {
+    return {
+      type: "image",
+      data: source.data,
+      mimeType: source.media_type,
+    };
+  }
+
+  return { type: "text", text: coerceChatContentText(block) };
+}
 
 function resolveJsonSchemaForTool(tool: AnyAgentTool): Record<string, unknown> {
   const params = tool.parameters;
@@ -52,14 +83,14 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         };
       }
       try {
-        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);
+        const result = await tool.execute(`mcp-${randomUUID()}`, params.arguments ?? {}, signal);
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content
             : result;
         return {
           content: Array.isArray(rawContent)
-            ? rawContent
+            ? rawContent.map(toMcpContentBlock)
             : [{ type: "text", text: coerceChatContentText(rawContent) }],
         };
       } catch (err) {

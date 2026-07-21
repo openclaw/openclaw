@@ -6,7 +6,6 @@ import {
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
   resolveMemoryIndexIdentityState,
-  isMemoryIndexIdentityDirty,
   type MemoryIndexMeta,
 } from "./manager-reindex-state.js";
 
@@ -53,6 +52,12 @@ function createIdentityParams(
     ftsTokenizer: "unicode61",
     ...overrides,
   };
+}
+
+function isMemoryIndexIdentityDirty(
+  params: Parameters<typeof resolveMemoryIndexIdentityState>[0],
+): boolean {
+  return resolveMemoryIndexIdentityState(params).status !== "valid";
 }
 
 describe("memory reindex state", () => {
@@ -272,5 +277,40 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("falls back to fts-only when provider.model is an empty string", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "openai", model: "" },
+          meta: createMeta({ model: "fts-only" }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
+  });
+
+  it("reports mismatch when empty-string expected model is compared to a non-fts index", () => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        provider: { id: "openai", model: "" },
+        meta: createMeta({ model: "text-embedding-3-small" }),
+      }),
+    );
+    expect(state.status).toBe("mismatched");
+    if (state.status === "mismatched") {
+      expect(state.reason).toContain("expected fts-only");
+    }
+  });
+
+  it("falls back to fts-only when provider.model is whitespace-only", () => {
+    expect(
+      resolveMemoryIndexIdentityState(
+        createIdentityParams({
+          provider: { id: "openai", model: "  " },
+          meta: createMeta({ model: "fts-only" }),
+        }),
+      ),
+    ).toEqual({ status: "valid" });
   });
 });

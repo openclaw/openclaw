@@ -4,6 +4,7 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AssistantMessage } from "../../../llm/types.js";
+import { classifyRateLimitWindow } from "../../../llm/utils/rate-limit-window.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   formatAssistantErrorText,
@@ -27,7 +28,7 @@ type AssistantFailoverOutcome =
       action: "retry";
       overloadProfileRotations: number;
       lastRetryFailoverReason: FailoverReason | null;
-      retryKind?: "same_model_idle_timeout" | "same_model_rate_limit";
+      retryKind: "profile_rotation" | "same_model_idle_timeout" | "same_model_rate_limit";
     }
   | {
       action: "throw";
@@ -38,76 +39,16 @@ type ShortWindowRateLimitRetry = {
   retryAfterSeconds?: number;
 };
 
-const LONG_WINDOW_RATE_LIMIT_RE =
-  /\b(?:daily|weekly|monthly|tokens per day|requests per day|usage limit|subscription|insufficient[_ -]?quota|current quota|quota[_ -]?exceeded|quota exceeded)\b/i;
-const SHORT_RATE_LIMIT_WINDOW_RE =
-  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm)\b/i;
-const SHORT_WINDOW_RATE_LIMIT_RE =
-  /\b(?:requests per minute|tokens per minute|per-minute|rpm|tpm|model_cooldown)\b|请求过于频繁|调用频率|频率限制/i;
-const RETRY_AFTER_VALUE_RE = /\bretry[- ]after\b\s*:?\s*(?:in\s*)?([^\r\n;]+)/i;
-const RETRY_AFTER_SECONDS_RE =
-  /^(\d+(?:\.\d+)?)(?:\s*(milliseconds?|msecs?|ms|seconds?|secs?|s|minutes?|mins?|m))?\b/i;
-const MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS = 60;
-
-function parseRetryAfterSeconds(message: string): number | null {
-  const valueText = RETRY_AFTER_VALUE_RE.exec(message)?.[1]?.trim();
-  if (!valueText) {
-    return null;
-  }
-  const secondsMatch = RETRY_AFTER_SECONDS_RE.exec(valueText);
-  if (secondsMatch?.[1]) {
-    const value = Number(secondsMatch[1]);
-    if (!Number.isFinite(value) || value < 0) {
-      return null;
-    }
-    const unit = secondsMatch[2]?.toLowerCase();
-    if (
-      unit?.startsWith("m") &&
-      unit !== "ms" &&
-      !unit.startsWith("msec") &&
-      !unit.startsWith("millisecond")
-    ) {
-      return value * 60;
-    }
-    if (unit === "ms" || unit?.startsWith("msec") || unit?.startsWith("millisecond")) {
-      return value / 1000;
-    }
-    return value;
-  }
-  const retryAtMs = Date.parse(valueText);
-  if (!Number.isFinite(retryAtMs)) {
-    return null;
-  }
-  return Math.max(0, (retryAtMs - Date.now()) / 1000);
-}
-
 function resolveShortWindowRateLimitRetry(
   message: string | undefined,
 ): ShortWindowRateLimitRetry | null {
-  const raw = message?.trim();
-  if (!raw) {
+  const window = classifyRateLimitWindow(message);
+  if (window.kind !== "short") {
     return null;
   }
-  const retryAfterSeconds = parseRetryAfterSeconds(raw);
-  if (retryAfterSeconds !== null && retryAfterSeconds > MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS) {
-    return null;
-  }
-  const shortRetryAfter =
-    retryAfterSeconds !== null && retryAfterSeconds <= MAX_SHORT_WINDOW_RETRY_AFTER_SECONDS;
-  const hasShortWindowSignal = SHORT_RATE_LIMIT_WINDOW_RE.test(raw);
-  if (RETRY_AFTER_VALUE_RE.test(raw) && retryAfterSeconds === null && !hasShortWindowSignal) {
-    return null;
-  }
-  if (LONG_WINDOW_RATE_LIMIT_RE.test(raw) && !hasShortWindowSignal && !shortRetryAfter) {
-    return null;
-  }
-  // Providers such as Gemini use quota wording for per-minute RPM/TPM
-  // throttles. Treat quota as long-window only when no short-window hint is
-  // present; hard daily/usage/subscription limits are filtered above.
-  if (!SHORT_WINDOW_RATE_LIMIT_RE.test(raw) && !shortRetryAfter) {
-    return null;
-  }
-  return retryAfterSeconds !== null ? { retryAfterSeconds } : {};
+  return window.retryAfterSeconds === undefined
+    ? {}
+    : { retryAfterSeconds: window.retryAfterSeconds };
 }
 
 export function isShortWindowRateLimitMessage(message: string | undefined): boolean {
@@ -130,6 +71,7 @@ export async function handleAssistantFailover(params: {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  timedOutByRunBudget: boolean;
   allowSameModelIdleTimeoutRetry: boolean;
   allowSameModelRateLimitRetry: boolean;
   assistantProfileFailureReason: AuthProfileFailureReason | null;
@@ -143,6 +85,8 @@ export async function handleAssistantFailover(params: {
   authFailure: boolean;
   rateLimitFailure: boolean;
   billingFailure: boolean;
+  /** Credential auth mode (e.g. "oauth", "token", "api_key") for billing copy (#80877). */
+  authMode?: string;
   cloudCodeAssistFormatError: boolean;
   isProbeSession: boolean;
   overloadProfileRotations: number;
@@ -283,6 +227,7 @@ export async function handleAssistantFailover(params: {
       return {
         action: "retry",
         overloadProfileRotations,
+        retryKind: "profile_rotation",
         lastRetryFailoverReason: mergeRetryFailoverReason({
           previous: params.previousRetryFailoverReason,
           failoverReason: params.failoverReason,
@@ -307,6 +252,7 @@ export async function handleAssistantFailover(params: {
       idleTimedOut: params.idleTimedOut,
       timedOutDuringCompaction: params.timedOutDuringCompaction,
       timedOutDuringToolExecution: params.timedOutDuringToolExecution,
+      timedOutByRunBudget: params.timedOutByRunBudget,
       profileRotated: true,
     });
   }
@@ -331,6 +277,7 @@ export async function handleAssistantFailover(params: {
         provider: params.activeErrorContext.provider,
         model: params.activeErrorContext.model,
         profileId: params.lastProfileId,
+        authMode: params.authMode,
         status,
         rawError: params.lastAssistant?.errorMessage?.trim(),
         suspend: shouldSuspend,
@@ -362,6 +309,7 @@ export async function handleAssistantFailover(params: {
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
           profileId: params.lastProfileId,
+          authMode: params.authMode,
           status,
           rawError: params.lastAssistant?.errorMessage?.trim(),
           suspend: shouldSuspend,
@@ -386,6 +334,8 @@ function resolveAssistantFailoverErrorMessage(params: {
   rateLimitFailure: boolean;
   billingFailure: boolean;
   authFailure: boolean;
+  /** Credential auth mode passed through to billing copy formatter (#80877). */
+  authMode?: string;
 }): string {
   const timeoutFailure = params.timedOut || params.idleTimedOut;
   return (
@@ -395,6 +345,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           sessionKey: params.sessionKey,
           provider: params.activeErrorContext.provider,
           model: params.activeErrorContext.model,
+          authMode: params.authMode,
         })
       : undefined) ||
     params.lastAssistant?.errorMessage?.trim() ||
@@ -406,6 +357,7 @@ function resolveAssistantFailoverErrorMessage(params: {
           ? formatBillingErrorMessage(
               params.activeErrorContext.provider,
               params.activeErrorContext.model,
+              params.authMode,
             )
           : params.authFailure
             ? "LLM request unauthorized."

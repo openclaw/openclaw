@@ -3,12 +3,14 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  CONFIG_CLOBBER_SNAPSHOT_LIMIT,
   persistBoundedClobberedConfigSnapshot,
   persistBoundedClobberedConfigSnapshotSync,
 } from "./io.clobber-snapshot.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 describe("config clobber snapshots", () => {
   let fixtureRoot = "";
@@ -71,7 +73,9 @@ describe("config clobber snapshots", () => {
       if (!match) {
         continue;
       }
-      const touchedAt = new Date(`2026-05-03T00:00:${match[1].padStart(2, "0")}.000Z`);
+      const touchedAt = new Date(
+        `2026-05-03T00:00:${expectDefined(match[1], "match[1] test invariant").padStart(2, "0")}.000Z`,
+      );
       await fsp.utimes(path.join(dir, file.entry), touchedAt, touchedAt);
     }
   }
@@ -88,7 +92,9 @@ describe("config clobber snapshots", () => {
       if (!match) {
         continue;
       }
-      const touchedAt = new Date(`2026-05-03T00:00:${match[1].padStart(2, "0")}.000Z`);
+      const touchedAt = new Date(
+        `2026-05-03T00:00:${expectDefined(match[1], "match[1] test invariant").padStart(2, "0")}.000Z`,
+      );
       fs.utimesSync(targetPath, touchedAt, touchedAt);
     }
   }

@@ -1,5 +1,7 @@
 // Chat attachment tests cover inbound image/file parsing, media-store cleanup,
 // warning surfaces, size limits, and outbound message block assembly.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -26,10 +28,9 @@ vi.mock("../media/store.js", async (importOriginal) => {
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  buildMessageWithAttachments,
   type ChatAttachment,
-  DEFAULT_CHAT_ATTACHMENT_MAX_MB,
   parseMessageWithAttachments,
+  persistInboundImagesForTranscript,
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
@@ -57,6 +58,13 @@ function pdfAttachment(overrides: Partial<ChatAttachment> = {}): ChatAttachment 
     content: Buffer.from("%PDF-1.4\n").toString("base64"),
     ...overrides,
   };
+}
+
+function oversizedPngBase64(): string {
+  const pngHeader = PNG_1x1.slice(0, 64);
+  let base64Length = Math.ceil(((MAX_IMAGE_BYTES + 1) * 4) / 3);
+  base64Length += (4 - (base64Length % 4)) % 4;
+  return `${pngHeader}${"A".repeat(base64Length - pngHeader.length)}`;
 }
 
 async function parseWithWarnings(
@@ -128,22 +136,45 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("buildMessageWithAttachments", () => {
-  it("embeds a single image as data URL", () => {
-    const msg = buildMessageWithAttachments("see this", [pngAttachment()]);
-    expect(msg).toContain("see this");
-    expect(msg).toContain(`data:image/png;base64,${PNG_1x1}`);
-    expect(msg).toContain("![dot.png]");
-  });
+describe("persistInboundImagesForTranscript", () => {
+  it("preserves mixed image order and appends non-image offloads", async () => {
+    saveMediaBufferMock.mockResolvedValueOnce({
+      id: "inline",
+      path: "/media/inbound/inline.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
 
-  it("rejects non-image mime types", () => {
-    const bad: ChatAttachment = {
-      type: "file",
-      mimeType: "application/pdf",
-      fileName: "a.pdf",
-      content: "AAA",
-    };
-    expect(() => buildMessageWithAttachments("x", [bad])).toThrow(/image/);
+    const saved = await persistInboundImagesForTranscript({
+      images: [{ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" }],
+      imageOrder: ["offloaded", "inline"],
+      offloadedRefs: [
+        {
+          mediaRef: "media://inbound/offloaded",
+          id: "offloaded",
+          path: "/media/inbound/offloaded.png",
+          mimeType: "image/png",
+          label: "offloaded.png",
+          sizeBytes: 2_100_000,
+        },
+        {
+          mediaRef: "media://inbound/report",
+          id: "report",
+          path: "/media/inbound/report.pdf",
+          mimeType: "application/pdf",
+          label: "report.pdf",
+          sizeBytes: 100,
+        },
+      ],
+      log: { warn: vi.fn() },
+      logContext: "test",
+    });
+
+    expect(saved.map((entry) => entry.path)).toEqual([
+      "/media/inbound/offloaded.png",
+      "/media/inbound/inline.jpg",
+      "/media/inbound/report.pdf",
+    ]);
   });
 });
 
@@ -156,6 +187,31 @@ describe("parseMessageWithAttachments", () => {
     );
     expectSingleInlinePng(parsed);
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
+  });
+
+  it("parses large clipboard data URL images without full base64 decoding", async () => {
+    const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
+    const base64 = png.toString("base64");
+    const fromSpy = vi.spyOn(Buffer, "from");
+    try {
+      const parsed = await parseMessageWithAttachments(
+        "see screenshot",
+        [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
+        { log: { warn: () => {} } },
+      );
+
+      expectSingleInlinePng(parsed);
+      expect(parsed.images[0]?.data).toBe(base64);
+      expect(
+        fromSpy.mock.calls.some((call) => {
+          const [value, encoding] = call as unknown[];
+          return value === base64 && encoding === "base64";
+        }),
+      ).toBe(false);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    } finally {
+      fromSpy.mockRestore();
+    }
   });
 
   it("sniffs mime when missing", async () => {
@@ -172,7 +228,7 @@ describe("parseMessageWithAttachments", () => {
     const { parsed, logs } = await parseWithWarnings("read this", [pdfAttachment()]);
     expect(parsed.images).toHaveLength(0);
     expect(parsed.offloadedRefs).toHaveLength(1);
-    const ref = parsed.offloadedRefs[0];
+    const ref = expectDefined(parsed.offloadedRefs[0], "parsed.offloadedRefs[0] test invariant");
     expect(ref.mimeType).toBe("application/pdf");
     expect(ref.label).toBe("report.pdf");
     expect(ref.mediaRef).toMatch(/^media:\/\/inbound\//);
@@ -248,7 +304,7 @@ describe("parseMessageWithAttachments", () => {
   });
 
   it("rejects oversized images before offload", async () => {
-    const big = Buffer.alloc(MAX_IMAGE_BYTES + 1, 1).toString("base64");
+    const big = oversizedPngBase64();
 
     await expect(
       parseMessageWithAttachments(
@@ -477,7 +533,7 @@ describe("parseMessageWithAttachments validation errors", () => {
 
 describe("resolveChatAttachmentMaxBytes", () => {
   const MB = 1024 * 1024;
-  const DEFAULT_BYTES = DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+  const DEFAULT_BYTES = 20 * MB;
 
   const cfgWithMediaMaxMb = (value: unknown): OpenClawConfig =>
     ({ agents: { defaults: { mediaMaxMb: value } } }) as unknown as OpenClawConfig;
@@ -501,8 +557,8 @@ describe("resolveChatAttachmentMaxBytes", () => {
   });
 });
 
-describe("shared attachment validation", () => {
-  it("rejects invalid base64 content for both builder and parser", async () => {
+describe("attachment validation", () => {
+  it("rejects invalid base64 content", async () => {
     const bad: ChatAttachment = {
       type: "image",
       mimeType: "image/png",
@@ -510,13 +566,12 @@ describe("shared attachment validation", () => {
       content: "%not-base64%",
     };
 
-    expect(() => buildMessageWithAttachments("x", [bad])).toThrow(/base64/i);
     await expect(
       parseMessageWithAttachments("x", [bad], { log: { warn: () => {} } }),
     ).rejects.toThrow(/base64/i);
   });
 
-  it("rejects images over limit for both builder and parser without decoding base64", async () => {
+  it("rejects images over limit without decoding base64", async () => {
     const big = "A".repeat(10_000);
     const att: ChatAttachment = {
       type: "image",
@@ -527,9 +582,6 @@ describe("shared attachment validation", () => {
 
     const fromSpy = vi.spyOn(Buffer, "from");
     try {
-      expect(() => buildMessageWithAttachments("x", [att], { maxBytes: 16 })).toThrow(
-        /exceeds size limit/i,
-      );
       await expect(
         parseMessageWithAttachments("x", [att], { maxBytes: 16, log: { warn: () => {} } }),
       ).rejects.toThrow(/exceeds size limit/i);

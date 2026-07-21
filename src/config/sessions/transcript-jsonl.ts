@@ -14,11 +14,22 @@ export function serializeJsonlEntry(entry: unknown): string {
 }
 
 export function serializeJsonlLine(entry: unknown): string {
-  return JSON.stringify(entry);
+  const serialized = JSON.stringify(entry);
+  // JSON.stringify returns undefined when the root value is undefined, a
+  // function, or a symbol. Without this guard the template literal in
+  // serializeJsonlEntry coerces it to the literal string "undefined", which is
+  // not valid JSON and is silently skipped by readers — a fail-silent loss of a
+  // transcript entry. Fail fast instead so the caller fixes the bad value.
+  if (serialized === undefined) {
+    throw new TypeError(
+      `serializeJsonlLine: entry of type ${typeof entry} is not JSON-serializable (JSON.stringify returned undefined)`,
+    );
+  }
+  return serialized;
 }
 
-export function serializeJsonlEntries(entries: readonly unknown[]): string {
-  return serializeJsonlLines(entries.map(serializeJsonlLine));
+function serializeJsonlEntries(jsonlEntries: readonly unknown[]): string {
+  return serializeJsonlLines(jsonlEntries.map(serializeJsonlLine));
 }
 
 export function serializeJsonlLines(lines: readonly string[]): string {
@@ -26,45 +37,39 @@ export function serializeJsonlLines(lines: readonly string[]): string {
   return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }
 
-export function writeJsonlEntriesSync(filePath: string, entries: readonly unknown[]): void {
-  writeFileSync(filePath, serializeJsonlEntries(entries), "utf-8");
+export function writeJsonlEntriesSync(filePath: string, entries: readonly unknown[]): string {
+  const content = serializeJsonlEntries(entries);
+  writeFileSync(filePath, content, "utf-8");
+  return content;
 }
 
-export function appendJsonlEntrySync(filePath: string, entry: unknown): void {
-  appendFileSync(filePath, serializeJsonlEntry(entry), "utf-8");
-}
-
-export function appendJsonlEntriesSync(filePath: string, entries: readonly unknown[]): void {
-  if (entries.length === 0) {
-    return;
-  }
-  appendFileSync(filePath, serializeJsonlEntries(entries), "utf-8");
-}
-
-export async function writeJsonlEntry(
+export function appendJsonlEntrySync(
   filePath: string,
   entry: unknown,
-  options?: WriteJsonlFileOptions,
-): Promise<void> {
-  await fs.writeFile(filePath, serializeJsonlEntry(entry), {
-    encoding: options?.encoding ?? "utf-8",
-    ...(options?.flag ? { flag: options.flag } : {}),
-    ...(options?.mode !== undefined ? { mode: options.mode } : {}),
-  });
+  options?: { prefixNewline?: boolean },
+): string {
+  return appendSerializedJsonlEntrySync(filePath, serializeJsonlEntry(entry), options);
 }
 
+export function appendSerializedJsonlEntrySync(
+  filePath: string,
+  serializedEntry: string,
+  options?: { prefixNewline?: boolean },
+): string {
+  const content = options?.prefixNewline ? `\n${serializedEntry}` : serializedEntry;
+  appendFileSync(filePath, content, "utf-8");
+  return content;
+}
 export async function writeJsonlLines(
   filePath: string,
   lines: readonly string[],
   options?: WriteJsonlFileOptions,
-): Promise<void> {
-  await fs.writeFile(filePath, serializeJsonlLines(lines), {
+): Promise<string> {
+  const content = serializeJsonlLines(lines);
+  await fs.writeFile(filePath, content, {
     encoding: options?.encoding ?? "utf-8",
     ...(options?.flag ? { flag: options.flag } : {}),
     ...(options?.mode !== undefined ? { mode: options.mode } : {}),
   });
-}
-
-export async function appendJsonlEntry(filePath: string, entry: unknown): Promise<void> {
-  await fs.appendFile(filePath, serializeJsonlEntry(entry), "utf-8");
+  return content;
 }

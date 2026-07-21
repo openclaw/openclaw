@@ -4,6 +4,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createInterface } from "node:readline";
+import { resolveOptionalIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 import { renderTranscriptsMarkdown } from "./summary.js";
@@ -39,13 +40,6 @@ async function readJsonFile<T>(filePath: string): Promise<T | undefined> {
     }
     throw err;
   }
-}
-
-function normalizeMaxUtterances(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(value));
 }
 
 function sameSessionIdentity(
@@ -150,14 +144,6 @@ export class TranscriptsStore {
     return session ? { session, sessionDir: dir } : undefined;
   }
 
-  /** Append an utterance by session id, creating a dated session directory if needed. */
-  async appendUtterance(sessionId: string, utterance: TranscriptUtterance): Promise<void> {
-    const dir =
-      (await this.findSessionDir(sessionId)) ??
-      path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
-    await this.appendUtteranceToDir(dir, sessionId, utterance);
-  }
-
   /** Append an utterance for an exact session descriptor. */
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
@@ -195,48 +181,79 @@ export class TranscriptsStore {
     return await this.readUtterancesFromDir(sessionDir, options);
   }
 
-  /** Read utterances by session id or qualified date/id selector. */
-  async readUtterances(
-    sessionId: string,
-    options: { maxUtterances?: number } = {},
-  ): Promise<TranscriptUtterance[]> {
-    const dir = await this.findSessionDir(sessionId);
-    if (!dir) {
-      return [];
-    }
-    return await this.readUtterancesFromDir(dir, options);
-  }
-
   private async readUtterancesFromDir(
     dir: string,
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     const transcriptPath = path.join(dir, "transcript.jsonl");
-    const maxUtterances = normalizeMaxUtterances(options.maxUtterances);
+    const maxUtterances = resolveOptionalIntegerOption(options.maxUtterances, { min: 1 });
     if (maxUtterances !== undefined) {
-      const utterances: TranscriptUtterance[] = [];
-      try {
+      return await new Promise<TranscriptUtterance[]>((resolve, reject) => {
+        const utterances: TranscriptUtterance[] = [];
+        const stream = createReadStream(transcriptPath, { encoding: "utf8" });
         const lines = createInterface({
-          input: createReadStream(transcriptPath, { encoding: "utf8" }),
+          input: stream,
           crlfDelay: Infinity,
         });
-        for await (const line of lines) {
-          if (!line) {
-            continue;
+        let settled = false;
+        let emptyForENOENT = false;
+        let pendingError: Error | undefined;
+
+        const settle = () => {
+          if (settled) {
+            return;
           }
-          utterances.push(JSON.parse(line) as TranscriptUtterance);
+          settled = true;
+          lines.close();
+          stream.destroy();
+          if (pendingError) {
+            reject(pendingError);
+          } else if (emptyForENOENT) {
+            resolve([]);
+          } else {
+            resolve(utterances);
+          }
+        };
+        const setError = (err: unknown) => {
+          if (!pendingError) {
+            pendingError = err instanceof Error ? err : new Error(String(err));
+          }
+        };
+
+        stream.on("close", settle);
+        stream.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
+        lines.on("error", (err) => {
+          if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
+            emptyForENOENT = true;
+            return;
+          }
+          setError(err);
+          stream.destroy();
+        });
+        lines.on("line", (line) => {
+          if (!line) {
+            return;
+          }
+          try {
+            utterances.push(JSON.parse(line) as TranscriptUtterance);
+          } catch (err) {
+            setError(err);
+            stream.destroy();
+            return;
+          }
           if (utterances.length > maxUtterances) {
             // Stream and keep only the tail so large transcripts do not require full-file memory.
             utterances.shift();
           }
-        }
-      } catch (err) {
-        if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
-          return [];
-        }
-        throw err;
-      }
-      return utterances;
+        });
+      });
     }
     let raw: string;
     try {

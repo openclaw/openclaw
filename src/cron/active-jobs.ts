@@ -139,20 +139,25 @@ export function isCronActiveJobMarkerCurrent(marker: CronActiveJobMarker | undef
   );
 }
 
-/** Returns whether any other cron run is active in this process. */
-export function hasOtherActiveCronJobs(jobId: string) {
+/** Returns whether any cron run is active in this process. */
+export function hasActiveCronJobs() {
+  return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
+}
+
+/**
+ * Ignore only the caller's own marker. Unrelated runs must still block its wake,
+ * because cron jobs may execute concurrently.
+ */
+export function hasActiveCronJobsExceptMarker(markerToIgnore: CronActiveJobMarker) {
   const state = getCronActiveJobState();
-  for (const [activeJobId, marker] of state.activeJobs) {
-    if (activeJobId !== jobId && isMarkerActiveInGeneration(marker, state.generation)) {
+  for (const marker of state.activeJobs.values()) {
+    const isIgnoredMarker =
+      marker.jobId === markerToIgnore.jobId && marker.token === markerToIgnore.token;
+    if (!isIgnoredMarker && isMarkerActiveInGeneration(marker, state.generation)) {
       return true;
     }
   }
   return false;
-}
-
-/** Returns whether any cron run is active in this process. */
-export function hasActiveCronJobs() {
-  return getActiveCronJobCountForGeneration(getCronActiveJobState()) > 0;
 }
 
 /** Returns the number of active cron runs in this process. */
@@ -213,6 +218,3 @@ export function resetCronActiveJobs() {
   state.activeJobIds?.clear();
   notifyActiveCronJobWaitersIfEmpty(state);
 }
-
-/** Clears process-global cron active-job state between tests. */
-export const resetCronActiveJobsForTests = resetCronActiveJobs;

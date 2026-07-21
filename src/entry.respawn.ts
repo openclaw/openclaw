@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
+  isTerminalInteractiveRespawnArgv,
   shouldSkipRespawnForArgv,
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
@@ -14,15 +15,19 @@ import {
   type RespawnChildRuntime,
 } from "./process/respawn-child-runner.js";
 
-export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
-export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+const BUNDLED_CA_FLAG = "--use-bundled-ca";
+const OPENSSL_CA_FLAG = "--use-openssl-ca";
+const SYSTEM_CA_FLAG = "--use-system-ca";
+const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
+const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 
 type CliRespawnPlan = {
   command: string;
   argv: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
@@ -33,7 +38,7 @@ function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
-export function resolveCliRespawnCommand(params: {
+function resolveCliRespawnCommand(params: {
   execPath: string;
   platform?: NodeJS.Platform;
 }): string {
@@ -58,6 +63,28 @@ function hasExperimentalWarningSuppressed(
     return true;
   }
   return execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings");
+}
+
+function hasNodeRuntimeOption(params: {
+  env: NodeJS.ProcessEnv;
+  execArgv: string[];
+  option: string;
+}): boolean {
+  const nodeOptions = (params.env.NODE_OPTIONS ?? "").split(/\s+/u);
+  return (
+    params.execArgv.includes(params.option) ||
+    nodeOptions.some((token) => {
+      if (token === params.option) {
+        return true;
+      }
+      const quote = token[0];
+      return (
+        (quote === '"' || quote === "'") &&
+        token.at(-1) === quote &&
+        token.slice(1, -1) === params.option
+      );
+    })
+  );
 }
 
 function hasStackSizeConfigured(execArgv: string[]): boolean {
@@ -89,7 +116,7 @@ export function buildCliRespawnPlan(
     platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
 
   if (
-    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv, platform) ||
     isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
   ) {
     return null;
@@ -113,7 +140,25 @@ export function buildCliRespawnPlan(
       command: resolveCliRespawnCommand({ execPath, platform }),
       argv: [...childExecArgv, ...normalizedArgv.slice(1)],
       env: childEnv,
+      detachForProcessTree: false,
     };
+  }
+
+  if (
+    platform === "darwin" &&
+    env.NODE_USE_SYSTEM_CA === "1" &&
+    !isTerminalInteractiveRespawnArgv(argv) &&
+    !hasNodeRuntimeOption({ env, execArgv, option: SYSTEM_CA_FLAG }) &&
+    !hasNodeRuntimeOption({ env, execArgv, option: OPENSSL_CA_FLAG })
+  ) {
+    // Node loads the macOS Keychain off-thread on the first TLS import, then joins
+    // that worker during shutdown. One-shot CLIs use the file-backed CA store instead;
+    // an explicit --use-system-ca remains the opt-in for Keychain-only trust.
+    childEnv.NODE_USE_SYSTEM_CA = "0";
+    if (!hasNodeRuntimeOption({ env, execArgv, option: BUNDLED_CA_FLAG })) {
+      childExecArgv.unshift(OPENSSL_CA_FLAG);
+    }
+    needsRespawn = true;
   }
 
   const autoNodeExtraCaCerts =
@@ -134,7 +179,7 @@ export function buildCliRespawnPlan(
   }
 
   if (
-    !shouldSkipRespawnForArgv(argv) &&
+    !shouldSkipRespawnForArgv(argv, platform) &&
     !isTruthyEnvValue(env[OPENCLAW_NODE_OPTIONS_READY]) &&
     !hasExperimentalWarningSuppressed({ env, execArgv })
   ) {
@@ -151,6 +196,7 @@ export function buildCliRespawnPlan(
     command: resolveCliRespawnCommand({ execPath, platform }),
     argv: [...childExecArgv, ...argv.slice(1)],
     env: childEnv,
+    detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 
@@ -167,6 +213,7 @@ export function runCliRespawnPlan(
     command: plan.command,
     args: plan.argv,
     env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
       runtime.writeError(

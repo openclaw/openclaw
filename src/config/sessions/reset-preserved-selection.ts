@@ -2,7 +2,7 @@
 import { hasSessionAutoModelFallbackProvenance } from "./model-override-provenance.js";
 import type { SessionEntry } from "./types.js";
 
-export type ResetPreservedSelectionState = Pick<
+type ResetPreservedSelectionState = Pick<
   SessionEntry,
   | "providerOverride"
   | "modelOverride"

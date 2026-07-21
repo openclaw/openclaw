@@ -57,6 +57,7 @@ async function issueSmsPairingChallenge(params: {
 }) {
   const issueChallenge = createChannelPairingChallengeIssuer({
     channel: CHANNEL_ID,
+    accountId: params.account.accountId,
     upsertPairingRequest: async (input) =>
       await params.channelRuntime.pairing.upsertPairingRequest({
         channel: CHANNEL_ID,
@@ -88,6 +89,10 @@ export async function dispatchSmsInboundEvent(params: {
   account: ResolvedSmsAccount;
   msg: SmsInboundMessage;
   channelRuntime: SmsChannelRuntime;
+  receivedAt: number;
+  turnAdoptionLifecycle?: NonNullable<
+    Parameters<SmsChannelRuntime["inbound"]["run"]>[0]["turnAdoptionLifecycle"]
+  >;
   log?: SmsLog;
 }): Promise<void> {
   const from = normalizeSmsPhoneNumber(params.msg.from);
@@ -126,10 +131,13 @@ export async function dispatchSmsInboundEvent(params: {
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
+    ...(params.turnAdoptionLifecycle
+      ? { turnAdoptionLifecycle: params.turnAdoptionLifecycle }
+      : {}),
     adapter: {
       ingest: (msg) => ({
         id: msg.messageSid,
-        timestamp: Date.now(),
+        timestamp: params.receivedAt,
         rawText: msg.body,
         textForAgent: msg.body,
         textForCommands: msg.body,
@@ -169,23 +177,12 @@ export async function dispatchSmsInboundEvent(params: {
             To: params.msg.to,
           },
         });
-        const storePath = params.channelRuntime.session.resolveStorePath(
-          params.cfg.session?.store,
-          {
-            agentId: route.agentId,
-          },
-        );
         return {
           cfg: params.cfg,
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
-          agentId: route.agentId,
-          routeSessionKey: sessionKey,
-          storePath,
+          route: { agentId: route.agentId, sessionKey },
           ctxPayload,
-          recordInboundSession: params.channelRuntime.session.recordInboundSession,
-          dispatchReplyWithBufferedBlockDispatcher:
-            params.channelRuntime.reply.dispatchReplyWithBufferedBlockDispatcher,
           delivery: {
             durable: () => ({
               to: from,

@@ -12,11 +12,17 @@ import { resolveToolsConfig } from "./tools-config.js";
 import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
+type FeishuToolFamily = keyof FeishuToolsConfig;
+type FeishuToolRequirement = {
+  family: FeishuToolFamily;
+  label: string;
+};
 
 function resolveImplicitToolAccountId(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  requiredTool?: FeishuToolRequirement;
 }): string | undefined {
   const explicitAccountId = normalizeOptionalString(params.executeParams?.accountId);
   if (explicitAccountId) {
@@ -45,6 +51,19 @@ function resolveImplicitToolAccountId(params: {
     return configuredDefaultAccountId;
   }
 
+  if (params.requiredTool && params.api.config) {
+    for (const accountId of listFeishuAccountIds(params.api.config)) {
+      const account = resolveFeishuAccount({ cfg: params.api.config, accountId });
+      if (
+        account.enabled &&
+        account.configured &&
+        resolveToolsConfig(account.config.tools)[params.requiredTool.family]
+      ) {
+        return accountId;
+      }
+    }
+  }
+
   return undefined;
 }
 
@@ -52,20 +71,31 @@ export function resolveFeishuToolAccount(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  requiredTool?: FeishuToolRequirement;
 }): ResolvedFeishuAccount {
   if (!params.api.config) {
     throw new Error("Feishu config unavailable");
   }
-  return resolveFeishuRuntimeAccount({
+  const account = resolveFeishuRuntimeAccount({
     cfg: params.api.config,
     accountId: resolveImplicitToolAccountId(params),
   });
+  if (
+    params.requiredTool &&
+    !resolveToolsConfig(account.config.tools)[params.requiredTool.family]
+  ) {
+    throw new Error(
+      `Feishu ${params.requiredTool.label} tools are disabled for account "${account.accountId}"`,
+    );
+  }
+  return account;
 }
 
 export function createFeishuToolClient(params: {
   api: Pick<OpenClawPluginApi, "config">;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
+  requiredTool?: FeishuToolRequirement;
 }): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
 }

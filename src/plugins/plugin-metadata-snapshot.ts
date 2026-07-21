@@ -36,6 +36,7 @@ import {
   type PluginRegistrySnapshotSource,
 } from "./plugin-registry.js";
 import { normalizePluginIdScope, serializePluginIdScope } from "./plugin-scope.js";
+import { fileFingerprint } from "./plugin-snapshot-fingerprint.js";
 
 type PluginMetadataSnapshotMemo = {
   key: string;
@@ -68,7 +69,6 @@ const MEMO_RELEVANT_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
   "OPENCLAW_HOME",
   "OPENCLAW_NIX_MODE",
   "OPENCLAW_STATE_DIR",
@@ -85,16 +85,6 @@ export type {
   PluginMetadataSnapshotRegistryDiagnostic,
   ResolvePluginMetadataSnapshotParams,
 } from "./plugin-metadata-snapshot.types.js";
-
-function fileFingerprint(filePath: string): unknown {
-  try {
-    const stat = fs.statSync(filePath, { bigint: true });
-    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
-    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
-  } catch {
-    return [filePath, "missing"];
-  }
-}
 
 function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
   let entries: fs.Dirent[];
@@ -189,13 +179,7 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   preferPersisted?: boolean;
   stateDir?: string;
 }): Record<string, unknown> {
-  const disabledByEnv = params.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY?.trim().toLowerCase();
-  const disabled =
-    params.preferPersisted === false ||
-    (Boolean(disabledByEnv) &&
-      disabledByEnv !== "0" &&
-      disabledByEnv !== "false" &&
-      disabledByEnv !== "no");
+  const disabled = params.preferPersisted === false;
   if (disabled) {
     return { disabled: true };
   }
@@ -587,16 +571,7 @@ export function loadPluginMetadataSnapshot(
   const memoKey = computePluginMetadataSnapshotMemoKey({ params, registryState });
   const memo = findPluginMetadataSnapshotMemo(memoKey);
   if (memo?.key === memoKey) {
-    return measureDiagnosticsTimelineSpanSync("plugins.metadata.scan", () => memo.snapshot, {
-      phase: activeTimelineSpan?.phase ?? "startup",
-      config: params.config,
-      env: params.env,
-      attributes: {
-        cacheHit: true,
-        hasWorkspaceDir: params.workspaceDir !== undefined,
-        hasInstalledIndex: params.index !== undefined,
-      },
-    });
+    return memo.snapshot;
   }
 
   const result = measureDiagnosticsTimelineSpanSync(

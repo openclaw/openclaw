@@ -1,5 +1,5 @@
 // Applies legacy config rules during load-time compatibility checks.
-import { LEGACY_CONFIG_RULES } from "./legacy.rules.js";
+import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../commands/doctor/shared/legacy-config-migrations.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
 

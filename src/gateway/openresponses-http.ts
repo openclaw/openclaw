@@ -33,7 +33,11 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
-import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
+import {
+  isReplaceableAssistantStreamEvent,
+  resolveAssistantStreamDeltaText,
+  resolveAssistantStreamSnapshotText,
+} from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import {
@@ -48,6 +52,7 @@ import {
   authorizeOpenAiCompatibleHttpModelOverride,
   getBearerToken,
   getHeader,
+  isGatewaySessionKeyOverrideError,
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
@@ -257,7 +262,7 @@ function resolveResponsesLimits(
   const images = config?.images;
   const fileLimits = resolveInputFileLimits(files);
   return {
-    maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
+    maxBodyBytes: DEFAULT_BODY_BYTES,
     maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
@@ -449,9 +454,7 @@ export async function handleOpenResponsesHttpRequest(
   const limits = resolveResponsesLimits(opts.config);
   const maxBodyBytes =
     opts.maxBodyBytes ??
-    (opts.config?.maxBodyBytes
-      ? limits.maxBodyBytes
-      : Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2));
+    Math.max(limits.maxBodyBytes, limits.files.maxBytes * 2, limits.images.maxBytes * 2);
   const handled = await handleGatewayPostJsonEndpoint(req, res, {
     pathname: "/v1/responses",
     requiredOperatorMethod: "chat.send",
@@ -667,7 +670,7 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (isUnknownGatewayAgentError(err)) {
+    if (isUnknownGatewayAgentError(err) || isGatewaySessionKeyOverrideError(err)) {
       sendJson(res, 400, {
         error: { message: err.message, type: "invalid_request_error" },
       });
@@ -911,11 +914,13 @@ export async function handleOpenResponsesHttpRequest(
   setSseHeaders(res);
 
   let accumulatedText = "";
+  let bufferedReplaceableAssistantContent = "";
   let sawAssistantDelta = false;
   let closed = false;
   let unsubscribe = () => {};
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
+  let finalizeStatus: ResponseResource["status"] | null = null;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
 
   const maybeFinalize = () => {
@@ -981,6 +986,7 @@ export async function handleOpenResponsesHttpRequest(
     if (finalizeRequested) {
       return;
     }
+    finalizeStatus = status;
     finalizeRequested = { status, text };
     maybeFinalize();
   };
@@ -1027,13 +1033,39 @@ export async function handleOpenResponsesHttpRequest(
     }
 
     if (evt.stream === "assistant") {
+      if (isReplaceableAssistantStreamEvent(evt)) {
+        const snapshot = resolveAssistantStreamSnapshotText(evt);
+        if (snapshot) {
+          bufferedReplaceableAssistantContent = snapshot;
+        }
+        return;
+      }
+
       const text = evt.data?.text;
       const replace = evt.data?.replace === true;
+      const hadAssistantDelta = sawAssistantDelta;
       if (replace && typeof text === "string") {
         accumulatedText = text;
       }
+
       const content = resolveAssistantStreamDeltaText(evt);
       if (!content) {
+        if (
+          replace &&
+          typeof text === "string" &&
+          text &&
+          !toolChoiceConstraint &&
+          !hadAssistantDelta
+        ) {
+          sawAssistantDelta = true;
+          writeSseEvent(res, {
+            type: "response.output_text.delta",
+            item_id: outputItemId,
+            output_index: 0,
+            content_index: 0,
+            delta: text,
+          });
+        }
         return;
       }
 
@@ -1063,7 +1095,8 @@ export async function handleOpenResponsesHttpRequest(
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
-        const finalText = accumulatedText || "No response from OpenClaw.";
+        const finalText =
+          accumulatedText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
         const finalStatus = phase === "error" ? "failed" : "completed";
         requestFinalize(finalStatus, finalText);
       }
@@ -1096,6 +1129,12 @@ export async function handleOpenResponsesHttpRequest(
       // Check for pending client tool calls BEFORE maybeFinalize() because the
       // lifecycle:end event may already have requested finalization.
       const resultAny = result as { payloads?: Array<{ text?: string }>; meta?: unknown };
+      const resultPayloadText = Array.isArray(resultAny.payloads)
+        ? resultAny.payloads
+            .map((p) => (typeof p.text === "string" ? p.text : ""))
+            .filter(Boolean)
+            .join("\n\n")
+        : "";
       const meta = resultAny.meta;
       const { stopReason, pendingToolCalls } = resolveStopReasonAndPendingToolCalls(meta);
 
@@ -1136,22 +1175,16 @@ export async function handleOpenResponsesHttpRequest(
       ) {
         const usage = finalUsage ?? createEmptyUsage();
         const finalText =
-          accumulatedText ||
-          (Array.isArray(resultAny.payloads)
-            ? resultAny.payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "");
+          accumulatedText || resultPayloadText || bufferedReplaceableAssistantContent;
 
-        if (toolChoiceConstraint && accumulatedText) {
+        if (toolChoiceConstraint && finalText && !sawAssistantDelta) {
           sawAssistantDelta = true;
           writeSseEvent(res, {
             type: "response.output_text.delta",
             item_id: outputItemId,
             output_index: 0,
             content_index: 0,
-            delta: accumulatedText,
+            delta: finalText,
           });
         }
         writeSseEvent(res, {
@@ -1236,25 +1269,16 @@ export async function handleOpenResponsesHttpRequest(
         return;
       }
 
-      maybeFinalize();
-
-      if (closed) {
-        return;
-      }
-
       // Fallback: if no streaming deltas were received, send the full response as text
       if (!sawAssistantDelta) {
-        const payloads = resultAny.payloads;
         const content =
-          Array.isArray(payloads) && payloads.length > 0
-            ? payloads
-                .map((p) => (typeof p.text === "string" ? p.text : ""))
-                .filter(Boolean)
-                .join("\n\n")
-            : "No response from OpenClaw.";
+          resultPayloadText || bufferedReplaceableAssistantContent || "No response from OpenClaw.";
 
         accumulatedText = content;
         sawAssistantDelta = true;
+        if (finalizeStatus !== null) {
+          finalizeRequested = { status: finalizeStatus, text: content };
+        }
 
         writeSseEvent(res, {
           type: "response.output_text.delta",
@@ -1264,6 +1288,8 @@ export async function handleOpenResponsesHttpRequest(
           delta: content,
         });
       }
+
+      maybeFinalize();
     } catch (err) {
       if (closed || abortController.signal.aborted) {
         return;
@@ -1342,3 +1368,4 @@ export async function handleOpenResponsesHttpRequest(
   return true;
 }
 export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

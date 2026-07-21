@@ -9,7 +9,7 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
-export function outputText(response: unknown): string {
+function outputText(response: unknown): string {
   const output = (response as { output?: Array<{ type?: unknown; content?: unknown }> }).output;
   if (!Array.isArray(output)) {
     return "";
@@ -51,6 +51,7 @@ export function validateMcpCodeModeResult(
   if (options.requireExec) {
     assert(options.plannedTools?.includes("exec"), "agent did not call code-mode exec");
   }
+  assert(mentions.apiFileList > 0, "session log lacks API.list usage");
   assert(mentions.apiFileRead > 0, "session log lacks API.read usage");
   assert(mentions.mcpNamespace > 0, "session log lacks MCP.fixture usage");
   assert(mentions.mcpTool > 0, "session log lacks fixture__lookup_note call");

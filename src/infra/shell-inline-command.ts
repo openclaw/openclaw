@@ -29,7 +29,7 @@ const POWERSHELL_COMMAND_FLAGS = [
 const POWERSHELL_FILE_FLAGS = expandPowerShellSwitchPrefixForms("file", "f");
 const POWERSHELL_INLINE_FILE_FLAGS = new Set(POWERSHELL_FILE_FLAGS);
 
-export const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
+const POWERSHELL_INLINE_COMMAND_FLAGS = new Set([
   ...POWERSHELL_COMMAND_FLAGS,
   ...POWERSHELL_FILE_FLAGS,
   ...expandPowerShellSwitchPrefixForms("encodedcommand", "e"),
@@ -166,7 +166,7 @@ export function resolveInlineCommandMatch(
     valueOptions?: ReadonlySet<string>;
   } = {},
 ): { command: string | null; valueTokenIndex: number | null } {
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -216,6 +216,22 @@ export function resolveInlineCommandMatch(
   return { command: null, valueTokenIndex: null };
 }
 
+/** Return true when an inline shell payload directly dispatches positional args. */
+export function isDirectShellPositionalCarrierCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
+}
+
 /** Find the PowerShell inline command payload and value token index. */
 export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   command: string | null;
@@ -241,11 +257,11 @@ export function isPowerShellInlineFileCommandFlag(token: string): boolean {
 
 /** Detect POSIX interactive startup before an inline command flag. */
 export function hasPosixInteractiveStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawInteractiveMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;
@@ -270,11 +286,11 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
 
 /** Detect POSIX login startup before an inline command flag. */
 export function hasPosixLoginStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawLoginMode = false;
-  for (let i = 1; i < argv.length; ) {
+  for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
       i += 1;

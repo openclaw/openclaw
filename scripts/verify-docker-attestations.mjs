@@ -7,6 +7,7 @@ import process from "node:process";
 const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
 const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.manifest.v1+json";
 const REQUIRED_PREDICATES = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"];
+const DOCKER_INSPECT_TIMEOUT_MS = 120_000;
 
 /**
  * Rewrites an image reference to use the provided digest.
@@ -124,17 +125,20 @@ export function collectDockerAttestationErrors(params) {
   return errors;
 }
 
-function inspectRaw(imageRef) {
-  return execFileSync("docker", ["buildx", "imagetools", "inspect", "--raw", imageRef], {
+export function inspectRaw(imageRef, params = {}) {
+  const execFileSyncImpl = params.execFileSyncImpl ?? execFileSync;
+  return execFileSyncImpl("docker", ["buildx", "imagetools", "inspect", "--raw", imageRef], {
     encoding: "utf8",
+    killSignal: "SIGKILL",
     maxBuffer: 20 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: DOCKER_INSPECT_TIMEOUT_MS,
   });
 }
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;

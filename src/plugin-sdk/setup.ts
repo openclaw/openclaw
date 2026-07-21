@@ -19,12 +19,13 @@ export type {
   ChannelSetupWizardAdapter,
   ChannelSetupWizard,
   ChannelSetupWizardAllowFromEntry,
+  ChannelSetupWizardCredential,
   ChannelSetupWizardTextInput,
 } from "../channels/plugins/setup-wizard-types.js";
 
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { formatCliCommand } from "../cli/command-format.js";
-export { detectBinary } from "../plugins/setup-binary.js";
+export { detectBinary } from "../infra/detect-binary.js";
 export { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 export { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 export { normalizeE164, pathExists } from "../utils.js";
@@ -110,3 +111,4 @@ export {
 } from "../channels/plugins/setup-wizard-binary.js";
 
 export { formatResolvedUnresolvedNote } from "./resolution-notes.js";
+export { baseUrlTextInput, defineTokenCredential } from "./setup-credential.js";

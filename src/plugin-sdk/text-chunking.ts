@@ -1,6 +1,15 @@
 // Text chunking helpers split long outbound text while preserving readable line boundaries.
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 
+/** Offset-preserving text ranges for transports with native style metadata. */
+export {
+  chunkTextRanges,
+  type ChunkTextRangesOptions,
+  type TextChunkRange,
+} from "../../packages/markdown-core/src/chunk-text.js";
+/** Quote-aware HTML tag tokens for exact post-render projections. */
+export { tokenizeHtmlTags } from "../../packages/markdown-core/src/html-tags.js";
+
 /**
  * Splits outbound channel text into chunks no longer than the requested limit.
  * Newline boundaries win over spaces; text without usable separators falls back
@@ -25,6 +34,7 @@ export {
   type MarkdownParseOptions,
   type MarkdownStyle,
   type MarkdownStyleSpan,
+  type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "../../packages/markdown-core/src/ir.js";
 /** Render-size-aware Markdown chunking for channel payload limits. */

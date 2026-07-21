@@ -15,7 +15,7 @@ type NodeInvokeCall = {
 
 let lastNodeInvokeCall: NodeInvokeCall | null = null;
 
-const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
+const callGateway = vi.fn(async (opts: NodeInvokeCall): Promise<unknown> => {
   if (opts.method === "node.list") {
     return {
       nodes: [
@@ -123,6 +123,82 @@ describe("nodes-cli coverage", () => {
     });
   });
 
+  it("explains unknown nodes approve request ids with the current pending requests", async () => {
+    callGateway.mockResolvedValueOnce({
+      pending: [{ requestId: "current-request", nodeId: "n1", ts: Date.now() }],
+      paired: [],
+    });
+
+    await expect(
+      sharedProgram.parseAsync(
+        [
+          "nodes",
+          "approve",
+          "stale-request",
+          "--url",
+          "wss://gateway.example.test",
+          "--token",
+          "secret-token",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: stale-request");
+    expect(output).toContain("Pending requestIds: current-request");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).not.toContain("gateway.example.test");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("nodes approve failed: Error:");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.list"]);
+  });
+
+  it("explains when a nodes approve request disappears after the preflight", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        pending: [{ requestId: "expired-request", nodeId: "n1", ts: Date.now() }],
+        paired: [],
+      })
+      .mockRejectedValueOnce(
+        Object.assign(new Error("unknown requestId"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+        }),
+      );
+
+    await expect(
+      sharedProgram.parseAsync(["nodes", "approve", "expired-request"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const output = runtimeErrors.join("\n");
+    expect(output).toContain("Unknown node pairing requestId: expired-request");
+    expect(output).not.toContain("No pending node pairing requests are currently visible.");
+    expect(output).not.toContain("Pending requestIds:");
+    expect(output).toContain("openclaw nodes pending");
+    expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual([
+      "node.pair.list",
+      "node.pair.approve",
+    ]);
+  });
+
+  it("still approves when the pairing preflight is unavailable", async () => {
+    callGateway
+      .mockRejectedValueOnce(new Error("pairing list unavailable"))
+      .mockResolvedValueOnce({ approved: true });
+
+    await sharedProgram.parseAsync(["nodes", "approve", "request-1"], { from: "user" });
+
+    expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual([
+      "node.pair.list",
+      "node.pair.approve",
+    ]);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
+  });
+
   it("blocks system.run on nodes invoke", async () => {
     await expect(
       sharedProgram.parseAsync(["nodes", "invoke", "--node", "mac-1", "--command", "system.run"], {
@@ -130,6 +206,19 @@ describe("nodes-cli coverage", () => {
       }),
     ).rejects.toThrow("__exit__:1");
     expect(runtimeErrors.at(-1)).toContain('command "system.run" is reserved for shell execution');
+  });
+
+  it("rejects malformed nodes invoke params before opening a gateway call", async () => {
+    await expect(
+      sharedProgram.parseAsync(
+        ["nodes", "invoke", "--node", "mac-1", "--command", "canvas.eval", "--params", "not-json"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.at(-1)).toContain("--params must be valid JSON.");
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(lastNodeInvokeCall).toBeNull();
   });
 
   it("invokes system.notify with provided fields", async () => {

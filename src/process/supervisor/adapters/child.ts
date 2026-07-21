@@ -1,24 +1,71 @@
 // Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { toErrorObject } from "../../../infra/errors.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
+import {
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgramCandidate,
+} from "../../../plugin-sdk/windows-spawn.js";
 import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim } from "../../windows-command.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+  resolveWindowsCommandShim,
+} from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
 const FORCE_KILL_WAIT_FALLBACK_MS = 4000;
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
+const WINDOWS_PACKAGE_MANAGER_SHIMS = ["npm", "pnpm", "yarn", "npx"] as const;
 
-function resolveCommand(command: string): string {
-  return resolveWindowsCommandShim({
+function resolveChildInvocation(params: {
+  argv: string[];
+  env?: NodeJS.ProcessEnv;
+  windowsVerbatimArguments?: boolean;
+}): {
+  args: string[];
+  command: string;
+  windowsVerbatimArguments?: boolean;
+} {
+  const command = params.argv[0] ?? "";
+  const candidate = resolveWindowsSpawnProgramCandidate({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+    env: params.env,
+    // npm shims invoke `node` from PATH; process.execPath may be a packaged OpenClaw executable.
+    execPath:
+      process.platform === "win32"
+        ? resolveWindowsExecutablePath("node", params.env ?? process.env)
+        : undefined,
   });
+  const args = [...candidate.leadingArgv, ...params.argv.slice(1)];
+  // Keep the historical package-manager fallback when PATH probing cannot see
+  // its shim; every resolved wrapper takes the direct Node/exe path above.
+  const resolvedCommand =
+    candidate.resolution === "direct" && candidate.command === command
+      ? resolveWindowsCommandShim({
+          command,
+          cmdCommands: WINDOWS_PACKAGE_MANAGER_SHIMS,
+        })
+      : candidate.command;
+  if (!isWindowsBatchCommand(resolvedCommand)) {
+    return {
+      command: resolvedCommand,
+      args,
+      windowsVerbatimArguments: params.windowsVerbatimArguments,
+    };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(resolvedCommand, args)],
+    windowsVerbatimArguments: true,
+  };
 }
 
-export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
+type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
 
 function isServiceManagedRuntime(): boolean {
   return Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
@@ -32,10 +79,13 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
-  const resolvedArgv = [...params.argv];
-  resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
+  const invocation = resolveChildInvocation({
+    argv: params.argv,
+    env: baseEnv,
+    windowsVerbatimArguments: params.windowsVerbatimArguments,
+  });
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
     env: baseEnv,
   });
 
@@ -52,7 +102,7 @@ export async function createChildAdapter(params: {
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
-    windowsVerbatimArguments: params.windowsVerbatimArguments,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];
@@ -74,6 +124,11 @@ export async function createChildAdapter(params: {
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
+  // Pipe errors can arrive before output subscribers attach. Close remains
+  // responsible for decoder flush and Windows drain completion.
+  const ignoreOutputStreamError = () => {};
+  child.stdout.on("error", ignoreOutputStreamError);
+  child.stderr.on("error", ignoreOutputStreamError);
   const childStdin = spawned.child.stdin;
   let stdinDestroyed = childStdin?.destroyed ?? false;
   let stdinEnded = childStdin?.writableEnded === true || childStdin?.writableFinished === true;
@@ -326,7 +381,7 @@ export async function createChildAdapter(params: {
       return waitResult;
     }
     if (waitError !== undefined) {
-      throw toLintErrorObject(waitError, "Non-Error thrown");
+      throw toErrorObject(waitError, "Non-Error thrown");
     }
     if (!waitPromise) {
       waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -344,7 +399,7 @@ export async function createChildAdapter(params: {
             const error = waitError;
             resolveWait = null;
             rejectWait = null;
-            reject(toLintErrorObject(error, "Non-Error rejection"));
+            reject(toErrorObject(error, "Non-Error rejection"));
           }
         },
       );
@@ -404,18 +459,4 @@ export async function createChildAdapter(params: {
     kill,
     dispose,
   };
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

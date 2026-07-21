@@ -132,4 +132,70 @@ describe("emitCliBanner", () => {
     expect(writeSpy).toHaveBeenCalledWith("\n🦞 OpenClaw 2026.3.7 (abc1234)\n\n");
     expect(hasEmittedCliBanner()).toBe(true);
   });
+
+  it("adds the ASCII lobster on lobster days for rich random-mode terminals", async () => {
+    const { emitCliBanner } = await importFreshBannerModule();
+    setStdoutIsTty(true);
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    emitCliBanner("2026.3.7", {
+      argv: ["node", "openclaw"],
+      commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      mode: "random",
+      now: () => new Date(2026, 1, 26),
+      platform: "darwin",
+      richTty: true,
+    });
+
+    const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(written).toContain("( o.o )");
+  });
+
+  it("keeps lobster day out of plain terminals and pinned tagline modes", async () => {
+    const { emitCliBanner, testing } = await importFreshBannerModule();
+    setStdoutIsTty(true);
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const base = {
+      argv: ["node", "openclaw"],
+      commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      now: () => new Date(2026, 1, 26),
+      platform: "darwin" as const,
+    };
+
+    emitCliBanner("2026.3.7", { ...base, mode: "random", richTty: false });
+    testing.resetBannerEmittedForTests();
+    emitCliBanner("2026.3.7", { ...base, mode: "off", richTty: true });
+
+    const written = writeSpy.mock.calls.map(([chunk]) => String(chunk)).join("");
+    expect(written).not.toContain("( o.o )");
+  });
+
+  it("can reset banner emission state for same-module tests", async () => {
+    const { emitCliBanner, hasEmittedCliBanner, testing } = await importFreshBannerModule();
+    setStdoutIsTty(true);
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    const options = {
+      argv: ["node", "openclaw"],
+      commit: "abc1234",
+      env: { LANG: "en_US.UTF-8" },
+      isTty: true,
+      mode: "off" as const,
+      platform: "darwin" as const,
+      richTty: false,
+    };
+
+    emitCliBanner("2026.3.7", options);
+    expect(hasEmittedCliBanner()).toBe(true);
+
+    testing.resetBannerEmittedForTests();
+    expect(hasEmittedCliBanner()).toBe(false);
+
+    emitCliBanner("2026.3.7", options);
+    expect(writeSpy).toHaveBeenCalledTimes(2);
+  });
 });

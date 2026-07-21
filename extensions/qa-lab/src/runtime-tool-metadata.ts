@@ -23,8 +23,6 @@ export type QaRuntimeCapabilityLayer =
   | "optional-profile-or-plugin"
   | "structural-text";
 
-export type QaCodexToolLoading = "direct" | "searchable";
-
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 
 export type QaRuntimeToolCoverageMetadata = {
@@ -39,29 +37,24 @@ export type QaRuntimeToolCoverageMetadata = {
   action?: string;
 };
 
-export const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
+const QA_RUNTIME_TOOL_BUCKETS: readonly QaRuntimeToolBucket[] = [
   "codex-native-workspace",
   "openclaw-dynamic-integration",
   "optional-profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
+const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLayer[] = [
   "codex-native-workspace",
   "openclaw-dynamic",
   "profile-or-plugin",
 ] as const;
 
-export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
+const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
   "codex-native-workspace",
   "openclaw-dynamic-direct",
   "openclaw-dynamic-searchable",
   "optional-profile-or-plugin",
   "structural-text",
-] as const;
-
-export const QA_CODEX_TOOL_LOADING_MODES: readonly QaCodexToolLoading[] = [
-  "direct",
-  "searchable",
 ] as const;
 
 const DEFAULT_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeToolExpectedLayer> = {
@@ -172,26 +165,4 @@ export function readScenarioRuntimeToolCoverageMetadata(
     config: scenario.execution.config,
     runtimeParityTier: scenario.runtimeParityTier,
   });
-}
-
-export function runtimeToolComparisonModeForScenario(
-  scenario: QaSeedScenarioWithSource,
-): RuntimeParityComparisonMode {
-  const explicit = readString(scenario.execution.config?.runtimeParityComparison);
-  if (explicit) {
-    if (
-      explicit !== "default" &&
-      explicit !== "codex-native-workspace" &&
-      explicit !== "outcome-only"
-    ) {
-      throw new Error(
-        `unknown runtime parity comparison mode: ${explicit}; expected default, codex-native-workspace, outcome-only`,
-      );
-    }
-    return explicit;
-  }
-  return readScenarioRuntimeToolCoverageMetadata(scenario).expectedLayer ===
-    "codex-native-workspace"
-    ? "codex-native-workspace"
-    : "default";
 }

@@ -2,9 +2,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
-
-installBaseProgramMocks();
+import { callGateway, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
@@ -564,7 +562,7 @@ describe("cli program (nodes basics)", () => {
 
     const output = getRuntimeOutput();
     expect(output).toContain("openclaw nodes approve request-reapproval --timeout 3000");
-    expect(output).toContain("Reuse the same --url/--token options when rerunning.");
+    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
     expect(output).not.toContain("gateway-user");
     expect(output).not.toContain("url-secret");
     expect(output).not.toContain("gateway.example");
@@ -730,9 +728,14 @@ describe("cli program (nodes basics)", () => {
         useStoredDeviceAuth?: boolean;
       };
       if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("missing scope: operator.read"), {
+        throw Object.assign(new Error("permission denied"), {
           name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
+          gatewayCode: "FORBIDDEN",
+          details: {
+            code: "MISSING_SCOPE",
+            missingScope: "operator.read",
+            requiredScopes: ["operator.read"],
+          },
         });
       }
       if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {

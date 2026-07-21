@@ -2,14 +2,13 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildCliRespawnPlan,
-  EXPERIMENTAL_WARNING_FLAG,
-  OPENCLAW_NODE_EXTRA_CA_CERTS_READY,
-  OPENCLAW_NODE_OPTIONS_READY,
-  resolveCliRespawnCommand,
-  runCliRespawnPlan,
-} from "./entry.respawn.js";
+import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
+
+const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+const BUNDLED_CA_FLAG = "--use-bundled-ca";
+const OPENSSL_CA_FLAG = "--use-openssl-ca";
+const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 
 type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
 
@@ -40,6 +39,18 @@ describe("buildCliRespawnPlan", () => {
     ).toBeNull();
   });
 
+  it("does not detach native hook relays through a startup respawn", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "hooks", "relay", "--relay-id", "relay-1"],
+        env: {},
+        execArgv: [],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
+      }),
+    ).toBeNull();
+  });
+
   it("adds NODE_EXTRA_CA_CERTS and warning suppression in one respawn", () => {
     const plan = buildCliRespawnPlan({
       argv: ["node", "openclaw", "status"],
@@ -55,6 +66,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
     expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
     expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBe("1");
+    expect(respawnPlan.detachForProcessTree).toBe(true);
   });
 
   it.each(["tui", "terminal", "chat"] as const)(
@@ -73,8 +85,117 @@ describe("buildCliRespawnPlan", () => {
       expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/certs/ca-certificates.crt");
       expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBe("1");
       expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+      expect(respawnPlan.detachForProcessTree).toBe(false);
     },
   );
+
+  it("keeps bare-root startup respawns attached to the terminal", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw"],
+      env: {},
+      execArgv: [],
+      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([EXPERIMENTAL_WARNING_FLAG, "openclaw"]);
+    expect(respawnPlan.detachForProcessTree).toBe(false);
+  });
+
+  it("uses the file-backed CA store for one-shot macOS commands", () => {
+    const plan = buildCliRespawnPlan({
+      argv: ["node", "openclaw", "cron", "list", "--json"],
+      env: { NODE_USE_SYSTEM_CA: "1" },
+      execArgv: [],
+      autoNodeExtraCaCerts: undefined,
+      platform: "darwin",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([
+      EXPERIMENTAL_WARNING_FLAG,
+      OPENSSL_CA_FLAG,
+      "openclaw",
+      "cron",
+      "list",
+      "--json",
+    ]);
+    expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("0");
+  });
+
+  it.each([
+    ["interactive commands", ["node", "openclaw", "tui"]],
+    ["the foreground Gateway", ["node", "openclaw", "gateway", "run"]],
+  ] as const)("keeps macOS system CA loading for %s", (_label, argv) => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [...argv],
+        env: { NODE_USE_SYSTEM_CA: "1" },
+        execArgv: [],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    ["the command line", ["--use-system-ca"], undefined],
+    ["NODE_OPTIONS", [], "--use-system-ca"],
+    ["quoted NODE_OPTIONS", [], '"--use-system-ca"'],
+    ["single-quoted NODE_OPTIONS", [], "'--use-system-ca'"],
+  ] as const)(
+    "keeps an explicit macOS system CA runtime flag from %s",
+    (_label, execArgv, nodeOptions) => {
+      const plan = buildCliRespawnPlan({
+        argv: ["node", "openclaw", "cron", "list", "--json"],
+        env: { NODE_OPTIONS: nodeOptions, NODE_USE_SYSTEM_CA: "1" },
+        execArgv: [...execArgv],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      });
+
+      const respawnPlan = expectCliRespawnPlan(plan);
+      expect(respawnPlan.argv).not.toContain(OPENSSL_CA_FLAG);
+      expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("1");
+    },
+  );
+
+  it.each([
+    ["the command line", [BUNDLED_CA_FLAG], undefined],
+    ["NODE_OPTIONS", [], BUNDLED_CA_FLAG],
+    ["quoted NODE_OPTIONS", [], `"${BUNDLED_CA_FLAG}"`],
+  ] as const)(
+    "preserves an explicit bundled CA selection from %s",
+    (_label, execArgv, nodeOptions) => {
+      const plan = buildCliRespawnPlan({
+        argv: ["node", "openclaw", "cron", "list", "--json"],
+        env: { NODE_OPTIONS: nodeOptions, NODE_USE_SYSTEM_CA: "1" },
+        execArgv: [...execArgv],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      });
+
+      const respawnPlan = expectCliRespawnPlan(plan);
+      expect(respawnPlan.argv).not.toContain(OPENSSL_CA_FLAG);
+      expect(respawnPlan.env.NODE_USE_SYSTEM_CA).toBe("0");
+    },
+  );
+
+  it("does not respawn again after selecting the macOS file-backed CA store", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: ["node", "openclaw", "cron", "list", "--json"],
+        env: {
+          NODE_USE_SYSTEM_CA: "1",
+          [OPENCLAW_NODE_OPTIONS_READY]: "1",
+        },
+        execArgv: [OPENSSL_CA_FLAG, EXPERIMENTAL_WARNING_FLAG],
+        autoNodeExtraCaCerts: undefined,
+        platform: "darwin",
+      }),
+    ).toBeNull();
+  });
 
   it("does not respawn interactive commands for warning suppression only", () => {
     expect(
@@ -138,6 +259,7 @@ describe("buildCliRespawnPlan", () => {
     expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
     expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBeUndefined();
     expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+    expect(respawnPlan.detachForProcessTree).toBe(false);
   });
 
   it("normalizes duplicated Windows node.exe argv before respawning", () => {
@@ -211,23 +333,7 @@ describe("buildCliRespawnPlan", () => {
       "/usr/local/bin/openclaw",
       "status",
     ]);
-  });
-});
-
-describe("resolveCliRespawnCommand", () => {
-  it("keeps normal node paths absolute", () => {
-    expect(resolveCliRespawnCommand({ execPath: "/usr/bin/node", platform: "linux" })).toBe(
-      "/usr/bin/node",
-    );
-  });
-
-  it("maps Volta's Unix shim target back to the named node shim", () => {
-    expect(
-      resolveCliRespawnCommand({
-        execPath: "/home/alice/.volta/bin/volta-shim",
-        platform: "linux",
-      }),
-    ).toBe("node");
+    expect(respawnPlan.detachForProcessTree).toBe(true);
   });
 });
 
@@ -244,6 +350,7 @@ describe("runCliRespawnPlan", () => {
         command: "/usr/bin/node",
         argv: ["/repo/openclaw/dist/entry.js", "status"],
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+        detachForProcessTree: true,
       },
       {
         spawn: spawn as unknown as typeof import("node:child_process").spawn,
@@ -259,6 +366,7 @@ describe("runCliRespawnPlan", () => {
       {
         stdio: "inherit",
         env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
+        detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
       },
     );
     const [bridgeChild, bridgeOptions] = requireFirstMockCall(
@@ -289,6 +397,7 @@ describe("runCliRespawnPlan", () => {
           command: "/usr/bin/node",
           argv: ["/repo/openclaw/dist/entry.js", "tui"],
           env: {},
+          detachForProcessTree: false,
         },
         {
           spawn: spawn as unknown as typeof import("node:child_process").spawn,

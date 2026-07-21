@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 // Qa Lab tests cover cli plugin behavior.
 import { Command } from "commander";
 import type { QaRunnerCliContribution } from "openclaw/plugin-sdk/qa-runner-runtime";
@@ -214,15 +215,19 @@ describe("qa cli registration", () => {
       "--qa-profile",
       "smoke-ci",
       "--surface",
-      "agent-runtime-and-provider-execution",
+      "channel-framework",
       "--category",
-      "agent-runtime-and-provider-execution.agent-turn-execution",
+      "channel-framework.conversation-routing-and-delivery",
+      "--scenario",
+      "dm-chat-baseline",
+      "--evidence-mode",
+      "slim",
       "--transport",
       "qa-channel",
       "--provider-mode",
       "mock-openai",
       "--model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--alt-model",
       "anthropic/claude-sonnet-4-6",
       "--concurrency",
@@ -235,11 +240,13 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       outputDir: ".artifacts/qa-e2e/smoke-ci",
       profile: "smoke-ci",
-      surface: "agent-runtime-and-provider-execution",
-      category: "agent-runtime-and-provider-execution.agent-turn-execution",
+      surface: "channel-framework",
+      category: "channel-framework.conversation-routing-and-delivery",
+      scenarioIds: ["dm-chat-baseline"],
+      evidenceMode: "slim",
       transportId: "qa-channel",
       providerMode: "mock-openai",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       alternateModel: "anthropic/claude-sonnet-4-6",
       concurrency: 2,
       allowFailures: true,
@@ -251,10 +258,13 @@ describe("qa cli registration", () => {
   it.each([
     ["--output-dir", [".artifacts/qa-e2e/smoke-ci"]],
     ["--surface", ["agent-runtime-and-provider-execution"]],
-    ["--category", ["agent-runtime-and-provider-execution.agent-turn-execution"]],
+    ["--category", ["channel-framework.conversation-routing-and-delivery"]],
+    ["--scenario", ["dm-chat-baseline"]],
+    ["--evidence-mode", ["slim"]],
+    ["--exclude-test-execution-evidence", []],
     ["--transport", ["qa-channel"]],
     ["--provider-mode", ["mock-openai"]],
-    ["--model", ["openai/gpt-5.5"]],
+    ["--model", ["openai/gpt-5.6-luna"]],
     ["--alt-model", ["anthropic/claude-sonnet-4-6"]],
     ["--concurrency", ["2"]],
     ["--allow-failures", []],
@@ -263,6 +273,72 @@ describe("qa cli registration", () => {
     await expect(
       program.parseAsync(["node", "openclaw", "qa", "run", flag, ...values]),
     ).rejects.toThrow(`qa run ${flag} requires --qa-profile`);
+
+    expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([["--evidence-mode", "compact"], ["--exclude-test-execution-evidence"]])(
+    "maps deprecated compact evidence flag %s to slim",
+    async (...flags) => {
+      await program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "release",
+        ...flags.filter(Boolean),
+      ]);
+
+      expect(runQaProfileCommand).toHaveBeenCalledWith(
+        expect.objectContaining({
+          evidenceMode: "slim",
+          profile: "release",
+        }),
+      );
+    },
+  );
+
+  it("rejects conflicting deprecated evidence flags", async () => {
+    await expect(
+      program.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "release",
+        "--evidence-mode",
+        "full",
+        "--exclude-test-execution-evidence",
+      ]),
+    ).rejects.toThrow("--exclude-test-execution-evidence conflicts with --evidence-mode full");
+
+    expect(runQaProfileCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects unknown qa evidence modes", async () => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(
+      invalidProgram.parseAsync([
+        "node",
+        "openclaw",
+        "qa",
+        "run",
+        "--qa-profile",
+        "smoke-ci",
+        "--evidence-mode",
+        "tiny",
+      ]),
+    ).rejects.toThrow("--evidence-mode must be one of full, slim.");
 
     expect(runQaLabSelfCheckCommand).not.toHaveBeenCalled();
     expect(runQaProfileCommand).not.toHaveBeenCalled();
@@ -476,9 +552,9 @@ describe("qa cli registration", () => {
       "--provider-mode",
       "live-frontier",
       "--model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--alt-model",
-      "openai/gpt-5.5",
+      "openai/gpt-5.6-luna",
       "--scenario",
       "slack-canary",
       "--credential-source",
@@ -490,7 +566,7 @@ describe("qa cli registration", () => {
     ]);
 
     expect(runMantisSlackDesktopSmokeCommand).toHaveBeenCalledWith({
-      alternateModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.6-luna",
       crabboxBin: "/tmp/crabbox",
       credentialRole: "maintainer",
       credentialSource: "env",
@@ -503,7 +579,7 @@ describe("qa cli registration", () => {
       machineClass: "beast",
       market: "on-demand",
       outputDir: ".artifacts/qa-e2e/mantis/slack-desktop",
-      primaryModel: "openai/gpt-5.5",
+      primaryModel: "openai/gpt-5.6-luna",
       provider: "hetzner",
       providerMode: "live-frontier",
       repoRoot: "/tmp/openclaw-repo",
@@ -661,7 +737,12 @@ describe("qa cli registration", () => {
   });
 
   it("delegates discovered qa runner registration through the generic host seam", () => {
-    const [{ registration }] = listQaRunnerCliContributions.mock.results[0].value;
+    const mockResult = expectDefined(
+      listQaRunnerCliContributions.mock.results[0],
+      "QA runner contribution result",
+    );
+    const contribution = expectDefined(mockResult.value[0], "QA runner contribution");
+    const { registration } = contribution;
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
@@ -714,6 +795,33 @@ describe("qa cli registration", () => {
     [["qa", "up", "--qa-lab-port", "0x43124"], "--qa-lab-port must be a positive integer."],
     [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
   ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
+  });
+
+  it.each([
+    [["qa", "ui", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+    [
+      ["qa", "ui", "--advertise-port", "999999"],
+      "--advertise-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "docker-scaffold", "--output-dir", "/tmp/qa", "--gateway-port", "65536"],
+      "--gateway-port must be a TCP port between 1 and 65535.",
+    ],
+    [
+      ["qa", "up", "--qa-lab-port", "65536"],
+      "--qa-lab-port must be a TCP port between 1 and 65535.",
+    ],
+    [["qa", "aimock", "--port", "65536"], "--port must be a TCP port between 1 and 65535."],
+  ])("rejects out-of-range QA port option %j", async (args, message) => {
     const invalidProgram = new Command();
     invalidProgram.exitOverride();
     invalidProgram.configureOutput({

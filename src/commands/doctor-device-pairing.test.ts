@@ -1,6 +1,7 @@
 // Doctor device pairing tests cover device-pairing checks, repair prompts, and diagnostics.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { storeDeviceAuthToken } from "../infra/device-auth-store.js";
 import {
@@ -60,6 +61,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 describe("noteDevicePairingHealth", () => {
+  let collectDevicePairingHealthFindings: typeof import("./doctor-device-pairing.js").collectDevicePairingHealthFindings;
   let noteDevicePairingHealth: typeof import("./doctor-device-pairing.js").noteDevicePairingHealth;
 
   async function withApprovedOperatorPairing(
@@ -102,7 +104,8 @@ describe("noteDevicePairingHealth", () => {
     vi.resetModules();
     callGatewayMock.mockReset();
     noteMock.mockReset();
-    ({ noteDevicePairingHealth } = await import("./doctor-device-pairing.js"));
+    ({ collectDevicePairingHealthFindings, noteDevicePairingHealth } =
+      await import("./doctor-device-pairing.js"));
   });
 
   afterEach(() => {
@@ -112,7 +115,7 @@ describe("noteDevicePairingHealth", () => {
 
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
     await withApprovedOperatorPairing(async ({ identity, publicKey }) => {
-      await requestDevicePairing({
+      const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey,
         role: "operator",
@@ -134,10 +137,26 @@ describe("noteDevicePairingHealth", () => {
       expect(message).toContain("operator.admin");
       expect(message).toContain("openclaw devices approve");
       expect(callGatewayMock).not.toHaveBeenCalled();
+
+      const findings = await collectDevicePairingHealthFindings({
+        cfg: { gateway: { mode: "local" } },
+      });
+      expect(findings).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/device-pairing",
+          severity: "warning",
+          path: "devices.pending",
+          target: identity.deviceId + ":" + pending.request.requestId,
+          requirement: "scope-upgrade",
+          message: expect.stringContaining("Pending scope upgrade"),
+          fixHint: expect.stringContaining("openclaw devices approve"),
+        }),
+      ]);
+      expect(callGatewayMock).not.toHaveBeenCalled();
     });
   });
 
-  it("warns when local pairing state is corrupt instead of treating it as empty", async () => {
+  it("warns when a legacy pairing store file has not been imported into SQLite", async () => {
     await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
       await withEnvAsync(
         {
@@ -158,7 +177,21 @@ describe("noteDevicePairingHealth", () => {
           const message = requireNoteMessage();
           expect(requireNoteTitle()).toBe("Device pairing");
           expect(message).toContain("paired.json");
-          expect(message).toContain("refused to treat it as empty");
+          expect(message).toContain("has not been imported");
+          expect(await fs.readFile(pairedPath, "utf8")).toBe("{not-json}");
+
+          const findings = await collectDevicePairingHealthFindings({
+            cfg: { gateway: { mode: "local" } },
+          });
+          expect(findings).toEqual([
+            expect.objectContaining({
+              checkId: "core/doctor/device-pairing",
+              severity: "warning",
+              path: "devices.legacy-store",
+              requirement: "pairing-store-legacy-file",
+              message: expect.stringContaining("has not been imported"),
+            }),
+          ]);
           expect(await fs.readFile(pairedPath, "utf8")).toBe("{not-json}");
         },
       );
@@ -182,7 +215,7 @@ describe("noteDevicePairingHealth", () => {
           { token: string; role: string; scopes: string[]; updatedAtMs: number }
         >;
       };
-      store.tokens.operator.updatedAtMs = 1;
+      expectDefined(store.tokens.operator, "store.tokens.operator test invariant").updatedAtMs = 1;
       await fs.writeFile(deviceAuthPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
 
       const rotated = await rotateDeviceToken({

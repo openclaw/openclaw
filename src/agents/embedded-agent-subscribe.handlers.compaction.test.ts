@@ -3,8 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { drainSessionStoreWriterQueuesForTest } from "../config/sessions.js";
+import { describe, expect, it, vi } from "vitest";
 import {
   readCompactionCount,
   seedSessionStore,
@@ -13,8 +12,8 @@ import {
 import {
   handleCompactionEnd,
   handleCompactionStart,
-  reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./embedded-agent-subscribe.handlers.compaction.js";
+import reconcileSessionStoreCompactionCountAfterSuccess from "./embedded-agent-subscribe.handlers.compaction.runtime.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot, type AssistantUsageSnapshot } from "./usage.js";
@@ -129,10 +128,6 @@ function loggedInfoMessageAt(info: ReturnType<typeof vi.fn>, index: number): str
   }
   return message;
 }
-
-afterEach(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-});
 
 describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   it("raises the stored compaction count to the observed value", async () => {

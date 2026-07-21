@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_REPLAY_MAX_MESSAGES,
-  replayRecentUserAssistantMessages,
-} from "./session-transcript-replay.js";
+import { replayRecentUserAssistantMessages } from "../../config/sessions/transcript-replay.js";
+
+const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 
 const j = (obj: unknown): string => `${JSON.stringify(obj)}\n`;
 
@@ -159,7 +159,7 @@ describe("replayRecentUserAssistantMessages", () => {
     const records = await readJsonlRecords(target);
     expect(records.reduce((count, r) => count + (r.type === "session" ? 1 : 0), 0)).toBe(1);
     expect(records[0]?.id).toBe("existing");
-    expect(records[1].message?.role).toBe("user");
+    expect(expectDefined(records[1], "records[1] test invariant").message?.role).toBe("user");
   });
 
   it("coalesces same-role runs so replayed records strictly alternate", async () => {

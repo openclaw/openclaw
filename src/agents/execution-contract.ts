@@ -41,8 +41,7 @@ const STRICT_AGENTIC_MODEL_ID_PATTERN = /^gpt-5(?:[.o-]|$)/i;
 /**
  * Supported provider + model combinations where strict-agentic is the intended
  * runtime contract. Kept as a narrow helper so both the execution-contract
- * resolver and the `update_plan` auto-enable gate converge on the same
- * definition of "GPT-5-family OpenAI run". The embedded
+ * resolver uses for the GPT-5-family OpenAI strict-agentic default. The embedded
  * `mock-openai` QA lane intentionally piggybacks on that contract so repo QA
  * can exercise the same incomplete-turn recovery rules end to end.
  */
@@ -83,7 +82,7 @@ export function isStrictAgenticSupportedProviderModel(params: {
  * Explicit opt-out still works. Assistant prose is never classified to decide
  * whether a turn represents planning, progress, or completion.
  */
-export function resolveEffectiveExecutionContract(params: {
+function resolveEffectiveExecutionContract(params: {
   config?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string | null;

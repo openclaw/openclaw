@@ -4,13 +4,28 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { MemoryQmdUpdateConfig } from "../config/types.memory.js";
+import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 
-const { getMemorySearchManagerMock } = vi.hoisted(() => ({
+const { getMemorySearchManagerMock, resolveMemorySearchConfigMock } = vi.hoisted(() => ({
   getMemorySearchManagerMock: vi.fn(),
+  resolveMemorySearchConfigMock: vi.fn(),
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
   getActiveMemorySearchManager: getMemorySearchManagerMock,
+}));
+
+// This suite owns startup orchestration; agent and memory config resolution have
+// separate tests. Keep those graphs out of this non-isolated Gateway shard.
+vi.mock("../agents/agent-scope.js", () => ({
+  listAgentEntries: (cfg: OpenClawConfig) => cfg.agents?.list ?? [],
+  listAgentIds: (cfg: OpenClawConfig) => cfg.agents?.list?.map((entry) => entry.id) ?? ["main"],
+  resolveDefaultAgentId: (cfg: OpenClawConfig) =>
+    cfg.agents?.list?.find((entry) => entry.default)?.id ?? "main",
+}));
+
+vi.mock("../agents/memory-search.js", () => ({
+  resolveMemorySearchConfig: resolveMemorySearchConfigMock,
 }));
 
 import { startGatewayMemoryBackend } from "./server-startup-memory.js";
@@ -87,6 +102,13 @@ function expectBootSyncCompleted(
 describe("startGatewayMemoryBackend", () => {
   beforeEach(() => {
     getMemorySearchManagerMock.mockClear();
+    resolveMemorySearchConfigMock.mockReset();
+    resolveMemorySearchConfigMock.mockImplementation((cfg: OpenClawConfig, agentId: string) => {
+      const agent = cfg.agents?.list?.find((entry) => entry.id === agentId);
+      const enabled =
+        agent?.memorySearch?.enabled ?? cfg.agents?.defaults?.memorySearch?.enabled ?? true;
+      return enabled ? {} : null;
+    });
   });
 
   it("skips initialization when memory backend is not qmd", async () => {
@@ -172,6 +194,37 @@ describe("startGatewayMemoryBackend", () => {
       'qmd memory startup initialization failed for agent "main": qmd missing',
     );
     expectBootSyncCompleted(log, 1, '"ops"');
+  });
+
+  it("skips an unavailable memory owner and initializes healthy agents", async () => {
+    const cfg = createQmdConfig(
+      {
+        defaults: { memorySearch: { enabled: true } },
+        list: [{ id: "cold", default: true }, { id: "healthy" }],
+      },
+      { startup: "immediate", interval: "0s", embedInterval: "0s" },
+    );
+    resolveMemorySearchConfigMock.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
+      if (agentId === "cold") {
+        throw new SecretSurfaceUnavailableError({
+          ownerKind: "capability",
+          ownerId: "memory-provider:cold",
+          state: "unavailable",
+          paths: ["agents.defaults.memorySearch.remote.apiKey"],
+          refKeys: ["env:default:MISSING_MEMORY_KEY"],
+          reason: "secret reference was not found",
+        });
+      }
+      return {};
+    });
+
+    const log = await startQmdBackendWithManager(cfg);
+
+    expectQmdManagerRequests(cfg, ["healthy"]);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('memory startup unavailable for agent "cold"'),
+    );
+    expectBootSyncCompleted(log, 1, '"healthy"');
   });
 
   it("skips agents with memory search disabled", async () => {

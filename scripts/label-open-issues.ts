@@ -4,9 +4,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isRecord } from "../src/utils.js";
 import { readBoundedResponseText as readBoundedBodyText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { resolveGitHubRepoFromOrigin } from "./lib/github-repo.ts";
 
 function writeStdoutLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -223,7 +225,7 @@ function parseArgs(argv: string[]): ScriptOptions {
 
     if (arg === "--limit") {
       const next = argv[index + 1];
-      if (!next || Number.isNaN(Number(next))) {
+      if (!next || next.startsWith("-") || !/^\d+$/u.test(next)) {
         throw new Error("Missing/invalid --limit value");
       }
       const parsed = Number(next);
@@ -237,13 +239,15 @@ function parseArgs(argv: string[]): ScriptOptions {
 
     if (arg === "--model") {
       const next = argv[index + 1];
-      if (!next) {
+      if (!next || next.startsWith("-")) {
         throw new Error("Missing --model value");
       }
       model = next;
       index++;
       continue;
     }
+
+    throw new Error(`Unknown argument: ${arg}`);
   }
 
   return { limit, dryRun, model };
@@ -266,11 +270,11 @@ function resolveOpenAITimeoutMs(raw = process.env.OPENCLAW_LABEL_OPEN_ISSUES_OPE
 async function withOpenAITimeout<T>(
   label: string,
   timeoutMs: number,
-  run: (signal: AbortSignal) => Promise<T>,
+  run: (signal: AbortSignal, timeoutPromise: Promise<never>) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => {
       const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
       reject(error);
@@ -278,7 +282,7 @@ async function withOpenAITimeout<T>(
     }, timeoutMs);
   });
   try {
-    return await Promise.race([run(controller.signal), timeoutPromise]);
+    return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
     if (timeout) {
       clearTimeout(timeout);
@@ -289,6 +293,7 @@ async function withOpenAITimeout<T>(
 async function readBoundedResponseText(
   response: Response,
   maxChars = OPENAI_ERROR_BODY_MAX_CHARS,
+  timeoutPromise?: Promise<never>,
 ): Promise<string> {
   if (!response.body) {
     return "";
@@ -298,10 +303,13 @@ async function readBoundedResponseText(
   const decoder = new TextDecoder();
   let text = "";
   let truncated = false;
+  let canceled = false;
 
   try {
     while (text.length <= maxChars) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readOpenAIErrorChunk(reader, timeoutPromise, () => {
+        canceled = true;
+      });
       if (done) {
         text += decoder.decode();
         break;
@@ -309,7 +317,7 @@ async function readBoundedResponseText(
 
       text += decoder.decode(value, { stream: true });
       if (text.length > maxChars) {
-        text = text.slice(0, maxChars);
+        text = truncateUtf16Safe(text, maxChars);
         truncated = true;
         break;
       }
@@ -317,7 +325,7 @@ async function readBoundedResponseText(
   } finally {
     if (truncated) {
       await reader.cancel().catch(() => undefined);
-    } else {
+    } else if (!canceled) {
       reader.releaseLock();
     }
   }
@@ -325,15 +333,55 @@ async function readBoundedResponseText(
   return truncated ? `${text}\n[truncated]` : text;
 }
 
+function cancelOpenAIErrorReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  void Promise.resolve()
+    .then(() => reader.cancel())
+    .catch(() => undefined);
+}
+
+async function readOpenAIErrorChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  timeoutPromise: Promise<never> | undefined,
+  markCanceled: () => void,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const readPromise = reader.read();
+  if (!timeoutPromise) {
+    return await readPromise;
+  }
+
+  let waitingForRead = true;
+  const timeoutReadPromise = timeoutPromise.catch((error: unknown) => {
+    if (waitingForRead) {
+      markCanceled();
+      cancelOpenAIErrorReaderSoon(reader);
+    }
+    throw error instanceof Error ? error : new Error("OpenAI error response body read timed out");
+  });
+
+  try {
+    return await Promise.race([readPromise, timeoutReadPromise]);
+  } finally {
+    waitingForRead = false;
+  }
+}
+
+type OpenAIJsonReadOptions = {
+  signal?: AbortSignal;
+  timeoutPromise?: Promise<never>;
+};
+
 async function readBoundedOpenAIJson(
   response: Response,
   maxBytes = OPENAI_RESPONSE_BODY_MAX_BYTES,
+  options: OpenAIJsonReadOptions = {},
 ): Promise<OpenAIResponse> {
   const text = await readBoundedBodyText(response, "OpenAI classification", maxBytes, {
     createTooLargeError: (message) =>
       Object.assign(new Error(message), {
         code: "ETOOBIG",
       }),
+    signal: options.signal,
+    timeoutPromise: options.timeoutPromise,
   });
   return JSON.parse(text) as OpenAIResponse;
 }
@@ -420,33 +468,8 @@ function runGh(args: string[]): string {
 }
 
 function resolveRepo(): RepoInfo {
-  const remote = execFileSync("git", ["config", "--get", "remote.origin.url"], {
-    encoding: "utf8",
-  }).trim();
-
-  if (!remote) {
-    throw new Error("Unable to determine repository from git remote.");
-  }
-
-  const normalized = remote.replace(/\.git$/, "");
-
-  if (normalized.startsWith("git@github.com:")) {
-    const slug = normalized.replace("git@github.com:", "");
-    const [owner, name] = slug.split("/");
-    if (owner && name) {
-      return { owner, name };
-    }
-  }
-
-  if (normalized.startsWith("https://github.com/")) {
-    const slug = normalized.replace("https://github.com/", "");
-    const [owner, name] = slug.split("/");
-    if (owner && name) {
-      return { owner, name };
-    }
-  }
-
-  throw new Error(`Unsupported GitHub remote: ${remote}`);
+  const [owner, name] = resolveGitHubRepoFromOrigin().split("/") as [string, string];
+  return { owner, name };
 }
 
 function fetchIssuePage(repo: RepoInfo, after: string | null): IssuePage {
@@ -622,7 +645,7 @@ function truncateBody(body: string): string {
   if (body.length <= MAX_BODY_CHARS) {
     return body;
   }
-  return `${body.slice(0, MAX_BODY_CHARS)}\n\n[truncated]`;
+  return `${truncateUtf16Safe(body, MAX_BODY_CHARS)}\n\n[truncated]`;
 }
 
 function buildItemPrompt(item: LabelItem, kind: "issue" | "pull request"): string {
@@ -692,7 +715,7 @@ async function classifyItem(
   const payload = await withOpenAITimeout(
     "OpenAI issue label classification request",
     timeoutMs,
-    async (signal) => {
+    async (signal, timeoutPromise) => {
       const response = await fetchImpl("https://api.openai.com/v1/responses", {
         method: "POST",
         headers: {
@@ -741,11 +764,11 @@ async function classifyItem(
       });
 
       if (!response.ok) {
-        const text = await readBoundedResponseText(response);
+        const text = await readBoundedResponseText(response, undefined, timeoutPromise);
         throw new Error(`OpenAI request failed (${response.status}): ${text}`);
       }
 
-      return await readBoundedOpenAIJson(response);
+      return await readBoundedOpenAIJson(response, undefined, { signal, timeoutPromise });
     },
   );
   const rawText = extractResponseText(payload);
@@ -1009,6 +1032,7 @@ async function main() {
 export const testing = {
   classifyItem,
   normalizeClassification,
+  parseArgs,
   readBoundedOpenAIJson,
   readBoundedResponseText,
   resolveOpenAITimeoutMs,

@@ -3,7 +3,13 @@ import path from "node:path";
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  type ChannelDmAllowFromMode,
+  resolveChannelDmAllowFrom,
+  resolveChannelDmPolicy,
+} from "../channels/plugins/dm-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import {
@@ -26,7 +32,7 @@ import {
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
-import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
+import { unsupportedSecretRefSurfacePolicy } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
@@ -42,12 +48,24 @@ import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
-import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
+import {
+  collectChannelDmPolicyMetadata,
+  collectChannelSchemaMetadataWithOwnership,
+} from "./channel-config-metadata.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import {
+  isModelPolicyCompatSelector,
+  isValidExactModelPolicyRef,
+  parseModelPolicyWildcardRef,
+} from "./model-policy-ref.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import {
+  type DmPolicyAllowFromViolation,
+  evaluateDmPolicyAllowFromDependency,
+  isBuiltInModelProviderOverlayId,
+} from "./zod-schema.core.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set([
@@ -78,18 +96,6 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
-
-function stripDeprecatedValidationKeys(raw: unknown): unknown {
-  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
-    return raw;
-  }
-  const commands = { ...raw.commands };
-  delete commands.modelsWrite;
-  return {
-    ...raw,
-    commands,
-  };
-}
 
 function materializeBundledModelProviderOverlays(config: OpenClawConfig): OpenClawConfig {
   const providers = config.models?.providers;
@@ -192,6 +198,17 @@ function toConfigPathSegments(pathLocal3: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function withConfigIssuePath(
+  issue: ConfigValidationIssue,
+  pathSegments: readonly ConfigPathSegment[],
+): ConfigValidationIssue {
+  Object.defineProperty(issue, "pathSegments", {
+    value: [...pathSegments],
+    enumerable: false,
+  });
+  return issue;
 }
 
 function formatMissingOfficialExternalPluginWarning(
@@ -310,6 +327,144 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
 function formatRawChannelConfigIssueMessage(message: string): string {
   return `invalid config: ${message}`;
 }
+
+function buildDmPolicyDependencyWarning(params: {
+  channelId: string;
+  accountId?: string;
+  allowFromSource?: "explicit" | "inherited";
+  violation: DmPolicyAllowFromViolation;
+}): ConfigValidationIssue {
+  const channelBase = `channels.${params.channelId}`;
+  const scope = params.accountId ? `${channelBase}.accounts.${params.accountId}` : channelBase;
+  const allowFromPath = `${scope}.allowFrom`;
+  const inherited = params.accountId && params.allowFromSource === "inherited";
+  const allowFromSubject = inherited
+    ? `${allowFromPath} is unset and ${channelBase}.allowFrom`
+    : allowFromPath;
+  const accountInheritedTarget = inherited ? ` or ${channelBase}.allowFrom` : "";
+  const accountOverrideFix =
+    params.accountId && !inherited
+      ? `, remove ${allowFromPath} to inherit ${channelBase}.allowFrom,`
+      : "";
+  const message =
+    params.violation === "open_requires_wildcard"
+      ? `${scope}.dmPolicy="open" but ${allowFromSubject} does not include "*"; all DMs will be dropped. Add "*" to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or set ${scope}.dmPolicy to "pairing"/"allowlist".`
+      : `${scope}.dmPolicy="allowlist" but ${allowFromSubject} is empty; all DMs will be dropped. Add at least one sender ID to ${allowFromPath}${accountInheritedTarget}${accountOverrideFix} or change ${scope}.dmPolicy.`;
+  return { path: allowFromPath, message };
+}
+
+// Channel map keys that are not channels and must be skipped while scanning DM policy.
+const DM_POLICY_PSEUDO_CHANNEL_KEYS = new Set(["defaults", "modelByChannel", "tools"]);
+
+function hasDefinedConfigValue(record: Record<string, unknown>, key: string): boolean {
+  return Object.hasOwn(record, key) && record[key] !== undefined;
+}
+
+function hasConfiguredDmAllowFrom(
+  record: Record<string, unknown>,
+  mode: ChannelDmAllowFromMode,
+): boolean {
+  const dm = isRecord(record.dm) ? record.dm : null;
+  if (mode === "nestedOnly") {
+    return (
+      (dm !== null && hasDefinedConfigValue(dm, "allowFrom")) ||
+      hasDefinedConfigValue(record, "allowFrom")
+    );
+  }
+  return (
+    hasDefinedConfigValue(record, "allowFrom") ||
+    (dm !== null && hasDefinedConfigValue(dm, "allowFrom"))
+  );
+}
+
+function isConfigRecordEnabled(record: Record<string, unknown>): boolean {
+  return record.enabled !== false;
+}
+
+type ChannelDmPolicyDependencyWarningOptions = {
+  dmAllowFromModes?: ReadonlyMap<string, ChannelDmAllowFromMode>;
+};
+
+function hasChannelDmPolicyDependencyWarningCandidates(config: OpenClawConfig): boolean {
+  if (!config.channels || !isRecord(config.channels)) {
+    return false;
+  }
+  return Object.entries(config.channels).some(
+    ([channelId, channelValue]) =>
+      !DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) &&
+      isRecord(channelValue) &&
+      isConfigRecordEnabled(channelValue),
+  );
+}
+
+/**
+ * Surface dmPolicy/allowFrom dependency problems generically for every channel that
+ * exposes DM policy via the canonical top-level `dmPolicy`/`allowFrom` fields. These
+ * configs parse fine but drop every DM at runtime, so we warn (rather than reject) to
+ * stay consistent with `security audit`/`doctor` and avoid breaking existing-but-usable
+ * configs on upgrade.
+ *
+ * Resolution goes through the shared DM-access helpers so the warning matches the
+ * effective policy/allowFrom the runtime sees, including the legacy `dm.*` aliases and
+ * account->channel inheritance. `nestedOnly` channels (canonical fields under `dm.*`)
+ * are skipped because their config shape does not match this warning's top-level paths.
+ */
+function collectChannelDmPolicyDependencyWarnings(
+  config: OpenClawConfig,
+  options: ChannelDmPolicyDependencyWarningOptions = {},
+): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const warnings: ConfigValidationIssue[] = [];
+  for (const [channelId, channelValue] of Object.entries(config.channels)) {
+    if (
+      DM_POLICY_PSEUDO_CHANNEL_KEYS.has(channelId) ||
+      !isRecord(channelValue) ||
+      !isConfigRecordEnabled(channelValue)
+    ) {
+      continue;
+    }
+    const mode = options.dmAllowFromModes?.get(channelId) ?? "topOnly";
+    if (mode === "nestedOnly") {
+      continue;
+    }
+    const channelViolation = evaluateDmPolicyAllowFromDependency({
+      policy: resolveChannelDmPolicy({ account: channelValue, mode }),
+      allowFrom: resolveChannelDmAllowFrom({ account: channelValue, mode }),
+    });
+    if (channelViolation) {
+      warnings.push(buildDmPolicyDependencyWarning({ channelId, violation: channelViolation }));
+    }
+    if (!isRecord(channelValue.accounts)) {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(channelValue.accounts)) {
+      if (!isRecord(accountValue) || !isConfigRecordEnabled(accountValue)) {
+        continue;
+      }
+      const allowFromSource = hasConfiguredDmAllowFrom(accountValue, mode)
+        ? "explicit"
+        : "inherited";
+      const accountViolation = evaluateDmPolicyAllowFromDependency({
+        policy: resolveChannelDmPolicy({ account: accountValue, parent: channelValue, mode }),
+        allowFrom: resolveChannelDmAllowFrom({ account: accountValue, parent: channelValue, mode }),
+      });
+      if (accountViolation) {
+        warnings.push(
+          buildDmPolicyDependencyWarning({
+            channelId,
+            accountId,
+            allowFromSource,
+            violation: accountViolation,
+          }),
+        );
+      }
+    }
+  }
+  return warnings;
+}
+
 function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
   if (!config.channels || !isRecord(config.channels)) {
     return [];
@@ -480,7 +635,7 @@ function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
 
 function extractBindingsSpecificUnionIssue(
   record: UnknownIssueRecord,
-  parentPath: string,
+  parentPathSegments: readonly ConfigPathSegment[],
 ): ConfigValidationIssue | null {
   if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
     return null;
@@ -549,11 +704,16 @@ function extractBindingsSpecificUnionIssue(
     return null;
   }
 
-  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
-  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const fullPathSegments = [
+    ...parentPathSegments,
+    ...toConfigPathSegments(matchingBranchIssue.path),
+  ];
   const subMessage =
     typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
-  return { path: fullPath, message: subMessage };
+  return withConfigIssuePath(
+    { path: formatConfigPath(fullPathSegments), message: subMessage },
+    fullPathSegments,
+  );
 }
 
 function isObjectSecretRefCandidate(value: unknown): boolean {
@@ -588,7 +748,7 @@ function pushUnsupportedMutableSecretRefIssue(
 
 function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidationIssue[] {
   const issues: ConfigValidationIssue[] = [];
-  for (const candidate of collectUnsupportedSecretRefConfigCandidates(raw)) {
+  for (const candidate of unsupportedSecretRefSurfacePolicy.collectConfigCandidates(raw)) {
     pushUnsupportedMutableSecretRefIssue(issues, candidate.path, candidate.value);
   }
 
@@ -632,7 +792,9 @@ function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   if (!unrecognizedKeys.includes(childKey)) {
     return issue;
   }
-  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  const remainingKeys = unrecognizedKeys.filter(
+    (key): key is string => key !== undefined && key !== childKey,
+  );
   if (remainingKeys.length === 0) {
     return null;
   }
@@ -671,7 +833,8 @@ export function collectUnsupportedSecretRefPolicyIssues(raw: unknown): ConfigVal
 
 function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
-  const pathItem = formatConfigPath(toConfigPathSegments(record?.path));
+  const pathSegments = toConfigPathSegments(record?.path);
+  const pathItem = formatConfigPath(pathSegments);
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
 
   // Numeric ceiling/floor hints (too_big / too_small with numeric origin).
@@ -690,22 +853,25 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     record.code === "invalid_union" &&
     !allowedValuesSummary
   ) {
-    const betterIssue = extractBindingsSpecificUnionIssue(record, pathItem);
+    const betterIssue = extractBindingsSpecificUnionIssue(record, pathSegments);
     if (betterIssue) {
       return betterIssue;
     }
   }
 
   if (!allowedValuesSummary) {
-    return { path: pathItem, message: enrichedMessage };
+    return withConfigIssuePath({ path: pathItem, message: enrichedMessage }, pathSegments);
   }
 
-  return {
-    path: pathItem,
-    message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
-    allowedValues: allowedValuesSummary.values,
-    allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
-  };
+  return withConfigIssuePath(
+    {
+      path: pathItem,
+      message: appendAllowedValuesHint(enrichedMessage, allowedValuesSummary),
+      allowedValues: allowedValuesSummary.values,
+      allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
+    },
+    pathSegments,
+  );
 }
 
 function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
@@ -782,15 +948,15 @@ function resolveExplicitPluginReferencePath(
   }
   return undefined;
 }
-
-export const testing = {
-  mapZodIssueToConfigIssue,
-};
-
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
   return isPathWithinRoot(workspaceRoot, resolved);
+}
+
+function createIdentityAvatarIssue(index: number, message: string): ConfigValidationIssue {
+  const pathSegments = ["agents", "list", index, "identity", "avatar"] as const;
+  return withConfigIssuePath({ path: formatConfigPath(pathSegments), message }, pathSegments);
 }
 
 function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[] {
@@ -815,18 +981,22 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       continue;
     }
     if (avatar.startsWith("~")) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const hasScheme = hasAvatarUriScheme(avatar);
     if (hasScheme && !isWindowsAbsolutePath(avatar)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(
+          index,
+          "identity.avatar must be a workspace-relative path, http(s) URL, or data URI.",
+        ),
+      );
       continue;
     }
     const workspaceDir = resolveAgentWorkspaceDir(
@@ -834,10 +1004,9 @@ function validateIdentityAvatar(config: OpenClawConfig): ConfigValidationIssue[]
       entry.id ?? resolveDefaultAgentId(config),
     );
     if (!isWorkspaceAvatarPath(avatar, workspaceDir)) {
-      issues.push({
-        path: `agents.list.${index}.identity.avatar`,
-        message: "identity.avatar must stay within the agent workspace.",
-      });
+      issues.push(
+        createIdentityAvatarIssue(index, "identity.avatar must stay within the agent workspace."),
+      );
     }
   }
   return issues;
@@ -883,6 +1052,61 @@ function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function collectModelPolicyAllowIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const defaultModels = config.agents?.defaults?.models;
+  const collectAliases = (...modelMaps: Array<typeof defaultModels | undefined>): Set<string> => {
+    const aliases = new Set<string>();
+    for (const models of modelMaps) {
+      for (const entry of Object.values(models ?? {})) {
+        const alias = normalizeLowercaseStringOrEmpty(entry?.alias);
+        if (alias) {
+          aliases.add(alias);
+        }
+      }
+    }
+    return aliases;
+  };
+  const validateRefs = (
+    refs: readonly string[] | undefined,
+    configPath: string,
+    aliases: Set<string>,
+  ) => {
+    for (const [index, raw] of (refs ?? []).entries()) {
+      const trimmed = raw.trim();
+      if (
+        aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+        isModelPolicyCompatSelector(trimmed) ||
+        isValidExactModelPolicyRef(trimmed) ||
+        parseModelPolicyWildcardRef(trimmed)
+      ) {
+        continue;
+      }
+      issues.push({
+        path: `${configPath}.${index}`,
+        message:
+          `invalid model policy ref: ${sanitizeForLog(JSON.stringify(raw))}. ` +
+          'Use a configured alias, an exact "provider/model" ref, or a trailing prefix wildcard such as "provider/*" or "provider/namespace/*".',
+      });
+    }
+  };
+
+  const defaultAliases = collectAliases(defaultModels);
+  validateRefs(
+    config.agents?.defaults?.modelPolicy?.allow,
+    "agents.defaults.modelPolicy.allow",
+    defaultAliases,
+  );
+  for (const [index, agent] of (config.agents?.list ?? []).entries()) {
+    validateRefs(
+      agent.modelPolicy?.allow,
+      `agents.list.${index}.modelPolicy.allow`,
+      collectAliases(defaultModels, agent.models),
+    );
+  }
+  return issues;
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -897,7 +1121,7 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripPreservedLegacyRootKeysForValidation(
-    stripDeprecatedValidationKeys(raw),
+    raw,
     opts?.preservedLegacyRootKeys,
   );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
@@ -946,6 +1170,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
   if (gatewayTailscaleAuthIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleAuthIssues };
+  }
+  const modelPolicyAllowIssues = collectModelPolicyAllowIssues(validatedConfig);
+  if (modelPolicyAllowIssues.length > 0) {
+    return { ok: false, issues: modelPolicyAllowIssues };
   }
   return {
     ok: true,
@@ -1072,15 +1300,25 @@ function validateConfigObjectWithPluginsBase(
     return `${baseLocal}.${errorPath}`;
   };
 
+  const formatChannelConfigIssueMessage = (message: string, pluginId?: string): string => {
+    const safePluginId = pluginId ? sanitizeForLog(pluginId).trim() : "";
+    if (safePluginId) {
+      return `invalid config for plugin ${safePluginId}: ${message}`;
+    }
+    return formatRawChannelConfigIssueMessage(message);
+  };
+
   type RegistryInfo = {
     registry: PluginManifestRegistry;
     knownIds?: Set<string>;
     overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
+    channelDmAllowFromModes?: Map<string, ChannelDmAllowFromMode>;
     channelSchemas?: Map<
       string,
       {
         schema?: Record<string, unknown>;
+        pluginId?: string;
       }
     >;
   };
@@ -1130,6 +1368,8 @@ function validateConfigObjectWithPluginsBase(
     return registryInfo;
   };
 
+  const ensureLoadedRegistryInfo = (): RegistryInfo => registryInfo ?? loadValidationRegistry();
+
   const ensureCompatPluginIds = (): ReadonlySet<string> => {
     if (compatPluginIdsResolved) {
       return compatPluginIds ?? new Set<string>();
@@ -1170,7 +1410,7 @@ function validateConfigObjectWithPluginsBase(
   };
 
   const ensureRegistry = (): RegistryInfo => {
-    const info = registryInfo ?? loadValidationRegistry();
+    const info = ensureLoadedRegistryInfo();
     ensureCompatConfig();
     pushRegistryDiagnostics(info.registry);
     return info;
@@ -1211,6 +1451,7 @@ function validateConfigObjectWithPluginsBase(
     string,
     {
       schema?: Record<string, unknown>;
+      pluginId?: string;
     }
   > => {
     const info = ensureRegistry();
@@ -1220,10 +1461,13 @@ function validateConfigObjectWithPluginsBase(
           (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
-      for (const entry of collectChannelSchemaMetadata(info.registry)) {
+      for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry)) {
         const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
-          info.channelSchemas.set(entry.id, { schema: entry.configSchema });
+          info.channelSchemas.set(entry.id, {
+            schema: entry.configSchema,
+            pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
+          });
           continue;
         }
         if (!current) {
@@ -1233,6 +1477,28 @@ function validateConfigObjectWithPluginsBase(
     }
     return info.channelSchemas;
   };
+
+  const ensureChannelDmAllowFromModes = (): ReadonlyMap<string, ChannelDmAllowFromMode> => {
+    const info = ensureLoadedRegistryInfo();
+    if (!info.channelDmAllowFromModes) {
+      info.channelDmAllowFromModes = new Map(
+        collectChannelDmPolicyMetadata(info.registry).flatMap((entry) =>
+          entry.dmAllowFromMode ? [[entry.id, entry.dmAllowFromMode] as const] : [],
+        ),
+      );
+    }
+    return info.channelDmAllowFromModes;
+  };
+
+  // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
+  // so account inheritance matches the per-channel Zod refinements.
+  warnings.push(
+    ...(hasChannelDmPolicyDependencyWarningCandidates(base.config)
+      ? collectChannelDmPolicyDependencyWarnings(base.config, {
+          dmAllowFromModes: ensureChannelDmAllowFromModes(),
+        })
+      : collectChannelDmPolicyDependencyWarnings(base.config)),
+  );
 
   let mutatedConfig = config;
   let channelsCloned = false;
@@ -1531,12 +1797,12 @@ function validateConfigObjectWithPluginsBase(
         continue;
       }
 
-      const channelSchema = ensureChannelSchemas().get(trimmed)?.schema;
-      if (!channelSchema) {
+      const channelSchema = ensureChannelSchemas().get(trimmed);
+      if (!channelSchema?.schema) {
         continue;
       }
       const result = validateJsonSchemaValue({
-        schema: channelSchema,
+        schema: channelSchema.schema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
         applyDefaults: true, // Always apply defaults for AJV schema validation;
@@ -1548,7 +1814,7 @@ function validateConfigObjectWithPluginsBase(
             error.path === "<root>" ? `channels.${trimmed}` : `channels.${trimmed}.${error.path}`;
           issues.push({
             path: pathResult,
-            message: formatRawChannelConfigIssueMessage(error.message),
+            message: formatChannelConfigIssueMessage(error.message, channelSchema.pluginId),
             allowedValues: error.allowedValues,
             allowedValuesHiddenCount: error.allowedValuesHiddenCount,
           });
@@ -1742,7 +2008,7 @@ function validateConfigObjectWithPluginsBase(
     if (
       normalizePluginId(pluginId) === "codex" &&
       pathLocal === "plugins.entries.codex" &&
-      shouldSuppressMissingCodexPluginDiagnostics(config)
+      shouldSuppressMissingCodexPluginDiagnostics(config, opts.env ?? process.env)
     ) {
       return;
     }
@@ -1936,4 +2202,4 @@ function validateConfigObjectWithPluginsBase(
 
   return { ok: true, config: mutatedConfig, warnings };
 }
-export { testing as __testing };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

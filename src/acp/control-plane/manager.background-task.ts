@@ -1,4 +1,5 @@
 /** Mirrors child ACP turns into detached-task status for requester-facing progress. */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -17,7 +18,7 @@ const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
 
 /** Context needed to mirror a child ACP turn into the requester task registry. */
-export type BackgroundTaskContext = {
+type BackgroundTaskContext = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;
   childSessionKey: string;
@@ -27,12 +28,12 @@ export type BackgroundTaskContext = {
 };
 
 /** Produces the bounded task label shown for a child ACP background run. */
-export function summarizeBackgroundTaskText(text: string): string {
+function summarizeBackgroundTaskText(text: string): string {
   const normalized = normalizeText(text) ?? "ACP background task";
   if (normalized.length <= ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH) {
     return normalized;
   }
-  return `${normalized.slice(0, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
+  return `${truncateUtf16Safe(normalized, ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH - 1)}…`;
 }
 
 /** Appends bounded progress text while preserving a single-line task summary. */
@@ -49,7 +50,7 @@ export function appendBackgroundTaskProgressSummary(current: string, chunk: stri
   if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
     return combined;
   }
-  return `${combined.slice(0, ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH - 1)}…`;
+  return `${truncateUtf16Safe(combined, ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH - 1)}…`;
 }
 
 /** Maps ACP runtime failures to detached-task terminal states. */
@@ -116,7 +117,7 @@ export function resolveBackgroundTaskContext(params: {
   requestId: string;
   text: string;
 }): BackgroundTaskContext | null {
-  const childEntry = params.deps.readSessionEntry({
+  const childEntry = params.deps.loadSessionEntry({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   })?.entry;
@@ -125,7 +126,7 @@ export function resolveBackgroundTaskContext(params: {
   if (!requesterSessionKey) {
     return null;
   }
-  const parentEntry = params.deps.readSessionEntry({
+  const parentEntry = params.deps.loadSessionEntry({
     cfg: params.cfg,
     sessionKey: requesterSessionKey,
   })?.entry;
@@ -193,7 +194,7 @@ export function markBackgroundTaskTerminal(
   runId: string,
   params: {
     sessionKey?: string;
-    status: "succeeded" | "failed" | "timed_out";
+    status: "succeeded" | "failed" | "timed_out" | "cancelled";
     endedAt: number;
     lastEventAt?: number;
     error?: string;

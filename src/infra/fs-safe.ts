@@ -42,6 +42,7 @@ export {
   root,
   type OpenResult,
   type ReadResult,
+  type Root,
 } from "@openclaw/fs-safe/root";
 export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export {

@@ -20,7 +20,7 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
   };
 });
 
-const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
+const { buildAnthropicCliMigrationResult } = await import("./cli-migration.js");
 const { resolveKnownAnthropicModelRef } = await import("./claude-model-refs.js");
 const { createTestWizardPrompter, registerSingleProviderPlugin } =
   await import("openclaw/plugin-sdk/plugin-test-runtime");
@@ -58,6 +58,20 @@ describe("anthropic Claude model refs", () => {
     );
     expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
       "anthropic/claude-haiku-4-5",
+    );
+  });
+
+  it("canonicalizes fable family aliases in bare and provider-qualified forms", () => {
+    // "fable-5" must map to the full model id, not the family name: the
+    // canonicalizer only accepts alias values that already start with
+    // "claude-", so a family-name value would leave the shorthand unresolved.
+    expect(resolveKnownAnthropicModelRef("fable")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/fable")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/fable-5")).toBe("anthropic/claude-fable-5");
+    expect(resolveKnownAnthropicModelRef("claude-cli/claude-fable-5")).toBe(
+      "anthropic/claude-fable-5",
     );
   });
 
@@ -135,23 +149,6 @@ function createProviderAuthMethodNonInteractiveContext(
 }
 
 describe("anthropic cli migration", () => {
-  it("detects local Claude CLI auth", () => {
-    readClaudeCliCredentialsForSetup.mockReturnValue({ type: "oauth" });
-
-    expect(hasClaudeCliAuth()).toBe(true);
-  });
-
-  it("uses the non-interactive Claude auth probe without keychain prompts", () => {
-    readClaudeCliCredentialsForSetup.mockReset();
-    readClaudeCliCredentialsForSetupNonInteractive.mockReset();
-    readClaudeCliCredentialsForSetup.mockReturnValue(null);
-    readClaudeCliCredentialsForSetupNonInteractive.mockReturnValue({ type: "oauth" });
-
-    expect(hasClaudeCliAuth({ allowKeychainPrompt: false })).toBe(true);
-    expect(readClaudeCliCredentialsForSetup).not.toHaveBeenCalled();
-    expect(readClaudeCliCredentialsForSetupNonInteractive).toHaveBeenCalledTimes(1);
-  });
-
   it("keeps anthropic defaults and selects the claude-cli runtime", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
@@ -183,13 +180,15 @@ describe("anthropic cli migration", () => {
               alias: "Opus",
               agentRuntime: { id: "claude-cli" },
             },
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": {
               alias: "Opus",
               agentRuntime: { id: "claude-cli" },
             },
             "openai/gpt-5.2": {},
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -275,8 +274,10 @@ describe("anthropic cli migration", () => {
         defaults: {
           models: {
             "openai/gpt-5.2": {},
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
           },
@@ -319,14 +320,110 @@ describe("anthropic cli migration", () => {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-7" },
           models: {
-            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-opus-4-8": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-sonnet-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
     });
+  });
+
+  it.each([
+    {
+      descriptor: {
+        value: { inherited: true },
+        writable: true,
+      },
+      name: "writable data descriptor",
+    },
+    {
+      descriptor: {
+        value: { inherited: true },
+        writable: false,
+      },
+      name: "non-writable data descriptor",
+    },
+    {
+      descriptor: {
+        get: () => ({ inherited: true }),
+      },
+      name: "getter-only accessor",
+    },
+  ])("writes migrated refs as own entries over an inherited $name", ({ descriptor }) => {
+    // Process-global prototype pollution can expose a converted ref. The
+    // migration must write the converted entry as an own property without
+    // invoking inherited getters/setters or throwing on non-writable descriptors.
+    const convertedRef = "anthropic/claude-opus-4-7";
+    const priorDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, convertedRef);
+    try {
+      Reflect.defineProperty(Object.prototype, convertedRef, {
+        configurable: true,
+        ...descriptor,
+      });
+
+      const result = buildAnthropicCliMigrationResult({
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            },
+          },
+        },
+      });
+
+      const models = result.configPatch?.agents?.defaults?.models ?? {};
+      const migrated = models[convertedRef];
+      expect(migrated).toEqual({ alias: "Opus", agentRuntime: { id: "claude-cli" } });
+      expect(Object.hasOwn(models, convertedRef)).toBe(true);
+    } finally {
+      if (priorDescriptor) {
+        Reflect.defineProperty(Object.prototype, convertedRef, priorDescriptor);
+      } else {
+        Reflect.deleteProperty(Object.prototype, convertedRef);
+      }
+    }
+  });
+
+  it("writes migrated refs as own entries without invoking an inherited setter", () => {
+    const convertedRef = "anthropic/claude-opus-4-7";
+    let setterCalled = false;
+    const priorDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, convertedRef);
+    try {
+      Reflect.defineProperty(Object.prototype, convertedRef, {
+        configurable: true,
+        set: () => {
+          setterCalled = true;
+        },
+      });
+
+      const result = buildAnthropicCliMigrationResult({
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-7" },
+            models: {
+              "claude-cli/claude-opus-4-7": { alias: "Opus" },
+            },
+          },
+        },
+      });
+
+      const models = result.configPatch?.agents?.defaults?.models ?? {};
+      const migrated = models[convertedRef];
+      expect(migrated).toEqual({ alias: "Opus", agentRuntime: { id: "claude-cli" } });
+      expect(Object.hasOwn(models, convertedRef)).toBe(true);
+      expect(setterCalled).toBe(false);
+    } finally {
+      if (priorDescriptor) {
+        Reflect.defineProperty(Object.prototype, convertedRef, priorDescriptor);
+      } else {
+        Reflect.deleteProperty(Object.prototype, convertedRef);
+      }
+    }
   });
 
   it("preserves explicit model runtime policy while filling missing Claude CLI policies", () => {
@@ -457,6 +554,15 @@ describe("anthropic cli migration", () => {
         },
       },
     ]);
+  });
+
+  it("does not persist a synthetic profile for Claude CLI apiKeyHelper auth", () => {
+    const result = buildAnthropicCliMigrationResult(
+      {},
+      { type: "api_key_helper", provider: "anthropic", helperHash: "helper-hash" },
+    );
+
+    expect(result.profiles).toEqual([]);
   });
 
   it("registered non-interactive cli auth keeps anthropic fallbacks and selects claude-cli runtime", async () => {
