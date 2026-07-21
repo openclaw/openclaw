@@ -25,7 +25,10 @@ import { resolveGatewayService } from "../../daemon/service.js";
 import { resolveAdvertisedControlUiLinks } from "../../gateway/control-ui-links.js";
 import { gatewaySecretInputPathCanWin } from "../../gateway/credentials-secret-inputs.js";
 import { trimToUndefined } from "../../gateway/credentials.js";
-import { resolveGatewayProbeCredentialConfig } from "../../gateway/probe-auth.js";
+import {
+  resolveGatewayProbeAuthSafeWithSecretInputs,
+  resolveGatewayProbeCredentialConfig,
+} from "../../gateway/probe-auth.js";
 import {
   ALL_GATEWAY_SECRET_INPUT_PATHS,
   readGatewaySecretInputValue,
@@ -119,9 +122,6 @@ type CliStatusSummary = {
   entrypoint?: string;
 };
 
-const gatewayProbeAuthModuleLoader = createLazyImportLoader(
-  () => import("../../gateway/probe-auth.js"),
-);
 const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
 const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
 const serviceAuditModuleLoader = createLazyImportLoader(
@@ -130,10 +130,6 @@ const serviceAuditModuleLoader = createLazyImportLoader(
 const gatewayTlsModuleLoader = createLazyImportLoader(() => import("../../infra/tls/gateway.js"));
 const daemonProbeModuleLoader = createLazyImportLoader(() => import("./probe.js"));
 const restartHealthModuleLoader = createLazyImportLoader(() => import("./restart-health.js"));
-
-function loadGatewayProbeAuthModule() {
-  return gatewayProbeAuthModuleLoader.load();
-}
 
 function loadDaemonInspectModule() {
   return daemonInspectModuleLoader.load();
@@ -672,15 +668,12 @@ export async function gatherDaemonStatus(
         mode: probeMode,
       });
     if (canResolveProbeAuth) {
-      const probeAuthResolution = await loadGatewayProbeAuthModule().then(
-        ({ resolveGatewayProbeAuthSafeWithSecretInputs }) =>
-          resolveGatewayProbeAuthSafeWithSecretInputs({
-            cfg: daemonCfg,
-            mode: probeMode,
-            env: mergedDaemonEnv as NodeJS.ProcessEnv,
-            explicitAuth,
-          }),
-      );
+      const probeAuthResolution = await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: daemonCfg,
+        mode: probeMode,
+        env: mergedDaemonEnv as NodeJS.ProcessEnv,
+        explicitAuth,
+      });
       daemonProbeAuth = probeAuthResolution.auth;
       rpcAuthWarning = probeAuthResolution.warning;
     } else {
