@@ -84,6 +84,67 @@ describe("SQLite CLI maintenance ownership", () => {
     );
   }, 90_000);
 
+  it.skipIf(process.platform === "win32")(
+    "rejects hard-linked shared-state SQLite sidecars before compaction",
+    async () => {
+      await withTempHome(
+        async (tempHome) => {
+          const stateDir = path.join(tempHome, ".openclaw");
+          const env: NodeJS.ProcessEnv = {
+            ...process.env,
+            HOME: tempHome,
+            USERPROFILE: tempHome,
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_TEST_FAST: "1",
+          };
+          delete env.OPENCLAW_CONFIG_PATH;
+          delete env.OPENCLAW_HOME;
+          delete env.VITEST;
+
+          const database = openOpenClawStateDatabase({ env });
+          const walPath = `${database.path}-wal`;
+          const externalWalPath = path.join(tempHome, "external-state", "openclaw.sqlite-wal");
+          try {
+            database.db.exec(`
+              PRAGMA wal_autocheckpoint = 0;
+              CREATE TABLE compact_sidecar_payload (
+                id INTEGER PRIMARY KEY,
+                payload TEXT NOT NULL
+              );
+              PRAGMA wal_checkpoint(TRUNCATE);
+              INSERT INTO compact_sidecar_payload (payload) VALUES ('committed wal frame');
+            `);
+            fs.mkdirSync(path.dirname(externalWalPath), { recursive: true });
+            fs.linkSync(walPath, externalWalPath);
+            const externalWalBefore = fs.readFileSync(externalWalPath);
+            expect(externalWalBefore.byteLength).toBeGreaterThan(0);
+
+            const entry = path.resolve(process.cwd(), "src/entry.ts");
+            const result = spawnSync(
+              process.execPath,
+              ["--import", "tsx", entry, "doctor", "--state-sqlite", "compact", "--json"],
+              {
+                cwd: process.cwd(),
+                env,
+                encoding: "utf8",
+                timeout: 60_000,
+              },
+            );
+
+            expect(result.status).not.toBe(0);
+            expect(`${result.stderr}\n${result.stdout}`).toContain("hard-linked path");
+            expect(fs.readFileSync(externalWalPath)).toEqual(externalWalBefore);
+          } finally {
+            closeOpenClawStateDatabase();
+          }
+        },
+        { prefix: "openclaw-state-sqlite-sidecar-cli-" },
+      );
+    },
+    90_000,
+  );
+
   it("rejects destructive explicit session stores outside the active state owner", async () => {
     await withTempHome(
       async (tempHome) => {
