@@ -668,7 +668,7 @@ describe("Codex app-server binding store", () => {
     expect(values.size).toBe(0);
   });
 
-  it("expires physical-session retirement fences but retains stable-key fences", async () => {
+  it("expires retirement fences for both physical and stable-key identities", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-13T00:00:00.000Z"));
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
@@ -710,10 +710,59 @@ describe("Codex app-server binding store", () => {
       vi.advanceTimersByTime(2 * 60_000);
 
       expect(state.lookup(bindingStoreKey(physical))).toBeUndefined();
-      expect(state.lookup(bindingStoreKey(stable))).toMatchObject({
-        state: "cleared",
-        retired: true,
+      expect(state.lookup(bindingStoreKey(stable))).toBeUndefined();
+    } finally {
+      resetPluginStateStoreForTests();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("lets a stable-key session that reuses its sessionId rebind after the retirement fence expires", async () => {
+    // Web/dashboard sessions keep the same sessionId across a retire (e.g. a
+    // gateway restart), so reclaim-generation can never get past their fence.
+    // Without a TTL on the stable-key tombstone the binding is permanently
+    // bricked; with the TTL the session self-heals once the fence expires.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T00:00:00.000Z"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
+    try {
+      const state = createPluginStateSyncKeyedStoreForTests<StoredCodexAppServerBinding>("codex", {
+        namespace: "app-server-thread-bindings-retirement-test",
+        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
       });
+      const store = createCodexAppServerBindingStore(state);
+      const identity = {
+        kind: "session" as const,
+        agentId: "main",
+        sessionId: "dashboard-session",
+        sessionKey: "agent:main:dashboard:chat-1",
+      };
+      await store.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-before-retire", cwd: "/repo" },
+      });
+      await expect(store.retireSessionGeneration(identity)).resolves.toBe("applied");
+
+      // Same sessionId cannot reclaim through the live fence.
+      await expect(
+        store.mutate(identity, {
+          kind: "reclaim-generation",
+          expectedPreviousSessionId: identity.sessionId,
+        }),
+      ).resolves.toBe(false);
+
+      vi.advanceTimersByTime(2 * 60_000);
+
+      expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+      await expect(
+        store.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-after-heal", cwd: "/repo" },
+          if: { kind: "absent" },
+        }),
+      ).resolves.toBe(true);
     } finally {
       resetPluginStateStoreForTests();
       fs.rmSync(stateDir, { recursive: true, force: true });
