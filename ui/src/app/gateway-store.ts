@@ -116,7 +116,9 @@ export function createApplicationGateway(
       const entries = readPresenceEntries(event.payload);
       if (entries) {
         const selfUser = resolveSelfPresenceUser(entries, client?.instanceId);
-        if (!sameSelfUser(snapshot.selfUser, selfUser)) {
+        // A live connection owns its authenticated identity until onClose. Older
+        // gateways can omit still-connected clients after presence TTL pruning.
+        if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
           setSnapshot({ ...snapshot, selfUser });
         }
       }
