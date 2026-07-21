@@ -407,6 +407,8 @@ type OpenClawCodingToolsOptions = {
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
   runtimeToolAllowlist?: string[];
+  /** True when runtimeToolAllowlist is real parent authority that child sessions inherit. */
+  inheritRuntimeToolAllowlist?: boolean;
   /** Mutable cron creator cap ref for callers that append final runtime tools later. */
   cronCreatorToolAllowlistRef?: CronCreatorToolAllowlistEntry[];
   /** If true, the model has native vision capability */
@@ -524,6 +526,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       skillsSnapshot: options?.skillsSnapshot,
       sandboxToolPolicy,
       runtimeToolAllowlist: options?.runtimeToolAllowlist,
+      inheritRuntimeToolAllowlist: options?.inheritRuntimeToolAllowlist,
       inputProvenance: options?.inputProvenance,
       trustedInternalHandoff: options?.trustedInternalHandoff,
     });
@@ -544,6 +547,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
     subagentPolicy,
     inheritedToolPolicy,
     runtimePluginToolGrant,
+    runtimeToolPolicyForInheritance,
   } = capabilityProfile.policy;
 
   const enableHeartbeatTool =
@@ -761,13 +765,15 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
         scopeKey,
         sessionKey: options?.sessionKey,
         runId: options?.runId,
+        // Detached completions return to the live session, not the sandbox policy scope.
+        notifySessionKey: options?.runSessionKey ?? options?.sessionKey,
         sessionId: options?.sessionId,
         sessionStore: options?.config?.session?.store,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
         eventRouting: resolveEventSessionRoutingPolicy({
           cfg: options?.config,
-          sessionKey: options?.sessionKey,
+          sessionKey: options?.runSessionKey ?? options?.sessionKey,
           channel: options?.messageProvider,
           accountId: options?.agentAccountId,
         }),
@@ -1125,6 +1131,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       {
         policy: subagentPolicyWithToolSearchControls,
         label: "subagent tools.allow",
+        unavailableCoreToolReason,
+      },
+      {
+        policy: runtimeToolPolicyForInheritance,
+        label: "runtime tools.allow",
         unavailableCoreToolReason,
       },
       { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
