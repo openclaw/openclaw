@@ -638,6 +638,7 @@ export function renderLobsterPetScene(args: {
             class="lobster-bottle ${args.bottle.opened ? "lobster-bottle--open" : ""}"
             style="--lob-x:${args.bottle.spotPct}%"
             title=${args.bottle.opened ? args.bottle.fortune : "a message in a bottle"}
+            aria-hidden="true"
             @pointerdown=${args.onBottleOpen}
           >
             ${renderBottleSvg(args.bottle.opened)}

@@ -47,6 +47,12 @@ export class LobsterLedgeTraffic implements ReactiveController {
 
   hostDisconnected() {
     this.clearTimers();
+    // The show ends with the host, mirroring the pet's own visit timers
+    // (which also die on disconnect and only re-arm on a seed change):
+    // clear visible guests so a reconnect never shows a frozen passer or an
+    // unebbing bottle.
+    this.passer = null;
+    this.bottleVisible = false;
   }
 
   // Re-plans both events for a (re)seeded load.
