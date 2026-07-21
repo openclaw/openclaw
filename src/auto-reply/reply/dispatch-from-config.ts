@@ -788,8 +788,9 @@ async function dispatchReplyFromConfigInner(
 
   type PluginBindingTranscriptOwner = {
     agentId: string;
-    expectedSessionId: string;
+    expectedSessionId?: string;
     sessionKey: string;
+    transcriptWriteBlocked?: true;
   };
   const deliverBindingPayload = async (
     payload: ReplyPayload,
@@ -805,7 +806,10 @@ async function dispatchReplyFromConfigInner(
           ? {
               sessionKey: transcriptOwner.sessionKey,
               agentId: transcriptOwner.agentId,
-              expectedSessionId: transcriptOwner.expectedSessionId,
+              ...(transcriptOwner.expectedSessionId
+                ? { expectedSessionId: transcriptOwner.expectedSessionId }
+                : {}),
+              ...(transcriptOwner.transcriptWriteBlocked ? { transcriptWriteBlocked: true } : {}),
             }
           : undefined,
       },
@@ -856,22 +860,11 @@ async function dispatchReplyFromConfigInner(
   const pluginBindingSessionKey = normalizeOptionalString(
     pluginOwnedBindingRecord?.targetSessionKey,
   );
-  const pluginBindingSessionStoreEntry = pluginBindingSessionKey
-    ? resolveSessionStoreLookup(
-        {
-          ...ctx,
-          CommandTargetSessionKey: undefined,
-          SessionKey: pluginBindingSessionKey,
-        },
-        cfg,
-      )
-    : undefined;
   const persistPluginBindingUserTurn = async (): Promise<
     PluginBindingTranscriptOwner | undefined
   > => {
     const recorder = params.replyOptions?.userTurnTranscriptRecorder;
-    const targetSessionEntry = pluginBindingSessionStoreEntry?.entry;
-    if (!recorder || recorder.hasPersisted() || !pluginBindingSessionKey || !targetSessionEntry) {
+    if (!recorder || !pluginBindingSessionKey) {
       return undefined;
     }
     const targetAgentId = resolveSessionAgentId({
@@ -879,30 +872,61 @@ async function dispatchReplyFromConfigInner(
       config: cfg,
       fallbackAgentId: ctx.AgentId,
     });
-    const result = await recorder.persistApproved({
-      target: {
-        sessionId: targetSessionEntry.sessionId,
-        sessionKey: pluginBindingSessionKey,
-        sessionEntry: targetSessionEntry,
-        ...(pluginBindingSessionStoreEntry?.store
-          ? { sessionStore: pluginBindingSessionStoreEntry.store }
-          : {}),
-        storePath: pluginBindingSessionStoreEntry?.storePath,
-        agentId: targetAgentId,
-        cwd: resolveAgentWorkspaceDir(cfg, targetAgentId),
-        config: cfg,
-      },
-      expectedSessionId: targetSessionEntry.sessionId,
-    });
-    if (!result) {
-      logVerbose(`plugin-bound user-turn persistence skipped because the target session changed`);
-      return undefined;
-    }
-    return {
+    const blockedOwner = (expectedSessionId?: string): PluginBindingTranscriptOwner => ({
       agentId: targetAgentId,
-      expectedSessionId: targetSessionEntry.sessionId,
       sessionKey: pluginBindingSessionKey,
-    };
+      ...(expectedSessionId ? { expectedSessionId } : {}),
+      transcriptWriteBlocked: true,
+    });
+    if (recorder.hasPersisted()) {
+      return blockedOwner();
+    }
+    let attemptedSessionId: string | undefined;
+    let lastOwner: PluginBindingTranscriptOwner | undefined;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const targetSessionStoreEntry = resolveSessionStoreLookup(
+        {
+          ...ctx,
+          CommandTargetSessionKey: undefined,
+          SessionKey: pluginBindingSessionKey,
+        },
+        cfg,
+      );
+      const targetSessionEntry = targetSessionStoreEntry.entry;
+      if (!targetSessionEntry || targetSessionEntry.sessionId === attemptedSessionId) {
+        break;
+      }
+      attemptedSessionId = targetSessionEntry.sessionId;
+      lastOwner = {
+        agentId: targetAgentId,
+        expectedSessionId: targetSessionEntry.sessionId,
+        sessionKey: pluginBindingSessionKey,
+      };
+      const result = await recorder.persistApproved({
+        target: {
+          sessionId: targetSessionEntry.sessionId,
+          sessionKey: pluginBindingSessionKey,
+          sessionEntry: targetSessionEntry,
+          ...(targetSessionStoreEntry.store ? { sessionStore: targetSessionStoreEntry.store } : {}),
+          storePath: targetSessionStoreEntry.storePath,
+          agentId: targetAgentId,
+          cwd: resolveAgentWorkspaceDir(cfg, targetAgentId),
+          config: cfg,
+        },
+        expectedSessionId: targetSessionEntry.sessionId,
+        retryIfUnpersisted: true,
+      });
+      if (result) {
+        return lastOwner;
+      }
+    }
+    if (!lastOwner) {
+      recorder.markBlocked();
+      return blockedOwner();
+    }
+    recorder.markBlocked();
+    logVerbose(`plugin-bound user-turn persistence skipped after the target session changed`);
+    return blockedOwner(lastOwner.expectedSessionId);
   };
 
   // Resolve automatic source-delivery suppression early so every outbound path

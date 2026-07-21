@@ -1156,6 +1156,34 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
+  it("keeps a twice-raced plugin-bound turn out of source history", async () => {
+    await createTranscriptFixture("openclaw-chat-send-plugin-binding-blocked-");
+    mockState.finalPayload = setReplyPayloadMetadata(
+      { text: "live reply without durable turn" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "plugin-binding:codex:blocked",
+          agentId: "main",
+          transcriptWriteBlocked: true,
+        },
+      },
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-plugin-binding-blocked",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.emittedTranscriptUpdates).toHaveLength(0);
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      "webchat transcript append skipped: binding-owned user turn was not persisted",
+    );
+  });
+
   it("does not fall back to source history for partial binding transcript metadata", async () => {
     await createTranscriptFixture("openclaw-chat-send-plugin-binding-partial-");
     const targetSessionKey = "plugin-binding:codex:partial";

@@ -34,17 +34,17 @@ type DeliveredReply = {
   kind: "block" | "final";
 };
 
+type TranscriptMirrorOwner = {
+  agentId?: string;
+  expectedSessionId?: string;
+  sessionKey: string;
+};
+
 type TranscriptMirrorResolution =
   | { kind: "none" }
   | { kind: "invalid" }
-  | {
-      kind: "owner";
-      owner: {
-        agentId?: string;
-        expectedSessionId: string;
-        sessionKey: string;
-      };
-    };
+  | { kind: "blocked"; owner: TranscriptMirrorOwner }
+  | { kind: "owner"; owner: TranscriptMirrorOwner };
 
 function resolveTranscriptMirrorOwner(
   payloads: readonly ReplyPayload[],
@@ -55,9 +55,13 @@ function resolveTranscriptMirrorOwner(
   const owners = payloads.map(
     (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
   );
-  // The older source-reply mirror shape has no expectedSessionId and keeps its
-  // existing source-session behavior. That field opts a payload into binding ownership.
-  if (owners.every((owner) => owner?.expectedSessionId === undefined)) {
+  // Older source-reply mirrors have neither field and keep their existing source-session
+  // behavior. Either field opts the batch into binding-owned transcript handling.
+  if (
+    owners.every(
+      (owner) => owner?.expectedSessionId === undefined && !owner?.transcriptWriteBlocked,
+    )
+  ) {
     return { kind: "none" };
   }
   const first = owners[0];
@@ -66,6 +70,28 @@ function resolveTranscriptMirrorOwner(
   }
   const sessionKey = first.sessionKey.trim();
   const expectedSessionId = first.expectedSessionId?.trim();
+  if (first.transcriptWriteBlocked) {
+    if (
+      !sessionKey ||
+      owners.some(
+        (owner) =>
+          !owner?.transcriptWriteBlocked ||
+          owner.sessionKey.trim() !== sessionKey ||
+          owner.expectedSessionId?.trim() !== expectedSessionId ||
+          owner.agentId !== first.agentId,
+      )
+    ) {
+      return { kind: "invalid" };
+    }
+    return {
+      kind: "blocked",
+      owner: {
+        sessionKey,
+        ...(expectedSessionId ? { expectedSessionId } : {}),
+        ...(first.agentId ? { agentId: first.agentId } : {}),
+      },
+    };
+  }
   if (
     !sessionKey ||
     !expectedSessionId ||
@@ -73,7 +99,8 @@ function resolveTranscriptMirrorOwner(
       (owner) =>
         owner?.sessionKey.trim() !== sessionKey ||
         owner.expectedSessionId?.trim() !== expectedSessionId ||
-        owner.agentId !== first.agentId,
+        owner.agentId !== first.agentId ||
+        owner.transcriptWriteBlocked === true,
     )
   ) {
     return { kind: "invalid" };
@@ -159,7 +186,9 @@ export async function finalizeChatSendNonAgentReplies(params: {
   });
   const transcriptMirrorResolution = resolveTranscriptMirrorOwner(rawFinalPayloads);
   const transcriptMirrorOwner =
-    transcriptMirrorResolution.kind === "owner" ? transcriptMirrorResolution.owner : undefined;
+    transcriptMirrorResolution.kind === "owner" || transcriptMirrorResolution.kind === "blocked"
+      ? transcriptMirrorResolution.owner
+      : undefined;
   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
     cfg,
     sessionKey,
@@ -177,10 +206,11 @@ export async function finalizeChatSendNonAgentReplies(params: {
   // beside it only when that durable target still exists. Never fall back to the
   // source transcript after ownership metadata appears on any final payload.
   const useTranscriptMirrorOwner = Boolean(
+    transcriptMirrorResolution.kind === "owner" &&
     transcriptMirrorOwner &&
     requestedTranscriptSession?.entry?.sessionId === transcriptMirrorOwner.expectedSessionId,
   );
-  if (transcriptMirrorOwner && !useTranscriptMirrorOwner) {
+  if (transcriptMirrorResolution.kind === "owner" && !useTranscriptMirrorOwner) {
     context.logGateway.warn(
       `webchat transcript append skipped: binding-owned session changed before finalization`,
     );
@@ -188,6 +218,11 @@ export async function finalizeChatSendNonAgentReplies(params: {
   if (transcriptMirrorResolution.kind === "invalid") {
     context.logGateway.warn(
       `webchat transcript append skipped: inconsistent binding-owned transcript metadata`,
+    );
+  }
+  if (transcriptMirrorResolution.kind === "blocked") {
+    context.logGateway.warn(
+      `webchat transcript append skipped: binding-owned user turn was not persisted`,
     );
   }
   const canAppendAssistantTranscript =
