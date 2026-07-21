@@ -14,6 +14,7 @@ export {
   markDeliveryPlatformSendAttemptStarted,
 } from "./delivery-queue-storage.js";
 export type {
+  QueuedPreDeliveryPayloadOutcome,
   QueuedReplyPayloadSendingHook,
   QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-storage.js";

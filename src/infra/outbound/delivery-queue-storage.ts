@@ -23,6 +23,10 @@ import {
   type DeliveryQueueCompletionRetention,
 } from "../delivery-queue-sqlite.js";
 import { generateSecureUuid } from "../secure-random.js";
+import type {
+  OutboundDeliveryFailureStage,
+  OutboundPayloadDeliverySuppressionReason,
+} from "./deliver-types.js";
 import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
@@ -56,6 +60,20 @@ export type QueuedReplyPayloadSendingHook = {
   context: PluginHookReplyPayloadSendingContext;
 };
 
+export type QueuedPreDeliveryPayloadOutcome =
+  | {
+      index: number;
+      status: "suppressed";
+      reason: Exclude<OutboundPayloadDeliverySuppressionReason, "adapter_returned_no_identity">;
+    }
+  | {
+      index: number;
+      status: "failed";
+      error: string;
+      sentBeforeError: false;
+      stage: OutboundDeliveryFailureStage;
+    };
+
 export type QueuedDeliveryPayload = {
   channel: Exclude<OutboundChannel, "none">;
   to: string;
@@ -72,6 +90,10 @@ export type QueuedDeliveryPayload = {
   preparedHookPayloadIndexes?: number[];
   /** Maps compacted queued payload positions to stable original batch indexes. */
   payloadSourceIndexes?: number[];
+  /** Queue-safe terminals for source payloads removed before native delivery. */
+  preDeliveryPayloadOutcomes?: QueuedPreDeliveryPayloadOutcome[];
+  /** Original logical batch cardinality before pre-delivery compaction. */
+  sourcePayloadCount?: number;
   /** New rows defer message_sent until the durable queue reaches one logical terminal. */
   messageSentHookMode?: "logical_terminal";
   /** Queue-local payload indexes that reached the observer-visible provider boundary. */
@@ -144,6 +166,8 @@ function createQueuedDelivery(params: QueuedDeliveryPayload, id: string): Queued
     payloads: params.payloads,
     preparedHookPayloadIndexes: params.preparedHookPayloadIndexes,
     payloadSourceIndexes: params.payloadSourceIndexes,
+    preDeliveryPayloadOutcomes: params.preDeliveryPayloadOutcomes,
+    sourcePayloadCount: params.sourcePayloadCount,
     messageSentHookMode: params.messageSentHookMode,
     messageSentProviderAttemptedPayloadIndexes: params.messageSentProviderAttemptedPayloadIndexes,
     messageSentHookEvents: params.messageSentHookEvents,

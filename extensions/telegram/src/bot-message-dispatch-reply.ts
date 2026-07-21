@@ -109,8 +109,14 @@ export function createTelegramReplyDelivery(params: {
       content?: string;
     }) => {
       visibleReplySent ||= delivery.visibleReplySent;
-      messageId ??= delivery.messageId;
-      deliveryContent = delivery.content ?? deliveryContent;
+      if (delivery.messageId !== undefined) {
+        // A logical payload can materialize multiple lane messages. Keep the
+        // reported content paired with the provider id from the same delivery.
+        messageId = delivery.messageId;
+        deliveryContent = delivery.content;
+      } else if (messageId === undefined && delivery.content !== undefined) {
+        deliveryContent = delivery.content;
+      }
     };
     const recordLaneDelivery = (result: LaneDeliveryResult) => {
       const visible = result.kind !== "skipped";

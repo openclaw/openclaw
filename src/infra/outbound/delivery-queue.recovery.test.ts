@@ -2097,6 +2097,10 @@ describe("delivery-queue recovery", () => {
         payloads: [{ text: "prepared a" }],
         preparedHookPayloadIndexes: [0],
         payloadSourceIndexes: [1],
+        preDeliveryPayloadOutcomes: [
+          { index: 0, status: "suppressed", reason: "no_visible_payload" },
+        ],
+        sourcePayloadCount: 2,
         replyToId: "root-message",
         replyToMode: "first",
         formatting: {
@@ -2147,6 +2151,8 @@ describe("delivery-queue recovery", () => {
       mirror?: unknown;
       preparedHookPayloadIndexes?: number[];
       payloadSourceIndexes?: number[];
+      preDeliveryPayloadOutcomes?: unknown[];
+      sourcePayloadCount?: number;
       payloads?: Array<{ text?: string }>;
       session?: unknown;
     };
@@ -2184,6 +2190,10 @@ describe("delivery-queue recovery", () => {
     });
     expect(deliverInput.preparedHookPayloadIndexes).toEqual([0]);
     expect(deliverInput.payloadSourceIndexes).toEqual([1]);
+    expect(deliverInput.preDeliveryPayloadOutcomes).toEqual([
+      { index: 0, status: "suppressed", reason: "no_visible_payload" },
+    ]);
+    expect(deliverInput.sourcePayloadCount).toBe(2);
     expect(deliverInput.payloads).toEqual([{ text: "prepared a" }]);
   });
 

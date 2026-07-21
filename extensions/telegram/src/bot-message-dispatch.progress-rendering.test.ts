@@ -491,7 +491,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
-  it("returns the buffered final when reasoning delivery flushes it", async () => {
+  it("pairs a buffered final with its provider id when reasoning delivery flushes it", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     loadSessionStore.mockReturnValue({
       s1: { reasoningLevel: "stream", sessionId: "reasoning-session" },
@@ -501,9 +501,11 @@ describeTelegramDispatch("dispatchTelegramMessage progress-rendering", () => {
       text: "Buffered answer",
       timestamp: Date.now() + 1_000,
     });
-    deliverReplies
-      .mockResolvedValueOnce({ delivered: false })
-      .mockResolvedValueOnce({ delivered: true });
+    deliverReplies.mockResolvedValueOnce({ delivered: false }).mockResolvedValueOnce({
+      delivered: true,
+      messageId: 3001,
+      content: "🧠 _second attempt_",
+    });
     let deliveryResult: unknown;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver(

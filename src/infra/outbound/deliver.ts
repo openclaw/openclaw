@@ -90,6 +90,7 @@ import {
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   recordDeliveryMessageSentHookEvent,
+  type QueuedPreDeliveryPayloadOutcome,
   type QueuedReplyPayloadSendingHook,
   type QueuedRenderedMessageBatchPlan,
   withActiveDeliveryClaim,
@@ -1264,6 +1265,39 @@ type PreparedOutboundPayloadBatch = {
   sourcePayloadCount: number;
 };
 
+function serializeQueuedPreDeliveryPayloadOutcomes(
+  outcomes: readonly OutboundPayloadDeliveryOutcome[],
+): QueuedPreDeliveryPayloadOutcome[] {
+  return outcomes.flatMap((outcome): QueuedPreDeliveryPayloadOutcome[] => {
+    if (outcome.status === "sent") {
+      return [];
+    }
+    if (outcome.status === "suppressed") {
+      // Provider-side no-identity suppression is recorded after queueing and
+      // must never masquerade as a pre-delivery terminal on recovery.
+      if (outcome.reason === "adapter_returned_no_identity") {
+        return [];
+      }
+      return [
+        {
+          index: outcome.index,
+          status: "suppressed",
+          reason: outcome.reason,
+        },
+      ];
+    }
+    return [
+      {
+        index: outcome.index,
+        status: "failed",
+        error: formatErrorMessage(outcome.error),
+        sentBeforeError: false,
+        stage: outcome.stage,
+      },
+    ];
+  });
+}
+
 function compactPreparedPayload(entry: OutboundPayloadPlan): ReplyPayload {
   const {
     audioAsVoice,
@@ -1325,7 +1359,7 @@ async function prepareOutboundPayloadBatch(
   });
   const payloads: ReplyPayload[] = [];
   const sourceIndexes: number[] = [];
-  const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+  const outcomes: OutboundPayloadDeliveryOutcome[] = [...(params.preDeliveryPayloadOutcomes ?? [])];
   const logicalSourceIndex = (inputIndex: number): number =>
     params.payloadSourceIndexes?.[inputIndex] ?? inputIndex;
   const recordOutcome = (outcome: OutboundPayloadDeliveryOutcome) => {
@@ -1479,7 +1513,7 @@ async function prepareOutboundPayloadBatch(
     payloads,
     sourceIndexes,
     outcomes,
-    sourcePayloadCount: params.payloads.length,
+    sourcePayloadCount: params.sourcePayloadCount ?? params.payloads.length,
   };
 }
 
@@ -1736,6 +1770,9 @@ export async function deliverOutboundPayloadsInternal(
       return null;
     }
     try {
+      const preDeliveryPayloadOutcomes = serializeQueuedPreDeliveryPayloadOutcomes(
+        preparedBatch.outcomes,
+      );
       const delivery = {
         channel,
         to,
@@ -1748,6 +1785,8 @@ export async function deliverOutboundPayloadsInternal(
         ...(preparedBatch.sourceIndexes.length > 0
           ? { payloadSourceIndexes: preparedBatch.sourceIndexes }
           : {}),
+        ...(preDeliveryPayloadOutcomes.length > 0 ? { preDeliveryPayloadOutcomes } : {}),
+        sourcePayloadCount: preparedBatch.sourcePayloadCount,
         messageSentHookMode: "logical_terminal" as const,
         renderedBatchPlan: queueRenderedBatchPlan,
         threadId: params.threadId,

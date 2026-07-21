@@ -110,6 +110,10 @@ describe("delivery-queue storage", () => {
           payloads: [{ text: "prepared hello" }],
           preparedHookPayloadIndexes: [0],
           payloadSourceIndexes: [1],
+          preDeliveryPayloadOutcomes: [
+            { index: 0, status: "suppressed", reason: "no_visible_payload" },
+          ],
+          sourcePayloadCount: 2,
           messageSentHookMode: "logical_terminal",
           renderedBatchPlan: {
             payloadCount: 1,
@@ -189,6 +193,10 @@ describe("delivery-queue storage", () => {
       expect(entry.preparedHookPayloadIndexes).toEqual([0]);
       expect(entry.durableDeliveryProtocol).toBe("test-replay-v1");
       expect(entry.payloadSourceIndexes).toEqual([1]);
+      expect(entry.preDeliveryPayloadOutcomes).toEqual([
+        { index: 0, status: "suppressed", reason: "no_visible_payload" },
+      ]);
+      expect(entry.sourcePayloadCount).toBe(2);
       expect(entry.messageSentHookMode).toBe("logical_terminal");
       const { db } = openOpenClawStateDatabase({
         env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() },

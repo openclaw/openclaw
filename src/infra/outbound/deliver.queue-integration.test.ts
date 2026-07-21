@@ -423,7 +423,7 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(auditEvents.map((event) => event.resultCount)).toEqual([1, 0]);
   });
 
-  it("does not retain a pre-send suppression across an ambiguous crash boundary", async () => {
+  it("retains a pre-send suppression across an ambiguous crash boundary", async () => {
     const auditEvents: TrustedMessageAuditEvent[] = [];
     const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
     process.env.OPENCLAW_STATE_DIR = tmpDir;
@@ -444,14 +444,19 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(beforeDrain).toHaveLength(1);
     expect(beforeDrain[0]?.recoveryState).toBe("send_attempt_started");
     expect(beforeDrain[0]?.payloads).toHaveLength(1);
+    expect(beforeDrain[0]?.payloadSourceIndexes).toEqual([1]);
+    expect(beforeDrain[0]?.preDeliveryPayloadOutcomes).toEqual([
+      { index: 0, status: "suppressed", reason: "no_visible_payload" },
+    ]);
+    expect(beforeDrain[0]?.sourcePayloadCount).toBe(2);
 
     const deliver = vi.fn<DeliverFn>(async () => {});
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
     unsubscribe();
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(auditEvents.map((event) => event.outcome)).toEqual(["unknown"]);
-    expect(auditEvents.map((event) => event.resultCount)).toEqual([0]);
+    expect(auditEvents.map((event) => event.outcome)).toEqual(["suppressed", "unknown"]);
+    expect(auditEvents.map((event) => event.resultCount)).toEqual([0, 0]);
   });
 
   it("retains retryable send-attempt state when an adapter fails before returning a result", async () => {

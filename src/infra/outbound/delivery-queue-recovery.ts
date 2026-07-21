@@ -217,9 +217,19 @@ function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
 }
 
 function queuedPayloadIndexes(entry: QueuedDelivery): readonly number[] {
-  return (
-    entry.payloadSourceIndexes ?? Array.from({ length: entry.payloads.length }, (_, index) => index)
-  );
+  const retainedIndexes =
+    entry.payloadSourceIndexes ??
+    Array.from({ length: entry.payloads.length }, (_, index) => index);
+  const sourcePayloadCount = entry.sourcePayloadCount;
+  if (
+    sourcePayloadCount !== undefined &&
+    Number.isSafeInteger(sourcePayloadCount) &&
+    sourcePayloadCount >= retainedIndexes.length &&
+    retainedIndexes.every((index) => index >= 0 && index < sourcePayloadCount)
+  ) {
+    return Array.from({ length: sourcePayloadCount }, (_, index) => index);
+  }
+  return retainedIndexes;
 }
 
 function queuedPersistedSuccessTerminal(
@@ -245,8 +255,31 @@ function queuedDeadLetterAuditTerminals(entry: QueuedDelivery) {
   const ambiguous =
     entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send";
   const attempted = new Set(entry.messageSentProviderAttemptedPayloadIndexes ?? []);
+  const preDeliveryOutcomes = new Map(
+    (entry.preDeliveryPayloadOutcomes ?? []).map((outcome) => [outcome.index, outcome]),
+  );
   const hasPayloadAttemptEvidence = entry.messageSentHookMode === "logical_terminal";
   return queuedPayloadIndexes(entry).map((payloadIndex) => {
+    const preDeliveryOutcome = preDeliveryOutcomes.get(payloadIndex);
+    if (preDeliveryOutcome?.status === "suppressed") {
+      return {
+        payloadIndex,
+        terminal: {
+          outcome: "suppressed" as const,
+          reasonCode: preDeliveryOutcome.reason,
+        },
+      };
+    }
+    if (preDeliveryOutcome?.status === "failed") {
+      return {
+        payloadIndex,
+        terminal: {
+          outcome: "failed" as const,
+          failureStage: preDeliveryOutcome.stage,
+          error: preDeliveryOutcome.error,
+        },
+      };
+    }
     const payloadIsAmbiguous =
       ambiguous && (!hasPayloadAttemptEvidence || attempted.has(payloadIndex));
     return (
@@ -294,6 +327,8 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
     payloads: entry.payloads,
     preparedHookPayloadIndexes: entry.preparedHookPayloadIndexes,
     payloadSourceIndexes: entry.payloadSourceIndexes,
+    preDeliveryPayloadOutcomes: entry.preDeliveryPayloadOutcomes,
+    sourcePayloadCount: entry.sourcePayloadCount,
     messageSentHookMode: entry.messageSentHookMode,
     renderedBatchPlan: entry.renderedBatchPlan,
     threadId: entry.threadId,
@@ -673,7 +708,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
           payloadCount: opts.entry.payloads.length,
           payloadIndexes: queuedPayloadIndexes(opts.entry),
           results: [result],
-          payloadOutcomes: [],
+          payloadOutcomes: opts.entry.preDeliveryPayloadOutcomes ?? [],
         }),
       );
     }
@@ -706,7 +741,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
         payloadCount: opts.entry.payloads.length,
         payloadIndexes: queuedPayloadIndexes(opts.entry),
         results: [],
-        payloadOutcomes: [],
+        payloadOutcomes: opts.entry.preDeliveryPayloadOutcomes ?? [],
         failureStage: "platform_send",
       }),
     );
@@ -821,7 +856,7 @@ async function drainQueuedEntry(opts: {
             payloadCount: entry.payloads.length,
             payloadIndexes: queuedPayloadIndexes(entry),
             results: [result],
-            payloadOutcomes: [],
+            payloadOutcomes: entry.preDeliveryPayloadOutcomes ?? [],
           }),
         );
         opts.onRecovered?.(entry);
@@ -901,7 +936,9 @@ async function drainQueuedEntry(opts: {
       return "failed";
     }
   }
-  const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [];
+  const payloadOutcomes: OutboundPayloadDeliveryOutcome[] = [
+    ...(entry.preDeliveryPayloadOutcomes ?? []),
+  ];
   let postSendState: "marked" | "acked" | "failed" | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let messageSentEvents: readonly IndexedMessageSentHookEvent[];
