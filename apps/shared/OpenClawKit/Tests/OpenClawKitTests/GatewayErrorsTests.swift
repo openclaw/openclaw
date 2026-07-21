@@ -336,7 +336,7 @@ struct GatewayErrorsTests {
         #expect(problem?.kind == .tlsCertificateUntrusted)
         #expect(problem?.retryable == false)
         #expect(problem?.pauseReconnect == true)
-        #expect(problem?.actionLabel == "Check Gateway URL")
+        #expect(problem?.actionLabel == "Check certificate")
     }
 
     @Test func `untrusted TLS mismatch cannot be recovered in app`() {
