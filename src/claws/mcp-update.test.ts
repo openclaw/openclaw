@@ -148,11 +148,13 @@ describe("applyClawMcpUpdate", () => {
       name: "docs",
       server: newDocs,
       expectedServer: oldDocs,
+      recordIndependentOwner: false,
     });
     expect(setServer).toHaveBeenNthCalledWith(2, {
       name: "remote",
       server: remote,
       createOnly: true,
+      recordIndependentOwner: false,
     });
     expect(unsetServer).toHaveBeenCalledWith({ name: "legacy", expectedServer: legacy });
 
@@ -162,6 +164,7 @@ describe("applyClawMcpUpdate", () => {
       name: "legacy",
       server: legacy,
       createOnly: true,
+      recordIndependentOwner: false,
     });
     expect(unsetServer).toHaveBeenNthCalledWith(2, {
       name: "remote",
@@ -171,6 +174,7 @@ describe("applyClawMcpUpdate", () => {
       name: "docs",
       server: oldDocs,
       expectedServer: newDocs,
+      recordIndependentOwner: false,
     });
     expect(upsertRef).toHaveBeenCalledTimes(7);
     expect(deleteRef).toHaveBeenCalledTimes(2);

@@ -192,7 +192,13 @@ export async function applyClawUpdatePlan(
           pkg.kind === "plugin" &&
           preflight.code === "plugin_version_conflict" &&
           action?.action === "change"
-          ? { ok: true, action: "install" as const }
+          ? {
+              ok: true,
+              action: "install" as const,
+              ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
+              ...(preflight.installId ? { installId: preflight.installId } : {}),
+              ...(preflight.warning ? { warning: preflight.warning } : {}),
+            }
           : preflight;
       },
     },

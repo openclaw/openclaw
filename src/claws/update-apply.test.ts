@@ -413,6 +413,87 @@ describe("applyClawUpdatePlan", () => {
     expect(commitConfig).not.toHaveBeenCalled();
   });
 
+  it("preserves resolved plugin metadata when applying an owned version upgrade", async () => {
+    const packageRoot = await mkdtemp(join(tmpdir(), "openclaw-claw-plugin-update-"));
+    const targetSource = {
+      ...source,
+      packageRoot,
+      manifestPath: join(packageRoot, "openclaw.claw.json"),
+    };
+    const targetPackage = {
+      kind: "plugin" as const,
+      source: "clawhub" as const,
+      ref: "github",
+      version: "2.0.0",
+    };
+    const resolved = {
+      integrity: `sha256:${"a".repeat(64)}`,
+      installId: "github",
+      warning: "Review @acme/github before installation.",
+    };
+    const desiredDigest = `sha256:${createHash("sha256")
+      .update(
+        stableStringify({
+          package: targetPackage,
+          integrity: resolved.integrity,
+          installId: resolved.installId,
+          riskWarning: resolved.warning,
+        }),
+      )
+      .digest("hex")}`;
+    const updatePlan = plan([
+      {
+        kind: "package",
+        id: "plugin:github",
+        action: "change",
+        target: "packages.plugin:github",
+        blocked: false,
+        reason: "target changes package version",
+        desiredDigest,
+      },
+    ]);
+    const packagePreflight = vi.fn(async () => ({
+      ok: false as const,
+      code: "plugin_version_conflict",
+      message: "The Claw owns the installed previous version.",
+      installedVersion: "1.0.0",
+      ...resolved,
+    }));
+    const applyPackage = vi.fn(async () => ({
+      appliedIds: ["plugin:github"],
+      rollback: vi.fn(async () => undefined),
+    }));
+
+    await applyClawUpdatePlan(
+      updatePlan,
+      { targetManifest: { ...manifest, packages: [targetPackage] }, targetSource },
+      {
+        config: {},
+        ...consent(updatePlan),
+        rebuildPlan: vi.fn(async () => updatePlan),
+        packagePreflight,
+        readInstall: vi.fn(() => install),
+        persistInstall: vi.fn(() => ({ ...install, claw: source })),
+        applyWorkspace: vi.fn(async () => ({
+          appliedPaths: [],
+          rollback: vi.fn(async () => undefined),
+        })),
+        applyMcp: vi.fn(async () => ({
+          appliedNames: [],
+          rollback: vi.fn(async () => undefined),
+        })),
+        applyCron: vi.fn(async () => ({
+          appliedNames: [],
+          rollback: vi.fn(async () => undefined),
+        })),
+        applyPackage,
+      },
+    );
+
+    expect(packagePreflight).toHaveBeenCalledOnce();
+    expect(applyPackage).toHaveBeenCalledOnce();
+  });
+
   it("rolls workspace and MCP changes back when root provenance cannot advance", async () => {
     const updatePlan = plan([
       {

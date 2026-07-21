@@ -129,7 +129,12 @@ export async function applyClawMcpUpdate(
           throw new Error(removed.error);
         }
         undo.push(async () => {
-          const restored = await setServer({ name, server: previousServer, createOnly: true });
+          const restored = await setServer({
+            name,
+            server: previousServer,
+            createOnly: true,
+            recordIndependentOwner: false,
+          });
           if (!restored.ok) {
             throw new Error(restored.error);
           }
@@ -162,6 +167,7 @@ export async function applyClawMcpUpdate(
         name,
         server: targetServer,
         ...(previousServer ? { expectedServer: previousServer } : { createOnly: true }),
+        recordIndependentOwner: false,
       });
       configMutationUncertain = false;
       if (!written.ok) {
@@ -173,6 +179,7 @@ export async function applyClawMcpUpdate(
             name,
             server: previousServer,
             expectedServer: targetServer,
+            recordIndependentOwner: false,
           });
           if (!restored.ok) {
             throw new Error(restored.error);
