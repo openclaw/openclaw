@@ -233,6 +233,75 @@ describe("openai responses payload policy", () => {
     expect(policy.shouldStripStore).toBe(false);
   });
 
+  it("honors explicit server compaction for native ChatGPT Responses without changing store", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          baseUrl: "https://chatgpt.com/backend-api/codex",
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true, responsesCompactThreshold: 360_000 },
+          storeMode: "disable",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: false,
+      context_management: [{ type: "compaction", compact_threshold: 360_000 }],
+    });
+  });
+
+  it("rejects explicit server compaction for non-native responses proxies", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "custom-proxy",
+          baseUrl: "https://proxy.example.com/v1",
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true, responsesCompactThreshold: 360_000 },
+          storeMode: "disable",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({ store: false });
+  });
+
+  it("ignores explicit server compaction on non-Responses OpenAI routes", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-completions",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesServerCompaction: true, responsesCompactThreshold: 360_000 },
+          storeMode: "disable",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({});
+  });
+
   it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {

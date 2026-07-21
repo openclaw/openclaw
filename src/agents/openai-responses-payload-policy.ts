@@ -290,22 +290,24 @@ function resolveOpenAIResponsesCompactThreshold(model: { contextWindow?: unknown
   return 80_000;
 }
 
-function shouldEnableOpenAIResponsesServerCompaction(
-  explicitStore: boolean | undefined,
-  provider: unknown,
-  extraParams: Record<string, unknown> | undefined,
-): boolean {
-  const configured = extraParams?.responsesServerCompaction;
-  if (configured === false) {
-    return false;
-  }
-  if (explicitStore !== true) {
+function shouldEnableOpenAIResponsesServerCompaction(params: {
+  explicitStore: boolean | undefined;
+  extraParams: Record<string, unknown> | undefined;
+  isResponsesApi: boolean;
+  provider: unknown;
+  usesKnownNativeOpenAIRoute: boolean;
+}): boolean {
+  const configured = params.extraParams?.responsesServerCompaction;
+  if (configured === false || !params.isResponsesApi) {
     return false;
   }
   if (configured === true) {
-    return true;
+    return params.usesKnownNativeOpenAIRoute;
   }
-  return provider === "openai";
+  if (params.explicitStore !== true) {
+    return false;
+  }
+  return params.provider === "openai";
 }
 
 function stripDisabledOpenAIReasoningPayload(payloadObj: Record<string, unknown>): void {
@@ -380,11 +382,13 @@ export function resolveOpenAIResponsesPayloadPolicy(
       isResponsesApi,
     useServerCompaction:
       options.enableServerCompaction === true &&
-      shouldEnableOpenAIResponsesServerCompaction(
+      shouldEnableOpenAIResponsesServerCompaction({
         explicitStore,
-        model.provider,
-        options.extraParams,
-      ),
+        extraParams: options.extraParams,
+        isResponsesApi,
+        provider: model.provider,
+        usesKnownNativeOpenAIRoute: capabilities.usesKnownNativeOpenAIRoute,
+      }),
   };
 }
 
