@@ -79,6 +79,51 @@ export type SecurityConfig = {
       allowSymlinkCommand?: boolean;
     };
   };
+  /**
+   * Agent-behavior governance policy.
+   *
+   * Rules defined here are injected into the system prompt as `enforce:`
+   * directives (Layer 2) so the model sees them as binding constraints.
+   * When an external `exec` command is also configured, the gateway can
+   * additionally validate model output against the rules (Layer 3).
+   *
+   * Skills without behavior rules behave exactly as before — no breakage.
+   */
+  behaviorPolicy?: {
+    /** Enable behavior-governance policy. */
+    enabled?: boolean;
+    /** Behavior rules that constrain agent output. */
+    rules?: Array<{
+      /** Stable identifier for the rule (used in logs, telemetry). */
+      id: string;
+      /** Human-readable description. */
+      description?: string;
+      /**
+       * The policy directive injected into the system prompt as an `enforce:`
+       * instruction — this is the text the LLM sees and must comply with.
+       */
+      enforce: string;
+      /**
+       * Enforcement mode:
+       *   "enforce" — hard rule (default).
+       *   "guide"   — soft guidance injected into prompt only.
+       */
+      mode?: "enforce" | "guide";
+    }>;
+    /**
+     * Optional external validation command for Layer 3 enforcement.
+     * When configured, model output is piped to this command and the
+     * response is checked before delivering to the user.
+     */
+    exec?: {
+      source: "exec";
+      command: string;
+      args?: string[];
+      timeoutMs?: number;
+      maxOutputBytes?: number;
+      env?: Record<string, string>;
+    };
+  };
 };
 
 export type SurfaceConfigEntry = {

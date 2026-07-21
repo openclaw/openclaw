@@ -45,6 +45,7 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { validateBehaviorOutput, resolveBehaviorRules } from "../../security/behavior-policy.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
@@ -401,6 +402,13 @@ async function filterAlreadyDeliveredReplyPayloads(params: {
 }): Promise<ReplyPayload[]> {
   const sentTexts = params.result.messagingToolSentTexts ?? [];
   const sentMediaUrls = params.result.messagingToolSentMediaUrls ?? [];
+  // eslint-disable-next-line max-lines -- behavior-policy validation
+  if (sentTexts.length && params.cfg)
+    validateBehaviorOutput({
+      config: params.cfg,
+      rules: resolveBehaviorRules(params.cfg),
+      output: sentTexts.join("\n"),
+    }).catch((e: unknown) => console.warn("behavior-policy:", e));
   // The message tool injects the run account after telemetry captures its
   // original args. Preserve that source route before falling back to default.
   const implicitToolAccountId = params.sourceAccountId ?? params.defaultAccountId;
