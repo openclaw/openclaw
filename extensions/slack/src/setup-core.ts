@@ -35,6 +35,15 @@ import {
 
 const t = createSetupTranslator();
 
+type SlackSetupInput = ChannelSetupInput & {
+  botToken?: string;
+  appToken?: string;
+  userToken?: string;
+  signingSecret?: string;
+  identity?: "bot" | "user";
+  mode?: "socket" | "http" | "relay";
+};
+
 function enableSlackAccount(cfg: OpenClawConfig, accountId: string): OpenClawConfig {
   return patchChannelConfigForAccount({
     cfg,
@@ -199,7 +208,7 @@ function createSlackTokenCredential(params: {
 }
 
 function hasSlackSetupCredentials(params: {
-  input: ChannelSetupInput;
+  input: SlackSetupInput;
   identity: "bot" | "user";
   mode: "socket" | "http" | "relay";
 }): boolean {
@@ -216,21 +225,22 @@ function hasSlackSetupCredentials(params: {
 const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
   channelKey: channel,
   validateInput: ({ cfg, accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+    const setupInput = input as SlackSetupInput;
+    if (setupInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "Slack env tokens can only be used for the default account.";
     }
     const account = inspectSlackAccount({ cfg, accountId });
-    const identity = input.identity ?? account.config.postAs ?? "bot";
-    const mode = input.mode ?? account.config.mode ?? "socket";
+    const identity = setupInput.identity ?? account.config.postAs ?? "bot";
+    const mode = setupInput.mode ?? account.config.mode ?? "socket";
     if (identity === "user" && mode === "relay") {
       return 'Slack user identity setup supports mode "socket" or "http", not "relay".';
     }
-    if (input.useEnv) {
+    if (setupInput.useEnv) {
       return identity === "user"
         ? "Slack user identity setup does not support --use-env; configure userToken and the transport credential explicitly."
         : null;
     }
-    if (hasSlackSetupCredentials({ input, identity, mode })) {
+    if (hasSlackSetupCredentials({ input: setupInput, identity, mode })) {
       return null;
     }
     if (identity === "user") {
@@ -240,25 +250,29 @@ const slackSetupAdapterBase = createPatchedAccountSetupAdapter({
     }
     return "Slack requires --bot-token and --app-token (or --use-env).";
   },
-  buildPatch: (input) => ({
-    ...(input.identity ? { postAs: input.identity } : {}),
-    ...(input.identity === "user" && input.mode ? { mode: input.mode } : {}),
-    ...(input.botToken ? { botToken: input.botToken } : {}),
-    ...(input.appToken ? { appToken: input.appToken } : {}),
-    ...(input.userToken ? { userToken: input.userToken } : {}),
-    ...(input.signingSecret ? { signingSecret: input.signingSecret } : {}),
-  }),
+  buildPatch: (input) => {
+    const setupInput = input as SlackSetupInput;
+    return {
+      ...(setupInput.identity ? { postAs: setupInput.identity } : {}),
+      ...(setupInput.identity === "user" && setupInput.mode ? { mode: setupInput.mode } : {}),
+      ...(setupInput.botToken ? { botToken: setupInput.botToken } : {}),
+      ...(setupInput.appToken ? { appToken: setupInput.appToken } : {}),
+      ...(setupInput.userToken ? { userToken: setupInput.userToken } : {}),
+      ...(setupInput.signingSecret ? { signingSecret: setupInput.signingSecret } : {}),
+    };
+  },
 });
 
 export const slackSetupAdapter: ChannelSetupAdapter = {
   ...slackSetupAdapterBase,
   singleAccountKeysToMove: ["appToken"],
   applyAccountConfig: ({ cfg, accountId, input }) => {
-    const identity = input.identity ?? inspectSlackAccount({ cfg, accountId }).config.postAs;
+    const setupInput = input as SlackSetupInput;
+    const identity = setupInput.identity ?? inspectSlackAccount({ cfg, accountId }).config.postAs;
     return slackSetupAdapterBase.applyAccountConfig({
       cfg,
       accountId,
-      input: identity === "user" ? { ...input, identity } : input,
+      input: identity === "user" ? { ...setupInput, identity } : setupInput,
     });
   },
 };
