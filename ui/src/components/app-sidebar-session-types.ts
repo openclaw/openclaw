@@ -1,3 +1,5 @@
+import type { SessionCatalogPullRequestSummary } from "../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
@@ -18,6 +20,7 @@ export type SidebarSessionAttention =
   | { kind: "none" }
   | { kind: "question" }
   | { kind: "approval" }
+  | { kind: "agent"; note: string; icon: SessionAgentAttentionIconId }
   | { kind: "error"; reason: string };
 
 /** Client-owned attention that can name a session before its row is loaded. */
@@ -32,6 +35,8 @@ export function sidebarSessionAttentionPriority(attention: SidebarSessionAttenti
   switch (attention.kind) {
     case "question":
     case "approval":
+      return 3;
+    case "agent":
       return 2;
     case "error":
       return 1;
@@ -64,13 +69,17 @@ export type SidebarRecentSession = {
   acpSession?: boolean;
   worktreeId?: string;
   placementState?: SessionPlacementState;
+  workspaceConflictCount?: number;
   cloudWorkerActive: boolean;
   hasAutomation: boolean;
+  pullRequest?: SessionCatalogPullRequestSummary;
   unread: boolean;
   attention: SidebarSessionAttention;
+  agentStatusNote?: string;
   spawnedBy?: string;
   status?: SessionRunStatus;
   startedAt?: number;
+  updatedAt?: number | null;
   endedAt?: number;
   runtimeMs?: number;
   runtimeSampledAt?: number;

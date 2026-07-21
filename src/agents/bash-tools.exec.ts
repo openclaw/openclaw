@@ -1883,6 +1883,7 @@ export function createExecTool(
         if (host === "node") {
           return executeNodeHostCommand({
             command: params.command,
+            toolCallId,
             workdir,
             env,
             requestedEnv,
@@ -1893,6 +1894,7 @@ export function createExecTool(
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,
@@ -1949,6 +1951,7 @@ export function createExecTool(
             sessionStore: defaults?.sessionStore,
             bashElevated: elevatedDefaults,
             approvalReviewerDeviceId: defaults?.approvalReviewerDeviceId,
+            nonInteractiveApproval: defaults?.nonInteractiveApproval,
             turnSourceChannel: defaults?.messageProvider,
             turnSourceTo: defaults?.currentChannelId,
             turnSourceAccountId: defaults?.accountId,

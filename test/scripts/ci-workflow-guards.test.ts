@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -7,7 +8,6 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -27,6 +27,7 @@ const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64
 const DOWNLOAD_ARTIFACT_V8 = "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c";
 const CREATE_GITHUB_APP_TOKEN_V3 =
   "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1";
+const TRUFFLEHOG_V3_95_9 = "trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55";
 const MANTIS_GITHUB_APP_CLIENT_ID = "Iv23liPJCozR0uHm6P7G";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
@@ -925,14 +926,8 @@ describe("ci workflow guards", () => {
     const nativeArtifactStep = refresh.steps.find(
       (step: { name?: string }) => step.name === "Prepare locale artifact",
     );
-    const nativeInventoryStep = nativeFinalize.steps.find(
-      (step: { name?: string }) => step.name === "Refresh shared native inventory",
-    );
-    const nativeAndroidStep = nativeFinalize.steps.find(
-      (step: { name?: string }) => step.name === "Refresh Android native resources",
-    );
-    const nativeAppleStep = nativeFinalize.steps.find(
-      (step: { name?: string }) => step.name === "Refresh Apple native resources",
+    const nativeGeneratedStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Refresh native generated artifacts",
     );
     const nativeValidationStep = nativeFinalize.steps.find(
       (step: { name?: string }) => step.name === "Validate native locale refresh",
@@ -988,6 +983,7 @@ describe("ci workflow guards", () => {
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
+    expect(workflow.on.push.paths).toContain("apps/android/wear/src/main/**");
     expect(workflow.on.push.paths).toContain("scripts/android-app-i18n.ts");
     expect(workflow.on.push.paths).toContain("scripts/apple-app-i18n.ts");
     expect(refreshStep.run).toContain("run_refresh anthropic");
@@ -1000,28 +996,25 @@ describe("ci workflow guards", () => {
     expect(refreshStep.env.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
     expect(nativeArtifactStep.run).toContain("git add -A apps/.i18n/native");
     expect(nativeArtifactStep.run).not.toContain("native-source.json");
-    expect(nativeInventoryStep.run).toBe(
+    expect(nativeGeneratedStep.run).toBe(
       "node --import tsx scripts/native-app-i18n.ts sync --write",
     );
-    expect(nativeAndroidStep.run).toBe("node --import tsx scripts/android-app-i18n.ts sync");
-    expect(nativeAppleStep.run).toBe(
-      "node --import tsx scripts/apple-app-i18n.ts sync-ios --write",
+    expect(nativeValidationStep.run).toBe("node --import tsx scripts/native-app-i18n.ts check");
+    expect(nativeFinalize.steps.map((step: { name?: string }) => step.name)).not.toContain(
+      "Refresh Android native resources",
     );
-    expect(nativeValidationStep.run).toContain(
-      "node --import tsx scripts/native-app-i18n.ts check",
+    expect(nativeFinalize.steps.map((step: { name?: string }) => step.name)).not.toContain(
+      "Refresh Apple native resources",
     );
-    expect(nativeValidationStep.run).toContain(
-      "node --import tsx scripts/android-app-i18n.ts check",
-    );
-    expect(nativeValidationStep.run).toContain("node --import tsx scripts/apple-app-i18n.ts check");
     expect(nativePublishStep.with["generated-paths"].trim().split("\n")).toEqual([
       "apps/.i18n/native",
-      "apps/.i18n/native-source.json",
       "apps/.i18n/apple-translation-contradictions.json",
       "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
       "apps/android/app/src/main/res/values*/assistant.xml",
       "apps/android/app/src/main/res/values*/strings.xml",
+      "apps/android/wear/src/main/res/values*/strings.xml",
       "apps/ios/Resources/Localizable.xcstrings",
+      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
       "apps/ios/Sources/*.lproj/InfoPlist.strings",
       "apps/ios/WatchApp/*.lproj/InfoPlist.strings",
       "apps/ios/ShareExtension/*.lproj/InfoPlist.strings",
@@ -1029,6 +1022,8 @@ describe("ci workflow guards", () => {
     ]);
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/android-app-i18n.ts");
     expect(nativePublishStep.with["invalidation-paths"]).toContain("scripts/apple-app-i18n.ts");
+    expect(nativePublishStep.with["invalidation-paths"]).toContain("apps/.i18n/native-source.json");
+    expect(nativePublishStep.with["auto-merge"]).toBe("true");
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
@@ -1106,7 +1101,7 @@ describe("ci workflow guards", () => {
       expect(preflight.needs).toBe("resolve-base");
       expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
       expect(preflight.strategy).toBeUndefined();
-      expect(preflight.steps).toHaveLength(preflight === controlUiPreflight ? 3 : 2);
+      expect(preflight.steps).toHaveLength(3);
       const checkoutStep = preflight.steps.find(
         (step: { uses?: string }) => step.uses === CHECKOUT_V6,
       );
@@ -1122,24 +1117,24 @@ describe("ci workflow guards", () => {
         "contents-client-id": "Iv23liOECG0slfuhz093",
         "contents-private-key": "${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY }}",
         "pull-request-client-id": MANTIS_GITHUB_APP_CLIENT_ID,
-        ...(preflight === controlUiPreflight
-          ? { "pull-request-contents-permission": "write" }
-          : {}),
+        "pull-request-contents-permission": "write",
         "pull-request-private-key": "${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}",
       });
     }
-    const controlUiTokensStep = controlUiPreflight.steps.find(
-      (step: { name?: string }) => step.name === "Create generated PR tokens",
-    );
-    const autoMergeSettingStep = controlUiPreflight.steps.find(
-      (step: { name?: string }) => step.name === "Verify repository auto-merge setting",
-    );
-    expect(controlUiTokensStep.id).toBe("tokens");
-    expect(autoMergeSettingStep.env.GH_TOKEN).toBe(
-      "${{ steps.tokens.outputs.pull-request-token }}",
-    );
-    expect(autoMergeSettingStep.run).toContain("autoMergeAllowed");
-    expect(autoMergeSettingStep.run).toContain("Repository auto-merge must be enabled");
+    for (const preflight of [controlUiPreflight, nativePreflight]) {
+      const tokensStep = preflight.steps.find(
+        (step: { name?: string }) => step.name === "Create generated PR tokens",
+      );
+      const autoMergeSettingStep = preflight.steps.find(
+        (step: { name?: string }) => step.name === "Verify repository auto-merge setting",
+      );
+      expect(tokensStep.id).toBe("tokens");
+      expect(autoMergeSettingStep.env.GH_TOKEN).toBe(
+        "${{ steps.tokens.outputs.pull-request-token }}",
+      );
+      expect(autoMergeSettingStep.run).toContain("autoMergeAllowed");
+      expect(autoMergeSettingStep.run).toContain("Repository auto-merge must be enabled");
+    }
 
     const tokenAction = parse(readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8"));
     const tokenActionSource = readFileSync(CREATE_GENERATED_PR_TOKENS_ACTION, "utf8");
@@ -1401,9 +1396,7 @@ describe("ci workflow guards", () => {
         ".github/actions/publish-generated-pr/action.yml",
       );
       expect(publishStep.with).not.toHaveProperty("overlap-policy");
-      expect(publishStep.with["auto-merge"]).toBe(
-        automationBranch.includes("control-ui") ? "true" : undefined,
-      );
+      expect(publishStep.with["auto-merge"]).toBe("true");
       expect(publishStep.with["pr-body"]).toContain("## What Problem This Solves");
       expect(publishStep.with["pr-body"]).toContain("## Evidence");
       expect(publishStep.with["pr-body"]).toContain("${{ needs.resolve-base.outputs.sha }}");
@@ -1910,6 +1903,40 @@ describe("ci workflow guards", () => {
     expect(workflow.jobs["pnpm-store-warmup"]["runs-on"]).toContain("blacksmith-4vcpu-ubuntu-2404");
   });
 
+  it("scans only the pull request commit range for leaked credentials", () => {
+    const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
+    const fetchScanHistoryIndex = securitySteps.findIndex(
+      (step) => step.name === "Fetch pull request scan history",
+    );
+    const scanIndex = securitySteps.findIndex(
+      (step) => step.name === "Scan pull request for leaked credentials",
+    );
+    const fetchScanHistoryStep = expectDefined(
+      securitySteps[fetchScanHistoryIndex],
+      "TruffleHog history fetch step",
+    );
+    const scanStep = expectDefined(securitySteps[scanIndex], "TruffleHog pull request scan step");
+
+    expect(scanIndex).toBeGreaterThan(fetchScanHistoryIndex);
+    expect(fetchScanHistoryStep.if).toBe("github.event_name == 'pull_request'");
+    expect(fetchScanHistoryStep.env).toEqual({
+      PR_COMMIT_COUNT: "${{ github.event.pull_request.commits }}",
+      PR_MERGE_SHA: "${{ github.sha }}",
+    });
+    expect(fetchScanHistoryStep.run).toContain("fetch_depth=$((PR_COMMIT_COUNT + 2))");
+    expect(fetchScanHistoryStep.run).toContain(
+      'fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"',
+    );
+    expect(scanStep.if).toBe("github.event_name == 'pull_request'");
+    expect(scanStep.uses).toBe(TRUFFLEHOG_V3_95_9);
+    expect(scanStep.with).toEqual({
+      base: "${{ steps.diff_base.outputs.sha }}",
+      head: "${{ github.sha }}",
+      version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42",
+      extra_args: "--results=verified,unknown --fail-on-scan-errors",
+    });
+  });
+
   it("keeps sticky dependency snapshots on trusted Blacksmith Node shards", () => {
     const workflow = readCiWorkflow();
     const blacksmithJobs = Object.entries(workflow.jobs).filter(([, job]) => {
@@ -2069,7 +2096,7 @@ describe("ci workflow guards", () => {
     // per-PR/per-manifest-hash keys saturated that cap. Install inputs and exact
     // runtime patches belong in the marker, not the backing-disk key.
     expect(mountStep.with.key).toBe(
-      "${{ github.repository }}-node-deps-bind-v5-${{ inputs.node-version }}",
+      "${{ github.repository }}-node-deps-bind-v6-${{ inputs.node-version }}",
     );
     expect(mountStep.with.commit).toBe(
       "${{ inputs.save-sticky-disk == 'true' && github.event_name != 'pull_request' && 'true' || 'false' }}",
@@ -2112,17 +2139,21 @@ describe("ci workflow guards", () => {
     expect(installStep.run).toContain(
       '[ "$sticky_fingerprint" = "${OPENCLAW_STICKY_DEPS_FINGERPRINT:?}" ]',
     );
+    expect(installStep.run).toContain('sticky_fingerprint_matches="true"');
+    expect(installStep.run).toContain(
+      "Sticky dependency fingerprint matches, but restored importer contents are incomplete; reinstalling",
+    );
     expect(installStep.run).toContain('[ "$STICKY_WRITER" != "true" ]');
     expect(installStep.run).toContain('sudo umount "$GITHUB_WORKSPACE/node_modules"');
     expect(installStep.run).toContain('ephemeral_store="${RUNNER_TEMP:?}/openclaw-pnpm-store"');
     expect(installStep.run).toContain(
-      "Sticky dependency snapshot is stale; using runner-local storage for this read-only run",
+      "Sticky dependency snapshot is unusable; using runner-local storage for this read-only run",
     );
     expect(installStep.run).toContain(
       'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" restore "$STICKY_ROOT" "$GITHUB_WORKSPACE"',
     );
     expect(installStep.run).toContain(
-      "Sticky dependency snapshot matches the install fingerprint; skipping pnpm install",
+      "Sticky dependency snapshot matches the install fingerprint and importer contents; skipping pnpm install",
     );
     expect(installStep.run).toContain("timeout --signal=TERM --kill-after=15s 4m");
     expect(installStep.run).toContain('pnpm "${install_args[@]}" --config.fetch-retries=0');
@@ -2141,7 +2172,7 @@ describe("ci workflow guards", () => {
         'bash "$GITHUB_ACTION_PATH/sticky-importers.sh" capture "$STICKY_ROOT" "$GITHUB_WORKSPACE" "$OPENCLAW_STICKY_DEPS_FINGERPRINT"',
       ),
     );
-    // The exact snapshot fingerprint or successful install already owns
+    // The content-validated snapshot or successful install already owns
     // dependency validation. pnpm's redundant check sees intentionally pruned
     // plugin importers as stale, so it must not mutate during shard fanout.
     const disableImplicitInstall =
@@ -2258,27 +2289,126 @@ describe("ci workflow guards", () => {
     try {
       const workspace = path.join(root, "workspace");
       const stickyRoot = path.join(root, "sticky");
+      const importerRoot = path.join(workspace, "packages", "example");
       const rootModules = path.join(workspace, "node_modules");
-      const importerModules = path.join(workspace, "packages", "example", "node_modules");
+      const importerModules = path.join(importerRoot, "node_modules");
+      const rootDependency = path.join(rootModules, "ipaddr.js");
+      const rootOptionalDependency = path.join(rootModules, "optional-ipaddr");
+      const importerDependency = path.join(importerModules, "ipaddr.js");
       const helper = path.resolve(".github/actions/setup-node-env/sticky-importers.sh");
-      mkdirSync(path.join(rootModules, "shared"), { recursive: true });
-      mkdirSync(importerModules, { recursive: true });
+      const lockfile = [
+        "lockfileVersion: '9.0'",
+        "importers:",
+        "  packages/example:",
+        "    dependencies:",
+        "      ipaddr.js:",
+        "        specifier: 2.4.0",
+        "        version: 2.4.0",
+        "      aliased-ipaddr:",
+        "        specifier: npm:ipaddr.js@2.4.0",
+        "        version: ipaddr.js@2.4.0",
+        "      local-helper:",
+        "        specifier: file:../local-helper",
+        "        version: file:../local-helper",
+        "    optionalDependencies:",
+        "      optional-ipaddr:",
+        "        specifier: npm:ipaddr.js@2.4.0",
+        "        version: ipaddr.js@2.4.0",
+        "      unsupported-optional:",
+        "        specifier: 3.0.0",
+        "        version: 3.0.0",
+        "",
+      ].join("\n");
+      mkdirSync(workspace, { recursive: true });
+      writeFileSync(path.join(workspace, "pnpm-lock.yaml"), lockfile, "utf8");
+      mkdirSync(rootDependency, { recursive: true });
+      mkdirSync(rootOptionalDependency, { recursive: true });
+      mkdirSync(importerDependency, { recursive: true });
+      writeFileSync(
+        path.join(rootDependency, "package.json"),
+        JSON.stringify({ name: "ipaddr.js", version: "1.9.1" }),
+        "utf8",
+      );
+      writeFileSync(
+        path.join(rootOptionalDependency, "package.json"),
+        JSON.stringify({ name: "ipaddr.js", version: "1.9.1" }),
+        "utf8",
+      );
+      writeFileSync(
+        path.join(importerDependency, "package.json"),
+        JSON.stringify({ name: "ipaddr.js", version: "2.4.0" }),
+        "utf8",
+      );
+      for (const dependencyName of ["aliased-ipaddr", "optional-ipaddr"]) {
+        const dependencyRoot = path.join(importerModules, dependencyName);
+        mkdirSync(dependencyRoot, { recursive: true });
+        writeFileSync(
+          path.join(dependencyRoot, "package.json"),
+          JSON.stringify({ name: "ipaddr.js", version: "2.4.0" }),
+          "utf8",
+        );
+      }
+      writeFileSync(
+        path.join(rootModules, ".modules.yaml"),
+        JSON.stringify({
+          hoistedLocations: {
+            "ipaddr.js@1.9.1": ["node_modules/ipaddr.js", "node_modules/optional-ipaddr"],
+            "ipaddr.js@2.4.0": [
+              "packages/example/node_modules/ipaddr.js",
+              "packages/example/node_modules/aliased-ipaddr",
+              "packages/example/node_modules/optional-ipaddr",
+            ],
+          },
+        }),
+        "utf8",
+      );
       writeFileSync(path.join(rootModules, "root-sentinel"), "before", "utf8");
-      symlinkSync("../../../node_modules/shared", path.join(importerModules, "shared"));
 
       execFileSync("bash", [helper, "capture", stickyRoot, workspace, "fingerprint-a"]);
       rmSync(importerModules, { recursive: true });
       writeFileSync(path.join(rootModules, "root-sentinel"), "after", "utf8");
       execFileSync("bash", [helper, "restore", stickyRoot, workspace]);
 
-      expect(readlinkSync(path.join(importerModules, "shared"))).toBe(
-        "../../../node_modules/shared",
-      );
+      expect(
+        JSON.parse(readFileSync(path.join(importerDependency, "package.json"), "utf8")),
+      ).toMatchObject({ version: "2.4.0" });
       expect(readFileSync(path.join(rootModules, "root-sentinel"), "utf8")).toBe("after");
       expect(readFileSync(path.join(stickyRoot, ".openclaw-deps-fingerprint"), "utf8")).toBe(
         "fingerprint-a\n",
       );
-      expect(() => execFileSync("bash", [helper, "capture", stickyRoot, workspace])).toThrow();
+
+      // Recreate the reported failure shape: a marker-matching archive can be
+      // structurally valid yet omit the importer-local override, causing Node
+      // to fall through to the stale root-hoisted version.
+      rmSync(importerModules, { recursive: true });
+      const archive = path.join(stickyRoot, "importer-node-modules.tar");
+      execFileSync("tar", ["--create", "--file", archive, "--files-from", "/dev/null"]);
+      const manifest = path.join(stickyRoot, "importer-node-modules.manifest");
+      const archiveChecksum = createHash("sha256").update(readFileSync(archive)).digest("hex");
+      const manifestChecksum = createHash("sha256").update(readFileSync(manifest)).digest("hex");
+      writeFileSync(
+        path.join(stickyRoot, ".openclaw-importer-archive.sha256"),
+        `${archiveChecksum}\n${manifestChecksum}\n`,
+        "utf8",
+      );
+      const failedRestore = spawnSync("bash", [helper, "restore", stickyRoot, workspace], {
+        encoding: "utf8",
+      });
+      expect(failedRestore.status).toBe(1);
+      expect(failedRestore.stderr).toContain(
+        "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
+      );
+      expect(existsSync(importerModules)).toBe(false);
+
+      const failedCapture = spawnSync(
+        "bash",
+        [helper, "capture", stickyRoot, workspace, "fingerprint-b"],
+        { encoding: "utf8" },
+      );
+      expect(failedCapture.status).toBe(1);
+      expect(failedCapture.stderr).toContain(
+        "ipaddr.js expected ipaddr.js@2.4.0, resolved ipaddr.js@1.9.1",
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -2923,6 +3053,23 @@ describe("ci workflow guards", () => {
     );
   });
 
+  it("runs the Plugin SDK API baseline as a visible additional check", () => {
+    const workflow = readCiWorkflow();
+    const additionalJob = workflow.jobs["check-additional-shard"];
+    const matrixRows = additionalJob.strategy.matrix.include;
+    expect(matrixRows).toContainEqual({
+      check_name: "check-plugin-sdk-api-baseline",
+      group: "plugin-sdk-api-baseline",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
+    });
+
+    const runStep = additionalJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run additional check shard",
+    );
+    expect(runStep.run).toContain("plugin-sdk-api-baseline)");
+    expect(runStep.run).toContain('run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check');
+  });
+
   it("runs the SQLite transaction ratchet in the session boundary check", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
@@ -3539,6 +3686,9 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const releaseGateMerge = checksFastSteps.find(
       (step: WorkflowStep) => step.name === "Prepare release-gate max-lines merge tree",
     );
+    const protocolManualBase = checksFastSteps.find(
+      (step: WorkflowStep) => step.name === "Resolve manual protocol base",
+    );
 
     expect(workflow.jobs["checks-fast-core"].permissions).toEqual({
       contents: "read",
@@ -3560,6 +3710,17 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     expect(checksFastRun.env.GH_TOKEN).toBe(
       "${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}",
+    );
+    expect(protocolManualBase.if).toBe(
+      "matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate",
+    );
+    expect(protocolManualBase.env.GH_TOKEN).toBe("${{ github.token }}");
+    expect(protocolManualBase.run).toContain(
+      '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}"',
+    );
+    expect(protocolManualBase.run).toContain('echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"');
+    expect(checksFastRun.env.PROTOCOL_MANUAL_BASE_SHA).toBe(
+      "${{ steps.protocol_manual_base.outputs.sha }}",
     );
     expect(releaseGateMerge.run).toContain(
       'gh api --method GET "repos/${GITHUB_REPOSITORY}/pulls/${PULL_REQUEST_NUMBER}"',
@@ -3601,6 +3762,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(checksFastRun.run).toContain('git ls-remote origin "refs/heads/${default_branch}"');
     expect(checksFastRun.run).toContain(
       '"repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}"',
+    );
+    expect(checksFastRun.run).toContain('PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"');
+    expect(checksFastRun.run).toContain(
+      '"+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"',
     );
     expect(checksFastRun.run).toContain("--jq '.merge_base_commit.sha'");
     expect(checksFastRun.run).toContain(
@@ -4041,6 +4206,30 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
+  it("splits native source verification from generated locale parity", () => {
+    const workflow = readCiWorkflow();
+    const localeJob = workflow.jobs["native-i18n"];
+    const sourceStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Verify native app i18n source",
+    );
+    const parityStep = localeJob.steps.find(
+      (step: WorkflowStep) => step.name === "Check native app generated locale parity",
+    );
+    const packageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+
+    expect(packageScripts["native:i18n:baseline"]).toContain("baseline --write");
+    expect(packageScripts["native:i18n:verify"]).toContain(" verify");
+    expect(workflow.jobs.preflight.outputs.strict_native_i18n).toContain(
+      "steps.changed_scope.outputs.strict_native_i18n",
+    );
+    expect(sourceStep.run).toContain("pnpm native:i18n:verify");
+    expect(sourceStep.run).toContain("Historical release targets");
+    expect(parityStep.if).toBe("${{ needs.preflight.outputs.strict_native_i18n == 'true' }}");
+    expect(parityStep.run).toContain("pnpm native:i18n:check");
+    expect(parityStep.run).not.toContain("pnpm android:i18n:check");
+    expect(parityStep.run).not.toContain("pnpm apple:i18n:check");
+  });
+
   it("keeps the hosted plugin-list memory allowance scoped to GitHub-hosted runners", () => {
     const workflow = readCiWorkflow();
     const startupMemoryStep = workflow.jobs["build-artifacts"].steps.find(
@@ -4421,8 +4610,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       "MANTIS_GITHUB_APP_PRIVATE_KEY",
       "OPENAI_API_KEY",
       "OPENCLAW_MATURITY_SCORECARD_AGENT_OPENAI_API_KEY",
+      "OPENCLAW_QA_CONVEX_SECRET_CI",
+      "OPENCLAW_QA_CONVEX_SITE_URL",
     ]);
-    for (const secret of ["CLAWSWEEPER_APP_PRIVATE_KEY", "MANTIS_GITHUB_APP_PRIVATE_KEY"]) {
+    for (const secret of [
+      "CLAWSWEEPER_APP_PRIVATE_KEY",
+      "MANTIS_GITHUB_APP_PRIVATE_KEY",
+      "OPENCLAW_QA_CONVEX_SECRET_CI",
+      "OPENCLAW_QA_CONVEX_SITE_URL",
+    ]) {
       expect(maturityWorkflow.on.workflow_call.secrets[secret].required).toBe(false);
     }
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
@@ -4430,6 +4626,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
+    expect(qaRunJob["timeout-minutes"]).toBe(60);
     const validateProfileStep = qaRunJob.steps.find(
       (step: WorkflowStep) => step.name === "Validate QA profile input",
     );
@@ -4441,18 +4638,28 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       (step: WorkflowStep) => step.name === "Ensure Playwright Chromium",
     );
     expect(ensurePlaywrightStep.run).toBe("node scripts/ensure-playwright-chromium.mjs");
+    const runProfileStep = qaRunJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run QA profile",
+    );
+    expect(runProfileStep.run).toContain("--concurrency 2");
+    expect(runProfileStep.run).toContain("--fast");
     expect(generateJob.needs).toEqual(["validate_selected_ref", "publisher_preflight"]);
     expect(generateJob.if.replace(/\s+/gu, " ")).toBe(
       "${{ always() && needs.validate_selected_ref.result == 'success' && (!inputs.publish_pull_request || needs.publisher_preflight.result == 'success') && inputs.qa_evidence_run_id == '' }}",
     );
     expect(generateJob.uses).toBe("./.github/workflows/qa-profile-evidence.yml");
     expect(generateJob.with).toMatchObject({
-      // Keep the caller's ref while the callee verifies it against expected_sha.
-      ref: "${{ inputs.ref }}",
+      // Reusable jobs start later, so forward the immutable revision instead of a moving branch.
+      ref: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
       qa_profile: "all",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
+    expect(generateJob.secrets).toMatchObject({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    });
 
     const workflowStep = maturityWorkflow.jobs.validate_selected_ref.steps.find(
       (step: WorkflowStep) => step.name === "Resolve job workflow identity",
@@ -4491,6 +4698,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     for (const fragment of [
       "expected_sha must be a full 40-character SHA",
       'branch_candidate="${INPUT_REF#refs/heads/}"',
+      "floating_default_branch=false",
+      '[[ -z "${expected_sha// }" && "$branch_candidate" == "$DEFAULT_BRANCH" ]]',
+      'selected_revision="$(git rev-parse refs/remotes/origin/main)"',
+      '[[ "$floating_default_branch" == "true" && "$publication_base" == "$DEFAULT_BRANCH" ]]',
       'branch_lookup_status="$?"',
       "2) ;;",
       "Unable to determine whether '${INPUT_REF}' is a remote branch",
@@ -4823,7 +5034,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(job.with).not.toHaveProperty("qa_profile");
     expect(job.with).not.toHaveProperty("publish_pull_request");
-    expect(Object.keys(job.secrets)).toEqual(["OPENAI_API_KEY"]);
+    expect(job.secrets).toMatchObject({
+      OPENAI_API_KEY: "${{ secrets.OPENAI_API_KEY }}",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
+      OPENCLAW_QA_CONVEX_SITE_URL: "${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}",
+    });
     expect(summaryJob.needs).toContain("maturity_scorecard_release_checks");
     expect(verifyStep.env.MATURITY_SCORECARD_RELEASE_CHECKS_RESULT).toBe(
       "${{ needs.maturity_scorecard_release_checks.result }}",

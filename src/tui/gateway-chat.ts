@@ -161,6 +161,7 @@ export class GatewayChatClient implements TuiBackend {
       mode: GATEWAY_CLIENT_MODES.UI,
       deviceIdentity: connection.allowInsecureLocalOperatorUi ? null : undefined,
       caps: [
+        GATEWAY_CLIENT_CAPS.AGENT_KIND,
         GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
         GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
         GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
@@ -445,7 +446,6 @@ function resolveBoundGatewayConnection(
     token: explicitAuth.token,
     password: explicitAuth.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: opts.config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi: false,
   };
 }
@@ -499,7 +499,6 @@ async function resolveGatewayConnection(
       token: explicitAuth.token,
       password: explicitAuth.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -522,7 +521,6 @@ async function resolveGatewayConnection(
       ...((opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint)
         ? { tlsFingerprint: opts.tlsFingerprint ?? config.gateway?.remote?.tlsFingerprint }
         : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi: false,
     };
   }
@@ -539,7 +537,6 @@ async function resolveGatewayConnection(
       token: resolved.token,
       password: resolved.password,
       ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-      preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
       allowInsecureLocalOperatorUi,
     };
   }
@@ -565,7 +562,6 @@ async function resolveGatewayConnection(
     token: resolved.token,
     password: resolved.password,
     ...(opts.tlsFingerprint ? { tlsFingerprint: opts.tlsFingerprint } : {}),
-    preauthHandshakeTimeoutMs: config.gateway?.handshakeTimeoutMs,
     allowInsecureLocalOperatorUi,
   };
 }

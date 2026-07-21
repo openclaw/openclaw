@@ -280,6 +280,11 @@ openclaw-board-widget-cell {
   position: relative;
 }
 
+.board-widget__body--card {
+  box-sizing: border-box;
+  padding: var(--widget-frame-inset);
+}
+
 .board-widget__body--scrollable {
   overflow: auto;
 }
@@ -295,12 +300,155 @@ openclaw-board-widget-cell {
   position: absolute;
 }
 
+/* Passive trust indicator: only meaningful where chrome hides (fine pointer),
+   so the base rule keeps it off and the overlay block reveals it at rest. */
+.board-widget__grant-dot {
+  display: none;
+}
+
 .board-widget__frame {
   background: transparent;
   border: 0;
   display: block;
   height: 100%;
   width: 100%;
+}
+
+.swarm-widget {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.swarm-widget__empty {
+  color: var(--muted, #8a919e);
+  font-size: 12px;
+  margin: 0;
+  padding: 12px;
+}
+
+.swarm-widget__group {
+  background: color-mix(in srgb, var(--text, #d7dae0) 3%, transparent);
+  border: 1px solid var(--board-line);
+  border-radius: 8px;
+  display: grid;
+  gap: 7px;
+  padding: 8px;
+}
+
+.swarm-widget__group-header {
+  align-items: baseline;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.swarm-widget__group-header strong {
+  color: var(--text, #d7dae0);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swarm-widget__group-header span,
+.swarm-widget__narrator,
+.swarm-widget__phase {
+  color: var(--muted, #8a919e);
+  font-size: 10px;
+}
+
+.swarm-widget__narrator {
+  line-height: 1.35;
+}
+
+.swarm-widget__phase-row {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(56px, auto) 1fr;
+}
+
+.swarm-widget__phase {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.swarm-widget__dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.swarm-widget__dot {
+  background: var(--muted, #8a919e);
+  border-radius: 50%;
+  height: 9px;
+  width: 9px;
+}
+
+.swarm-widget__dot--running {
+  animation: swarm-widget-pulse 1.25s ease-in-out infinite;
+  background: var(--accent, #ff5c5c);
+}
+
+.swarm-widget__dot--done {
+  background: var(--success, #45c486);
+}
+
+.swarm-widget__dot--failed {
+  background: var(--danger, #ff6b6b);
+}
+
+@keyframes swarm-widget-pulse {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent, #ff5c5c) 25%, transparent);
+    opacity: 0.55;
+  }
+}
+
+.board-widget__mcp-app {
+  display: grid;
+  min-height: 100%;
+}
+
+.board-widget__mcp-app > .board-widget__grant {
+  border-bottom: 1px solid var(--board-line);
+  height: auto;
+  max-height: 112px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.board-widget__mcp-app-view {
+  display: block;
+  min-height: 160px;
+  width: 100%;
+}
+
+.board-widget__app-loading,
+.board-widget__stale {
+  align-content: center;
+  color: var(--muted, #8a919e);
+  display: grid;
+  font-size: 11px;
+  gap: 8px;
+  justify-items: center;
+  min-height: 160px;
+  padding: 16px;
+  text-align: center;
+}
+
+.board-widget__stale strong {
+  color: var(--text, #d7dae0);
+  font-size: 13px;
+}
+
+.board-widget__stale > span {
+  line-height: 1.45;
+  max-width: 34ch;
 }
 
 .board-widget__resize-handle {
@@ -322,6 +470,110 @@ openclaw-board-widget-cell {
   position: absolute;
   right: 5px;
   width: 6px;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  /* Focus keeps keyboard actions reachable; menu-open and dragging keep chrome
+     pinned when interaction leaves the card bounds. */
+  .board-widget {
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .board-widget__bar {
+    backdrop-filter: blur(6px);
+    background: color-mix(in srgb, var(--board-surface) 92%, transparent);
+    border-radius: 11px 11px 0 0;
+    height: 38px;
+    left: 0;
+    opacity: 0;
+    position: absolute;
+    right: 0;
+    top: 0;
+    transition:
+      opacity 120ms ease,
+      visibility 0s linear 120ms;
+    visibility: hidden;
+    z-index: 5;
+    /* The overlay strip must not steal clicks from widget content underneath:
+       only real controls stay interactive, everything else passes through. */
+    pointer-events: none;
+  }
+
+  /* Capabilities chip stays interactive for its granted-permissions tooltip;
+     the kind badge and title are display-only and pass clicks through. */
+  .board-widget__bar > .board-widget__drag-handle,
+  .board-widget__bar > .board-widget__capabilities,
+  .board-widget__bar > .board-widget__menu {
+    pointer-events: auto;
+  }
+
+  .board-widget__resize-handle {
+    opacity: 0;
+    transition:
+      opacity 120ms ease,
+      visibility 0s linear 120ms;
+    visibility: hidden;
+  }
+
+  .board-widget:hover .board-widget__bar,
+  .board-widget:hover .board-widget__resize-handle,
+  .board-widget:focus-within .board-widget__bar,
+  .board-widget:focus-within .board-widget__resize-handle,
+  .board-widget--dragging .board-widget__bar,
+  .board-widget--dragging .board-widget__resize-handle,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__bar,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__resize-handle {
+    opacity: 1;
+    /* Delay-only override: reveal flips visibility immediately while the base
+       shorthand keeps the fade, and reduced-motion's transition: none stays
+       authoritative because no transition-property is redeclared here. */
+    transition-delay: 0s;
+    visibility: visible;
+  }
+
+  /* While chrome is hidden, a granted widget keeps a small trust dot in the
+     bar's corner; the revealed bar carries the full capabilities chip, so the
+     dot fades out together with the chrome fade-in. */
+  .board-widget__grant-dot {
+    background: var(--ok, #4ec9a8);
+    border-radius: 50%;
+    display: block;
+    height: 6px;
+    pointer-events: none;
+    position: absolute;
+    right: 10px;
+    top: 10px;
+    transition: opacity 120ms ease;
+    width: 6px;
+    z-index: 4;
+  }
+
+  .board-widget:hover .board-widget__grant-dot,
+  .board-widget:focus-within .board-widget__grant-dot,
+  .board-widget--dragging .board-widget__grant-dot,
+  .board-widget:has(.board-widget__menu[open]) .board-widget__grant-dot {
+    opacity: 0;
+  }
+
+  /* Frameless is a fine-pointer treatment only: touch keeps the card shell
+     because there is no hover to rediscover the widget bounds. While dragging,
+     the reset stops applying so the widget materializes back into a full card
+     (accent border + drop shadow from --dragging) under the pointer. */
+  .board-widget--frameless:not(.board-widget--dragging) {
+    background: transparent;
+    border-color: transparent;
+    box-shadow: none;
+  }
+
+  .board-widget--frameless:hover,
+  .board-widget--frameless:focus-within,
+  .board-widget--frameless:has(.board-widget__menu[open]) {
+    border-color: var(--board-line);
+  }
+
+  .board-widget__body {
+    border-radius: 11px;
+  }
 }
 
 .board-widget__grant,
@@ -347,6 +599,49 @@ openclaw-board-widget-cell {
   font-size: 11px;
   line-height: 1.45;
   max-width: 32ch;
+}
+
+.board-widget__grant-summary {
+  color: var(--muted, #8a919e);
+  display: grid;
+  font-size: 11px;
+  gap: 4px;
+  line-height: 1.45;
+  margin: 0;
+  max-width: 36ch;
+  padding-left: 18px;
+  text-align: left;
+}
+
+.board-widget__grant-groups {
+  display: grid;
+  gap: 8px;
+  max-width: 100%;
+  text-align: left;
+}
+
+.board-widget__grant-groups section {
+  display: grid;
+  gap: 3px;
+}
+
+.board-widget__grant-groups section > strong {
+  color: var(--text, #d7dae0);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.board-widget__capabilities {
+  background: color-mix(in srgb, var(--success, #4fbf78) 13%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success, #4fbf78) 45%, transparent);
+  border-radius: 999px;
+  color: var(--success, #4fbf78);
+  display: inline-flex;
+  font-size: 9px;
+  font-weight: 650;
+  line-height: 1;
+  padding: 3px 6px;
+  text-transform: uppercase;
 }
 
 .board-widget__grant-mark {
@@ -442,7 +737,11 @@ openclaw-board-widget-cell {
 
 @media (prefers-reduced-motion: reduce) {
   .board-widget,
-  .board-tabs__tab {
+  .board-widget__bar,
+  .board-widget__resize-handle,
+  .board-tabs__tab,
+  .swarm-widget__dot--running {
+    animation: none;
     transition: none;
   }
 }

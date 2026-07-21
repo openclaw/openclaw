@@ -17,6 +17,8 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "exec", family: "shell" },
   { name: "process", family: "shell" },
   { name: "agents_list", family: "openclaw" },
+  // Static factory identity only; runtime and tools.catalog apply the Swarm config gate.
+  { name: "agents_wait", family: "openclaw" },
   { name: "ask_user", family: "openclaw" },
   { name: "openclaw", family: "openclaw" },
   { name: "computer", family: "openclaw" },
@@ -43,6 +45,7 @@ const CORE_TOOL_FACTORY_DESCRIPTORS = [
   { name: "sessions_send", family: "openclaw" },
   { name: "sessions_spawn", family: "openclaw" },
   { name: "sessions_yield", family: "openclaw" },
+  { name: "structured_output", family: "openclaw" },
   { name: "skill_workshop", family: "openclaw" },
   { name: "spawn_task", family: "openclaw" },
   { name: "create_goal", family: "openclaw" },
