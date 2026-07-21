@@ -104,12 +104,10 @@ describe("sidebar Workboard runtime", () => {
   it("does not let an old client repopulate a replacement catalog", async () => {
     const first = deferred<{ boards: ReturnType<typeof board>[] }>();
     const second = deferred<{ boards: ReturnType<typeof board>[] }>();
-    const firstClient = {
-      request: vi.fn(() => first.promise),
-    } as unknown as GatewayBrowserClient;
-    const secondClient = {
-      request: vi.fn(() => second.promise),
-    } as unknown as GatewayBrowserClient;
+    const firstRequest = vi.fn(() => first.promise);
+    const secondRequest = vi.fn(() => second.promise);
+    const firstClient = { request: firstRequest } as unknown as GatewayBrowserClient;
+    const secondClient = { request: secondRequest } as unknown as GatewayBrowserClient;
     const snapshots: SidebarWorkboardSnapshot[] = [];
     const runtime = createSidebarWorkboardRuntime(
       (snapshot) => snapshots.push(snapshot),
@@ -123,8 +121,8 @@ describe("sidebar Workboard runtime", () => {
     second.resolve({ boards: [board("current")] });
 
     await vi.waitFor(() => expect(snapshots.at(-1)?.boards[0]?.id).toBe("current"));
-    expect(firstClient.request).toHaveBeenCalledOnce();
-    expect(secondClient.request).toHaveBeenCalledOnce();
+    expect(firstRequest).toHaveBeenCalledOnce();
+    expect(secondRequest).toHaveBeenCalledOnce();
     runtime.dispose();
   });
 

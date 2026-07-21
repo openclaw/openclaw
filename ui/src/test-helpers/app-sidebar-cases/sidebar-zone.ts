@@ -66,6 +66,17 @@ async function mountZone() {
   return { sidebar, sessions };
 }
 
+function sidebarBoard(id: string, metadata: { color?: string; icon?: string; name?: string } = {}) {
+  return {
+    id,
+    total: 0,
+    active: 0,
+    archived: 0,
+    byStatus: {},
+    ...metadata,
+  };
+}
+
 describe("AppSidebar interleaved zone", () => {
   it("keeps pinned sessions outside the optional page budget", async () => {
     const keys = [
@@ -229,12 +240,7 @@ describe("AppSidebar interleaved zone", () => {
   it("renders a pinned Workboard board with its icon, color, label, and route", async () => {
     const { sidebar } = await mountZone();
     sidebar.workboardBoards = [
-      {
-        id: "ops",
-        name: "Operations",
-        icon: "⚙",
-        color: "#22c55e",
-      },
+      sidebarBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
     ];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["workboard:ops"];
@@ -259,7 +265,7 @@ describe("AppSidebar interleaved zone", () => {
 
   it("keeps the Workboard parent active when the current board is not pinned", async () => {
     const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [{ id: "ops", name: "Operations" }];
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["route:workboard"];
     sidebar.activeRouteId = "workboard";
@@ -275,7 +281,7 @@ describe("AppSidebar interleaved zone", () => {
 
   it("hides Workboard board pins and editor choices when the plugin is inactive", async () => {
     const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [{ id: "ops", name: "Operations" }];
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
     sidebar.enabledRouteIds = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
@@ -299,13 +305,8 @@ describe("AppSidebar interleaved zone", () => {
   it("lists active boards in the WorkBoard pin-editor group", async () => {
     const { sidebar } = await mountZone();
     sidebar.workboardBoards = [
-      { id: "default" },
-      {
-        id: "ops",
-        name: "Operations",
-        icon: "⚙",
-        color: "#22c55e",
-      },
+      sidebarBoard("default"),
+      sidebarBoard("ops", { name: "Operations", icon: "⚙", color: "#22c55e" }),
     ];
     sidebar.workboardBoardsReady = true;
     const nav = sidebar.querySelector<HTMLElement>(".sidebar-nav");
@@ -405,7 +406,7 @@ describe("AppSidebar interleaved zone", () => {
 
   it("unpins a Workboard board dropped into the session-list region", async () => {
     const { sidebar } = await mountZone();
-    sidebar.workboardBoards = [{ id: "ops", name: "Operations" }];
+    sidebar.workboardBoards = [sidebarBoard("ops", { name: "Operations" })];
     sidebar.workboardBoardsReady = true;
     sidebar.sidebarEntries = ["workboard:ops", "route:usage"];
     const onUpdate = vi.fn();

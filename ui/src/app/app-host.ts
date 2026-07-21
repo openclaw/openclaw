@@ -1296,13 +1296,13 @@ class OpenClawShell extends OpenClawLightDomElement {
         if (!current) {
           return;
         }
-        const runtime = module.createSidebarWorkboardRuntime((nextSnapshot) => {
-          if (this.sidebarWorkboardRuntime === runtime) {
+        const loadedRuntime = module.createSidebarWorkboardRuntime((nextSnapshot) => {
+          if (this.sidebarWorkboardRuntime === loadedRuntime) {
             this.sidebarWorkboardSnapshot = nextSnapshot;
             this.requestUpdate();
           }
         }, current.workboard);
-        this.sidebarWorkboardRuntime = runtime;
+        this.sidebarWorkboardRuntime = loadedRuntime;
         this.sidebarWorkboardHost = current.workboard;
         this.sidebarWorkboardRenderers = {
           renderEntry: module.renderSidebarWorkboardEntry,
@@ -1314,7 +1314,7 @@ class OpenClawShell extends OpenClawLightDomElement {
           gateway &&
           isWorkboardEnabledInConfigSnapshot(current.runtimeConfig.state.configSnapshot)
         ) {
-          runtime.sync(gateway.client, gateway.connected);
+          loadedRuntime.sync(gateway.client, gateway.connected);
         }
       })
       .catch(() => {

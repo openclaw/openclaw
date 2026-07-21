@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveWorkboardRouteLocation } from "./route.ts";
+import { resolveWorkboardRouteLocation } from "./route-location.ts";
 
 describe("Workboard route location", () => {
   it("reads the canonical board path without rewriting it", () => {
