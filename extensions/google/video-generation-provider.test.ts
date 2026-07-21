@@ -368,6 +368,46 @@ describe("google video generation provider", () => {
     ).rejects.toThrow("Google generated video download exceeds 1 bytes");
   });
 
+  it("cancels response body on non-OK direct URI download before throwing", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({ cancel });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(body, { status: 503, statusText: "Service Unavailable" })),
+    );
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: {},
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Failed to download Google generated video: 503 Service Unavailable");
+
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("downloads SDK file handles through the bounded REST media endpoint", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
