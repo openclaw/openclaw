@@ -30,6 +30,10 @@ type CommandResult = {
   error?: string;
 };
 
+// Each Unix mapper starts three child processes; cap mapper slots so port
+// diagnostics cannot fan out one process batch per socket record.
+const PORT_PROCESS_ENRICHMENT_CONCURRENCY = 20;
+
 async function runCommandSafe(argv: string[], timeoutMs = 5_000): Promise<CommandResult> {
   try {
     const res = await runCommandWithTimeout(argv, { timeoutMs });
@@ -220,7 +224,7 @@ async function enrichUnixListenerProcessInfo(listeners: PortListener[]): Promise
         listener.ppid = parentPid;
       }
     },
-    { concurrency: 20 },
+    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
   );
 }
 
@@ -540,7 +544,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
         entry.commandLine = commandLine;
       }
     },
-    { concurrency: 20 },
+    { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY },
   );
   return { entries, detail: res.stdout.trim() || undefined, errors };
 }
