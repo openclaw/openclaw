@@ -376,6 +376,64 @@ describe("createCopilotAgentHarness", () => {
     );
   });
 
+  it("finalizes settled tools by resuming the compatible SDK session in isolated mode", async () => {
+    const pool = makePoolMock();
+    const client = createMockCopilotClient({ deleteSession: vi.fn() });
+    const settledResult = asAttemptResult({ assistantTexts: [] });
+    const finalResult = asAttemptResult({ assistantTexts: ["final answer"] });
+    const params = asAttemptParams({
+      ...ATTEMPT_PARAMS,
+      initialReplayState: { replayInvalid: true },
+      sessionId: "openclaw-session-finalize",
+    });
+    mocks.runCopilotAttempt
+      .mockImplementationOnce(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-session-finalize",
+          pooledClient: { client, key: TEST_POOL_KEY },
+          sessionConfig: TEST_SESSION_CONFIG,
+        });
+        return settledResult;
+      })
+      .mockResolvedValueOnce(finalResult);
+    const harness = createCopilotAgentHarness({ pool });
+
+    await expect(harness.runAttempt(params)).resolves.toBe(settledResult);
+    await expect(
+      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: settledResult }),
+    ).resolves.toBe(finalResult);
+
+    expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
+    expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({
+      disableTools: true,
+      initialReplayState: { sdkSessionId: "sdk-session-finalize" },
+      sessionId: "openclaw-session-finalize",
+    });
+    expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]?.initialReplayState).not.toHaveProperty(
+      "replayInvalid",
+    );
+    expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]).toMatchObject({
+      operation: "settled-tool-finalization",
+      pool,
+    });
+    expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]?.onSessionEstablished).toBeUndefined();
+  });
+
+  it("fails closed when settled finalization has no compatible SDK session", async () => {
+    const harness = createCopilotAgentHarness({ pool: makePoolMock() });
+    const params = asAttemptParams({
+      ...ATTEMPT_PARAMS,
+      sessionId: "openclaw-session-missing",
+    });
+
+    await expect(
+      harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: ATTEMPT_RESULT }),
+    ).rejects.toThrow(
+      "cannot safely finalize a settled tool turn without its compatible SDK session",
+    );
+    expect(mocks.runCopilotAttempt).not.toHaveBeenCalled();
+  });
+
   it("multiple harness instances create independent pools", async () => {
     const poolOne = makePoolMock();
     const poolTwo = makePoolMock();

@@ -475,6 +475,31 @@ harnesses. Optional does not mean ignorable for a harness that executes tools:
 without terminal reports, OpenClaw cannot preserve mutating-tool failure truth
 across later tool calls, including quiet heartbeat completion.
 
+### Settled tool finalization
+
+OpenClaw may need one final visible answer after a harness has completed every
+tool call but its native turn ended without assistant text. A harness can opt
+into that recovery by implementing `finalizeSettledTurn({ attempt,
+settledAttempt })`.
+
+The callback is a separate capability, not another ordinary attempt. It must:
+
+- continue the exact native transcript that contains the settled tool results;
+- expose no tools, permission-grant or user-input capabilities, native execution
+  hooks, agents, skills, memory, scheduling, extensions, or remote control;
+- send only the host-provided finalization prompt; and
+- fail closed if the existing native session cannot be resumed with those
+  restrictions.
+
+Do not implement this callback by calling `runAttempt` with a best-effort
+`disableTools` hint. The harness owner must enforce the complete native
+capability boundary. OpenClaw does not provide a generic fallback because it
+cannot attest that an arbitrary native runtime honored those restrictions.
+
+The callback remains optional for experimental third-party harness
+compatibility. When the selected harness omits it, OpenClaw preserves the
+existing incomplete-turn error instead of risking repeated side effects.
+
 ## Current limitations
 
 - The public import path is generic, but some attempt/result type aliases
