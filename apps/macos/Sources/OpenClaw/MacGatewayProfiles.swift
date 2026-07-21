@@ -78,6 +78,19 @@ actor MacGatewayProfileStore {
         return profile
     }
 
+    func profiles() throws -> [MacGatewayProfile] {
+        try Self.sortedProfiles(self.loadRegistry().profiles.map(\.profile))
+    }
+
+    func remove(profileID: String) throws {
+        var registry = try self.loadRegistry()
+        guard registry.profiles.contains(where: { $0.profile.id == profileID }) else {
+            throw MacGatewayProfileError.profileNotFound
+        }
+        registry.profiles.removeAll { $0.profile.id == profileID }
+        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+    }
+
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
         let registry = try self.loadRegistry()
         guard let stored = registry.profiles.first(where: { $0.profile.id == profileID }) else {
@@ -107,6 +120,16 @@ actor MacGatewayProfileStore {
 
     static func validateRegistryData(_ data: Data) throws {
         _ = try MacGatewayProfileStore.decodeRegistry(data)
+    }
+
+    static func sortedProfiles(_ profiles: [MacGatewayProfile]) -> [MacGatewayProfile] {
+        profiles.sorted { lhs, rhs in
+            let nameOrder = lhs.name.localizedCaseInsensitiveCompare(rhs.name)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return lhs.url.absoluteString.localizedCaseInsensitiveCompare(rhs.url.absoluteString) == .orderedAscending
+        }
     }
 
     static func canonicalURL(_ url: URL) throws -> URL {
@@ -206,6 +229,11 @@ actor MacGatewayConnectionFleet {
             supportsSharedEndpointRecovery: false)
         self.connections[profileID] = connection
         return connection
+    }
+
+    func remove(profileID: String) async {
+        guard let connection = self.connections.removeValue(forKey: profileID) else { return }
+        await connection.shutdown()
     }
 
     func shutdown() async {

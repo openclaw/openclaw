@@ -37,7 +37,7 @@ KEEP_EMULATOR="${ANDROID_SCREENSHOT_KEEP_EMULATOR:-0}"
 SKIP_BUILD=0
 SKIP_INSTALL=0
 DRY_RUN=0
-SCENES=(home chat voice settings gateway voice-wake)
+SCENES=(home chat settings gateway voice-wake)
 EMULATOR_PID=""
 EMULATOR_LOG=""
 STARTED_EMULATOR=0
@@ -484,7 +484,6 @@ scene_ready_text() {
     # The screenshot fixture seeds chat history and restores at the latest user
     # turn, so wait for that visible anchor instead of empty-chat copy.
     chat) printf '%s\n' "Draft a short status update for the team." ;;
-    voice) printf '%s\n' "Ready to talk" ;;
     settings) printf '%s\n' "OpenClaw mobile" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so

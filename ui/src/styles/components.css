@@ -5249,6 +5249,10 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
+.session-row-badge--cloud[data-workspace-conflicts] {
+  color: var(--warn);
+}
+
 .session-row-badge svg {
   width: 12px;
   height: 12px;

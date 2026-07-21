@@ -10,6 +10,7 @@ import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -558,6 +559,7 @@ export type GatewayServerOptions = {
   channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
   channelAutostartSuppression?: ChannelAutostartSuppression;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   /**
    * Optional startup timestamp used for concise readiness logging.
    */
@@ -623,6 +625,7 @@ export async function startGatewayServer(
 
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+  const ambientEnvTriggers = opts.ambientEnvTriggers ?? "allow";
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -869,6 +872,7 @@ export async function startGatewayServer(
           env: runtimeEnv.env,
           ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
           discovery: metadata?.discovery,
+          ambientEnvTriggers,
         });
     const applyCandidateOverrides = captureConfigOverrideApplier();
     const reapplyCompareOverlays = (config: OpenClawConfig): OpenClawConfig =>
@@ -921,6 +925,7 @@ export async function startGatewayServer(
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       minimalTestGateway,
+      ambientEnvTriggers,
       log,
       loadRuntimePlugins: false,
       loadSetupRuntimePlugins: true,
@@ -934,6 +939,7 @@ export async function startGatewayServer(
     pluginLookUpTable,
     baseMethods,
     runtimePluginsLoaded,
+    ambientAutostartSuppressedChannelIds,
   } = pluginBootstrap;
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
@@ -1161,6 +1167,7 @@ export async function startGatewayServer(
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntime?.nativeApprovals,
+    ambientAutostartSuppressedChannelIds,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -1838,16 +1845,22 @@ export async function startGatewayServer(
     }): Promise<GatewayPluginReloadResult> => {
       const beforeChannelTargets = listAttachedChannelConfigTargets();
       const beforeChannelIds = new Set(beforeChannelTargets.keys());
-      const [{ loadPluginLookUpTable }, { prepareGatewayPluginLoad }, { startPluginServices }] =
-        await Promise.all([
-          import("../plugins/plugin-lookup-table.js"),
-          loadGatewayPluginBootstrapModule(),
-          import("../plugins/services.js"),
-        ]);
+      const [
+        { loadPluginLookUpTable },
+        { listAmbientOnlyConfiguredChannelIds },
+        { prepareGatewayPluginLoad },
+        { startPluginServices },
+      ] = await Promise.all([
+        import("../plugins/plugin-lookup-table.js"),
+        import("../plugins/channel-presence-policy.js"),
+        loadGatewayPluginBootstrapModule(),
+        import("../plugins/services.js"),
+      ]);
       const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.nextConfig,
         activationSourceConfig: params.nextConfig,
         env: params.env,
+        ambientEnvTriggers,
       });
       const nextPluginLookUpTable = loadPluginLookUpTable({
         config: nextPluginActivationConfig,
@@ -1856,7 +1869,20 @@ export async function startGatewayServer(
         activationSourceConfig: params.nextConfig,
         // Workers can be created after startup; reload planning needs the live durable set.
         workerProviderIds: workerEnvironmentStartup?.listDurableProviderIds() ?? [],
+        ambientEnvTriggers,
       });
+      const nextAmbientAutostartSuppressedChannelIds =
+        ambientEnvTriggers === "suppress"
+          ? new Set(
+              listAmbientOnlyConfiguredChannelIds({
+                config: params.nextConfig,
+                activationSourceConfig: params.nextConfig,
+                env: params.env,
+                includePersistedAuthState: false,
+                manifestRecords: nextPluginLookUpTable.manifestRegistry.plugins,
+              }),
+            )
+          : new Set<string>();
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
       for (const plugin of nextPluginLookUpTable.manifestRegistry.plugins) {
@@ -1893,6 +1919,9 @@ export async function startGatewayServer(
       }
       const previousPluginServices = runtimeState.pluginServices;
       await params.commitRuntime();
+      channelManager.setAmbientAutostartSuppressedChannelIds(
+        nextAmbientAutostartSuppressedChannelIds,
+      );
       const loaded = prepareGatewayPluginLoad({
         cfg: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
@@ -1901,6 +1930,7 @@ export async function startGatewayServer(
         hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
+        ambientEnvTriggers,
       });
       setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
         config: params.nextConfig,
@@ -2079,6 +2109,7 @@ export async function startGatewayServer(
             pluginIds: startupPluginIds,
             pluginLookUpTable,
             logDiagnostics: false,
+            ambientEnvTriggers,
           }),
         );
         replaceAttachedPluginRuntime(loaded);
@@ -2195,6 +2226,7 @@ export async function startGatewayServer(
             logTailscale,
             gatewayPluginConfigAtStart,
             activationSourceConfig: startupActivationSourceConfig,
+            ambientEnvTriggers,
             pluginRegistry,
             defaultWorkspaceDir,
             deps,
@@ -2218,6 +2250,7 @@ export async function startGatewayServer(
                     startupPluginIds,
                     pluginLookUpTable,
                     startupTrace,
+                    ambientEnvTriggers,
                   });
                 },
             onStartupPluginsLoading: () => {

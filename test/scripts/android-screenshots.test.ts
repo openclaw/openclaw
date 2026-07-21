@@ -25,7 +25,7 @@ describe("android screenshots script", () => {
     expect(result.stdout).toContain("Android screenshot size: 1440x2560");
     expect(result.stdout).toContain("Screenshot AVD: OpenClaw_Screenshots_API36");
     expect(result.stdout).toContain("Screenshot device profile: pixel_2");
-    expect(result.stdout).toContain("Scenes: home chat voice settings gateway");
+    expect(result.stdout).toContain("Scenes: home chat settings gateway voice-wake");
     expect(result.stdout).not.toContain("connect chat voice screen settings");
     expect(result.stdout).toContain("Dry run complete.");
   });
@@ -46,6 +46,8 @@ describe("android screenshots script", () => {
 
     expect(script).toContain("chat) printf '%s\\n' \"Draft a short status update for the team.\"");
     expect(script).not.toContain("chat) printf '%s\\n' \"Ready when you are\"");
+    expect(script).not.toContain("voice) printf");
+    expect(script).not.toContain("Ready to talk");
     expect(fixture).toContain('"Draft a short status update for the team."');
     expect(script).toContain("settings) printf '%s\\n' \"OpenClaw mobile\"");
     expect(script).not.toContain("settings) printf '%s\\n' \"Settings\"");
