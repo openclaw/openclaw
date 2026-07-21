@@ -1,0 +1,121 @@
+# NemoClaw Security Policy: Mythos Memory (Memory Manager)
+# Memory agent with full memory access, local-only operation
+
+agents:
+  mythos-memory:
+    # ─── SANDBOX ────────────────────────────────────────────────────────
+    sandbox:
+      backend: openshell
+      filesystem:
+        readonly: false
+        writable_paths:
+          - ~/.openclaw/mythos/fleet/MEMORY
+          - ~/.openclaw/mythos/shared/wiki
+          - ~/.openclaw/memory           # Memory index
+      network:
+        allow: []                        # NO network access — fully local
+        deny:
+          - "*"                          # Deny all network access
+
+    # ─── TOOLS ──────────────────────────────────────────────────────────
+    tools:
+      allow:
+        # Memory tools (primary function)
+        - memory_search              # Search memory
+        - memory_get                 # Get memory
+        - read                       # Read files
+        - write                      # Write files
+        - edit                       # Edit files
+
+        # Wiki tools
+        - wiki_search                # Search wiki
+        - wiki_get                   # Get wiki page
+        - wiki_apply                 # Update wiki
+        - wiki_lint                  # Check wiki consistency
+
+      deny:
+        # Memory agent has NO access to:
+        - exec                       # No shell execution
+        - web_search                 # No web search
+        - web_fetch                  # No web fetch
+        - browser                    # No browser
+        - sessions_spawn             # No sub-agent spawning
+        - sessions_send              # No cross-session messaging
+        - subagents                  # No sub-agent management
+        - cron                       # No cron scheduling
+        - gateway                    # No gateway operations
+        - message                    # No messaging
+
+    # ─── MODEL ──────────────────────────────────────────────────────────
+    model:
+      provider: anthropic
+      model: claude-haiku-3-5        # Fast, cheap model for memory operations
+
+    # ─── RESOURCE LIMITS ────────────────────────────────────────────────
+    limits:
+      max_tokens_per_hour: 50000     # Low limit for memory ops
+      max_cost_per_hour: "$0.10"     # Very low cost
+      timeout_ms: 120000             # 2 minutes max per turn
+
+    # ─── MEMORY SECURITY ────────────────────────────────────────────────
+    memory:
+      # Memory agent has full access to all memory layers
+      access:
+        session_memory: true         # L1: Session context
+        daily_logs: true             # L2: Daily logs
+        long_term: true              # L3: MEMORY.md
+        procedural: true             # L4: Skill traces
+        semantic: true               # L5: Wiki
+        episodic: true               # L6: Event index
+        causal: true                 # L7: Causal graph
+
+      # Native engine preferences
+      engines:
+        vector_search: mythos-vector-engine    # HNSW (preferred)
+        text_search: mythos-search-engine      # Tantivy (preferred)
+        causal_graph: mythos-causal-graph      # Causal graph (L7)
+
+      # Memory rules
+      rules:
+        # Always read before writing
+        read_before_write: true
+
+        # Maintain provenance chains
+        maintain_provenance: true
+
+        # Never delete without explicit approval
+        deletion_requires_approval: true
+
+        # Verify contradictions before updating
+        verify_contradictions: true
+
+        # Never store secrets unless explicitly requested
+        no_secrets_by_default: true
+
+    # ─── DREAMING MANAGEMENT ────────────────────────────────────────────
+    dreaming:
+      # Memory agent manages the dreaming system
+      enabled: true
+      frequency: "0 */3 * * *"       # Every 3 hours
+      timezone: UTC
+
+      # Review and approve promotions
+      review_promotions: true
+
+      # Flag low-confidence entries
+      flag_low_confidence: true
+
+      # Maintain dreaming configuration
+      manage_config: true
+
+    # ─── AUDIT ──────────────────────────────────────────────────────────
+    audit:
+      log_level: full
+      destination: ~/.openclaw/mythos/shared/audit/memory-audit.jsonl
+      include:
+        - memory_operations          # All memory reads/writes
+        - wiki_operations            # All wiki operations
+        - dreaming_operations        # All dreaming operations
+        - tool_calls                 # All tool invocations
+        - errors                     # All errors and failures
+        - engine_status              # Native engine availability

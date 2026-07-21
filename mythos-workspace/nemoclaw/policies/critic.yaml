@@ -1,0 +1,138 @@
+# NemoClaw Security Policy: Mythos Critic (Validator & Auditor)
+# Critic agent with read-only access for thorough review
+
+agents:
+  mythos-critic:
+    # ─── SANDBOX ────────────────────────────────────────────────────────
+    sandbox:
+      backend: openshell
+      filesystem:
+        readonly: true               # Read-only — critic never modifies
+        writable_paths:
+          - ~/.openclaw/mythos/fleet/CRITIC/memory
+      network:
+        allow:
+          - api.anthropic.com        # Claude API
+          - api.openai.com           # OpenAI API
+          - "*.github.com"           # GitHub for code review
+          - stackoverflow.com        # Stack Overflow for research
+          - "*.mdn.mozilla.org"      # MDN for documentation
+        deny:
+          - "*"                      # Deny all other network access
+
+    # ─── TOOLS ──────────────────────────────────────────────────────────
+    tools:
+      allow:
+        # Read-only tools (critic never modifies)
+        - read                       # Read files
+        - memory_search              # Search memory
+        - memory_get                 # Get memory
+        - web_search                 # Web search (for research)
+        - web_fetch                  # Fetch web content
+        - browser                    # Browser automation (read-only)
+
+        # Execution for testing (sandboxed, read-only)
+        - exec                       # Run tests, security scans
+
+      deny:
+        # Critic NEVER modifies the system
+        - write                      # No file writing
+        - edit                       # No file editing
+        - sessions_spawn             # No sub-agent spawning
+        - sessions_send              # No cross-session messaging
+        - subagents                  # No sub-agent management
+        - cron                       # No cron scheduling
+        - gateway                    # No gateway operations
+        - message                    # No messaging
+
+    # ─── MODEL ──────────────────────────────────────────────────────────
+    model:
+      provider: anthropic
+      model: claude-opus-4-7         # Premium model for thorough analysis
+
+    # ─── RESOURCE LIMITS ────────────────────────────────────────────────
+    limits:
+      max_tokens_per_hour: 100000
+      max_cost_per_hour: "$1.50"
+      timeout_ms: 300000             # 5 minutes max per turn (thorough review)
+
+    # ─── AUDIT SECURITY ─────────────────────────────────────────────────
+    audit:
+      # Comprehensive audit checklist
+      checklists:
+        code_review:
+          - logic_correctness
+          - error_handling
+          - edge_cases
+          - performance_implications
+          - code_style
+
+        security_review:
+          - input_validation
+          - authentication_authorization
+          - data_sanitization
+          - secret_management
+          - dependency_vulnerabilities
+          - owasp_top_10
+
+        quality_review:
+          - test_coverage
+          - documentation
+          - backwards_compatibility
+          - error_messages
+          - logging_adequacy
+
+      # Adversarial testing
+      adversarial_testing:
+        enabled: true
+        techniques:
+          - fuzz_testing             # Random inputs
+          - boundary_conditions      # Edge cases
+          - error_injection          # Error handling
+          - permission_boundary      # Access control
+          - resource_exhaustion      # Resource limits
+
+    # ─── REPORT FORMAT ──────────────────────────────────────────────────
+    reporting:
+      # Structured report format
+      format: |
+        ## Audit Report: [Subject]
+
+        ### Summary
+        **Overall Assessment**: [PASS / PASS WITH NOTES / FAIL]
+
+        ### Critical Issues
+        [Blocking issues]
+
+        ### Warnings
+        [Non-blocking concerns]
+
+        ### Suggestions
+        [Improvements]
+
+        ### Security Findings
+        [Security-relevant findings]
+
+        ### Test Results
+        [Test suite results]
+
+        ### Evidence
+        [Specific references, logs, screenshots]
+
+      # Always include evidence
+      require_evidence: true
+
+      # Always suggest improvements
+      require_suggestions: true
+
+    # ─── AUDIT ──────────────────────────────────────────────────────────
+    audit:
+      log_level: full                # Log all review operations
+      destination: ~/.openclaw/mythos/shared/audit/critic-audit.jsonl
+      include:
+        - review_operations          # All reviews performed
+        - web_searches               # All web research
+        - exec_commands              # All test runs
+        - tool_calls                 # All tool invocations
+        - errors                     # All errors and failures
+        - findings                   # All audit findings

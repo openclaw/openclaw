@@ -1,0 +1,109 @@
+# NemoClaw Security Policy: Mythos Code (Software Engineer)
+# Coding agent with full execution in isolated sandbox
+
+agents:
+  mythos-code:
+    # ─── SANDBOX ────────────────────────────────────────────────────────
+    sandbox:
+      backend: openshell
+      filesystem:
+        readonly: false
+        writable_paths:
+          - ~/.openclaw/mythos/fleet/CODE
+          - /tmp/mythos-code-sandbox    # Temporary workspace
+      network:
+        allow:
+          - registry.npmjs.org       # npm packages
+          - github.com               # Git operations
+          - api.github.com           # GitHub API
+          - pypi.org                 # Python packages
+          - crates.io                # Rust packages
+        deny:
+          - "*"                      # Deny all other network access
+
+    # ─── TOOLS ──────────────────────────────────────────────────────────
+    tools:
+      allow:
+        # Execution tools (sandboxed)
+        - exec                       # Shell commands
+        - read                       # Read files
+        - write                      # Write files
+        - edit                       # Edit files
+
+        # Browser tools (for documentation/API research)
+        - browser                    # Browser automation
+        - web_fetch                  # Fetch web content
+        - web_search                 # Web search
+
+        # Memory tools
+        - memory_search              # Search memory
+        - memory_get                 # Get memory
+        - read                       # Read memory files
+
+      deny:
+        # Coding agent cannot spawn sub-agents
+        - sessions_spawn             # No sub-agent spawning
+        - sessions_send              # No cross-session messaging
+        - subagents                  # No sub-agent management
+        - cron                       # No cron scheduling
+        - gateway                    # No gateway operations
+
+    # ─── MODEL ──────────────────────────────────────────────────────────
+    model:
+      provider: anthropic
+      model: claude-opus-4-7         # Premium model for code generation
+
+    # ─── RESOURCE LIMITS ────────────────────────────────────────────────
+    limits:
+      max_tokens_per_hour: 200000    # Higher limit for code generation
+      max_cost_per_hour: "$3.00"
+      max_execution_time_ms: 600000  # 10 minutes max for long builds
+      max_file_size_mb: 10           # Limit file sizes
+
+    # ─── EXECUTION SECURITY ─────────────────────────────────────────────
+    execution:
+      # Approve all shell commands (no auto-approval)
+      approval_required: true
+
+      # Allowed binaries in sandbox
+      allowed_binaries:
+        - node                       # Node.js
+        - npm                        # npm
+        - pnpm                       # pnpm
+        - git                        # Git
+        - cargo                      # Rust
+        - python3                    # Python
+        - pip                        # Python packages
+        - rustc                      # Rust compiler
+        - gcc                        # C compiler
+        - make                       # Build tool
+        - test                       # Test runners
+        - curl                       # HTTP client (for API testing)
+        - jq                         # JSON processor
+
+      # Denied binaries (security risk)
+      denied_binaries:
+        - rm                         # No recursive deletes
+        - sudo                       # No privilege escalation
+        - ssh                        # No SSH connections
+        - wget                       # No arbitrary downloads
+        - curl                       # Restricted to specific domains
+
+      # Environment variables (filtered)
+      env_filter:
+        deny:
+          - "*KEY*"                  # No API keys in environment
+          - "*SECRET*"               # No secrets
+          - "*TOKEN*"                # No tokens
+          - "*PASSWORD*"             # No passwords
+
+    # ─── AUDIT ──────────────────────────────────────────────────────────
+    audit:
+      log_level: full                # Log all code operations
+      destination: ~/.openclaw/mythos/shared/audit/code-audit.jsonl
+      include:
+        - file_operations            # All file reads/writes/edits
+        - exec_commands              # All shell commands
+        - tool_calls                 # All tool invocations
+        - errors                     # All errors and failures
+        - security_events            # Security-relevant events

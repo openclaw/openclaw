@@ -1,0 +1,212 @@
+# Mythos-Class OpenClaw Docker Compose
+# Production deployment with Rust native engines
+
+services:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Gateway Service
+  # ═══════════════════════════════════════════════════════════════════════════
+  mythos-gateway:
+    build:
+      context: ../..
+      dockerfile: deploy/mythos/Dockerfile
+    image: openclaw-mythos:latest
+    container_name: mythos-gateway
+    restart: unless-stopped
+
+    # Environment variables
+    environment:
+      # Gateway authentication
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
+
+      # Model provider API keys
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+
+      # Channel tokens
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN}
+
+      # GitHub
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET}
+
+      # Observability
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      - OTEL_SERVICE_NAME=mythos-gateway
+
+      # Runtime
+      - NODE_ENV=production
+      - TZ=${TZ:-UTC}
+
+    # Volumes
+    volumes:
+      # Configuration
+      - openclaw-config:/home/openclaw/.openclaw
+
+      # Memory (persistent)
+      - openclaw-memory:/home/openclaw/.openclaw/memory
+
+      # Sessions (persistent)
+      - openclaw-sessions:/home/openclaw/.openclaw/sessions
+
+      # Mythos workspace
+      - mythos-workspace:/home/openclaw/mythos-workspace
+
+      # Logs
+      - openclaw-logs:/home/openclaw/.openclaw/logs
+
+    # Ports
+    ports:
+      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"  # Gateway
+      - "${OPENCLAW_CANVAS_PORT:-18793}:18793"   # Canvas
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 8G
+        reservations:
+          cpus: '2.0'
+          memory: 4G
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:18789/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE  # Bind to ports < 1024 if needed
+
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+    # Networks
+    networks:
+      - mythos-network
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PostgreSQL (for advanced memory features)
+  # ═══════════════════════════════════════════════════════════════════════════
+  mythos-postgres:
+    image: postgres:16-alpine
+    container_name: mythos-postgres
+    restart: unless-stopped
+
+    environment:
+      - POSTGRES_USER=${PG_USER:-openclaw}
+      - POSTGRES_PASSWORD=${PG_PASSWORD:-changeme}
+      - POSTGRES_DB=${PG_DATABASE:-mythos}
+
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Networks
+    networks:
+      - mythos-network
+
+    # Don't expose postgres externally
+    expose:
+      - "5432"
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Redis (for caching and rate limiting)
+  # ═══════════════════════════════════════════════════════════════════════════
+  mythos-redis:
+    image: redis:7-alpine
+    container_name: mythos-redis
+    restart: unless-stopped
+
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+    volumes:
+      - redis-data:/data
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+    # Security
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    # Networks
+    networks:
+      - mythos-network
+
+    # Don't expose redis externally
+    expose:
+      - "6379"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Volumes
+# ═══════════════════════════════════════════════════════════════════════════════
+volumes:
+  openclaw-config:
+    driver: local
+
+  openclaw-memory:
+    driver: local
+
+  openclaw-sessions:
+    driver: local
+
+  openclaw-logs:
+    driver: local
+
+  mythos-workspace:
+    driver: local
+
+  postgres-data:
+    driver: local
+
+  redis-data:
+    driver: local
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Networks
+# ═══════════════════════════════════════════════════════════════════════════════
+networks:
+  mythos-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

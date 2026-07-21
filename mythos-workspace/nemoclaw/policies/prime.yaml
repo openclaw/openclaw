@@ -1,0 +1,72 @@
+# NemoClaw Security Policy: Mythos Prime (Orchestrator)
+# Orchestrator agent with delegation authority, no direct execution
+
+agents:
+  mythos-prime:
+    # ─── SANDBOX ────────────────────────────────────────────────────────
+    sandbox:
+      backend: openshell
+      filesystem:
+        readonly: true
+        writable_paths:
+          - ~/.openclaw/mythos/fleet/PRIME/memory
+          - ~/.openclaw/mythos/shared
+      network:
+        allow:
+          - api.anthropic.com        # Claude API
+          - api.openai.com           # OpenAI API
+          - api.github.com           # GitHub API
+          - api.telegram.org         # Telegram Bot API
+          - discord.com              # Discord API
+          - slack.com                # Slack API
+        deny:
+          - "*"                      # Deny all other network access
+
+    # ─── TOOLS ──────────────────────────────────────────────────────────
+    tools:
+      allow:
+        # Delegation tools (orchestrator's primary function)
+        - sessions_spawn             # Spawn sub-agents
+        - sessions_send              # Send messages to sessions
+        - subagents                  # Manage sub-agents
+
+        # Memory tools (read-only for orchestrator)
+        - memory_search              # Search memory
+        - memory_get                 # Get specific memory
+
+        # Communication tools
+        - message                    # Send messages to channels
+
+        # Information tools
+        - web_search                 # Web search (for delegation context)
+        - read                       # Read files (read-only)
+
+      deny:
+        # Orchestrator never executes directly
+        - exec                       # No shell execution
+        - write                      # No file writing
+        - edit                       # No file editing
+        - browser                    # No browser automation
+        - cron                       # No cron scheduling
+
+    # ─── MODEL ──────────────────────────────────────────────────────────
+    model:
+      provider: anthropic
+      model: claude-opus-4-7         # Premium model for orchestration
+
+    # ─── RESOURCE LIMITS ────────────────────────────────────────────────
+    limits:
+      max_tokens_per_hour: 100000
+      max_cost_per_hour: "$2.00"
+      max_concurrent_subagents: 5
+      timeout_ms: 300000             # 5 minutes max per turn
+
+    # ─── AUDIT ──────────────────────────────────────────────────────────
+    audit:
+      log_level: full                # Log all decisions and delegations
+      destination: ~/.openclaw/mythos/shared/audit/prime-audit.jsonl
+      include:
+        - delegations                # All sub-agent spawns
+        - model_selections           # Model arbitrage decisions
+        - tool_calls                 # All tool invocations
+        - errors                     # All errors and failures

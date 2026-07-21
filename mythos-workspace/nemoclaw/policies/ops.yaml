@@ -1,0 +1,117 @@
+# NemoClaw Security Policy: Mythos Ops (Operations Engineer)
+# Ops agent with infrastructure access, elevated privileges
+
+agents:
+  mythos-ops:
+    # ─── SANDBOX ────────────────────────────────────────────────────────
+    sandbox:
+      backend: openshell
+      filesystem:
+        readonly: false
+        writable_paths:
+          - ~/.openclaw/mythos/fleet/OPS
+          - ~/.openclaw/mythos/shared/audit
+          - /tmp/mythos-ops-sandbox
+      network:
+        allow:
+          - api.anthropic.com        # Claude API
+          - api.openai.com           # OpenAI API
+          - api.telegram.org         # Telegram Bot API
+          - discord.com              # Discord API
+          - slack.com                # Slack API
+          - "*.internal.company.com" # Internal infrastructure
+        deny:
+          - "*"                      # Deny all other network access
+
+    # ─── TOOLS ──────────────────────────────────────────────────────────
+    tools:
+      allow:
+        # Execution tools (with approval)
+        - exec                       # Shell commands (approval required)
+        - read                       # Read files
+        - write                      # Write files
+        - edit                       # Edit files
+
+        # Operations tools
+        - cron                       # Schedule tasks
+        - gateway                    # Gateway management
+        - message                    # Send messages to channels
+
+        # Memory tools
+        - memory_search              # Search memory
+        - memory_get                 # Get memory
+        - read                       # Read memory files
+
+      deny:
+        # Ops agent cannot spawn sub-agents
+        - sessions_spawn             # No sub-agent spawning
+        - subagents                  # No sub-agent management
+
+    # ─── MODEL ──────────────────────────────────────────────────────────
+    model:
+      provider: anthropic
+      model: claude-sonnet-4-6       # Good balance of speed/quality for ops
+
+    # ─── RESOURCE LIMITS ────────────────────────────────────────────────
+    limits:
+      max_tokens_per_hour: 100000
+      max_cost_per_hour: "$1.00"
+      max_execution_time_ms: 300000  # 5 minutes max
+      timeout_ms: 240000             # 4 minutes max per turn
+
+    # ─── EXECUTION SECURITY ─────────────────────────────────────────────
+    execution:
+      # Require approval for all shell commands
+      approval_required: true
+
+      # Allowed binaries (operations-focused)
+      allowed_binaries:
+        - openclaw                   # OpenClaw CLI
+        - node                       # Node.js
+        - npm                        # npm
+        - pnpm                       # pnpm
+        - systemctl                  # System service management
+        - journalctl                 # Log viewing
+        - docker                     # Docker (if available)
+        - kubectl                    # Kubernetes (if available)
+        - git                        # Git operations
+        - curl                       # HTTP client
+        - wget                       # Downloads
+        - tar                        # Archive extraction
+        - gzip                       # Compression
+
+      # Denied binaries (high risk)
+      denied_binaries:
+        - rm -rf                     # No recursive deletes
+        - sudo                       # No privilege escalation
+        - ssh                        # No SSH (use internal tools)
+        - dd                         # No disk operations
+        - mkfs                       # No filesystem operations
+        - mount                      # No mount operations
+
+    # ─── OPERATIONS CHECKLIST ───────────────────────────────────────────
+    operations:
+      # Always backup before changes
+      backup_required: true
+
+      # Always verify after changes
+      verify_after_change: true
+
+      # Always document changes
+      document_changes: true
+
+      # Rollback plan required for major changes
+      rollback_plan_required: true
+
+    # ─── AUDIT ──────────────────────────────────────────────────────────
+    audit:
+      log_level: full                # Log all operations
+      destination: ~/.openclaw/mythos/shared/audit/ops-audit.jsonl
+      include:
+        - exec_commands              # All shell commands
+        - file_operations            # All file operations
+        - gateway_operations         # All gateway operations
+        - cron_operations            # All cron operations
+        - tool_calls                 # All tool invocations
+        - errors                     # All errors and failures
+        - security_events            # Security-relevant events

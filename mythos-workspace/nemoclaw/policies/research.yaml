@@ -1,0 +1,88 @@
+# NemoClaw Security Policy: Mythos Research (Intelligence Gatherer)
+# Research agent with web access, no code execution
+
+agents:
+  mythos-research:
+    # ─── SANDBOX ────────────────────────────────────────────────────────
+    sandbox:
+      backend: openshell
+      filesystem:
+        readonly: true               # Read-only filesystem
+        writable_paths:
+          - ~/.openclaw/mythos/fleet/RESEARCH/memory
+      network:
+        allow:
+          - "*"                      # Allow all web access for research
+        deny:
+          - "192.168.*"              # Block internal networks
+          - "10.*"                   # Block private networks
+          - "172.16.*"               # Block private networks
+
+    # ─── TOOLS ──────────────────────────────────────────────────────────
+    tools:
+      allow:
+        # Research tools
+        - web_search                 # Web search
+        - web_fetch                  # Fetch web content
+        - browser                    # Browser automation (read-only)
+
+        # Memory tools
+        - memory_search              # Search memory
+        - memory_get                 # Get memory
+        - read                       # Read files (read-only)
+
+      deny:
+        # Research agent cannot modify system
+        - exec                       # No shell execution
+        - write                      # No file writing
+        - edit                       # No file editing
+        - sessions_spawn             # No sub-agent spawning
+        - sessions_send              # No cross-session messaging
+        - subagents                  # No sub-agent management
+        - cron                       # No cron scheduling
+        - gateway                    # No gateway operations
+
+    # ─── MODEL ──────────────────────────────────────────────────────────
+    model:
+      provider: google
+      model: gemini-3-flash-preview  # Fast, cheap model for research
+
+    # ─── RESOURCE LIMITS ────────────────────────────────────────────────
+    limits:
+      max_tokens_per_hour: 150000
+      max_cost_per_hour: "$0.50"     # Low cost for research
+      max_web_searches_per_turn: 20
+      max_web_fetches_per_turn: 10
+      timeout_ms: 180000             # 3 minutes max per turn
+
+    # ─── WEB SECURITY ───────────────────────────────────────────────────
+    web:
+      # SSRF protection
+      ssrf:
+        strict: true
+        allowed_hosts:
+          - "*"                      # Allow all external hosts
+        denied_hosts:
+          - "localhost"              # Block localhost
+          - "127.0.0.1"              # Block loopback
+          - "*.internal"             # Block internal domains
+
+      # Rate limiting
+      rate_limit:
+        requests_per_second: 5
+        burst_size: 10
+
+      # Content filtering
+      content_filter:
+        max_page_size_mb: 10
+        timeout_ms: 30000
+
+    # ─── AUDIT ──────────────────────────────────────────────────────────
+    audit:
+      log_level: full
+      destination: ~/.openclaw/mythos/shared/audit/research-audit.jsonl
+      include:
+        - web_searches               # All web searches
+        - web_fetches                # All fetched URLs
+        - tool_calls                 # All tool invocations
+        - errors                     # All errors and failures
