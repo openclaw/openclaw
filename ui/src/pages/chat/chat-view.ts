@@ -115,6 +115,7 @@ export type ChatProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
+  runOutputTokens?: number | null;
   assistantAvatarUrl?: string | null;
   draft: string;
   queue: ChatQueueItem[];
@@ -341,6 +342,7 @@ export function renderChat(props: ChatProps) {
       streamSegments: props.streamSegments,
       stream: props.stream,
       streamStartedAt: props.streamStartedAt,
+      runOutputTokens: props.runOutputTokens,
       queue: props.queue,
       showThinking: props.showThinking,
       showToolCalls: props.showToolCalls,

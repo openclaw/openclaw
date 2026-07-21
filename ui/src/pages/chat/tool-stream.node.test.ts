@@ -108,6 +108,36 @@ function useToolStreamFakeTimers(): void {
   vi.setSystemTime(TOOL_STREAM_TEST_NOW);
 }
 
+describe("app-tool-stream run usage", () => {
+  it("tracks monotonic output usage for the active run", () => {
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, agentEvent("run-1", 1, "usage", { outputTokens: 12 }));
+    handleAgentEvent(host, agentEvent("run-1", 2, "usage", { outputTokens: 8 }));
+    handleAgentEvent(host, agentEvent("run-2", 1, "usage", { outputTokens: 30 }));
+
+    expect(host.chatRunUsageById?.get("run-1")).toBe(12);
+    expect(host.chatRunUsageById?.has("run-2")).toBe(false);
+
+    handleAgentEvent(host, agentEvent("run-1", 3, "lifecycle", { phase: "start" }));
+    handleAgentEvent(host, agentEvent("run-1", 4, "usage", { outputTokens: 3 }));
+
+    expect(host.chatRunUsageById?.get("run-1")).toBe(3);
+  });
+
+  it("keeps session-scoped usage separate for concurrent active runs", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, agentEvent("run-a", 1, "usage", { outputTokens: 100 }));
+    handleAgentEvent(host, agentEvent("run-b", 1, "usage", { outputTokens: 10 }));
+
+    expect(Array.from(host.chatRunUsageById?.entries() ?? [])).toEqual([
+      ["run-a", 100],
+      ["run-b", 10],
+    ]);
+  });
+});
+
 describe("app-tool-stream plan snapshots", () => {
   it("stores a normalized snapshot and drops malformed entries", () => {
     const requestUpdate = vi.fn();

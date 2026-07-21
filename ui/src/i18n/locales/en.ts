@@ -3684,6 +3684,7 @@ export const en: TranslationMap = {
       preparingContext: "Preparing context…",
       startingModel: "Starting model…",
     },
+    outputTokens: "{count} output tokens",
     archivedSessionDisabled: "Restore this thread to send messages.",
     loadOlder: "Load older",
     sessionHeader: {

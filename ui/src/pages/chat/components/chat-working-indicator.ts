@@ -30,6 +30,18 @@ function startupStatusLabel(phase: ChatRunStartupPhase): string {
   return t(STARTUP_STATUS_LABEL_KEYS[phase]);
 }
 
+function renderLiveOutputTokens(outputTokens: number | null | undefined) {
+  if (outputTokens === null || outputTokens === undefined) {
+    return nothing;
+  }
+  return html`
+    <span aria-hidden="true">·</span>
+    <span class="chat-working-indicator__tokens">
+      ${t("chat.outputTokens", { count: formatCompactTokenCount(outputTokens) })}
+    </span>
+  `;
+}
+
 function stanceClass(key: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i++) {
@@ -51,6 +63,7 @@ export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   waitingApproval = false,
   startupPhase?: ChatRunStartupPhase,
+  outputTokens?: number | null,
 ) {
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
@@ -69,6 +82,7 @@ export function renderChatWorkingIndicator(
                   class="chat-working-indicator__elapsed"
                   .startMs=${part.startedAt}
                 ></openclaw-elapsed-time>
+                ${renderLiveOutputTokens(outputTokens)}
               `
             : html`
                 <span class="agent-chat__sr-only">${t("common.working")}</span>
@@ -81,6 +95,7 @@ export function renderChatWorkingIndicator(
                   .startMs=${part.startedAt}
                   .seed=${part.key}
                 ></openclaw-working-phrase>
+                ${renderLiveOutputTokens(outputTokens)}
               `}
       </span>
     </div>

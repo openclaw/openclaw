@@ -22,6 +22,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
 import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
+import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
 
@@ -74,6 +75,34 @@ describe("agent-events sequencing", () => {
 
     clearAgentRunContext("shared-run", "post-restart");
     expect(getAgentRunContext("shared-run")).toBeUndefined();
+  });
+
+  test("accumulates output usage across attempts and resets with run context", () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
+    const seen: number[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "usage-run" && event.stream === "usage") {
+        seen.push(event.data.outputTokens as number);
+      }
+    });
+    const emitUsage = (outputTokens: number) => {
+      recordAgentRunOutputTokens({
+        runId: "usage-run",
+        outputTokens,
+        emit: (data) => emitAgentEvent({ runId: "usage-run", stream: "usage", data }),
+      });
+    };
+
+    emitUsage(12);
+    registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
+    emitUsage(8);
+    clearAgentRunContext("usage-run", lifecycleGeneration);
+    registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
+    emitUsage(3);
+    stop();
+
+    expect(seen).toEqual([12, 20, 3]);
   });
 
   test("clears sequence state when guarded cleanup finds no run context", () => {
