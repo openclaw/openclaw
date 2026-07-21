@@ -123,11 +123,15 @@ export type SystemAgentVerifiedInferenceBinding = Readonly<{
   }>;
 }>;
 
+type ResolveModelAsync =
+  (typeof import("../agents/embedded-agent-runner/model.js"))["resolveModelAsync"];
+
 export type SystemAgentVerifiedInferenceDeps = SystemAgentConfiguredRouteDeps & {
   ensureAuthProfileStore?: typeof ensureAuthProfileStore;
   resolveCliAuthBindingFingerprint?: typeof resolveCliAuthBindingFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof resolveCliRuntimeOwnerFingerprint;
   resolveCliRuntimeArtifactFingerprint?: typeof resolveCliRuntimeArtifactFingerprint;
+  resolveModelAsync?: ResolveModelAsync;
   resolveApiKeyForProvider?: typeof resolveApiKeyForProvider;
   validateAgentHarnessRuntimeArtifact?: (params: {
     harnessId: string;
@@ -484,6 +488,43 @@ export function captureSystemAgentOwnerPluginArtifacts(params: {
   };
 }
 
+// The successful run selected its credential under the route model's
+// transport constraints (isAuthModeAllowedForModel). Owner re-resolution must
+// apply the same facts or profile-first discovery can pick a credential the
+// route cannot execute — e.g. a Codex-imported ChatGPT OAuth profile owning a
+// direct OpenAI platform route probed with an env API key.
+async function resolveRouteModelFacts(params: {
+  route: SystemAgentConfiguredRoute;
+  deps: SystemAgentVerifiedInferenceDeps;
+}): Promise<{ modelId: string; modelApi: string } | undefined> {
+  const resolveModel =
+    params.deps.resolveModelAsync ??
+    (await import("../agents/embedded-agent-runner/model.js")).resolveModelAsync;
+  try {
+    const resolved = await resolveModel(
+      params.route.provider,
+      params.route.model,
+      params.route.agentDir,
+      params.route.runConfig,
+      {
+        workspaceDir: resolveAgentWorkspaceDir(
+          params.route.runConfig,
+          params.route.agentId,
+          process.env,
+        ),
+        allowBundledStaticCatalogFallback: true,
+      },
+    );
+    const model = resolved.model;
+    if (!model) {
+      return undefined;
+    }
+    return { modelId: model.id, modelApi: model.api };
+  } catch {
+    return undefined;
+  }
+}
+
 async function resolveCurrentAuthFingerprint(params: {
   route: SystemAgentConfiguredRoute;
   authProfileId?: string;
@@ -576,6 +617,10 @@ async function resolveCurrentAuthFingerprint(params: {
           deps: params.deps,
         });
       }
+      const modelFacts = await resolveRouteModelFacts({ route: params.route, deps: params.deps });
+      if (!modelFacts) {
+        return undefined;
+      }
       const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
       const auth = await resolveAuth({
         provider: params.route.provider,
@@ -588,6 +633,8 @@ async function resolveCurrentAuthFingerprint(params: {
         ),
         profileId: params.authProfileId,
         lockedProfile: true,
+        modelId: modelFacts.modelId,
+        modelApi: modelFacts.modelApi,
         secretSentinels: false,
       });
       if (auth.profileId !== params.authProfileId || !auth.apiKey) {
@@ -599,6 +646,12 @@ async function resolveCurrentAuthFingerprint(params: {
         resolvedAuth: auth,
       });
     }
+  }
+  // Fail closed on an unresolvable route model: without transport facts the
+  // current owner cannot be re-derived the way the successful run derived it.
+  const modelFacts = await resolveRouteModelFacts({ route: params.route, deps: params.deps });
+  if (!modelFacts) {
+    return undefined;
   }
   const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProvider;
   const auth = await resolveAuth({
@@ -613,6 +666,8 @@ async function resolveCurrentAuthFingerprint(params: {
     ...(params.authProfileId
       ? { profileId: params.authProfileId, lockedProfile: true as const }
       : {}),
+    modelId: modelFacts.modelId,
+    modelApi: modelFacts.modelApi,
     secretSentinels: true,
   });
   if (params.authProfileId && auth.profileId !== params.authProfileId) {
