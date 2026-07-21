@@ -113,7 +113,35 @@ describe("QA Lab dashboard HTTP", () => {
     );
   });
 
-  it("keeps API error bodies bounded and readable", async () => {
+  it("labels malformed JSON success responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        responseWithText("{", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(getJson("/api/state")).rejects.toThrow(/\/api\/state: malformed JSON response/);
+  });
+
+  it("accepts vendor JSON success responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        responseWithText(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "content-type": "application/problem+json; charset=utf-8" },
+        }),
+      ),
+    );
+
+    await expect(getJson("/api/bootstrap")).resolves.toEqual({ ok: true });
+  });
+
+  it("keeps JSON API error messages readable", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () =>
