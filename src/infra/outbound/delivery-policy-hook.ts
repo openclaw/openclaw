@@ -8,7 +8,7 @@ import type {
   PluginHookOutboundDeliveryPolicySource,
 } from "../../plugins/hook-types.js";
 
-export type OutboundDeliveryPolicyDestination = {
+type OutboundDeliveryPolicyDestination = {
   channel: string;
   to: string;
   accountId?: string;
@@ -18,7 +18,7 @@ export type OutboundDeliveryPolicyDestination = {
 
 export type OutboundDeliveryPolicySource = PluginHookOutboundDeliveryPolicySource;
 
-export type OutboundDeliveryPolicyKind = ReplyDispatchKind | "message_action";
+type OutboundDeliveryPolicyKind = ReplyDispatchKind | "message_action";
 
 export type OutboundDeliveryPolicyDecision =
   | {

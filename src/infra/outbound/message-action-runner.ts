@@ -16,13 +16,8 @@ import {
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
-import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
-import {
-  normalizeConversationReadInvocationOrigin,
-  type ConversationReadInvocationOrigin,
-} from "../../channels/plugins/conversation-read-origin.js";
+import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -30,7 +25,6 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import type { InternalChannelThreadingToolContext } from "../../channels/threading-tool-context-internal.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
@@ -52,11 +46,7 @@ import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
@@ -64,9 +54,6 @@ import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
 } from "./channel-selection.js";
-import type { OutboundDeliveryResult } from "./deliver-types.js";
-import type { OutboundSendDeps } from "./deliver.js";
-import type { DurableDeliveryCompletion } from "./delivery-completion.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { collectMessageAttachmentMediaHints } from "./message-action-attachment-hints.js";
 import {
@@ -95,6 +82,10 @@ import {
   prepareMessageActionPolicyMirrorRoute,
   settleMessageActionFinalPayloadPolicy,
 } from "./message-action-policy-boundary.js";
+import type {
+  MessageActionRunnerGateway,
+  RunMessageActionParams,
+} from "./message-action-runner.types.js";
 import { actionRequiresTarget } from "./message-action-spec.js";
 import {
   hasExplicitTargetParam,
@@ -106,7 +97,6 @@ import {
 } from "./message-action-threading.js";
 import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
-import type { OutboundMirror } from "./mirror.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
@@ -126,82 +116,16 @@ import {
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type MessageActionRunnerGateway = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  resolveAgentRuntimeIdentityToken?: (context?: {
-    sourceReplyFinal?: boolean;
-    sourceReplyToolCallId?: string;
-  }) => Promise<string | undefined>;
-  terminalSourceReplyReceiptOwner?: "caller";
-  clientName: GatewayClientName;
-  clientDisplayName?: string;
-  mode: GatewayClientMode;
-};
+export type {
+  MessageActionRunnerGateway,
+  RunMessageActionParams,
+} from "./message-action-runner.types.js";
 
 // Gateway runtime is only needed for remote message action dispatch or
 // idempotency keys; keep normal in-process actions import-light.
 const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
-
-export type RunMessageActionParams = {
-  cfg: OpenClawConfig;
-  action: ChannelMessageActionName;
-  params: Record<string, unknown>;
-  defaultAccountId?: string;
-  requesterAccountId?: string | null;
-  requesterSenderId?: string | null;
-  requesterSenderName?: string | null;
-  requesterSenderUsername?: string | null;
-  requesterSenderE164?: string | null;
-  senderIsOwner?: boolean;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  /**
-   * Authorization facts resolved from the host-issued current-turn capability.
-   * Presence means ambient routing fields must not be used as identity.
-   */
-  messageActionAuthorization?: {
-    requesterAccountId?: string;
-    requesterSenderId?: string;
-    toolContext?: InternalChannelThreadingToolContext;
-  };
-  sessionId?: string;
-  toolContext?: ChannelThreadingToolContext;
-  gateway?: MessageActionRunnerGateway;
-  deps?: OutboundSendDeps;
-  sessionKey?: string;
-  agentId?: string;
-  /** Caller owns durable outbound context and must avoid the generic delivery mirror. */
-  suppressTranscriptMirror?: boolean;
-  /** @internal Explicit durable transcript destination owned by the caller. */
-  transcriptMirror?: OutboundMirror;
-  /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
-  preparedMessageId?: string;
-  /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
-  gatewayOwnedDelivery?: boolean;
-  /** @internal Bypass provider-native action dispatch so core durable delivery owns the send. */
-  forceCoreDelivery?: boolean;
-  /** @internal Fail before platform I/O unless the core delivery queue persisted the intent. */
-  requireQueuePersistence?: boolean;
-  /** @internal Stable producer id for idempotent durable queue creation. */
-  deliveryIntentId?: string;
-  /** @internal Serializable owner state finalized by live send or recovery. */
-  deliveryCompletion?: DurableDeliveryCompletion;
-  /** @internal Runs after queue persistence and before platform I/O. */
-  onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
-  /** @internal Runs on identified platform evidence before queue acknowledgement. */
-  onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
-  sandboxRoot?: string;
-  dryRun?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  sourceReplyFinal?: boolean;
-  sourceReplyToolCallId?: string;
-  inboundEventKind?: InboundEventKind;
-  inboundAudio?: boolean;
-  abortSignal?: AbortSignal;
-};
 
 const log = createSubsystemLogger("outbound/message-action");
 

@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readTrimmedStringAlias } from "../../utils/string-readers.js";
 import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
-import type { RunMessageActionParams } from "./message-action-runner.js";
+import type { RunMessageActionParams } from "./message-action-runner.types.js";
 
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;

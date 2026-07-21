@@ -12,7 +12,7 @@ import {
   stripDestinationScopedReplyPayload,
   type OutboundDeliveryPolicySource,
 } from "./delivery-policy-hook.js";
-import type { RunMessageActionParams } from "./message-action-runner.js";
+import type { RunMessageActionParams } from "./message-action-runner.types.js";
 
 export type SendPayloadParts = {
   message: string;

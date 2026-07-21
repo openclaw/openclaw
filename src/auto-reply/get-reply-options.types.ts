@@ -38,7 +38,7 @@ export type ReplyThreadingPolicy = {
   implicitCurrentMessage?: "default" | "allow" | "deny";
 };
 
-export type SourcePromptContext = {
+type SourcePromptContext = {
   text: string;
   resumableText?: string;
   promptJoiner?: "\n\n" | "\n" | " ";

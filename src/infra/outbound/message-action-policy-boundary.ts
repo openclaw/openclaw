@@ -20,7 +20,7 @@ import {
 import type {
   MessageActionRunnerGateway,
   RunMessageActionParams,
-} from "./message-action-runner.js";
+} from "./message-action-runner.types.js";
 import { prepareOutboundMirrorRoute } from "./message-action-threading.js";
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import {
@@ -35,7 +35,7 @@ import {
 } from "./outbound-session.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-export type MessageActionPolicyState = {
+type MessageActionPolicyState = {
   actionParams: Record<string, unknown>;
   channel: ChannelId;
   to: string;
@@ -49,7 +49,7 @@ export type MessageActionPolicyState = {
 const UNRESOLVED_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
 
 /** Apply the response prefix and TTS transformation before final policy evaluation. */
-export async function prepareMessageActionFinalPayload(params: {
+async function prepareMessageActionFinalPayload(params: {
   cfg: OpenClawConfig;
   input: RunMessageActionParams;
   state: MessageActionPolicyState;
@@ -233,7 +233,7 @@ export async function settleMessageActionFinalPayloadPolicy(params: {
 }
 
 /** Restore first-reply state when a terminal delivery produced no visible send. */
-export async function executeMessageActionPolicyDelivery<
+async function executeMessageActionPolicyDelivery<
   T extends { sendResult?: { deliveryStatus?: string } },
 >(params: { execute: () => Promise<T>; restoreSourceReplyState: () => void }): Promise<T> {
   const result = await params.execute();

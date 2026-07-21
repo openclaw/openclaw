@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { DeliverOutboundPayloadsParams } from "./deliver-contract.js";
 import {
   isOutboundDeliveryError,
   OutboundDeliveryError,
@@ -8,7 +9,6 @@ import {
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver.js";
 import {
   MAX_OUTBOUND_DELIVERY_POLICY_REROUTES,
   runOutboundDeliveryPolicyHook,
@@ -17,18 +17,9 @@ import {
   type OutboundDeliveryPolicySource,
 } from "./delivery-policy-hook.js";
 
-/** Internal policy controls accepted by the outbound delivery boundary. */
-export type OutboundDeliveryPolicyParams = {
-  deliveryPolicy?: {
-    path?: "durable_delivery" | "message_action";
-    action?: string;
-    source?: OutboundDeliveryPolicySource;
-    runId?: string;
-  };
-  skipInitialOutboundDeliveryPolicy?: boolean;
-  deliveryPolicyDepth?: number;
-};
+export type { OutboundDeliveryPolicyParams } from "./deliver-contract.js";
 
+/** Internal policy controls accepted by the outbound delivery boundary. */
 function sourceFromDeliveryParams(
   params: DeliverOutboundPayloadsParams,
 ): OutboundDeliveryPolicySource | undefined {
@@ -66,7 +57,7 @@ function stripDestinationScopedDeliveryParams(delivery: DeliverOutboundPayloadsP
 }
 
 /** Resolve policy for one payload using the delivery's source and destination facts. */
-export async function resolveOutboundDeliveryPolicyDecision(
+async function resolveOutboundDeliveryPolicyDecision(
   delivery: DeliverOutboundPayloadsParams,
   payload: ReplyPayload,
 ): Promise<OutboundDeliveryPolicyDecision> {
@@ -92,7 +83,7 @@ export async function resolveOutboundDeliveryPolicyDecision(
   });
 }
 
-export type FinalOutboundDeliveryPolicyResult =
+type FinalOutboundDeliveryPolicyResult =
   | { status: "continue"; payload: ReplyPayload }
   | {
       status: "terminal";

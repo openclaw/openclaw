@@ -1,5 +1,5 @@
+import type { DeliverOutboundPayloadsParams } from "./deliver-contract.js";
 import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver.js";
 import { emitOutboundAuditTerminals } from "./outbound-audit.js";
 
 type PolicySuppression = Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }> & {

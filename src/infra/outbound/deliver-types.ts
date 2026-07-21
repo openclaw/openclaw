@@ -45,7 +45,7 @@ export type OutboundPayloadDeliverySuppressionReason =
   | "adapter_returned_no_identity";
 
 /** Delivery phase where a failure occurred. */
-export type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
+type OutboundDeliveryFailureStage = "platform_send" | "queue" | "unknown";
 export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
 
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
