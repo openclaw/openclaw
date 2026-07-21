@@ -680,14 +680,10 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar = workingOnly
     ? nothing
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
+  const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
-    <div
-      class="chat-group assistant ${workingOnly
-        ? "chat-group--working"
-        : "chat-group--with-footer"}"
-      data-chat-row-key=${parts[0]?.key ?? nothing}
-    >
+    <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
