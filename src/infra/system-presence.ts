@@ -26,6 +26,13 @@ export type SystemPresence = {
   roles?: string[];
   scopes?: string[];
   instanceId?: string;
+  user?: {
+    id: string;
+    email?: string;
+    name?: string;
+    avatarUrl?: string;
+  };
+  watchedSessions?: string[];
   text: string;
   ts: number;
 };

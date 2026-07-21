@@ -33,6 +33,8 @@ import { logWs, shouldLogWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   agent: [READ_SCOPE],
   chat: [READ_SCOPE],
+  "board.changed": [READ_SCOPE],
+  "board.command": [READ_SCOPE],
   "ui.command": [READ_SCOPE],
   "chat.send_timing": [READ_SCOPE],
   "chat.side_result": [READ_SCOPE],
@@ -55,6 +57,9 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   task: [READ_SCOPE],
   "task.suggestion": [READ_SCOPE],
   "update.available": [],
+  // Hash-only change notice after a persisted config write; content stays
+  // behind the operator-scoped config.get.
+  "config.changed": [READ_SCOPE],
   "voicewake.changed": [READ_SCOPE],
   "voicewake.routing.changed": [READ_SCOPE],
   "device.pair.requested": [PAIRING_SCOPE],
@@ -66,6 +71,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "sessions.changed": [READ_SCOPE],
   "session.approval": [APPROVALS_SCOPE],
   "session.message": [READ_SCOPE],
+  "session.observer": [READ_SCOPE],
   "session.operation": [READ_SCOPE],
   "session.tool": [READ_SCOPE],
   // Operator terminal byte/exit streams. Admin-gated to match the terminal.*
@@ -81,7 +87,12 @@ const NODE_ALLOWED_EVENTS = new Set<string>(["voicewake.changed", "voicewake.rou
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
 // authoritative registry key, including malformed/sessionless agent events.
-const SESSION_SUBSCRIPTION_EVENTS = new Set(["agent", "chat", "chat.side_result"]);
+const SESSION_SUBSCRIPTION_EVENTS = new Set([
+  "agent",
+  "chat",
+  "chat.side_result",
+  "session.observer",
+]);
 
 function serializeFrameField(name: "payload" | "stateVersion", value: unknown): string {
   // Serialize one field through JSON.stringify so embedded values keep JSON

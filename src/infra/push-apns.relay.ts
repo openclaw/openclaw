@@ -249,7 +249,7 @@ export function resolveApnsRelayConfigFromEnv(
     value: {
       baseUrl: normalizedBaseUrl.value,
       timeoutMs: normalizeTimeoutMs(
-        env.OPENCLAW_APNS_RELAY_TIMEOUT_MS ?? configuredRelay?.timeoutMs,
+        normalizeNonEmptyString(env.OPENCLAW_APNS_RELAY_TIMEOUT_MS) ?? configuredRelay?.timeoutMs,
       ),
     },
   };
@@ -309,7 +309,7 @@ async function sendApnsRelayRequest(params: {
     const buffer = await readResponseWithLimit(response, APNS_RELAY_MAX_RESPONSE_BYTES, {
       onOverflow: ({ size, maxBytes }) => new ApnsRelayResponseTooLargeError(size, maxBytes),
     });
-    json = JSON.parse(new TextDecoder("utf-8").decode(buffer)) as unknown;
+    json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer)) as unknown;
   } catch (err) {
     if (err instanceof ApnsRelayResponseTooLargeError) {
       // Fail closed: an oversized relay body must never be reported as a delivered push.

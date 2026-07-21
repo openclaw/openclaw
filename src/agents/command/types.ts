@@ -28,15 +28,6 @@ export type ImageContent = {
   mimeType: string;
 };
 
-/** Metadata overrides for trusted internal agent command callers. */
-export type AgentCommandResultMetaOverrides = {
-  transport?: "embedded";
-  fallbackFrom?: "gateway";
-  fallbackReason?: "gateway_timeout" | "gateway_closed";
-  fallbackSessionId?: string;
-  fallbackSessionKey?: string;
-};
-
 /** ACP turn source markers accepted by trusted command callsites. */
 type AcpTurnSource = "manual_spawn";
 
@@ -117,6 +108,8 @@ export type AgentCommandOpts = {
   toolsAllow?: string[];
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
+  trustedInternalHandoff?: boolean;
   /** Internal marker for an auto-applied cap that CLI runtimes must omit. */
   toolsAllowIsDefault?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
@@ -149,6 +142,10 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Collector children fail closed instead of emitting operator approval requests. */
+  swarmCollector?: boolean;
+  /** Synthetic structured_output input schema for collector children. */
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
@@ -178,8 +175,6 @@ export type AgentCommandOpts = {
   mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
   /** Gateway already consumed this automatic recovery run's durable reservation. */
   mainRestartRecoveryAdmitted?: boolean;
-  /** Internal local CLI callers can annotate result metadata before JSON/text output. */
-  resultMetaOverrides?: AgentCommandResultMetaOverrides;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when compaction rotates the active run onto a successor session. */
@@ -199,7 +194,7 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
+  "senderIsOwner" | "allowModelOverride"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;

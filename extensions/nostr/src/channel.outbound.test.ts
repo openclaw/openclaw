@@ -52,7 +52,7 @@ async function startOutboundAccount(accountId?: string) {
   const sendDm = vi.fn(async () => "a".repeat(64));
   const bus = {
     sendDm,
-    close: vi.fn(),
+    close: vi.fn(async () => {}),
     getMetrics: vi.fn(() => ({ counters: {} })),
     publishProfile: vi.fn(),
     getProfileState: vi.fn(async () => null),
@@ -156,6 +156,10 @@ describe("nostr outbound cfg threading", () => {
     expect(result.messageId).toBe(eventId);
 
     await cleanup.stop();
+  });
+
+  it("recognizes uppercase npub targets", () => {
+    expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.("NPUB1XYZ123")).toBe(true);
   });
 
   it("backs declared message adapter capabilities with outbound sends", async () => {

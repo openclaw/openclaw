@@ -7,6 +7,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatPlanStep
+import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
 import ai.openclaw.app.chat.ChatWidgetResource
@@ -32,11 +33,12 @@ import ai.openclaw.app.ui.chat.chatComposerTextDraftsFromSnapshot
 import ai.openclaw.app.ui.chat.matchesSession
 import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
+import ai.openclaw.app.voice.AndroidAudioInputSession
+import ai.openclaw.app.voice.AudioInputDeviceOption
 import ai.openclaw.app.voice.VoiceConversationEntry
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
-import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.SavedStateHandle
@@ -111,8 +113,8 @@ internal fun retainRefusedAssistantPrompt(
 data class ChatShareDraft(
   val id: Long,
   val text: String?,
-  val imageUris: List<Uri>,
-  val droppedImageCount: Int,
+  val attachments: List<SharedAttachment>,
+  val droppedAttachmentCount: Int,
 )
 
 internal const val MAX_PENDING_CHAT_SHARES = 16
@@ -534,6 +536,12 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
   val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
   val nodesDevicesErrorText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesErrorText }
+  val nodesDevicesNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesNoticeText }
+  val devicePairingCapabilities: StateFlow<GatewayDevicePairingCapabilities> =
+    runtimeState(initial = GatewayDevicePairingCapabilities()) { it.devicePairingCapabilities }
+  val operatorScopes: StateFlow<List<String>> = runtimeState(initial = emptyList()) { it.operatorScopes }
+  val devicePairingMutation: StateFlow<GatewayDevicePairingMutation?> =
+    runtimeState(initial = null) { it.devicePairingMutation }
   val channelsSummary: StateFlow<GatewayChannelsSummary> =
     runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
   val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
@@ -564,10 +572,13 @@ class MainViewModel private constructor(
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
+  val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
   val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+  val preferredCameraFacing: StateFlow<String> = prefs.preferredCameraFacing
+  val preferredAudioInputDevice: StateFlow<String?> = prefs.preferredAudioInputDevice
   val voiceWakeEnabled: StateFlow<Boolean> = prefs.voiceWakeEnabled
   val voiceWakeWords: StateFlow<List<String>> = prefs.voiceWakeWords
   val voiceWakeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeAvailable }
@@ -579,6 +590,8 @@ class MainViewModel private constructor(
   val voiceWakeWordsNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.voiceWakeWordsNoticeText }
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
+  val activeAudioInputDevicePreference: StateFlow<String?> =
+    runtimeState(initial = null) { it.activeAudioInputDevicePreference }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
   val micCooldown: StateFlow<Boolean> = runtimeState(initial = false) { it.micCooldown }
@@ -614,6 +627,7 @@ class MainViewModel private constructor(
   val chatModelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.chatModelCatalog }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = runtimeState(initial = emptyList()) { it.chatPlanSteps }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chatSessions }
   val pendingRunCount: StateFlow<Int> = runtimeState(initial = 0) { it.pendingRunCount }
@@ -766,7 +780,12 @@ class MainViewModel private constructor(
       gatewayConfigOperationMutex.withLock {
         if (operation != gatewayConfigOperationSeq.get()) return@withLock
         val config = plan.config
-        val endpoint = GatewayEndpoint.manual(host = config.host, port = config.port)
+        val endpoint =
+          GatewayEndpoint.manual(
+            host = config.host,
+            port = config.port,
+            tlsEnabled = config.tls,
+          )
         val targetAlreadyPaired =
           prefs.gatewayRegistry.entries.value
             .any { it.stableId == endpoint.stableId }
@@ -917,15 +936,17 @@ class MainViewModel private constructor(
   }
 
   /** Opens shared content as a fresh composer draft; sending still requires an explicit tap. */
-  fun handleShareLaunch(request: ShareLaunchRequest): Boolean {
-    val owner = currentOrProvisionalChatComposerOwner()
+  internal fun handleShareLaunch(
+    request: ShareLaunchRequest,
+    owner: ChatComposerOwner,
+  ): Boolean {
     val accepted =
       chatShareDraftQueue.enqueue(
         ChatShareDraft(
           id = chatShareDraftSeq.incrementAndGet(),
           text = request.text,
-          imageUris = request.imageUris,
-          droppedImageCount = request.droppedImageCount,
+          attachments = request.attachments,
+          droppedAttachmentCount = request.droppedAttachmentCount,
         ),
         owner,
       )
@@ -1090,7 +1111,11 @@ class MainViewModel private constructor(
     ensureRuntime().setTalkModeEnabled(enabled)
   }
 
-  suspend fun requestVoiceNotePermission(): Boolean {
+  suspend fun requestVoiceNotePermission(): Boolean = requestRecordAudioPermission()
+
+  suspend fun requestDictationPermission(): Boolean = requestRecordAudioPermission()
+
+  private suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
     return try {
       requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
@@ -1107,9 +1132,30 @@ class MainViewModel private constructor(
     runtimeRef.value?.releaseVoiceNoteMic()
   }
 
+  internal fun tryAcquireDictationMic(): Boolean = runtimeRef.value?.tryAcquireDictationMic() == true
+
+  internal fun releaseDictationMic() {
+    runtimeRef.value?.releaseDictationMic()
+  }
+
   fun setSpeakerEnabled(enabled: Boolean) {
     ensureRuntime().setSpeakerEnabled(enabled)
   }
+
+  fun setPreferredCameraFacing(facing: String) {
+    ensureRuntime().setPreferredCameraFacing(facing)
+  }
+
+  fun setPreferredAudioInputDevice(key: String?) {
+    ensureRuntime().setPreferredAudioInputDevice(key)
+  }
+
+  suspend fun hasFrontAndBackCameras(): Boolean {
+    val facings = ensureRuntime().camera.listDevices().mapTo(mutableSetOf()) { it.position }
+    return "front" in facings && "back" in facings
+  }
+
+  internal fun observeAudioInputDevices(onChanged: (List<AudioInputDeviceOption>) -> Unit): AutoCloseable = AndroidAudioInputSession.observeAvailableDevices(getApplication(), onChanged)
 
   fun setVoiceWakeEnabled(enabled: Boolean) {
     ensureRuntime().setVoiceWakeEnabled(enabled)
@@ -1181,6 +1227,13 @@ class MainViewModel private constructor(
     }
   }
 
+  fun setGatewayConnectionEnabled(
+    stableId: String,
+    enabled: Boolean,
+  ) {
+    ensureRuntime().setGatewayConnectionEnabled(stableId, enabled)
+  }
+
   fun forgetGateway(stableId: String) {
     val operation = gatewayConfigOperationSeq.incrementAndGet()
     viewModelScope.launch(Dispatchers.Default) {
@@ -1204,8 +1257,12 @@ class MainViewModel private constructor(
     }
   }
 
-  fun acceptGatewayTrustPrompt() {
-    runtimeRef.value?.acceptGatewayTrustPrompt()
+  fun acceptGatewayTrustPrompt(manualFingerprint: String? = null) {
+    runtimeRef.value?.acceptGatewayTrustPrompt(manualFingerprint)
+  }
+
+  fun useSystemGatewayTrustPrompt() {
+    runtimeRef.value?.useSystemGatewayTrustPrompt()
   }
 
   fun declineGatewayTrustPrompt() {
@@ -1378,6 +1435,21 @@ class MainViewModel private constructor(
 
   fun refreshNodesDevices() {
     ensureRuntime().refreshNodesDevices()
+  }
+
+  fun approveDevicePairing(
+    requestId: String,
+    deviceId: String,
+  ) {
+    ensureRuntime().approveDevicePairing(requestId, deviceId)
+  }
+
+  fun rejectDevicePairing(requestId: String) {
+    ensureRuntime().rejectDevicePairing(requestId)
+  }
+
+  fun removePairedDevice(deviceId: String) {
+    ensureRuntime().removePairedDevice(deviceId)
   }
 
   fun refreshExecApprovals() {
@@ -1554,6 +1626,8 @@ class MainViewModel private constructor(
         mainSessionKey = mainSessionKey.value,
       )
 
+  internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
+
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     (
       currentChatComposerOwner() ?: currentOrProvisionalChatComposerOwner()
@@ -1646,6 +1720,17 @@ class MainViewModel private constructor(
 
   fun deleteChatOutboxCommand(id: String) {
     ensureRuntime().deleteChatOutboxCommand(id)
+  }
+
+  fun resolveChatQuestion(
+    id: String,
+    answers: Map<String, List<String>>,
+  ) {
+    ensureRuntime().resolveChatQuestion(id, answers)
+  }
+
+  fun skipChatQuestion(id: String) {
+    ensureRuntime().skipChatQuestion(id)
   }
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)

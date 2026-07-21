@@ -6,6 +6,7 @@ import android.app.Activity
 import android.app.RemoteInput
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -40,25 +41,38 @@ import java.util.Locale
 
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
+  private var screenshotScene: WearScreenshotScene? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+      screenshotScene = parseWearScreenshotModeIntent(intent)
+    }
     setContent {
-      OpenClawWearApp(
-        viewModel = viewModel,
-        settingsStore = remember { WearSettingsStore(applicationContext) },
-        speaker = remember { WearReplySpeaker(applicationContext) },
-      )
+      val scene = screenshotScene
+      if (scene == null) {
+        OpenClawWearApp(
+          viewModel = viewModel,
+          settingsStore = remember { WearSettingsStore(applicationContext) },
+          speaker = remember { WearReplySpeaker(applicationContext) },
+        )
+      } else {
+        OpenClawWearScreenshotApp(scene)
+      }
     }
   }
 
   override fun onStart() {
     super.onStart()
-    (application as WearApplication).onActivityStarted()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStarted()
+    }
   }
 
   override fun onStop() {
-    (application as WearApplication).onActivityStopped()
+    if (screenshotScene == null) {
+      (application as WearApplication).onActivityStopped()
+    }
     super.onStop()
   }
 }
@@ -211,13 +225,13 @@ internal fun OpenClawWearApp(
     state.messages,
     state.activeRunId,
     state.sending,
-    state.error,
+    state.failure,
     awaitingReply,
   ) {
     if (!awaitingReply) return@LaunchedEffect
     val activeSnapshot = snapshot
     if (
-      state.error != null ||
+      state.failure != null ||
       activeSnapshot == null ||
       activeSnapshot.activeSessionId != awaitingReplySessionId
     ) {
@@ -268,15 +282,13 @@ internal fun OpenClawWearApp(
   }
 
   val failure =
-    when {
-      state.phoneNodeId == null && !state.loading -> WearConversationFailure.PHONE_UNAVAILABLE
-      state.error?.contains("update", ignoreCase = true) == true ->
-        WearConversationFailure.INCOMPATIBLE
-      else -> null
-    }
+    state.failure
+      ?: WearConversationFailure.PHONE_UNAVAILABLE.takeIf {
+        state.phoneNodeId == null && !state.loading
+      }
   val resolvedInteraction =
     when {
-      state.error != null -> WearInteractionState.ERROR
+      state.failure != null -> WearInteractionState.ERROR
       state.sending -> WearInteractionState.SENDING
       state.activeRunId != null -> WearInteractionState.AGENT_WORKING
       else -> interaction
@@ -292,10 +304,12 @@ internal fun OpenClawWearApp(
         speaking = speaking,
         realtimeCapturing = state.realtimeCapturing,
         realtimePlaying = state.realtimePlaying,
+        realtimeMouthLevel = state.realtimeMouthLevel,
         realtimePlaybackFailed = state.realtimePlaybackFailed,
         realtimeThinkingOverride = realtimeThinkingTurnId != null,
         actionBusy =
-          state.sending ||
+          state.loading ||
+            state.sending ||
             state.talkBusy ||
             state.controlBusy ||
             state.activeRunId != null ||
@@ -359,6 +373,10 @@ internal fun OpenClawWearApp(
             leaveConversationContext()
             viewModel.openSession(session)
           }
+        },
+        onSelectModel = { modelRef ->
+          leaveConversationContext()
+          viewModel.selectModel(modelRef)
         },
         onRefresh = viewModel::refresh,
         onGatewayEnabledChange = { enabled ->

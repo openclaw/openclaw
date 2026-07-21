@@ -12,12 +12,13 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) agentName = "";
   @property({ attribute: false }) avatarUrl: string | null = null;
   @property({ attribute: false }) avatarText = "";
-  @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) offline = false;
   @property({ attribute: false }) statusLabel = "";
   @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) menuOpen = false;
   /** Unread sessions exist on non-active agents; surfaces next to the name. */
   @property({ attribute: false }) menuUnread = false;
+  @property({ attribute: false }) approvalCount = 0;
   /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
   @property({ attribute: false }) onToggleMenu?: (trigger: HTMLElement) => void;
@@ -26,6 +27,10 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
     const menuLabel = this.switcherAvailable
       ? t("agentChip.switchAgent")
       : t("agentChip.menuLabel");
+    const approvalLabel = t(
+      this.approvalCount === 1 ? "execApproval.agentPendingOne" : "execApproval.agentPending",
+      { count: String(this.approvalCount) },
+    );
     return html`
       <div class="sidebar-agent-card ${this.menuOpen ? "sidebar-agent-card--open" : ""}">
         <button
@@ -33,7 +38,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
           class="sidebar-agent-card__main"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
-          aria-label="${this.agentName} · ${menuLabel}"
+          aria-label="${this.agentName} · ${menuLabel} · ${this.statusLabel}${this.approvalCount > 0
+            ? ` · ${approvalLabel}`
+            : ""}"
           @click=${(event: MouseEvent) => this.onToggleMenu?.(event.currentTarget as HTMLElement)}
         >
           <span class="sidebar-agent-card__avatar">
@@ -48,15 +55,14 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
                   >${this.avatarText}</span
                 >`}
-            <span
-              class="sidebar-agent-card__presence ${this.connected
-                ? "sidebar-connection-status--online"
-                : "sidebar-connection-status--offline"}"
-              role="img"
-              aria-live="polite"
-              aria-label=${this.statusLabel}
-              title=${this.statusLabel}
-            ></span>
+            ${this.offline
+              ? html`<span
+                  class="sidebar-agent-card__presence"
+                  role="img"
+                  aria-label=${this.statusLabel}
+                  title=${this.statusLabel}
+                ></span>`
+              : nothing}
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
@@ -69,6 +75,14 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
               : nothing}
           </span>
+          ${this.approvalCount > 0
+            ? html`<span
+                class="sidebar-agent-approval-count sidebar-agent-card__approval-count"
+                aria-label=${approvalLabel}
+                title=${approvalLabel}
+                >${this.approvalCount}</span
+              >`
+            : nothing}
           ${this.menuUnread && !this.menuOpen
             ? html`<span
                 class="session-unread-dot sidebar-agent-card__menu-unread"

@@ -49,7 +49,7 @@ function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalog
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: "Agent work queue and thread handoff.",
     origin: "bundled",
     installed: true,
     enabled: false,
@@ -132,6 +132,7 @@ type RuntimeConfigTestHarness = {
     patch: ReturnType<
       typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
     >;
+    patchFromSnapshot: ApplicationContext["runtimeConfig"]["patchFromSnapshot"];
     subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
   };
   notify: () => void;
@@ -142,13 +143,23 @@ function createRuntimeConfigHarness(
   runtimeConfigState: RuntimeConfigTestState,
 ): RuntimeConfigTestHarness {
   const listeners = new Set<(state: RuntimeConfigTestState) => void>();
+  const patch = vi.fn<
+    (options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>
+  >(async () => true);
   const runtimeConfig = {
     state: runtimeConfigState,
     refresh: refreshConfig,
     ensureLoaded: vi.fn(async () => undefined),
-    patch: vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>(
-      async () => true,
-    ),
+    patch,
+    patchFromSnapshot: vi.fn(async (build) => {
+      const config = runtimeConfigState.configSnapshot?.sourceConfig ?? {};
+      const built = build(config);
+      if ("error" in built) {
+        runtimeConfigState.lastError = built.error;
+        return false;
+      }
+      return patch(built.options);
+    }),
     subscribe(listener: (state: RuntimeConfigTestState) => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -869,7 +880,7 @@ describe("PluginsPage", () => {
     addButton?.click();
     await page.updateComplete;
 
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
@@ -1021,7 +1032,7 @@ describe("PluginsPage", () => {
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));

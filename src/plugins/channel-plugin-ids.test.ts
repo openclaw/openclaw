@@ -303,19 +303,13 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
       {
         id: "external-env-channel-plugin",
         channels: ["external-env-channel"],
-        channelEnvVars: {
-          "external-env-channel": ["EXTERNAL_ENV_CHANNEL_TOKEN"],
-        },
-        origin: "config",
-        enabledByDefault: undefined,
-        providers: [],
-        cliBackends: [],
-      },
-      {
-        id: "ambient-env-channel-plugin",
-        channels: ["ambient-env-channel"],
-        channelEnvVars: {
-          "ambient-env-channel": ["HOME", "PATH"],
+        packageChannel: {
+          id: "external-env-channel",
+          configuredState: {
+            env: {
+              allOf: ["EXTERNAL_ENV_CHANNEL_HOST", "EXTERNAL_ENV_CHANNEL_NICK"],
+            },
+          },
         },
         origin: "config",
         enabledByDefault: undefined,
@@ -575,7 +569,6 @@ function filterManifestRegistryForInstalledIndex(params: {
 
 function createPluginPlanningTestEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
-    OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     ...overrides,
   };
 }
@@ -3248,22 +3241,6 @@ describe("resolveConfiguredChannelPluginIds", () => {
     ).toStrictEqual([]);
   });
 
-  it("includes trusted external channel owners configured only by manifest env vars", () => {
-    expect(
-      resolveConfiguredChannelPluginIds({
-        config: {
-          plugins: {
-            allow: ["external-env-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
-        } as NodeJS.ProcessEnv,
-      }),
-    ).toEqual(["external-env-channel-plugin"]);
-  });
-
   it("blocks bundled activation owners when explicitly disabled", () => {
     expect(
       resolveConfiguredChannelPluginIds({
@@ -3309,7 +3286,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3324,7 +3301,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3346,7 +3323,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3357,6 +3334,69 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         effective: false,
         pluginIds: [],
         blockedReasons: ["not-in-allowlist"],
+      },
+    ]);
+  });
+
+  it("suppresses env-only presence when ambient triggers are disabled", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {},
+        workspaceDir: "/tmp",
+        env: { DEMO_FAKE_TEST_TRIGGER: "present" } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        ambientEnvTriggers: "suppress",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("suppresses manifest-env-only presence when ambient triggers are disabled", () => {
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          plugins: {
+            allow: ["external-env-channel-plugin"],
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+          EXTERNAL_ENV_CHANNEL_NICK: "openclaw",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        ambientEnvTriggers: "suppress",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("retains mixed explicit-config and env presence under suppression", () => {
+    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([
+      { channelId: "demo-channel", source: "env" },
+    ]);
+
+    expect(
+      resolveConfiguredChannelPresencePolicy({
+        config: {
+          channels: {
+            "demo-channel": { enabled: true },
+          },
+        } as OpenClawConfig,
+        workspaceDir: "/tmp",
+        env: { DEMO_FAKE_TEST_TRIGGER: "present" } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+        ambientEnvTriggers: "suppress",
+      }),
+    ).toEqual([
+      {
+        channelId: "demo-channel",
+        sources: ["env", "explicit-config"],
+        effective: true,
+        pluginIds: ["demo-channel"],
+        blockedReasons: [],
       },
     ]);
   });
@@ -3380,7 +3420,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "token",
+          DEMO_FAKE_TEST_TRIGGER: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3483,7 +3523,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         config,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3493,7 +3533,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         config,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
@@ -3543,11 +3583,41 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
+          EXTERNAL_ENV_CHANNEL_TOKEN: "present",
         } as NodeJS.ProcessEnv,
         includePersistedAuthState: false,
       }),
     ).toStrictEqual([]);
+  });
+
+  it("requires every package manifest allOf env variable", () => {
+    const config = {
+      plugins: {
+        allow: ["external-env-channel-plugin"],
+      },
+    } as OpenClawConfig;
+
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toStrictEqual([]);
+    expect(
+      listConfiguredChannelIdsForReadOnlyScope({
+        config,
+        workspaceDir: "/tmp",
+        env: {
+          EXTERNAL_ENV_CHANNEL_HOST: "irc.example.com",
+          EXTERNAL_ENV_CHANNEL_NICK: "openclaw",
+        } as NodeJS.ProcessEnv,
+        includePersistedAuthState: false,
+      }),
+    ).toContain("external-env-channel");
   });
 
   it("lets explicit bundled channel config bypass restrictive allowlists", () => {
@@ -3696,7 +3766,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
       }),
     ).toStrictEqual([]);
@@ -3723,7 +3793,7 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         } as OpenClawConfig,
         workspaceDir: "/tmp",
         env: {
-          DEMO_CHANNEL_TOKEN: "ambient",
+          DEMO_FAKE_TEST_TRIGGER: "ambient",
         } as NodeJS.ProcessEnv,
       }),
     ).toEqual(["demo-other-channel"]);
@@ -3940,146 +4010,6 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
         blockedReasons: ["no-channel-owner"],
       },
     ]);
-  });
-
-  it("uses manifest env vars as read-only configured channel triggers", () => {
-    expect(
-      listConfiguredChannelIdsForReadOnlyScope({
-        config: {
-          plugins: {
-            allow: ["external-env-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-      }),
-    ).toEqual(["external-env-channel"]);
-  });
-
-  it("ignores manifest env vars from untrusted external plugins", () => {
-    expect(
-      listConfiguredChannelIdsForReadOnlyScope({
-        config: {} as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-      }),
-    ).toStrictEqual([]);
-
-    expect(
-      hasConfiguredChannelsForReadOnlyScope({
-        config: {} as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("ignores ambient or malformed manifest env vars as read-only configured channel triggers", () => {
-    expect(
-      listConfiguredChannelIdsForReadOnlyScope({
-        config: {
-          plugins: {
-            allow: ["ambient-env-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          HOME: "/tmp/user",
-          PATH: "/usr/bin",
-          lowercase_token: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-      }),
-    ).toStrictEqual([]);
-  });
-
-  it("accepts lowercase or mixed-case manifest env vars as read-only configured channel triggers", () => {
-    expect(
-      listConfiguredChannelIdsForReadOnlyScope({
-        config: {
-          plugins: {
-            allow: ["external-env-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          external_env_channel_token: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-        manifestRecords: [
-          {
-            id: "external-env-channel-plugin",
-            channels: ["external-env-channel"],
-            channelEnvVars: {
-              "external-env-channel": ["external_env_channel_token"],
-            },
-            origin: "config",
-            enabledByDefault: undefined,
-            providers: [],
-            cliBackends: [],
-          } as never,
-        ],
-      }),
-    ).toEqual(["external-env-channel"]);
-  });
-
-  it("matches uppercase process env entries for lowercase manifest env var declarations", () => {
-    expect(
-      listConfiguredChannelIdsForReadOnlyScope({
-        config: {
-          plugins: {
-            allow: ["external-env-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-        manifestRecords: [
-          {
-            id: "external-env-channel-plugin",
-            channels: ["external-env-channel"],
-            channelEnvVars: {
-              "external-env-channel": ["external_env_channel_token"],
-            },
-            origin: "config",
-            enabledByDefault: undefined,
-            providers: [],
-            cliBackends: [],
-          } as never,
-        ],
-      }),
-    ).toEqual(["external-env-channel"]);
-  });
-
-  it("uses manifest env vars for read-only channel presence checks", () => {
-    listPotentialConfiguredChannelIds.mockReturnValue([]);
-    listPotentialConfiguredChannelPresenceSignals.mockReturnValue([]);
-
-    expect(
-      hasConfiguredChannelsForReadOnlyScope({
-        config: {
-          plugins: {
-            allow: ["external-env-channel-plugin"],
-          },
-        } as OpenClawConfig,
-        workspaceDir: "/tmp",
-        env: {
-          EXTERNAL_ENV_CHANNEL_TOKEN: "token",
-        } as NodeJS.ProcessEnv,
-        includePersistedAuthState: false,
-      }),
-    ).toBe(true);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

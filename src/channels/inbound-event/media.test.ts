@@ -1,53 +1,84 @@
 // Inbound event media tests cover channel media attachment normalization.
 import { describe, expect, it } from "vitest";
 import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
+import { normalizeMediaFacts, projectMediaFacts } from "../../media/media-facts.js";
+import { buildAgentMediaPayload } from "../../plugin-sdk/agent-media-payload.js";
+import { buildMediaPayload } from "../plugins/media-payload.js";
 import {
   buildChannelInboundMediaPayload,
+  formatMediaPlaceholderText,
   formatInboundMediaUnavailableText,
   toHistoryMediaEntries,
   toInboundMediaFacts,
+  type ChannelInboundMediaInput,
 } from "./media.js";
 
 describe("channel inbound media facts", () => {
-  it("replaces optimistic media placeholders and preserves real captions", () => {
+  it("formats media placeholder text with kind precedence and normalized MIME fallback", () => {
+    expect(
+      formatMediaPlaceholderText([
+        { kind: "document", contentType: "image/png", path: "/tmp/photo.jpg" },
+      ]),
+    ).toBe("<media:document>");
+    expect(formatMediaPlaceholderText([{ contentType: " IMAGE/PNG; charset=binary " }])).toBe(
+      "<media:image>",
+    );
+    expect(
+      formatMediaPlaceholderText([{ url: "https://example.test/uploads/clip.MP4?download=1" }]),
+    ).toBe("<media:video>");
+  });
+
+  it("counts homogeneous media and collapses mixed kinds deterministically", () => {
+    expect(formatMediaPlaceholderText([{ kind: "image" }, { contentType: "image/jpeg" }])).toBe(
+      "<media:image> (2 images)",
+    );
+    expect(formatMediaPlaceholderText([{ kind: "image" }, { path: "/tmp/voice-note.mp3" }])).toBe(
+      "<media:document> (2 files)",
+    );
+    expect(formatMediaPlaceholderText([{ kind: "image" }, {}])).toBe(
+      "<media:attachment> (2 attachments)",
+    );
+    expect(formatMediaPlaceholderText([{ kind: "sticker" }])).toBe("<media:sticker>");
+    expect(formatMediaPlaceholderText([{ kind: "sticker" }, { kind: "sticker" }])).toBe(
+      "<media:sticker> (2 stickers)",
+    );
+  });
+
+  it("formats type-only attachment facts without filenames or a count side channel", () => {
+    expect(formatMediaPlaceholderText([{}, {}, {}])).toBe("<media:attachment> (3 attachments)");
+    expect(formatMediaPlaceholderText([])).toBe("");
+  });
+
+  it("returns unavailable notices alone or appended to real captions", () => {
     expect(
       formatInboundMediaUnavailableText({
-        body: "<media:image>",
-        mediaPlaceholder: "<media:image>",
+        body: "",
         notice: "[test image attachment unavailable]",
       }),
     ).toBe("[test image attachment unavailable]");
     expect(
       formatInboundMediaUnavailableText({
         body: "please inspect this",
-        mediaPlaceholder: "<media:image>",
         notice: "[test image attachment unavailable]",
       }),
     ).toBe("please inspect this\n\n[test image attachment unavailable]");
   });
 
   it("normalizes provider media into inbound media facts", () => {
-    expect(
-      toInboundMediaFacts(
-        [
-          {
-            path: " /tmp/image.png ",
-            contentType: " image/png ",
-            messageId: " ",
-          },
-          {
-            url: "https://example.test/audio.mp3",
-            contentType: "audio/mpeg",
-            kind: "audio",
-          },
-        ],
-        {
-          kind: "image",
-          messageId: "msg-1",
-          transcribed: (_media, index) => index === 1,
-        },
-      ),
-    ).toEqual([
+    const input = [
+      { path: " /tmp/image.png ", contentType: " image/png ", messageId: " " },
+      {
+        url: "https://example.test/audio.mp3",
+        contentType: "audio/mpeg",
+        kind: "audio" as const,
+      },
+    ];
+    const defaults = {
+      kind: "image" as const,
+      messageId: "msg-1",
+      transcribed: (_media: ChannelInboundMediaInput, index: number): boolean => index === 1,
+    };
+    const expected = [
       {
         path: "/tmp/image.png",
         url: undefined,
@@ -64,21 +95,35 @@ describe("channel inbound media facts", () => {
         transcribed: true,
         messageId: "msg-1",
       },
+    ];
+    expect(normalizeMediaFacts(input, defaults)).toEqual(expected);
+    expect(toInboundMediaFacts(input, defaults)).toEqual(expected);
+    expect(
+      normalizeMediaFacts([{ path: " image.png ", workspaceDir: " /tmp/workspace " }]),
+    ).toEqual([
+      {
+        path: "image.png",
+        url: undefined,
+        contentType: undefined,
+        kind: undefined,
+        transcribed: false,
+        messageId: undefined,
+        workspaceDir: "/tmp/workspace",
+      },
     ]);
   });
 
   it("builds legacy media payload fields from inbound media facts", () => {
-    expect(
-      buildChannelInboundMediaPayload([
-        { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
-        {
-          url: "https://example.test/audio.mp3",
-          contentType: "audio/mpeg",
-          kind: "audio",
-          transcribed: true,
-        },
-      ]),
-    ).toEqual({
+    const media = [
+      { path: "/tmp/image.png", contentType: "image/png", kind: "image" as const },
+      {
+        url: "https://example.test/audio.mp3",
+        contentType: "audio/mpeg",
+        kind: "audio" as const,
+        transcribed: true,
+      },
+    ];
+    const expected = {
       MediaPath: "/tmp/image.png",
       MediaUrl: "/tmp/image.png",
       MediaType: "image/png",
@@ -86,7 +131,9 @@ describe("channel inbound media facts", () => {
       MediaUrls: ["/tmp/image.png", "https://example.test/audio.mp3"],
       MediaTypes: ["image/png", "audio/mpeg"],
       MediaTranscribedIndexes: [1],
-    });
+    };
+    expect(projectMediaFacts(media)).toEqual(expected);
+    expect(buildChannelInboundMediaPayload(media)).toEqual(expected);
   });
 
   it("keeps legacy media arrays index-aligned for mixed path and URL media", () => {
@@ -102,6 +149,54 @@ describe("channel inbound media facts", () => {
       { path: "/tmp/image.png", url: "/tmp/image.png", mime: "image/png" },
       { path: undefined, url: "https://example.test/remote.png", mime: "image/png" },
     ]);
+  });
+
+  it("keeps compact and cardinality-preserving adapter projections byte-identical", () => {
+    const media = [{ path: "/tmp/image.png", contentType: "image/png" }, { path: "/tmp/file.bin" }];
+    const compact = {
+      MediaPath: "/tmp/image.png",
+      MediaUrl: "/tmp/image.png",
+      MediaType: "image/png",
+      MediaPaths: ["/tmp/image.png", "/tmp/file.bin"],
+      MediaUrls: ["/tmp/image.png", "/tmp/file.bin"],
+      MediaTypes: ["image/png"],
+    };
+    expect(projectMediaFacts(media, "compact")).toEqual(compact);
+    expect(buildAgentMediaPayload(media)).toEqual(compact);
+    expect(buildMediaPayload(media)).toEqual(compact);
+
+    const aligned = { ...compact, MediaTypes: ["image/png", ""] };
+    expect(projectMediaFacts(media, "aligned")).toEqual(aligned);
+    expect(buildMediaPayload(media, { preserveMediaTypeCardinality: true })).toEqual(aligned);
+  });
+
+  it("keeps richer fact fields out of legacy outbound payloads", () => {
+    const richerMedia = [
+      {
+        path: "/tmp/voice-note.ogg",
+        url: "https://example.test/voice-note.ogg",
+        kind: "audio" as const,
+      },
+    ];
+    const compact = {
+      MediaPath: "/tmp/voice-note.ogg",
+      MediaUrl: "/tmp/voice-note.ogg",
+      MediaType: undefined,
+      MediaPaths: ["/tmp/voice-note.ogg"],
+      MediaUrls: ["/tmp/voice-note.ogg"],
+      MediaTypes: undefined,
+    };
+    expect(projectMediaFacts(richerMedia, "compact")).toEqual(compact);
+    expect(buildAgentMediaPayload(richerMedia)).toEqual(compact);
+    expect(buildMediaPayload(richerMedia)).toEqual(compact);
+    expect(projectMediaFacts(richerMedia, "aligned")).toEqual({
+      ...compact,
+      MediaTypes: [""],
+    });
+    expect(buildMediaPayload(richerMedia, { preserveMediaTypeCardinality: true })).toEqual({
+      ...compact,
+      MediaTypes: [""],
+    });
   });
 
   it("maps inbound media facts into history media entries", () => {

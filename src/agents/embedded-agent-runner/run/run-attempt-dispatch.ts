@@ -32,6 +32,7 @@ type AttemptRuntime = {
   workspaceDir: string;
   isCanonicalWorkspace: boolean;
   agentDir: string;
+  preparedModelRuntime?: EmbeddedRunAttemptParams["preparedModelRuntime"];
   contextEngine?: EmbeddedRunAttemptParams["contextEngine"];
   contextTokenBudget?: number;
   contextWindowInfo?: EmbeddedRunAttemptParams["contextWindowInfo"];
@@ -54,7 +55,6 @@ type AttemptRuntime = {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: EmbeddedRunAttemptParams["modelRegistry"];
   agentId: string;
-  beforeAgentStartResult: EmbeddedRunAttemptParams["beforeAgentStartResult"];
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"];
   fastMode: EmbeddedRunAttemptParams["fastMode"];
   fastModeStartedAtMs?: number;
@@ -163,6 +163,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
   const rawAttempt = await runEmbeddedAttemptWithBackend({
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
+    conversationRecall: params.conversationRecall,
     promptCacheKey: params.promptCacheKey,
     sandboxSessionKey: params.sandboxSessionKey,
     trigger: params.trigger,
@@ -203,6 +204,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     workspaceDir: runtime.workspaceDir,
     cwd: params.cwd,
     agentDir: runtime.agentDir,
+    preparedModelRuntime: runtime.preparedModelRuntime,
     config: params.config,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     ...(runtime.contextEngine
@@ -263,7 +265,6 @@ export async function dispatchEmbeddedRunAttempt(input: {
     toolAuthProfileStore: runtime.toolAuthProfileStore,
     modelRegistry: runtime.modelRegistry,
     agentId: runtime.agentId,
-    beforeAgentStartResult: runtime.beforeAgentStartResult,
     thinkLevel: runtime.thinkLevel,
     onToolOutcome: control.onToolOutcome,
     allocateToolOutcomeOrdinal: control.allocateToolOutcomeOrdinal,
@@ -325,6 +326,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
     streamParams: params.streamParams,
     modelRun: params.modelRun,
     disableTrajectory: params.disableTrajectory,
@@ -341,6 +343,8 @@ export async function dispatchEmbeddedRunAttempt(input: {
     ...(params.systemAgentTool ? { systemAgentTool: params.systemAgentTool } : {}),
     cleanupBundleMcpOnRunEnd: params.cleanupBundleMcpOnRunEnd,
     disableMessageTool: params.disableMessageTool,
+    swarmCollector: params.swarmCollector,
+    swarmOutputSchema: params.swarmOutputSchema,
     forceRestartSafeTools: params.forceRestartSafeTools,
     forceMessageTool: params.forceMessageTool,
     enableHeartbeatTool: params.enableHeartbeatTool,

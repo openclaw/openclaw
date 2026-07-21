@@ -38,10 +38,14 @@ export function buildGatewaySessionEventFields(params: {
     archivedAt: sessionRow.archivedAt ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
+    icon: sessionRow.icon ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
+    agentStatus: sessionRow.agentStatus ?? null,
+    observerDigest: sessionRow.observerDigest ?? null,
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
+    swarmGroupId: sessionRow.swarmGroupId,
     spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
     spawnedCwd: sessionRow.spawnedCwd,
     forkedFromParent: sessionRow.forkedFromParent,
@@ -81,6 +85,8 @@ export function buildGatewaySessionEventFields(params: {
     model: sessionRow.model,
     agentRuntime: sessionRow.agentRuntime,
     status: sessionRow.status,
+    // Explicit null lets subscribed clients clear the previous run's failure reason.
+    lastRunError: sessionRow.lastRunError ?? null,
     // Explicit false lets subscribed clients drop the flag during merge-reconcile.
     hasAutomation: sessionRow.hasAutomation ?? false,
     ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),

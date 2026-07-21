@@ -1,3 +1,244 @@
+// Pure stream helpers stay above browser bindings so the Node regression test can exercise the
+// Gateway-compatible assembler without constructing a WebView.
+function chatMessageText(message) {
+  const content = message?.content;
+  if (Array.isArray(content)) {
+    const textBlocks = content
+      .filter((block) => block?.type === "text" && typeof block.text === "string")
+      .map((block) => block.text);
+    if (textBlocks.length > 0) {
+      return textBlocks.join("\n\n");
+    }
+  }
+  // Match the Control UI fallback contract in ui/src/lib/chat/message-extract.ts: typed content
+  // blocks, then plain-string content, then top-level message.text.
+  if (typeof content === "string") {
+    return content;
+  }
+  return typeof message?.text === "string" ? message.text : null;
+}
+
+function assembleChatDelta(currentText, payload) {
+  const snapshot = chatMessageText(payload?.message);
+  if (typeof payload?.deltaText === "string") {
+    if (payload.replace === true) {
+      return payload.deltaText;
+    }
+    if (currentText === null) {
+      return snapshot ?? payload.deltaText;
+    }
+    if (snapshot !== null) {
+      const prefixLength = snapshot.length - payload.deltaText.length;
+      if (
+        prefixLength !== currentText.length ||
+        snapshot.slice(0, prefixLength) !== currentText
+      ) {
+        return snapshot;
+      }
+    }
+    return `${currentText}${payload.deltaText}`;
+  }
+  return snapshot;
+}
+
+const INLINE_WIDGET_DOCUMENTS_PATH = "/__openclaw__/canvas/documents";
+const INLINE_WIDGET_MIN_HEIGHT = 160;
+const INLINE_WIDGET_MAX_HEIGHT = 1200;
+const INLINE_WIDGET_VIEWPORT_MAX_HEIGHT = 160;
+const CANVAS_SURFACE_REFRESH_INTERVAL_MS = 8 * 60 * 1_000;
+
+function decodeRepeatedly(raw) {
+  let value = raw;
+  for (let index = 0; index < 8; index += 1) {
+    let decoded;
+    try {
+      decoded = decodeURIComponent(value);
+    } catch {
+      return null;
+    }
+    if (decoded === value) {
+      return decoded;
+    }
+    value = decoded;
+  }
+  return null;
+}
+
+function canonicalInlineWidgetTarget(raw) {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const target = raw.trim();
+  if (!target.startsWith("/") || target.startsWith("//") || target.includes("\\")) {
+    return null;
+  }
+  const suffixIndex = [target.indexOf("?"), target.indexOf("#")]
+    .filter((index) => index >= 0)
+    .reduce((lowest, index) => Math.min(lowest, index), target.length);
+  const path = target.slice(0, suffixIndex);
+  if (!path.startsWith(`${INLINE_WIDGET_DOCUMENTS_PATH}/`)) {
+    return null;
+  }
+  const segments = path.split("/");
+  if (
+    segments[0] !== "" ||
+    segments.slice(1).some((segment) => {
+      if (!segment) {
+        return true;
+      }
+      const decoded = decodeRepeatedly(segment);
+      return (
+        decoded === null ||
+        decoded === "." ||
+        decoded === ".." ||
+        decoded.includes("/") ||
+        decoded.includes("\\")
+      );
+    })
+  ) {
+    return null;
+  }
+  try {
+    const parsed = new URL(target, "http://openclaw.invalid");
+    return parsed.origin === "http://openclaw.invalid" && parsed.pathname === path ? target : null;
+  } catch {
+    return null;
+  }
+}
+
+function boundedWidgetKey(raw) {
+  if (raw.length <= 200) {
+    return raw;
+  }
+  let hash = 2166136261;
+  for (const character of raw) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  const prefix = raw.replace(/[^A-Za-z0-9._-]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 80);
+  return `${prefix || "widget"}-${hash.toString(16).padStart(8, "0")}`;
+}
+
+function coerceInlineWidgetPreview(block) {
+  const preview = block?.type === "canvas" ? block.preview : null;
+  if (
+    !preview ||
+    preview.kind !== "canvas" ||
+    preview.surface !== "assistant_message" ||
+    preview.render !== "url" ||
+    !["scripts", "strict"].includes(preview.sandbox)
+  ) {
+    return null;
+  }
+  const target = canonicalInlineWidgetTarget(preview.url);
+  if (!target) {
+    return null;
+  }
+  const preferredHeight = Number.isFinite(preview.preferredHeight)
+    ? Math.min(
+        Math.max(Math.trunc(preview.preferredHeight), INLINE_WIDGET_MIN_HEIGHT),
+        INLINE_WIDGET_MAX_HEIGHT,
+      )
+    : 320;
+  return {
+    key: boundedWidgetKey(
+      typeof preview.viewId === "string" && preview.viewId.trim() ? preview.viewId.trim() : target,
+    ),
+    title: typeof preview.title === "string" && preview.title.trim() ? preview.title.trim() : "Widget",
+    target,
+    preferredHeight,
+    sandbox: preview.sandbox,
+  };
+}
+
+function chatMessageWidgets(message) {
+  const role = typeof message?.role === "string" ? message.role.trim().toLowerCase() : null;
+  if (role !== "assistant" || !Array.isArray(message?.content)) {
+    return [];
+  }
+  const emitted = new Set();
+  return message.content
+    .map(coerceInlineWidgetPreview)
+    .filter(Boolean)
+    .map((widget) => {
+      const base = widget.key.slice(0, 240);
+      let key = widget.key;
+      let suffix = 2;
+      while (emitted.has(key)) {
+        key = `${base}-${suffix}`;
+        suffix += 1;
+      }
+      emitted.add(key);
+      return key === widget.key ? widget : { ...widget, key };
+    });
+}
+
+function isLoopbackHostname(rawHostname) {
+  const hostname = rawHostname.toLowerCase().replace(/^\[|\]$/gu, "");
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname === "::1") {
+    return true;
+  }
+  const octets = hostname.split(".");
+  return (
+    octets.length === 4 &&
+    octets[0] === "127" &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255)
+  );
+}
+
+function resolveInlineWidgetUrl(rawSurfaceUrl, rawTarget) {
+  const target = canonicalInlineWidgetTarget(rawTarget);
+  if (!target || typeof rawSurfaceUrl !== "string") {
+    return null;
+  }
+  let surface;
+  try {
+    surface = new URL(rawSurfaceUrl.trim());
+  } catch {
+    return null;
+  }
+  const secureTransport =
+    surface.protocol === "https:" ||
+    (surface.protocol === "http:" && isLoopbackHostname(surface.hostname));
+  if (
+    !secureTransport ||
+    surface.username ||
+    surface.password ||
+    surface.search ||
+    surface.hash
+  ) {
+    return null;
+  }
+  const encodedSegments = surface.pathname.split("/");
+  if (encodedSegments[0] !== "" || encodedSegments.slice(1).some((segment) => !segment)) {
+    return null;
+  }
+  const segments = [];
+  for (const encoded of encodedSegments.slice(1)) {
+    const decoded = decodeRepeatedly(encoded);
+    if (
+      decoded === null ||
+      decoded === "." ||
+      decoded === ".." ||
+      decoded.includes("/") ||
+      decoded.includes("\\")
+    ) {
+      return null;
+    }
+    segments.push(decoded);
+  }
+  if (
+    segments.length < 3 ||
+    segments.at(-3) !== "__openclaw__" ||
+    segments.at(-2) !== "cap" ||
+    !segments.at(-1)
+  ) {
+    return null;
+  }
+  const prefix = surface.pathname.replace(/\/+$/u, "");
+  return `${surface.origin}${prefix}${target}`;
+}
+
 const tauri = window["__TAURI__"];
 const { invoke } = tauri.core;
 const { listen } = tauri.event;
@@ -9,6 +250,15 @@ const elements = {
   agentMenu: document.querySelector("#agent-menu"),
   composer: document.querySelector("#composer"),
   input: document.querySelector("#message"),
+  reply: document.querySelector("#reply"),
+  replyAgentAvatar: document.querySelector("#reply-agent-avatar"),
+  replyAgentName: document.querySelector("#reply-agent-name"),
+  replyError: document.querySelector("#reply-error"),
+  replyScroll: document.querySelector("#reply-scroll"),
+  replyState: document.querySelector("#reply-state"),
+  replyText: document.querySelector("#reply-text"),
+  replyThinking: document.querySelector("#reply-thinking"),
+  replyWidgets: document.querySelector("#reply-widgets"),
   send: document.querySelector("#send"),
   sendIcon: document.querySelector("#send-icon"),
   shortcutCapture: document.querySelector("#shortcut-capture"),
@@ -32,9 +282,19 @@ let acceptedTimer = null;
 let visibilitySequence = 0;
 let popoverSequence = 0;
 let sendError = "";
+let gatewayState = "down";
+let gatewayNotice = "";
+let canvasSurfaceUrl = null;
+let canvasSurfaceRefreshedAt = 0;
+let canvasSurfaceRefreshPromise = null;
+let gatewayDisconnectSequence = 0;
 let openPopover = null;
 let menuIndex = 0;
 let capturingShortcut = false;
+let activeReply = null;
+let pendingChatEvents = [];
+
+const MAX_PENDING_CHAT_EVENTS = 64;
 
 function friendlyError(error, fallback = "Could not send the message.") {
   if (typeof error === "string") {
@@ -48,13 +308,64 @@ function setError(message = "") {
   elements.composer.classList.toggle("has-error", Boolean(message));
 }
 
+function renderStatus() {
+  if (gatewayState === "pairing-required") {
+    setError(gatewayNotice || "Approve this device in the dashboard (Nodes)");
+    return;
+  }
+  if (gatewayState === "credential-required") {
+    setError(
+      gatewayNotice || "Gateway requires a credential — open the dashboard on the gateway host",
+    );
+    return;
+  }
+  if (gatewayState === "tls-failure") {
+    setError("Gateway TLS trust failed — check the certificate fingerprint");
+    return;
+  }
+  setError(
+    gatewayState === "up" ? sendError : gatewayNotice || "Gateway unreachable — retrying",
+  );
+}
+
+function setGatewayState(payload) {
+  const wasUp = gatewayState === "up";
+  gatewayState = payload?.state || "down";
+  gatewayNotice = typeof payload?.notice === "string" ? payload.notice : "";
+  const nextCanvasSurfaceUrl =
+    gatewayState === "up" && typeof payload?.canvasSurfaceUrl === "string"
+      ? payload.canvasSurfaceUrl
+      : null;
+  if (nextCanvasSurfaceUrl !== canvasSurfaceUrl) {
+    canvasSurfaceRefreshedAt = nextCanvasSurfaceUrl ? Date.now() : 0;
+  }
+  canvasSurfaceUrl = nextCanvasSurfaceUrl;
+  if (!canvasSurfaceUrl) {
+    canvasSurfaceRefreshPromise = null;
+  }
+  if (gatewayState !== "up") {
+    gatewayDisconnectSequence += 1;
+    terminalizeDisconnectedReply();
+  }
+  renderStatus();
+  updateSendButton();
+  if (activeReply?.widgets.length) {
+    renderReplyWidgets();
+  }
+  if (gatewayState === "up" && !wasUp) {
+    void refreshAgents();
+  }
+}
+
 function updateSendButton() {
   const empty = !elements.input.value.trim();
-  elements.send.disabled = empty || selectingAgent || sending || accepted;
+  const streaming = activeReply !== null && !activeReply.terminal;
+  elements.send.disabled =
+    gatewayState !== "up" || empty || selectingAgent || sending || accepted || streaming;
   elements.send.classList.toggle("sending", sending);
   elements.send.classList.toggle("accepted", accepted);
   elements.sendIcon.textContent = sending ? "" : accepted ? "✓" : "↑";
-  elements.input.readOnly = sending || accepted;
+  elements.input.readOnly = sending || accepted || streaming;
 }
 
 function nameHue(name) {
@@ -89,6 +400,334 @@ function renderAvatar(target, identity) {
   });
   image.src = avatarUrl;
   target.replaceChildren(image);
+}
+
+function resetAccepted() {
+  window.clearTimeout(acceptedTimer);
+  acceptedTimer = null;
+  accepted = false;
+}
+
+function clearReply() {
+  activeReply = null;
+  elements.reply.hidden = true;
+  elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
+  elements.replyError.textContent = "";
+  elements.replyState.textContent = "";
+  elements.replyText.textContent = "";
+  elements.replyWidgets.replaceChildren();
+  elements.replyWidgets.hidden = true;
+  elements.replyThinking.hidden = true;
+  scheduleWidgetSync();
+}
+
+function scrollReplyToEnd() {
+  window.requestAnimationFrame(() => {
+    elements.replyScroll.scrollTop = elements.replyScroll.scrollHeight;
+  });
+}
+
+function renderReplyText() {
+  // Deliberately plain text: this small native surface avoids a Markdown dependency and preserves
+  // whitespace, leaving Markdown punctuation visible instead of interpreting agent output.
+  elements.replyText.textContent = activeReply?.text || "";
+  if (activeReply?.widgets.length) {
+    scheduleWidgetSync();
+  }
+  scrollReplyToEnd();
+}
+
+function canvasSurfaceNeedsRefresh() {
+  return (
+    Boolean(canvasSurfaceUrl) &&
+    Date.now() - canvasSurfaceRefreshedAt >= CANVAS_SURFACE_REFRESH_INTERVAL_MS
+  );
+}
+
+function refreshCanvasSurface() {
+  if (canvasSurfaceRefreshPromise) {
+    return canvasSurfaceRefreshPromise;
+  }
+  if (!canvasSurfaceUrl) {
+    return Promise.resolve(null);
+  }
+  canvasSurfaceRefreshPromise = invoke("quickchat_refresh_widget_surface")
+    .then((refreshed) => {
+      canvasSurfaceUrl = typeof refreshed === "string" && refreshed.trim() ? refreshed : null;
+      canvasSurfaceRefreshedAt = canvasSurfaceUrl ? Date.now() : 0;
+      return canvasSurfaceUrl;
+    })
+    .catch(() => {
+      canvasSurfaceUrl = null;
+      canvasSurfaceRefreshedAt = 0;
+      return null;
+    })
+    .finally(() => {
+      canvasSurfaceRefreshPromise = null;
+      if (activeReply?.widgets.length) {
+        renderReplyWidgets();
+      }
+    });
+  return canvasSurfaceRefreshPromise;
+}
+
+let widgetSyncScheduled = false;
+let widgetSyncPromise = Promise.resolve();
+
+function scheduleWidgetSync() {
+  if (widgetSyncScheduled) {
+    return;
+  }
+  const generation = visibilitySequence;
+  widgetSyncScheduled = true;
+  window.requestAnimationFrame(() => {
+    widgetSyncScheduled = false;
+    const widgets = activeReply?.widgets || [];
+    const activeKey = activeReply?.activeWidgetKey ?? null;
+    const host = elements.replyWidgets.querySelector(".inline-widget-host");
+    const rect = host?.getBoundingClientRect();
+    const layouts = [];
+    if (rect && rect.width > 0 && rect.height > 0) {
+      for (const widget of widgets) {
+        const url = resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target);
+        if (!url) {
+          continue;
+        }
+        layouts.push({
+          key: widget.key,
+          url,
+          sandbox: widget.sandbox,
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+          visible: widget.key === activeKey && !openPopover,
+        });
+      }
+    }
+    widgetSyncPromise = widgetSyncPromise
+      .catch(() => {})
+      .then(() =>
+        invoke("quickchat_sync_widgets", {
+          widgets: layouts,
+          hasWidgets: widgets.length > 0,
+          expanded: !elements.reply.hidden || Boolean(openPopover),
+          generation,
+        }),
+      )
+      .catch((error) => {
+        sendError = friendlyError(error, "Could not render the widget.");
+        renderStatus();
+      });
+  });
+}
+
+function selectReplyWidget(key) {
+  if (!activeReply?.widgets.some((widget) => widget.key === key)) {
+    return;
+  }
+  activeReply.activeWidgetKey = key;
+  renderReplyWidgets();
+}
+
+function renderReplyWidgets() {
+  elements.replyWidgets.replaceChildren();
+  const widgets = activeReply?.widgets || [];
+  elements.replyWidgets.hidden = widgets.length === 0;
+  elements.reply.classList.toggle("has-widgets", widgets.length > 0);
+  if (widgets.length === 0) {
+    scheduleWidgetSync();
+    return;
+  }
+
+  const activeKey = widgets.some((widget) => widget.key === activeReply.activeWidgetKey)
+    ? activeReply.activeWidgetKey
+    : widgets[0].key;
+  activeReply.activeWidgetKey = activeKey;
+  if (widgets.length > 1) {
+    const tabs = document.createElement("div");
+    tabs.className = "inline-widget-tabs";
+    for (const widget of widgets) {
+      const tab = document.createElement("button");
+      tab.type = "button";
+      tab.className = "inline-widget-tab";
+      tab.classList.toggle("active", widget.key === activeKey);
+      tab.textContent = widget.title;
+      tab.addEventListener("click", () => selectReplyWidget(widget.key));
+      tabs.append(tab);
+    }
+    elements.replyWidgets.append(tabs);
+  }
+
+  const widget = widgets.find((candidate) => candidate.key === activeKey) ?? widgets[0];
+  const card = document.createElement("section");
+  card.className = "inline-widget";
+  card.dataset.widgetKey = widget.key;
+  const title = document.createElement("div");
+  title.className = "inline-widget-title";
+  title.textContent = widget.title;
+  card.append(title);
+
+  if (!resolveInlineWidgetUrl(canvasSurfaceUrl, widget.target)) {
+    const unavailable = document.createElement("div");
+    unavailable.className = "inline-widget-unavailable";
+    unavailable.textContent = "Widget unavailable until the Gateway reconnects.";
+    card.append(unavailable);
+  } else {
+    const host = document.createElement("div");
+    host.className = "inline-widget-host";
+    host.style.height = `${Math.min(widget.preferredHeight, INLINE_WIDGET_VIEWPORT_MAX_HEIGHT)}px`;
+    card.append(host);
+  }
+  elements.replyWidgets.append(card);
+  scheduleWidgetSync();
+  scrollReplyToEnd();
+}
+
+function updateReplyWidgets(message) {
+  if (!Array.isArray(message?.content)) {
+    return;
+  }
+  const role = typeof message?.role === "string" ? message.role.trim().toLowerCase() : null;
+  if (role !== "assistant") {
+    return;
+  }
+  const widgets = chatMessageWidgets(message);
+  const changed = JSON.stringify(widgets) !== JSON.stringify(activeReply?.widgets || []);
+  if (activeReply && changed) {
+    activeReply.widgets = widgets;
+    if (!widgets.some((widget) => widget.key === activeReply.activeWidgetKey)) {
+      activeReply.activeWidgetKey = widgets[0]?.key ?? null;
+    }
+    if (widgets.length && canvasSurfaceNeedsRefresh()) {
+      const refresh = refreshCanvasSurface();
+      canvasSurfaceUrl = null;
+      renderReplyWidgets();
+      void refresh;
+    } else {
+      renderReplyWidgets();
+    }
+  }
+}
+
+function stopReplyThinking() {
+  elements.replyThinking.hidden = true;
+}
+
+function terminalizeDisconnectedReply() {
+  if (!activeReply || activeReply.terminal) {
+    return;
+  }
+  // Chat events are not replayed after a socket gap. Unlock the composer instead of leaving a
+  // reply waiting forever for a terminal frame that may have been lost while disconnected.
+  activeReply.terminal = true;
+  stopReplyThinking();
+  elements.reply.classList.add("has-error", "is-terminal");
+  elements.replyState.textContent = "Interrupted";
+  elements.replyError.textContent = "Connection lost before the reply completed.";
+  scrollReplyToEnd();
+}
+
+function replyTargetMatches(target, payload) {
+  if (!target || payload?.sessionKey !== target.sessionKey) {
+    return false;
+  }
+  return target.agentId == null || payload?.agentId === target.agentId;
+}
+
+function startReply(target, identity, runId) {
+  activeReply = {
+    runId,
+    target: {
+      sessionKey: target.sessionKey,
+      agentId: typeof target.agentId === "string" ? target.agentId : null,
+    },
+    terminal: false,
+    text: null,
+    widgets: [],
+    activeWidgetKey: null,
+  };
+  elements.reply.hidden = false;
+  elements.reply.classList.remove("has-error", "has-widgets", "is-terminal");
+  elements.replyError.textContent = "";
+  elements.replyState.textContent = "";
+  elements.replyText.textContent = "";
+  elements.replyWidgets.replaceChildren();
+  elements.replyWidgets.hidden = true;
+  elements.replyThinking.textContent = reducedMotion.matches ? "…" : "Thinking…";
+  elements.replyThinking.hidden = false;
+  renderAvatar(elements.replyAgentAvatar, identity);
+  elements.replyAgentName.textContent = identity?.name?.trim() || "Agent";
+  void invoke("quickchat_set_expanded", { expanded: true });
+}
+
+function applyChatEvent(payload) {
+  if (!activeReply) {
+    return;
+  }
+  // The chat.send ACK owns this reply. Exact runId equality is primary; the routing target remains
+  // a secondary guard so concurrent turns from other surfaces never enter this reply area.
+  if (payload?.runId !== activeReply.runId || !replyTargetMatches(activeReply.target, payload)) {
+    return;
+  }
+  if (activeReply.terminal) {
+    return;
+  }
+
+  updateReplyWidgets(payload?.message);
+  const hasTextUpdate =
+    typeof payload?.deltaText === "string" || chatMessageText(payload?.message) !== null;
+  if (hasTextUpdate) {
+    const nextText = assembleChatDelta(activeReply.text, payload);
+    if (nextText !== null) {
+      activeReply.text = nextText;
+      renderReplyText();
+    }
+  }
+
+  if (payload?.state === "delta") {
+    stopReplyThinking();
+    return;
+  }
+  if (!["final", "aborted", "error"].includes(payload?.state)) {
+    return;
+  }
+
+  activeReply.terminal = true;
+  pendingChatEvents = [];
+  stopReplyThinking();
+  elements.reply.classList.add("is-terminal");
+  if (payload.state === "final") {
+    elements.replyState.textContent = "Done";
+  } else if (payload.state === "aborted") {
+    activeReply.text = `${activeReply.text || ""}${activeReply.text ? "\n\n" : ""}(stopped)`;
+    elements.replyState.textContent = "Stopped";
+    renderReplyText();
+  } else {
+    elements.reply.classList.add("has-error");
+    elements.replyState.textContent = "Error";
+    elements.replyError.textContent =
+      typeof payload.errorMessage === "string" && payload.errorMessage.trim()
+        ? payload.errorMessage
+        : "Gateway reply failed.";
+    scrollReplyToEnd();
+  }
+  updateSendButton();
+}
+
+function handleChatEvent(payload) {
+  if (activeReply) {
+    applyChatEvent(payload);
+    return;
+  }
+  if (sending) {
+    // The Gateway may stream before the chat.send ack reaches invoke; replay only after the native
+    // command returns the accepted routing target, then apply the same session/run filters.
+    if (pendingChatEvents.length === MAX_PENDING_CHAT_EVENTS) {
+      pendingChatEvents.shift();
+    }
+    pendingChatEvents.push(payload);
+  }
 }
 
 function renderIdentity(identity) {
@@ -160,7 +799,7 @@ async function selectAgent(agentId) {
     closePopover();
   } catch (error) {
     sendError = friendlyError(error, "Could not select that agent.");
-    setError(sendError);
+    renderStatus();
   } finally {
     selectingAgent = false;
     updateSendButton();
@@ -182,6 +821,9 @@ function setPopoverVisibility(kind) {
   if (kind !== "shortcut") {
     resetShortcutCapture();
   }
+  if (activeReply?.widgets.length) {
+    scheduleWidgetSync();
+  }
 }
 
 async function openNamedPopover(kind) {
@@ -194,7 +836,7 @@ async function openNamedPopover(kind) {
     await invoke("quickchat_set_expanded", { expanded: true });
   } catch (error) {
     sendError = friendlyError(error, "Could not open Quick Chat settings.");
-    setError(sendError);
+    renderStatus();
     return;
   }
   if (sequence !== popoverSequence) {
@@ -216,7 +858,7 @@ function closePopover(focusInput = true, compact = true) {
   ++popoverSequence;
   setPopoverVisibility(null);
   if (compact) {
-    void invoke("quickchat_set_expanded", { expanded: false });
+    void invoke("quickchat_set_expanded", { expanded: !elements.reply.hidden });
   }
   if (focusInput) {
     elements.input.focus();
@@ -294,24 +936,27 @@ async function saveShortcut(accelerator) {
   }
 }
 
-async function requestHide(force = false) {
-  if ((accepted && !force) || hiding) {
+async function requestHide() {
+  if (hiding) {
     return;
   }
   visibilitySequence += 1;
   const hideSequence = visibilitySequence;
   hiding = true;
+  pendingChatEvents = [];
   closePopover(false, false);
   document.body.classList.remove("shown");
   window.clearTimeout(hideTimer);
   hideTimer = window.setTimeout(
     async () => {
       try {
-        await invoke("quickchat_hide");
+        await invoke("quickchat_hide", { generation: hideSequence });
+        resetAccepted();
+        clearReply();
       } catch (error) {
         if (visibilitySequence === hideSequence) {
           sendError = friendlyError(error);
-          setError(sendError);
+          renderStatus();
           document.body.classList.add("shown");
           elements.input.focus();
         }
@@ -326,53 +971,83 @@ async function requestHide(force = false) {
 }
 
 function reveal() {
+  visibilitySequence += 1;
   window.clearTimeout(hideTimer);
-  if (accepted) {
-    window.clearTimeout(acceptedTimer);
-    acceptedTimer = null;
-    accepted = false;
-  }
+  resetAccepted();
   hiding = false;
   setPopoverVisibility(null);
-  setError(sendError);
+  renderStatus();
   updateSendButton();
   document.body.classList.remove("shown");
   window.requestAnimationFrame(() => {
     document.body.classList.add("shown");
     elements.input.focus();
   });
-  void refreshAgents();
+  if (gatewayState === "up") {
+    void refreshAgents();
+  }
   void refreshShortcutStatus();
 }
 
 async function send(openDashboard) {
   const message = elements.input.value.trim();
-  if (!message || selectingAgent || sending || accepted) {
+  if (gatewayState !== "up" || !message || selectingAgent || sending || accepted) {
     return;
   }
   sending = true;
+  const sendDisconnectSequence = gatewayDisconnectSequence;
+  const sendVisibilitySequence = visibilitySequence;
+  clearReply();
+  pendingChatEvents = [];
+  void invoke("quickchat_set_expanded", { expanded: false });
   sendError = "";
-  setError();
+  renderStatus();
   updateSendButton();
   try {
-    await invoke("quickchat_send", { message });
+    const sentIdentity = { ...activeIdentity };
+    const result = await invoke("quickchat_send", { message });
+    if (!result || typeof result.sessionKey !== "string") {
+      throw new Error("Gateway accepted the message without a routing target.");
+    }
+    if (typeof result.runId !== "string" || !result.runId) {
+      throw new Error("Gateway accepted the message without a run ID.");
+    }
     sending = false;
-    accepted = true;
     sendError = "";
     elements.input.value = "";
+    if (visibilitySequence !== sendVisibilitySequence || hiding) {
+      pendingChatEvents = [];
+      updateSendButton();
+      return;
+    }
+    accepted = true;
+    startReply(result, sentIdentity, result.runId);
+    const bufferedEvents = pendingChatEvents;
+    pendingChatEvents = [];
+    for (const payload of bufferedEvents) {
+      applyChatEvent(payload);
+    }
+    if (gatewayDisconnectSequence !== sendDisconnectSequence || gatewayState !== "up") {
+      terminalizeDisconnectedReply();
+    }
     updateSendButton();
     if (openDashboard) {
       void invoke("quickchat_show_dashboard");
     }
     acceptedTimer = window.setTimeout(() => {
       accepted = false;
+      acceptedTimer = null;
       updateSendButton();
-      void requestHide(true);
     }, 450);
   } catch (error) {
     sending = false;
+    pendingChatEvents = [];
+    if (visibilitySequence !== sendVisibilitySequence || hiding) {
+      updateSendButton();
+      return;
+    }
     sendError = friendlyError(error);
-    setError(sendError);
+    renderStatus();
     updateSendButton();
     elements.input.focus();
     // A strict send failure can mean the pinned agent vanished; re-sync the chip.
@@ -380,9 +1055,10 @@ async function send(openDashboard) {
   }
 }
 
+window.addEventListener("resize", scheduleWidgetSync);
 elements.input.addEventListener("input", () => {
   sendError = "";
-  setError();
+  renderStatus();
   updateSendButton();
 });
 elements.input.addEventListener("keydown", (event) => {
@@ -400,7 +1076,7 @@ elements.input.addEventListener("keydown", (event) => {
   }
   if (event.key === "Enter" && !openPopover) {
     event.preventDefault();
-    void send(event.ctrlKey);
+    void send(event.ctrlKey || event.metaKey);
   }
 });
 elements.agentChip.addEventListener("click", () => {
@@ -475,11 +1151,16 @@ document.addEventListener("pointerdown", (event) => {
 });
 
 await listen("quickchat:shown", () => {
-  visibilitySequence += 1;
   reveal();
 });
 await listen("quickchat:hide-requested", () => {
   void requestHide();
+});
+await listen("quickchat:gateway-state", (event) => {
+  setGatewayState(event.payload);
+});
+await listen("quickchat:chat-event", (event) => {
+  handleChatEvent(event.payload);
 });
 
 const readySequence = visibilitySequence;
@@ -489,9 +1170,9 @@ try {
     if (shouldShow) {
       reveal();
     } else {
-      void requestHide(true);
+      void requestHide();
     }
   }
 } catch {
-  void requestHide(true);
+  void requestHide();
 }

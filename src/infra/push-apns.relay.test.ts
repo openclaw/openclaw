@@ -144,6 +144,29 @@ describe("push-apns.relay", () => {
       });
     });
 
+    it("uses the configured timeout when the env override is blank", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {
+          OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+          OPENCLAW_APNS_RELAY_TIMEOUT_MS: "   ",
+        } as NodeJS.ProcessEnv,
+        {
+          push: {
+            apns: {
+              relay: {
+                timeoutMs: 2500,
+              },
+            },
+          },
+        },
+      );
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: 2500,
+      });
+    });
+
     it("allows loopback http URLs for alternate truthy env values", () => {
       const resolved = resolveApnsRelayConfigFromEnv({
         OPENCLAW_APNS_RELAY_BASE_URL: "http://[::1]:8787",
@@ -432,6 +455,35 @@ describe("push-apns.relay", () => {
       expect(result.ok).toBe(false);
       expect(result.reason).toBe("RelayResponseTooLarge");
       expect(result.status).toBe(202);
+    });
+
+    it("rejects relay body with malformed UTF-8 bytes instead of parsing corrupted metadata", async () => {
+      // Regression guard: with { fatal: true } on the TextDecoder, a relay body
+      // containing invalid UTF-8 sequences must be rejected at decode time and
+      // treated as absent (status-derived fallback). Corrupted field values must
+      // never reach the caller.
+      const encoder = new TextEncoder();
+      const prefix = encoder.encode('{"ok":true,"status":200,"apnsId":"test-');
+      const suffix = encoder.encode('1234"}');
+      const body = new Uint8Array(prefix.length + 1 + suffix.length);
+      body.set(prefix, 0);
+      body[prefix.length] = 0xff; // bare invalid byte inside the apns-id string
+      body.set(suffix, prefix.length + 1);
+
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 202, headers: { "content-type": "application/json" } }),
+        );
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 202,
+        apnsId: undefined,
+        reason: undefined,
+        tokenSuffix: undefined,
+      });
     });
   });
 });

@@ -17,11 +17,12 @@ afterEach(() => {
   container.remove();
 });
 
-function renderBadges(placementState?: SessionPlacementState) {
+function renderBadges(placementState?: SessionPlacementState, workspaceConflictCount?: number) {
   render(
     renderSessionRowBadges({
       hasAutomation: false,
       placementState,
+      workspaceConflictCount,
     }),
     container,
   );
@@ -61,12 +62,106 @@ describe("session row placement badges", () => {
       renderSessionRowBadges({
         hasAutomation: true,
         placementState: "local",
-        worktreeId: "worktree-1",
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+    expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
+  });
+
+  it("renders a green open-pull-request indicator", () => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: false,
+        hasOpenPullRequest: true,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--pull-request");
+    expect(badge?.getAttribute("aria-label")).toBe("Open PR");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("renders a warning-colored approval-needed indicator", () => {
+    render(
+      renderSessionRowBadges({
+        hasApproval: true,
+        hasAutomation: false,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector(".session-row-badge--approval");
+    expect(badge?.getAttribute("aria-label")).toBe("Approval needed");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("keeps child-only automation and placement badges hidden while showing PR and approval", () => {
+    render(
+      renderSessionRowBadges({
+        isChild: true,
+        hasAutomation: true,
+        hasOpenPullRequest: true,
+        hasApproval: true,
+        placementState: "active",
       }),
       container,
     );
 
     expect(container.querySelectorAll(".session-row-badge")).toHaveLength(2);
+    expect(container.querySelector(".session-row-badge--pull-request")).not.toBeNull();
+    expect(container.querySelector(".session-row-badge--approval")).not.toBeNull();
     expect(container.querySelector(".session-row-badge--cloud")).toBeNull();
+  });
+
+  it("keeps conflict attention visible for child sessions", () => {
+    render(
+      renderSessionRowBadges({
+        isChild: true,
+        hasAutomation: false,
+        placementState: "reclaimed",
+        workspaceConflictCount: 2,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.placementState).toBe("reclaimed");
+    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+  });
+
+  it("uses the existing cloud badge to call out workspace conflicts", () => {
+    renderBadges("active", 3);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.workspaceConflicts).toBe("3");
+    expect(badge?.getAttribute("title")).toBe("Cloud worker: active · 3 workspace conflicts");
+    expect(container.querySelectorAll(".session-row-badge")).toHaveLength(1);
+
+    renderBadges("active", 1);
+    expect(container.querySelector(".session-row-badge--cloud")?.getAttribute("title")).toBe(
+      "Cloud worker: active · 1 workspace conflict",
+    );
+  });
+
+  it("keeps retained workspace conflicts visible after reclaim", () => {
+    renderBadges("reclaimed", 2);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.placementState).toBe("reclaimed");
+    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    expect(badge?.getAttribute("title")).toBe("Cloud worker: reclaimed · 2 workspace conflicts");
+  });
+
+  it("renders descendant conflict attention without claiming a parent placement state", () => {
+    renderBadges(undefined, 2);
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--cloud");
+    expect(badge?.dataset.placementState).toBeUndefined();
+    expect(badge?.dataset.workspaceConflicts).toBe("2");
+    expect(badge?.getAttribute("title")).toBe("Cloud worker children: 2 workspace conflicts");
   });
 });

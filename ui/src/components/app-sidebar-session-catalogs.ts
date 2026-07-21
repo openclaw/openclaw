@@ -22,7 +22,6 @@ import {
 import { searchForSession } from "../lib/sessions/index.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
-import { sidebarSessionMetaId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -40,8 +39,8 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   for (const catalog of catalogs) {
     for (const host of catalog.hosts) {
       for (const session of host.sessions) {
-        if (session.openClawSessionKey) {
-          keys.add(session.openClawSessionKey);
+        if (session.sessionKey) {
+          keys.add(session.sessionKey);
         }
       }
     }
@@ -60,6 +59,7 @@ export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
   search: string;
   canOpenTerminal: boolean;
+  meta: string;
 };
 
 /** Stamps a freshly adopted session key onto its catalog row so the sidebar
@@ -78,7 +78,7 @@ export function bindAdoptedCatalogSession(
                   ...host,
                   sessions: host.sessions.map((session) =>
                     session.threadId === detail.threadId
-                      ? { ...session, openClawSessionKey: detail.sessionKey }
+                      ? { ...session, sessionKey: detail.sessionKey }
                       : session,
                   ),
                 }
@@ -170,9 +170,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       host.sessions.map((session) => ({ host, session })),
     );
     const liveRows = rows.flatMap(({ session }) => {
-      const row = session.openClawSessionKey
-        ? liveRowsByKey.get(session.openClawSessionKey)
-        : undefined;
+      const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
       return row ? [row] : [];
     });
     const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
@@ -188,7 +186,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
       return nothing;
     }
     const errorMessage = errorMessages.join("; ");
-    const errorHelp = `${errorMessage}. Configure native session discovery in Settings > Automation > Plugins.`;
+    const errorHelp = `${errorMessage}. Configure native thread discovery in Settings > Automation > Plugins.`;
     return html`
       <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
         <div class="sidebar-recent-sessions__head">
@@ -344,9 +342,7 @@ function renderCatalogSessionRow(
     typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
       ? rawTimestamp * 1000
       : rawTimestamp;
-  const adoptedRow = session.openClawSessionKey
-    ? liveRowsByKey.get(session.openClawSessionKey)
-    : undefined;
+  const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
   if (adoptedRow) {
     const label = session.name || session.threadId;
     return params.renderLiveRow(adoptedRow, {
@@ -360,10 +356,9 @@ function renderCatalogSessionRow(
     hostId: host.hostId,
     threadId: session.threadId,
   } satisfies CatalogSessionKey;
-  const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
+  const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey);
   const label = session.name || session.threadId;
   const meta = formatSidebarTimestamp(timestamp);
-  const metaId = meta ? sidebarSessionMetaId(key) : undefined;
   const search = searchForSession(key);
   const href = `${pathForRoute("chat", params.basePath)}${search}`;
   const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
@@ -371,7 +366,7 @@ function renderCatalogSessionRow(
   const openTerminal = () => params.onOpenTerminal(catalogKey);
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(
-      { key: catalogKey, search, canOpenTerminal: session.canOpenTerminal === true },
+      { key: catalogKey, search, canOpenTerminal: session.canOpenTerminal === true, meta },
       x,
       y,
       trigger,
@@ -393,7 +388,6 @@ function renderCatalogSessionRow(
         class="sidebar-recent-session__link"
         title=${`${label} · ${host.label}`}
         aria-current=${active ? "page" : nothing}
-        aria-describedby=${metaId ?? nothing}
         @click=${(event: MouseEvent) => {
           if (!shouldHandleNavigationClick(event)) {
             return;
@@ -411,7 +405,6 @@ function renderCatalogSessionRow(
         </span>
       </a>
       <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-trail" id=${metaId ?? nothing}>${meta}</span>
         <span class="session-row-actions">
           <button
             class="session-action"

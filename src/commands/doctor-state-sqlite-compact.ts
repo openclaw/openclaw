@@ -1,9 +1,9 @@
 /** Explicit doctor maintenance for the canonical shared state SQLite database. */
 import fs from "node:fs";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
 import {
   assertOpenClawStateDatabaseForMaintenance,
-  clearOpenClawDatabaseVerificationHistory,
   clearOpenClawStateDatabaseOpenFailure,
   ensureOpenClawStatePermissions,
   isOpenClawStateDatabaseOpen,
@@ -64,6 +64,7 @@ export async function runDoctorStateSqliteCompact(
   return await withMaintenanceLock({
     env,
     operation: "state SQLite compaction",
+    protectedPaths: resolveSqliteDatabaseFilePaths(sqlitePath),
     run: () => {
       if (isOpenClawStateDatabaseOpen()) {
         throw new Error(
@@ -78,7 +79,6 @@ export async function runDoctorStateSqliteCompact(
               `OpenClaw state database ${sqlitePath} was compacted, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
             );
           }
-          clearOpenClawDatabaseVerificationHistory(sqlitePath, { env });
           clearOpenClawStateDatabaseOpenFailure(sqlitePath);
           ensureOpenClawStatePermissions(sqlitePath, env);
         },

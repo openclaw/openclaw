@@ -1,5 +1,6 @@
 // Attachment normalization converts message context media fields into typed
 // attachment records and classifies media kind from MIME or filename.
+import type { MediaKind } from "@openclaw/media-core/constants";
 import { getFileExtension, isAudioFileName, kindFromMime } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -91,9 +92,7 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
 }
 
 /** Classifies an attachment by MIME first, then by filename/URL extension fallback. */
-export function resolveAttachmentKind(
-  attachment: MediaAttachment,
-): "image" | "audio" | "video" | "document" | "unknown" {
+export function resolveAttachmentKind(attachment: MediaAttachment): Exclude<MediaKind, "sticker"> {
   const kind = kindFromMime(attachment.mime);
   if (kind === "image" || kind === "audio" || kind === "video") {
     return kind;

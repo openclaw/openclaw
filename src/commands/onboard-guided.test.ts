@@ -100,6 +100,20 @@ function detection(
   };
 }
 
+function setupApplyResult() {
+  return {
+    configPath: "/tmp/openclaw.json",
+    configHashBefore: null,
+    configHashAfter: null,
+    bootstrapPending: false,
+    lines: [],
+  };
+}
+
+function recommendationOutcome(config: OpenClawConfig) {
+  return { config, commitResult: vi.fn() };
+}
+
 function setupDeps(params: {
   prompter: WizardPrompter;
   detect?: GuidedOnboardingDeps["detect"];
@@ -120,14 +134,7 @@ function setupDeps(params: {
   return {
     createPrompter: () => params.prompter,
     persistAccessMode: vi.fn(async () => undefined),
-    applySetup:
-      params.applySetup ??
-      vi.fn(async () => ({
-        configPath: "/tmp/openclaw.json",
-        configHashBefore: null,
-        configHashAfter: null,
-        lines: [],
-      })),
+    applySetup: params.applySetup ?? vi.fn(async () => setupApplyResult()),
     launchHatchTui: vi.fn(async () => undefined),
     listManualOptions: vi.fn(async () => ({
       manualProviders: [],
@@ -146,7 +153,8 @@ function setupDeps(params: {
       })),
     persistRiskAcknowledgement: params.persistRiskAcknowledgement ?? vi.fn(async () => undefined),
     runSetupMemoryImportStep: params.runSetupMemoryImportStep ?? vi.fn(async () => undefined),
-    runAppRecommendations: params.runAppRecommendations ?? vi.fn(async ({ config }) => config),
+    runAppRecommendations:
+      params.runAppRecommendations ?? vi.fn(async ({ config }) => recommendationOutcome(config)),
     runBrowserHandoff:
       params.runBrowserHandoff ??
       (vi.fn(async () => ({
@@ -227,14 +235,9 @@ describe("runGuidedOnboarding", () => {
       select,
       confirm: vi.fn(async () => false),
     });
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: null,
-      configHashAfter: null,
-      lines: [],
-    }));
+    const applySetup = vi.fn(async () => setupApplyResult());
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
-      async ({ config }) => config,
+      async ({ config }) => recommendationOutcome(config),
     );
     const deps = setupDeps({ prompter, applySetup, runAppRecommendations });
     const runtime = makeRuntime();
@@ -275,14 +278,9 @@ describe("runGuidedOnboarding", () => {
 
   it("hands the custodian hatch to the browser on Linux after apply and recommendations", async () => {
     const prompter = createWizardPrompter();
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: null,
-      configHashAfter: null,
-      lines: [],
-    }));
+    const applySetup = vi.fn(async () => setupApplyResult());
     const runAppRecommendations = vi.fn<NonNullable<GuidedOnboardingDeps["runAppRecommendations"]>>(
-      async ({ config }) => config,
+      async ({ config }) => recommendationOutcome(config),
     );
     const probeBrowserHandoffGateway = vi.fn(async () => ({ ok: true }));
     const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
