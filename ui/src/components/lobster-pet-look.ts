@@ -2,10 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, svg, type TemplateResult } from "lit";
 import { lobsterHonorific } from "./lobster-dex.ts";
 import type {
+  LobsterPasserKind,
   LobsterPetAccessory,
   LobsterPetAntennae,
   LobsterPetBuild,
   LobsterPetClawSize,
+  LobsterPetEntrance,
   LobsterPetLook,
   LobsterPetMode,
   LobsterPetPalette,
@@ -15,9 +17,10 @@ import type {
 
 // Rarity ladder loosely mirrors real lobster genetics: blue ~1 in 2 million,
 // yellow ~1 in 30 million, calico ~1 in 30 million, split two-tone ~1 in
-// 50 million, albino/ghost ~1 in 100 million. Abyss is our deep-sea fantasy.
-// Split/calico extra geometry and ghost/abyss styling key off the palette id
-// (see lobster-pet.css and renderLobsterSvg).
+// 50 million, albino/ghost ~1 in 100 million, cotton candy ~1 in 100 million.
+// Abyss and lumen are our deep-sea fantasies. Split/calico extra geometry and
+// ghost/abyss/lumen/cottoncandy styling key off the palette id (see
+// lobster-pet.css and renderLobsterSvg).
 const PALETTES: Array<[LobsterPetPalette, number]> = [
   [{ id: "crimson", shell: "#ff4f40", claw: "#ff775f" }, 26],
   [{ id: "coral", shell: "#d0836a", claw: "#de9b80" }, 26],
@@ -28,8 +31,13 @@ const PALETTES: Array<[LobsterPetPalette, number]> = [
   [{ id: "gold", shell: "#f4b840", claw: "#f9d47a" }, 5],
   [{ id: "calico", shell: "#d97a3d", claw: "#e89a63" }, 3],
   [{ id: "abyss", shell: "#2c3b68", claw: "#465b96" }, 2],
+  // Bioluminescent: photophore freckles that only really glow in the dark
+  // theme (see .lob-lumen in lobster-pet.css).
+  [{ id: "lumen", shell: "#1d2f4e", claw: "#2e4a77" }, 2],
   [{ id: "ghost", shell: "#dce8f2", claw: "#ecf3fa" }, 1],
   [{ id: "split", shell: "#ff4f40", claw: "#ff775f" }, 1],
+  // Pastel pink/blue iridescence, after the famous Maine catches.
+  [{ id: "cottoncandy", shell: "#f6a8c9", claw: "#a5c6f0" }, 0.8],
   // The grail: homage to the classic OpenClaw logo (big raised claw, smirk,
   // angry brows, white sticker outline). ~0.5% of sessions.
   [{ id: "retro", shell: "#e8262c", claw: "#f04a3e" }, 0.5],
@@ -55,6 +63,10 @@ export function canonicalLobsterLook(palette: LobsterPetPalette): LobsterPetLook
     build: "round",
     clawSize: "regular",
     tailFan: false,
+    shiny: false,
+    crusherSide: null,
+    freckles: false,
+    glint: null,
   };
 }
 
@@ -84,6 +96,10 @@ function seasonalAccessories(now: Date): Array<[LobsterPetAccessory, number]> {
   }
   if (month === 9 && day >= 20) {
     return [["pumpkin", 18]];
+  }
+  // National Lobster Day (US, Sept 25): dress fancy. We do not cook friends.
+  if (month === 8 && day === 25) {
+    return [["monocle", 24]];
   }
   return [];
 }
@@ -116,13 +132,13 @@ const CLAW_SIZES: Array<[LobsterPetClawSize, number]> = [
 // Builds reshape the whole sprite by stretching its aspect ratio (the svg
 // renders with preserveAspectRatio="none"), so eyes, claws, accessories, and
 // rare-variant geometry stay aligned for every silhouette.
-export const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
+const LOBSTER_PET_BUILD_MULS: Record<LobsterPetBuild, { w: number; h: number }> = {
   round: { w: 1, h: 1 },
   squat: { w: 1.14, h: 0.9 },
   slender: { w: 0.88, h: 1.1 },
 };
 
-export const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
+const LOBSTER_PET_CLAW_MULS: Record<LobsterPetClawSize, number> = {
   dainty: 0.85,
   regular: 1,
   mighty: 1.18,
@@ -162,8 +178,10 @@ const RARE_NAMES: Partial<Record<LobsterPetPaletteId, string>> = {
   gold: "Goldie",
   calico: "Patches",
   abyss: "Lantern",
+  lumen: "Glimmer",
   ghost: "Boo",
   split: "Picasso",
+  cottoncandy: "Taffy",
   retro: "OG",
 };
 
@@ -211,6 +229,10 @@ export function randomBetween(rng: () => number, min: number, max: number): numb
   return min + rng() * (max - min);
 }
 
+// Seeded glint tints for common palettes (rare palettes pin their own via
+// CSS). Applied through --lob-glint-seed so offline grey still wins.
+const GLINT_TINTS = ["#ffd166", "#ff8ac2", "#b79bff"] as const;
+
 export function createLobsterPetLook(seed: number, now: Date = new Date()): LobsterPetLook {
   const rng = mulberry32(seed);
   const palette = pickWeighted(rng, PALETTES);
@@ -223,30 +245,22 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   const facing = rng() < 0.5 ? 1 : -1;
   const personality = pickWeighted(rng, PERSONALITY_IDS);
   const blinkDelayS = Math.round(randomBetween(rng, 0, 4) * 10) / 10;
-  // Shape traits roll after the original ones so pre-existing seeds keep
-  // their palette/personality and only gain a silhouette.
+  // Trait generations append their rolls (shape, then sparkle) so earlier
+  // seeds keep their palette/personality and only gain new details.
   const build = pickWeighted(rng, BUILDS);
   const clawSize = pickWeighted(rng, CLAW_SIZES);
   const tailFan = rng() < 0.3;
-  if (isLobsterAnniversary(now)) {
-    // Birthday dress code: everyone is the classic logo, party hats on.
-    const retro = PALETTES.find(([entry]) => entry.id === "retro")?.[0];
-    return {
-      palette: retro ?? palette,
-      scale,
-      accessory: "party",
-      antennae,
-      side,
-      spotPct,
-      facing,
-      personality,
-      blinkDelayS,
-      build,
-      clawSize,
-      tailFan,
-    };
-  }
-  return {
+  const shiny = rng() < 1 / 512;
+  // Chance-and-pick pairs always burn both rolls so later traits stay
+  // aligned across seeds whichever way the chance lands.
+  const crusherRoll = rng();
+  const crusherPick: "left" | "right" = rng() < 0.5 ? "left" : "right";
+  const crusherSide = crusherRoll < 0.15 ? crusherPick : null;
+  const freckles = rng() < 0.12;
+  const glintRoll = rng();
+  const glintPick = GLINT_TINTS[Math.floor(rng() * GLINT_TINTS.length)] ?? null;
+  const glint = glintRoll < 0.3 ? glintPick : null;
+  const look: LobsterPetLook = {
     palette,
     scale,
     accessory,
@@ -259,7 +273,17 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
     build,
     clawSize,
     tailFan,
+    shiny,
+    crusherSide,
+    freckles,
+    glint,
   };
+  if (isLobsterAnniversary(now)) {
+    // Birthday dress code: everyone is the classic logo, party hats on.
+    const retro = PALETTES.find(([entry]) => entry.id === "retro")?.[0];
+    return { ...look, palette: retro ?? palette, accessory: "party" };
+  }
+  return look;
 }
 
 const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateResult> = {
@@ -302,7 +326,59 @@ const ACCESSORY_SPRITES: Record<Exclude<LobsterPetAccessory, "none">, TemplateRe
       <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
     </g>
   `,
+  // Elder wear: a patient little colony riding the shell's shoulder.
+  barnacle: svg`
+    <g class="lob-barnacles">
+      <path d="M32 22 L36.5 13 L41 22 Z" fill="#cfd8de" />
+      <path d="M42 18 L45.5 11 L49 18 Z" fill="#b8c4cc" />
+      <path d="M27 26 L30 20.5 L33 26 Z" fill="#b8c4cc" />
+      <circle cx="36.5" cy="18.5" r="1.1" fill="#8a949d" />
+      <circle cx="45.5" cy="15" r="0.9" fill="#8a949d" />
+    </g>
+  `,
+  // National Lobster Day formal wear: gold rim, chain, no further questions.
+  monocle: svg`
+    <g class="lob-monocle" fill="none" stroke="#f4b840">
+      <circle cx="75" cy="32" r="8.5" stroke-width="2.5" />
+      <path d="M81 39 Q85 48 80 56" stroke-width="1.5" />
+    </g>
+  `,
 };
+
+// Light speckle trait, distinct from calico's bold mottling; skipped on
+// palettes whose identity is already pattern-driven (see renderLobsterSvg).
+const FRECKLE_SPOTS = svg`
+  <g class="lob-freckles" fill="#ffffff" opacity="0.3">
+    <circle cx="42" cy="45" r="1.6" />
+    <circle cx="50" cy="41" r="1.2" />
+    <circle cx="70" cy="45" r="1.6" />
+    <circle cx="78" cy="41" r="1.2" />
+    <circle cx="55" cy="62" r="1.4" />
+    <circle cx="67" cy="66" r="1.2" />
+  </g>
+`;
+
+// Lumen photophores: dotted running lights along the shell. The glow (and
+// its dark-theme-only intensity) lives in lobster-pet.css.
+const LUMEN_SPOTS = svg`
+  <g class="lob-lumen" fill="#7ef5dd">
+    <circle cx="36" cy="54" r="2.4" />
+    <circle cx="50" cy="66" r="2" />
+    <circle cx="66" cy="70" r="2.2" />
+    <circle cx="80" cy="60" r="2" />
+    <circle cx="88" cy="46" r="1.7" />
+    <circle cx="60" cy="86" r="1.7" />
+  </g>
+`;
+
+// Palettes whose identity is already pattern-driven skip the freckle trait;
+// stacking speckle sets reads as noise, not a variant.
+const PATTERNED_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set([
+  "calico",
+  "split",
+  "retro",
+  "lumen",
+]);
 
 // Calico mottling: dark blotches scattered clear of the eye line.
 const CALICO_SPOTS = svg`
@@ -462,6 +538,131 @@ function renderCrabSvg() {
   `;
 }
 
+// Also not a lobster. Crosses the ledge on its own schedule, which is to
+// say: eventually.
+function renderSnailSvg() {
+  return svg`
+    <svg
+      class="lobster-pet__svg"
+      viewBox="0 0 120 105"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M14 96 Q32 84 58 88 L96 88 Q110 90 112 97 Q112 103 102 103 L24 103 Q14 103 14 96 Z"
+        fill="#c9a06a"
+      />
+      <g stroke="#c9a06a" stroke-width="3.5" stroke-linecap="round" fill="none">
+        <path d="M94 88 Q96 76 91 68" />
+        <path d="M103 88 Q107 76 103 66" />
+      </g>
+      <circle cx="90" cy="65" r="3.6" fill="#0a1014" />
+      <circle cx="103" cy="63" r="3.6" fill="#0a1014" />
+      <circle cx="91" cy="64" r="1.3" fill="#ffd166" />
+      <circle cx="104" cy="62" r="1.3" fill="#ffd166" />
+      <circle cx="50" cy="62" r="27" fill="#8a5a2b" />
+      <path
+        d="M50 41 a21 21 0 1 1 -15 36 a14 14 0 1 0 11 -25 a8 8 0 1 0 4 14"
+        stroke="#5f3d1c"
+        stroke-width="4"
+        stroke-linecap="round"
+        fill="none"
+      />
+    </svg>
+  `;
+}
+
+// The rubber duck: patron saint of debugging. It floats through, listens,
+// and leaves without judging anyone's architecture.
+function renderDuckSvg() {
+  return svg`
+    <svg
+      class="lobster-pet__svg"
+      viewBox="0 0 120 105"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <path d="M30 82 Q20 74 27 65 Q30 76 40 79 Z" fill="#f0b52e" />
+      <ellipse cx="58" cy="85" rx="34" ry="17" fill="#ffd23e" />
+      <circle cx="82" cy="50" r="18" fill="#ffd23e" />
+      <path d="M98 49 Q112 52 99 59 Q95 56 95 51 Z" fill="#ff8c2e" />
+      <circle cx="86" cy="44" r="3.6" fill="#0a1014" />
+      <circle cx="87" cy="43" r="1.3" fill="#ffffff" />
+      <path d="M44 82 Q58 72 72 82 Q58 93 44 82 Z" fill="#f0b52e" opacity="0.75" />
+    </svg>
+  `;
+}
+
+// A jellyfish drifting past above the ledge, pulsing gently, thinking about
+// nothing at all.
+function renderJellyfishSvg() {
+  return svg`
+    <svg
+      class="lobster-pet__svg"
+      viewBox="0 0 120 105"
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      <g class="lob-jelly-tentacles" stroke="#9f7dfa" stroke-width="2.5" stroke-linecap="round" fill="none" opacity="0.8">
+        <path d="M40 58 Q35 74 42 90" />
+        <path d="M54 61 Q52 78 57 96" />
+        <path d="M68 61 Q71 78 64 94" />
+        <path d="M80 58 Q85 72 78 88" />
+      </g>
+      <path
+        d="M30 52 C30 22 90 22 90 52 L90 58 Q82 52 75 58 Q67 52 60 58 Q52 52 45 58 Q38 52 30 58 Z"
+        fill="#b79bff"
+        opacity="0.78"
+      />
+      <ellipse cx="47" cy="37" rx="12" ry="6" fill="#ffffff" opacity="0.25" />
+      <circle cx="52" cy="45" r="2.6" fill="#0a1014" />
+      <circle cx="66" cy="45" r="2.6" fill="#0a1014" />
+    </svg>
+  `;
+}
+
+const PASSER_SPRITES: Record<Exclude<LobsterPasserKind, "stranger">, () => TemplateResult> = {
+  crab: renderCrabSvg,
+  snail: renderSnailSvg,
+  duck: renderDuckSvg,
+  jellyfish: renderJellyfishSvg,
+};
+
+// While hovering, a closed bottle keeps its secret; opening swaps the title
+// to the fortune — the pet-name tooltip channel, so no i18n surface.
+function renderBottleSvg(opened: boolean) {
+  return svg`
+    <svg class="lobster-bottle__svg" viewBox="0 0 48 44" aria-hidden="true">
+      <g transform="rotate(-16 24 30)">
+        <rect x="5" y="18" width="30" height="16" rx="7" fill="#7fc8b8" opacity="0.72" />
+        <rect x="33" y="22" width="9" height="8" rx="2.5" fill="#7fc8b8" opacity="0.72" />
+        ${
+          opened
+            ? svg`
+              <rect x="36" y="20" width="11" height="7" rx="1.5" fill="#f2e5c9" transform="rotate(-24 41 23)" />
+              <rect x="43" y="30" width="4.5" height="8" rx="1.6" fill="#8a5a2b" transform="rotate(38 45 34)" />
+            `
+            : svg`<rect x="41" y="21.5" width="5" height="9" rx="1.8" fill="#8a5a2b" />`
+        }
+        <rect x="11" y="22" width="12" height="8" rx="1.5" fill="#f2e5c9" />
+        <path d="M13 24.5 L21 24.5 M13 27 L19 27" stroke="#b6a071" stroke-width="1" />
+        <ellipse cx="13" cy="20.5" rx="5" ry="2" fill="#ffffff" opacity="0.35" />
+      </g>
+    </svg>
+  `;
+}
+
+// Balloon entrance rig: rendered inside the body while the descent plays,
+// then unmounts with the entering flag.
+const BALLOON = svg`
+  <svg class="lobster-pet__balloon" viewBox="0 0 40 62" aria-hidden="true">
+    <path d="M20 34 Q23 46 18 60" stroke="#8a949d" stroke-width="1.5" fill="none" />
+    <ellipse cx="20" cy="16" rx="13" ry="15" fill="#ff5c8a" />
+    <path d="M17 30 L20 34.5 L23 30 Z" fill="#e0446f" />
+    <ellipse cx="15" cy="10" rx="4" ry="6" fill="#ffffff" opacity="0.3" />
+  </svg>
+`;
+
 // Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
 // with stubby legs, side claws, antennae, and teal-glint eyes.
 export function renderLobsterSvg(
@@ -508,6 +709,8 @@ export function renderLobsterSvg(
       />
       ${look.palette.id === "split" ? SPLIT_HALF : nothing}
       ${look.palette.id === "calico" ? CALICO_SPOTS : nothing}
+      ${look.palette.id === "lumen" ? LUMEN_SPOTS : nothing}
+      ${look.freckles && !PATTERNED_PALETTES.has(look.palette.id) ? FRECKLE_SPOTS : nothing}
       <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
       <g class="lob-eye-open" style=${options.shell || options.sleeping ? "display:none" : ""}>
         <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
@@ -559,24 +762,41 @@ export function renderLobsterSvg(
 
 export const SPOT_ZONES = { left: [12, 38], right: [60, 84] } as const;
 
+// Shared inline vars for every surface that renders a look (ledge sprite,
+// twin, stranger passer, logo stand-in). The seeded glint rides
+// --lob-glint-seed instead of --lob-glint so the class-driven palette and
+// offline overrides in lobster-pet.css still out-cascade it.
+export function lobsterLookStyleVars(look: LobsterPetLook): string[] {
+  const crusher = look.crusherSide;
+  const clawMul = (side: "left" | "right") =>
+    crusher === null
+      ? LOBSTER_PET_CLAW_MULS[look.clawSize]
+      : crusher === side
+        ? LOBSTER_PET_CLAW_MULS.mighty
+        : LOBSTER_PET_CLAW_MULS.dainty;
+  return [
+    `--lob-shell:${look.palette.shell}`,
+    `--lob-claw:${look.palette.claw}`,
+    `--lob-blink-delay:${look.blinkDelayS}s`,
+    `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
+    `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
+    `--lob-claw-l:${clawMul("left")}`,
+    `--lob-claw-r:${clawMul("right")}`,
+    ...(look.glint ? [`--lob-glint-seed:${look.glint}`] : []),
+  ];
+}
+
 function lobsterPetSpriteStyle(
   look: LobsterPetLook,
   scale: number,
   spotPct: number,
   facing: 1 | -1,
 ) {
-  // Glint color stays class-driven (see lobster-pet.css): an inline
-  // --lob-glint would out-cascade the offline grey override.
   return [
-    `--lob-shell:${look.palette.shell}`,
-    `--lob-claw:${look.palette.claw}`,
+    ...lobsterLookStyleVars(look),
     `--lob-scale:${scale}`,
     `--lob-x:${spotPct}%`,
     `--lob-face:${facing}`,
-    `--lob-blink-delay:${look.blinkDelayS}s`,
-    `--lob-w:${LOBSTER_PET_BUILD_MULS[look.build].w}`,
-    `--lob-h:${LOBSTER_PET_BUILD_MULS[look.build].h}`,
-    `--lob-claw-scale:${LOBSTER_PET_CLAW_MULS[look.clawSize]}`,
   ].join(";");
 }
 
@@ -588,12 +808,14 @@ export function renderLobsterPetScene(args: {
   shellVisible: boolean;
   visitsEnabled: boolean;
   dismissed: boolean;
-  passer: { kind: "stranger" | "crab"; direction: 1 | -1 } | null;
+  passer: { kind: LobsterPasserKind; direction: 1 | -1; crossMs: number } | null;
   twinPlanned: boolean;
   anniversary: boolean;
   entering: boolean;
+  entrance: LobsterPetEntrance;
   grumpy: boolean;
   vigil: boolean;
+  elder: boolean;
   act: string | null;
   zone: readonly [number, number];
   spotPct: number;
@@ -606,10 +828,15 @@ export function renderLobsterPetScene(args: {
   seed: number;
   movingDay: boolean;
   sailorDay: boolean;
+  nameOverride: string | null;
+  // Extra "· <flavor>" tooltip suffix (elder lore, old-friend returns).
+  flavor: string | null;
+  bottle: { spotPct: number; opened: boolean; fortune: string } | null;
   onPointerDown: () => void;
   onPointerUp: () => void;
   onPointerCancel: () => void;
   onContextMenu: (event: Event) => void;
+  onBottleOpen: () => void;
 }) {
   const anchoredScale = (scale: number) =>
     args.anchor === "bar" ? Math.min(scale, args.barMaxScale) : scale;
@@ -626,8 +853,11 @@ export function renderLobsterPetScene(args: {
       `lobster-pet--palette-${args.look.palette.id}`,
       twin ? "lobster-pet--twin" : "",
       dressed.accessory === "party" ? "lobster-pet--party" : "",
+      args.look.shiny ? "lobster-pet--shiny" : "",
+      args.elder ? "lobster-pet--elder" : "",
       args.presence === "leaving" ? "lobster-pet--away" : "",
       args.entering ? "lobster-pet--entering" : "",
+      args.entering && args.entrance !== "walk" ? `lobster-pet--enter-${args.entrance}` : "",
       args.grumpy ? "lobster-pet--grumpy" : "",
       args.vigil ? "lobster-pet--vigil" : "",
       args.act ? `lobster-pet--act-${args.act}` : "",
@@ -649,11 +879,18 @@ export function renderLobsterPetScene(args: {
     // Milestone honorifics come from the load-start familiarity snapshot, so
     // a title never pops mid-visit; it is simply there next time.
     const honorific = lobsterHonorific(args.familiarityVisits);
-    const baseName = lobsterPetName(args.look, args.seed);
-    const name = honorific ? `${honorific} ${baseName}` : baseName;
+    const baseName = args.nameOverride ?? lobsterPetName(args.look, args.seed);
+    const titled = honorific ? `${honorific} ${baseName}` : baseName;
+    const name = args.look.shiny ? `✦ ${titled}` : titled;
     // The twin travels light; only the resident pet hauls the moving bindle.
     const bindle = args.movingDay && !twin;
-    const title = twin ? `${name} Jr.` : bindle ? `${name} · just moved in` : name;
+    const title = twin
+      ? `${name} Jr.`
+      : bindle
+        ? `${name} · just moved in`
+        : args.flavor
+          ? `${name} · ${args.flavor}`
+          : name;
     return html`
       <div
         class=${classes}
@@ -672,6 +909,20 @@ export function renderLobsterPetScene(args: {
             bindle,
             sailorCap: args.sailorDay,
           })}
+          ${args.entering && args.entrance === "balloon" ? BALLOON : nothing}
+          ${
+            args.entering && args.entrance === "bubble"
+              ? html`<span class="lobster-pet__entry-bubble"></span>`
+              : nothing
+          }
+          ${
+            args.look.shiny
+              ? html`
+                  <span class="lobster-pet__sparkle" style="--i:0;left:12%;bottom:64%">✦</span>
+                  <span class="lobster-pet__sparkle" style="--i:1;left:76%;bottom:82%">✦</span>
+                `
+              : nothing
+          }
           <span class="lobster-pet__z" style="--i:0">z</span>
           <span class="lobster-pet__z" style="--i:1">z</span>
           <span class="lobster-pet__z" style="--i:2">Z</span>
@@ -699,7 +950,10 @@ export function renderLobsterPetScene(args: {
   // visits setting silence it like everything else.
   const showShell = args.shellVisible && args.visitsEnabled && !args.dismissed;
   const showPasser = args.passer !== null && args.visitsEnabled;
-  if (!showSprites && !showShell && !showPasser) {
+  // The bottle washes ashore whether or not the pet is around; it belongs to
+  // the ledge, not the visit.
+  const showBottle = args.bottle !== null && args.visitsEnabled && !args.dismissed;
+  if (!showSprites && !showShell && !showPasser && !showBottle) {
     return nothing;
   }
   // The abandoned shell: the pre-molt silhouette, frozen and slowly fading.
@@ -710,31 +964,43 @@ export function renderLobsterPetScene(args: {
     args.facing,
   );
   // A pass-through visitor: crosses the ledge once and is gone. Strangers
-  // are other lobsters (never your palette); the crab is, allegedly, also a
-  // lobster. Neither perches, neither counts for the Lobsterdex.
+  // are other lobsters (never your palette); everyone else is at most
+  // lobster-adjacent. None perch, none count for the Lobsterdex.
   const passerLook =
     args.passer?.kind === "stranger" ? strangerLookFor(args.seed, args.look.palette.id) : args.look;
   const passerClasses = args.passer
     ? [
         "lobster-pet",
         "lobster-pet--passer",
-        args.passer.kind === "crab"
-          ? "lobster-pet--crab"
-          : `lobster-pet--palette-${passerLook.palette.id}`,
+        args.passer.kind === "stranger"
+          ? `lobster-pet--palette-${passerLook.palette.id}`
+          : `lobster-pet--${args.passer.kind}`,
+        args.passer.kind === "stranger" && passerLook.shiny ? "lobster-pet--shiny" : "",
         args.passer.direction === 1 ? "lobster-pet--passer-ltr" : "lobster-pet--passer-rtl",
-      ].join(" ")
+      ]
+        .filter(Boolean)
+        .join(" ")
     : "";
-  const passerStyle =
-    args.passer?.kind === "crab"
-      ? `--lob-scale:2;--lob-w:1;--lob-h:0.82;--lob-face:1`
-      : args.passer
-        ? lobsterPetSpriteStyle(passerLook, Math.min(passerLook.scale, 2), 0, args.passer.direction)
-        : "";
+  const passerStyle = args.passer
+    ? `${passerBaseStyle(args.passer.kind, args.passer.direction, passerLook)};--lob-cross:${args.passer.crossMs}ms`
+    : "";
   return html`
     ${showShell
       ? html`
           <div class="lobster-pet lobster-pet--shell" style=${shellStyle} aria-hidden="true">
             <div class="lobster-pet__body">${renderLobsterSvg(args.look, { shell: true })}</div>
+          </div>
+        `
+      : nothing}
+    ${showBottle && args.bottle
+      ? html`
+          <div
+            class="lobster-bottle ${args.bottle.opened ? "lobster-bottle--open" : ""}"
+            style="--lob-x:${args.bottle.spotPct}%"
+            title=${args.bottle.opened ? args.bottle.fortune : "a message in a bottle"}
+            @pointerdown=${args.onBottleOpen}
+          >
+            ${renderBottleSvg(args.bottle.opened)}
           </div>
         `
       : nothing}
@@ -746,15 +1012,45 @@ export function renderLobsterPetScene(args: {
             class=${passerClasses}
             style=${passerStyle}
             aria-hidden="true"
-            title=${args.passer.kind === "crab" ? "definitely a lobster" : "a stranger"}
+            title=${PASSER_TITLES[args.passer.kind]}
           >
             <div class="lobster-pet__body">
-              ${args.passer.kind === "crab"
-                ? renderCrabSvg()
-                : renderLobsterSvg(passerLook, { standalone: true })}
+              ${args.passer.kind === "stranger"
+                ? renderLobsterSvg(passerLook, { standalone: true })
+                : PASSER_SPRITES[args.passer.kind]()}
             </div>
           </div>
         `
       : nothing}
   `;
+}
+
+const PASSER_TITLES: Record<LobsterPasserKind, string> = {
+  stranger: "a stranger",
+  crab: "definitely a lobster",
+  snail: "in no particular hurry",
+  duck: "a duck. obviously",
+  jellyfish: "just drifting",
+};
+
+// Non-lobster passers ignore the perch variables and carry fixed sprite
+// proportions; strangers reuse the full look pipeline (capped size so a
+// visiting grail does not upstage the resident).
+function passerBaseStyle(
+  kind: LobsterPasserKind,
+  direction: 1 | -1,
+  passerLook: LobsterPetLook,
+): string {
+  switch (kind) {
+    case "crab":
+      return "--lob-scale:2;--lob-w:1;--lob-h:0.82;--lob-face:1";
+    case "snail":
+      return `--lob-scale:1.7;--lob-w:1;--lob-h:0.9;--lob-face:${direction}`;
+    case "duck":
+      return `--lob-scale:1.9;--lob-w:1;--lob-h:1;--lob-face:${direction}`;
+    case "jellyfish":
+      return "--lob-scale:1.7;--lob-w:0.9;--lob-h:1.1;--lob-face:1";
+    case "stranger":
+      return lobsterPetSpriteStyle(passerLook, Math.min(passerLook.scale, 2), 0, direction);
+  }
 }

@@ -28,8 +28,6 @@ export {
   type LobsterRunOutcome,
 } from "./lobster-pet-contract.ts";
 export {
-  LOBSTER_PET_BUILD_MULS,
-  LOBSTER_PET_CLAW_MULS,
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
   createLobsterPetLook,
@@ -53,6 +51,7 @@ class LobsterPet extends LitElement {
   @state() private spotPct = 80;
   @state() private facing: 1 | -1 = 1;
   @state() private entering = false;
+  @state() private entrance: contract.LobsterPetEntrance = "walk";
   @state() private presence: "out" | "in" | "leaving" = "out";
   @state() private anchor: plans.LobsterPetAnchor = "ledge";
   @state() private scheduledVisiting = false;
@@ -73,6 +72,20 @@ class LobsterPet extends LitElement {
   private movingDayChecked = false;
   @state() private anniversary = false;
   private sailorDay = false;
+  // Rare-load identities resolved once per seed: the Elder, and old-friend
+  // returns drawn from the Lobsterdex.
+  private elder = false;
+  private oldFriend = false;
+  private friendName: string | null = null;
+  // Load-start snapshot, like familiarity: the golden ledge trim appears on
+  // the next load after the final palette lands, never mid-visit.
+  private dexComplete = false;
+  @state() private bottleVisible = false;
+  @state() private bottleOpened = false;
+  private bottlePlan: plans.LobsterBottlePlan | null = null;
+  private bottleTimer: number | null = null;
+  private bottleEndTimer: number | null = null;
+  private entranceRng: () => number = lobsterLook.mulberry32(0);
   @state() private shellVisible = false;
   private shellSpotPct = 50;
   private shellScale = 2;
@@ -133,6 +146,8 @@ class LobsterPet extends LitElement {
       this.passerEndTimer,
       this.passerWatchTimer,
       this.logoScareTimer,
+      this.bottleTimer,
+      this.bottleEndTimer,
     ]) {
       if (timer !== null) {
         window.clearTimeout(timer);
@@ -144,6 +159,8 @@ class LobsterPet extends LitElement {
     this.passerEndTimer = null;
     this.passerWatchTimer = null;
     this.logoScareTimer = null;
+    this.bottleTimer = null;
+    this.bottleEndTimer = null;
     if (this.audioCtx) {
       this.audioCtx.close().catch(() => {});
       this.audioCtx = null;
@@ -170,6 +187,8 @@ class LobsterPet extends LitElement {
       this.rng = lobsterLook.mulberry32(this.seed ^ 0x9e3779b9);
       this.visitRng = lobsterLook.mulberry32(this.seed ^ 0x5eaf00d);
       this.scareRng = lobsterLook.mulberry32((this.seed ^ 0x5ca2e) >>> 0);
+      this.entranceRng = lobsterLook.mulberry32((this.seed ^ 0xe27a) >>> 0);
+      this.resolveLoadIdentity();
       this.spotPct = this.look.spotPct;
       this.facing = this.look.facing;
       // Reset the act loop inside the update pass; deferring state flips to
@@ -185,7 +204,8 @@ class LobsterPet extends LitElement {
         window.clearTimeout(this.shellTimer);
         this.shellTimer = null;
       }
-      this.moltPlanned = plans.isLobsterMoltLoad(this.seed);
+      // The Elder never molts: it is already every size it will ever need.
+      this.moltPlanned = plans.isLobsterMoltLoad(this.seed) && !this.elder;
       this.twinPlanned = plans.isLobsterTwinLoad(this.seed);
       this.logoPlanned = plans.isLobsterLogoLoad(this.seed);
       this.logoDone = false;
@@ -201,6 +221,7 @@ class LobsterPet extends LitElement {
       this.greetedThisLoad = false;
       this.scheduleVisits();
       this.schedulePasser();
+      this.scheduleBottle();
       // The first update takes this branch, so the mode-change branch below
       // never sees the initial mode: arm the vigil tracker here as well.
       this.vigil = false;
@@ -234,7 +255,55 @@ class LobsterPet extends LitElement {
       this.movingDayChecked = true;
       this.movingDay = plans.detectLobsterMovingDay(this.gatewayVersion);
     }
+    // The completed-Lobsterdex trim lives on the host so it survives the pet
+    // being out; the visits setting and dismissals silence it too.
+    this.toggleAttribute(
+      "data-dex-complete",
+      this.dexComplete && this.visitsEnabled && !this.dismissed,
+    );
     this.reconcilePresence();
+  }
+
+  // Rare per-load identities, resolved after the seeded look: the Elder
+  // outranks an old-friend return, and retro looks (grail or anniversary
+  // dress code) are never repainted.
+  private resolveLoadIdentity() {
+    this.elder = plans.isLobsterElderLoad(this.seed);
+    this.oldFriend = false;
+    this.friendName = null;
+    const seen = dex.getLobsterdex();
+    this.dexComplete = lobsterLook.LOBSTER_PET_PALETTES.every((p) => seen.has(p.id));
+    if (!this.look) {
+      return;
+    }
+    if (this.elder) {
+      this.look = {
+        ...this.look,
+        scale: 3,
+        accessory: "barnacle",
+        personality: "sleepy",
+        clawSize: "mighty",
+        crusherSide: null,
+      };
+      return;
+    }
+    if (this.look.palette.id === "retro") {
+      return;
+    }
+    const known = [...seen]
+      .filter((id) => lobsterLook.LOBSTER_PET_PALETTES.some((p) => p.id === id))
+      .toSorted();
+    const friendId = plans.planLobsterOldFriend(this.seed, known);
+    if (!friendId) {
+      return;
+    }
+    const palette = lobsterLook.LOBSTER_PET_PALETTES.find((p) => p.id === friendId);
+    if (!palette) {
+      return;
+    }
+    this.oldFriend = true;
+    this.look = { ...this.look, palette };
+    this.friendName = dex.getLobsterdexEntries().get(friendId)?.name ?? null;
   }
 
   // Presence follows the visit schedule, offline summons, the setting, and
@@ -266,6 +335,9 @@ class LobsterPet extends LitElement {
           this.scheduledVisiting &&
           this.mode === "idle" &&
           !plans.prefersReducedMotion();
+        // Entrance rolls burn once per arrival on their own stream, aligned
+        // across visit kinds like the scare roll above.
+        this.entrance = plans.pickLobsterEntrance(this.entranceRng());
         if (this.look) {
           // Anniversary check reads the dex before this arrival records into
           // it: a first-ever visit today must not celebrate itself.
@@ -274,9 +346,11 @@ class LobsterPet extends LitElement {
             new Date(),
           );
           // Every genuine arrival (visit or offline summon) logs the palette
-          // with the first visitor's name, and bumps the familiarity count.
+          // with the first visitor's name (the Elder signs as itself) and
+          // any shiny sighting, and bumps the familiarity count.
           dex.recordLobsterVisit(this.look.palette.id, {
-            name: lobsterLook.lobsterPetName(this.look, this.seed),
+            name: this.petBaseName(),
+            shiny: this.look.shiny,
           });
           dex.recordLobsterArrivalStats();
         }
@@ -317,11 +391,12 @@ class LobsterPet extends LitElement {
     this.enterTimer = window.setTimeout(() => {
       this.enterTimer = null;
       this.entering = false;
-      // Old friends get a hello: the first arrival of the load waves at you.
-      // A logo stand-in skips the greeting (and keeps it for a ledge visit).
+      // Familiar humans and returning old friends get a hello: the first
+      // arrival of the load waves at you. A logo stand-in skips the greeting
+      // (and keeps it for a ledge visit).
       if (
         !this.greetedThisLoad &&
-        this.familiarity.tier === "friend" &&
+        (this.familiarity.tier === "friend" || this.oldFriend) &&
         this.presence === "in" &&
         !this.logoPerched &&
         !plans.prefersReducedMotion()
@@ -329,7 +404,7 @@ class LobsterPet extends LitElement {
         this.greetedThisLoad = true;
         this.performAct("wave");
       }
-    }, plans.ENTER_MS);
+    }, plans.LOBSTER_PET_ENTRANCE_MS[this.entrance]);
     if (this.logoScarePending) {
       this.logoScarePending = false;
       // The beat between arrival and the duck is what sells "the crab scared
@@ -373,12 +448,24 @@ class LobsterPet extends LitElement {
         detail: {
           phase,
           look: dressed,
-          name: dressed ? lobsterLook.lobsterPetName(dressed, this.seed) : null,
+          name: dressed ? this.petBaseName() : null,
         },
         bubbles: true,
         composed: true,
       }),
     );
+  }
+
+  // The displayed base name before honorifics: rare identities (the Elder,
+  // named old friends) override the seeded catalog name.
+  private petBaseName(): string {
+    if (this.elder) {
+      return "Methuselah";
+    }
+    if (this.friendName) {
+      return this.friendName;
+    }
+    return this.look ? lobsterLook.lobsterPetName(this.look, this.seed) : "";
   }
 
   private readonly handleVisibilityChange = () => {
@@ -614,7 +701,7 @@ class LobsterPet extends LitElement {
         this.passerEndTimer = null;
         this.passer = null;
         this.scheduleNextAct();
-      }, plans.PASSER_CROSS_MS);
+      }, plans.LOBSTER_PASSER_CROSS_MS[plan.kind]);
     }, plan.atMs);
   }
 
@@ -632,8 +719,76 @@ class LobsterPet extends LitElement {
     this.passerWatchTimer = window.setTimeout(() => {
       this.passerWatchTimer = null;
       watch(plan.direction);
-    }, plans.PASSER_CROSS_MS / 2);
+      // Mid-crossing is when the passer is closest: friends wave at the
+      // traffic, shy pets duck for a peek, regulars just watch it go by.
+      this.reactToPasser();
+    }, plans.LOBSTER_PASSER_CROSS_MS[plan.kind] / 2);
   }
+
+  private reactToPasser() {
+    const reaction =
+      this.familiarity.tier === "friend"
+        ? "wave"
+        : this.familiarity.tier === "shy"
+          ? "peek"
+          : null;
+    if (
+      reaction === null ||
+      this.presence !== "in" ||
+      this.logoPerched ||
+      this.act !== null ||
+      this.vigil ||
+      this.mode !== "idle" ||
+      plans.prefersReducedMotion()
+    ) {
+      return;
+    }
+    this.performAct(reaction);
+  }
+
+  // ---- Message in a bottle ----
+
+  // The bottle keeps its own clock: it washes up whether or not the pet is
+  // around, waits to be opened, and drifts back out with the tide.
+  private scheduleBottle() {
+    for (const timer of [this.bottleTimer, this.bottleEndTimer]) {
+      if (timer !== null) {
+        window.clearTimeout(timer);
+      }
+    }
+    this.bottleTimer = null;
+    this.bottleEndTimer = null;
+    this.bottleVisible = false;
+    this.bottleOpened = false;
+    this.bottlePlan = plans.planLobsterBottle(this.seed);
+    if (!this.bottlePlan) {
+      return;
+    }
+    this.bottleTimer = window.setTimeout(() => {
+      this.bottleTimer = null;
+      this.bottleVisible = true;
+      this.armBottleEbb(300_000);
+    }, this.bottlePlan.atMs);
+  }
+
+  private armBottleEbb(delayMs: number) {
+    if (this.bottleEndTimer !== null) {
+      window.clearTimeout(this.bottleEndTimer);
+    }
+    this.bottleEndTimer = window.setTimeout(() => {
+      this.bottleEndTimer = null;
+      this.bottleVisible = false;
+    }, delayMs);
+  }
+
+  private readonly handleBottleOpen = () => {
+    if (this.bottleOpened || !this.bottleVisible) {
+      return;
+    }
+    this.bottleOpened = true;
+    // Read, then reclaimed by the sea a couple of minutes later.
+    this.armBottleEbb(120_000);
+  };
 
   // Each arrival re-rolls either the standard side zone or compact bar zone.
   // Both visit profiles render above the footer divider.
@@ -771,6 +926,17 @@ class LobsterPet extends LitElement {
     if (!look) {
       return nothing;
     }
+    const bottle =
+      this.bottleVisible && this.bottlePlan
+        ? {
+            spotPct: this.bottlePlan.spotPct,
+            opened: this.bottleOpened,
+            fortune: expectDefined(
+              plans.LOBSTER_BOTTLE_FORTUNES[this.bottlePlan.fortuneIndex],
+              "lobster bottle fortune",
+            ),
+          }
+        : null;
     return lobsterLook.renderLobsterPetScene({
       look,
       mode: this.mode,
@@ -779,12 +945,20 @@ class LobsterPet extends LitElement {
       shellVisible: this.shellVisible,
       visitsEnabled: this.visitsEnabled,
       dismissed: this.dismissed,
-      passer: this.passer,
+      passer: this.passer
+        ? {
+            kind: this.passer.kind,
+            direction: this.passer.direction,
+            crossMs: plans.LOBSTER_PASSER_CROSS_MS[this.passer.kind],
+          }
+        : null,
       twinPlanned: this.twinPlanned,
       anniversary: this.anniversary,
       entering: this.entering,
+      entrance: this.entrance,
       grumpy: this.grumpy,
       vigil: this.vigil,
+      elder: this.elder,
       act: this.act,
       zone: this.currentZone(),
       spotPct: this.spotPct,
@@ -797,10 +971,14 @@ class LobsterPet extends LitElement {
       seed: this.seed,
       movingDay: this.movingDay,
       sailorDay: this.sailorDay,
+      nameOverride: this.elder ? "Methuselah" : this.friendName,
+      flavor: this.elder ? "old as the tides" : this.oldFriend ? "an old friend" : null,
+      bottle,
       onPointerDown: this.handleHoldStart,
       onPointerUp: this.handleHoldEnd,
       onPointerCancel: this.handleHoldCancel,
       onContextMenu: this.handleShoo,
+      onBottleOpen: this.handleBottleOpen,
     });
   }
 }

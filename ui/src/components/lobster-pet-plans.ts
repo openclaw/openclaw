@@ -1,5 +1,7 @@
 import { getSafeLocalStorage } from "../local-storage.ts";
 import type {
+  LobsterPasserKind,
+  LobsterPetEntrance,
   LobsterPetMode,
   LobsterPetPersonalityId,
   LobsterRunOutcome,
@@ -134,10 +136,32 @@ export function resolveLobsterFinishAct(outcome: LobsterRunOutcome): LobsterPetA
   return outcome === "error" ? "droop" : outcome === "aborted" ? "startle" : "cheer";
 }
 
-export const ENTER_MS = 450;
 export const LEAVE_MS = 350;
-// One full ledge crossing for pass-through visitors.
-export const PASSER_CROSS_MS = 11_000;
+
+// Arrival theatrics: most visits walk up from behind the ledge; a few float
+// in under a balloon or pop out of a bubble. Rolled per arrival from the
+// component's dedicated entrance stream so visit scheduling stays untouched.
+export function pickLobsterEntrance(roll: number): LobsterPetEntrance {
+  return roll < 0.06 ? "balloon" : roll < 0.13 ? "bubble" : "walk";
+}
+
+// How long each entrance owns the `entering` flag; mirrors the entrance
+// animation durations in lobster-pet.css.
+export const LOBSTER_PET_ENTRANCE_MS: Record<LobsterPetEntrance, number> = {
+  walk: 450,
+  balloon: 1250,
+  bubble: 700,
+};
+
+// One full ledge crossing per passer kind. The snail is the point of the
+// snail: glance away, glance back, still crossing.
+export const LOBSTER_PASSER_CROSS_MS: Record<LobsterPasserKind, number> = {
+  stranger: 11_000,
+  crab: 11_000,
+  snail: 90_000,
+  duck: 14_000,
+  jellyfish: 16_000,
+};
 
 export type LobsterPetAnchor = "ledge" | "bar";
 
@@ -179,27 +203,99 @@ export function isLobsterLogoLoad(seed: number): boolean {
   return mulberry32((seed ^ 0x1063) >>> 0)() < 0.12;
 }
 
-type LobsterPasserKind = "stranger" | "crab";
-
 export type LobsterPasserPlan = {
   kind: LobsterPasserKind;
   atMs: number;
   direction: 1 | -1;
 };
 
-// Once per load, someone else might just... walk through. Strangers are
-// other lobsters that never stop; the crab is not a lobster and refuses to
-// discuss it. Neither counts for the Lobsterdex.
+// Once per load, someone else might just... pass through. Strangers are
+// other lobsters that never stop; the rest of the traffic is a crab (not a
+// lobster, refuses to discuss it), a snail, a rubber duck, or a jellyfish.
+// The 9.5% event gate is unchanged from the two-kind era — variety widened,
+// frequency did not. None of them count for the Lobsterdex.
 export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
   const rng = mulberry32((seed ^ 0xcab) >>> 0);
   const roll = rng();
   if (roll >= 0.095) {
     return null;
   }
-  const kind: LobsterPasserKind = roll < 0.015 ? "crab" : "stranger";
+  const kind: LobsterPasserKind =
+    roll < 0.015
+      ? "crab"
+      : roll < 0.027
+        ? "snail"
+        : roll < 0.039
+          ? "duck"
+          : roll < 0.05
+            ? "jellyfish"
+            : "stranger";
   const atMs = Math.round(60_000 + rng() * 840_000);
   const direction: 1 | -1 = rng() < 0.5 ? 1 : -1;
   return { kind, atMs, direction };
+}
+
+// A very rare load hosts the Elder: a huge, barnacled, unhurried lobster.
+// Lobsters famously never really stop growing; this one simply started
+// earlier than everyone else.
+export function isLobsterElderLoad(seed: number): boolean {
+  return mulberry32((seed ^ 0xe1d3) >>> 0)() < 0.015;
+}
+
+// Sometimes the visitor is not a stranger at all: a palette the Lobsterdex
+// already remembers comes back wearing its recorded name. Returns the chosen
+// palette id, or null for an ordinary load. Candidates must be passed in
+// (sorted) so this stays a pure plan.
+export function planLobsterOldFriend(
+  seed: number,
+  knownPaletteIds: readonly string[],
+): string | null {
+  if (knownPaletteIds.length === 0) {
+    return null;
+  }
+  const rng = mulberry32((seed ^ 0xf21e) >>> 0);
+  if (rng() >= 0.08) {
+    return null;
+  }
+  return knownPaletteIds[Math.floor(rng() * knownPaletteIds.length)] ?? null;
+}
+
+// Ledge lore, delivered by sea. Shown through the bottle's title tooltip
+// (the pet-name channel), so there is no i18n surface.
+export const LOBSTER_BOTTLE_FORTUNES = [
+  "the tide returns every branch to shore",
+  "molt before you feel ready",
+  "a shell is just armor you outgrew",
+  "somewhere, a test is green because of you",
+  "swim sideways when forward fails",
+  "the reef remembers kind commits",
+  "even the abyss keeps a night light",
+  "barnacles are only patient passengers",
+  "no current lasts forever",
+  "bury your treasure in version control",
+  "the crab was a lobster all along",
+  "small claws, firm grip",
+  "rest is also progress",
+  "what washes away was never pinned",
+] as const;
+
+export type LobsterBottlePlan = {
+  atMs: number;
+  spotPct: number;
+  fortuneIndex: number;
+};
+
+// A few loads beach a message in a bottle somewhere on the ledge. It is not
+// the pet's: it appears on its own clock and outlives visits.
+export function planLobsterBottle(seed: number): LobsterBottlePlan | null {
+  const rng = mulberry32((seed ^ 0xb077) >>> 0);
+  if (rng() >= 0.03) {
+    return null;
+  }
+  const atMs = Math.round(45_000 + rng() * 855_000);
+  const spotPct = Math.round(15 + rng() * 70);
+  const fortuneIndex = Math.floor(rng() * LOBSTER_BOTTLE_FORTUNES.length);
+  return { atMs, spotPct, fortuneIndex };
 }
 
 // The pet notices gateway upgrades: the first page load on a new version, it
