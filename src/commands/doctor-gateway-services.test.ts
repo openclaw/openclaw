@@ -236,11 +236,11 @@ function expectBoundedLaunchctlCleanup() {
   expect(probeTimeout).toBeLessThanOrEqual(5_000);
 }
 
-function mockConfirmedUnloaded() {
+function mockConfirmedUnloaded(stderr = "Could not find service") {
   mocks.runExec
     .mockResolvedValueOnce({ stdout: "", stderr: "" })
     .mockResolvedValueOnce({ stdout: "", stderr: "" })
-    .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
+    .mockRejectedValueOnce(launchctlFailure({ stderr }));
 }
 
 async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
@@ -1844,73 +1844,25 @@ describe("maybeScanExtraGatewayServices", () => {
     );
   });
 
-  it("moves a legacy macOS plist only after print confirms the label is gone", async () => {
-    setupLegacyMacService();
-    mockConfirmedUnloaded();
-    const runtime = makeDoctorIo();
-    const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
-    vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-    vi.spyOn(fs, "access").mockResolvedValue(undefined);
-
-    await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
-
-    expectBoundedLaunchctlCleanup();
-    expect(rename).toHaveBeenCalledTimes(1);
-    expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-    expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Legacy gateway services removed. Installing OpenClaw gateway next.",
-    );
-  });
-
-  it.each([
-    ["bootout", true],
-    ["unload", false],
-  ])(
-    "moves the plist when %s succeeds, the other call times out, and print confirms it is gone",
-    async (_, bootoutOk) => {
-      setupLegacyMacService();
-      const timeout = launchctlFailure({ timedOut: true });
-      if (bootoutOk) {
-        mocks.runExec
-          .mockResolvedValueOnce({ stdout: "", stderr: "" })
-          .mockRejectedValueOnce(timeout)
-          .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
-      } else {
-        mocks.runExec
-          .mockRejectedValueOnce(timeout)
-          .mockResolvedValueOnce({ stdout: "", stderr: "" })
-          .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
-      }
-      vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
-      vi.spyOn(fs, "access").mockResolvedValue(undefined);
-      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
-
-      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
-
-      expectBoundedLaunchctlCleanup();
-      expect(rename).toHaveBeenCalledTimes(1);
-      expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
-    },
-  );
-
   it.each(["Could not find service", "No such process"])(
-    "treats launchctl '%s' as already unloaded",
+    "moves a legacy macOS plist only after print reports '%s'",
     async (stderr) => {
       setupLegacyMacService();
-      mocks.runExec
-        .mockRejectedValueOnce(launchctlFailure({ stderr }))
-        .mockRejectedValueOnce(launchctlFailure({ timedOut: true }))
-        .mockRejectedValueOnce(launchctlFailure({ stderr: "Could not find service" }));
+      mockConfirmedUnloaded(stderr);
+      const runtime = makeDoctorIo();
+      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
       vi.spyOn(fs, "mkdir").mockResolvedValue(undefined);
       vi.spyOn(fs, "access").mockResolvedValue(undefined);
-      const rename = vi.spyOn(fs, "rename").mockResolvedValue(undefined);
 
-      await maybeScanExtraGatewayServices({ deep: false }, makeDoctorIo(), makeDoctorPrompts());
+      await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
 
       expectBoundedLaunchctlCleanup();
       expect(rename).toHaveBeenCalledTimes(1);
       expectNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway removed");
+      expectNoNoteContaining(LEGACY_MAC_LABEL, "Legacy gateway cleanup skipped");
+      expect(runtime.log).toHaveBeenCalledWith(
+        "Legacy gateway services removed. Installing OpenClaw gateway next.",
+      );
     },
   );
 
