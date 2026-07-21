@@ -31,7 +31,9 @@ struct SessionDashboardScreen: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button(action: { self.dismiss() }) {
+                Button {
+                    self.dismiss()
+                } label: {
                     Text("Done")
                         .font(OpenClawType.subheadSemiBold)
                 }
