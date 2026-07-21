@@ -21,8 +21,8 @@ export function disambiguate<T>(
       continue;
     }
     const candidate =
-      candidates.find((candidate) => {
-        const values = indices.map((index) => candidate(items[index]!) ?? fallback(items[index]!));
+      candidates.find((option) => {
+        const values = indices.map((index) => option(items[index]!) ?? fallback(items[index]!));
         return (
           values.every((value) => value !== undefined) && new Set(values).size === indices.length
         );

@@ -14,7 +14,7 @@ function parentFolderDisplayName(path: string): string | undefined {
   if (separator < 0) {
     return undefined;
   }
-  const parent = separator === 0 ? trimmed[0] : trimmed.slice(0, separator);
+  const parent = separator === 0 ? trimmed.slice(0, 1) : trimmed.slice(0, separator);
   return folderDisplayName(parent) || undefined;
 }
 
@@ -200,11 +200,11 @@ export function renderPlaceSelect(params: {
     : [];
   const recentItems = recents.map((recent) => {
     const node = params.execNodes.find((candidate) => candidate.nodeId === recent.execNode);
-    const label =
+    const recentLabel =
       params.showDestinations && node
         ? `${folderDisplayName(recent.folder)} · ${node.displayName}`
         : folderDisplayName(recent.folder);
-    return { ...recent, label, node };
+    return { ...recent, label: recentLabel, node };
   });
   const recentSuffixes = disambiguate(recentItems, (recent) => recent.label, [
     (recent) => parentFolderDisplayName(recent.folder),
