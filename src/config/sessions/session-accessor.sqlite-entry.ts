@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { sql } from "kysely";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
   executeSqliteQuerySync,
@@ -169,6 +170,80 @@ function listSqliteSessionEntriesFromDatabase(database: { db: DatabaseSync }) {
       return entry ? { sessionKey: row.session_key, entry } : undefined;
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
+}
+
+type SlimSessionListCacheEntry = {
+  fingerprint: string;
+  entries: SessionEntrySummary[];
+};
+
+const slimSessionListCache = new Map<string, SlimSessionListCacheEntry>();
+
+function readSlimSessionListFingerprint(database: { db: DatabaseSync }): string {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select([
+        sql<number>`count(*)`.as("row_count"),
+        sql<number>`coalesce(max(updated_at), 0)`.as("max_updated_at"),
+        sql<number>`coalesce(sum(updated_at), 0)`.as("sum_updated_at"),
+      ]),
+  );
+  return `${row?.row_count ?? 0}:${row?.max_updated_at ?? 0}:${row?.sum_updated_at ?? 0}`;
+}
+
+/**
+ * Lists session entries with the two large report blobs (`systemPromptReport`,
+ * `skillsSnapshot`) omitted from the returned objects. Storage is untouched:
+ * the projection runs inside SQLite via `json_remove`, so the blobs never cross
+ * into the process, and single-entry loads still return them. On stores where
+ * the blobs dominate `entry_json` this turns a whole-store parse into a small one.
+ *
+ * Results are cached per store path and revalidated on every call with an
+ * indexed count/max/sum fingerprint probe, so any writer — including other
+ * processes such as CLI invocations — invalidates the cache without hooks.
+ * Rows are borrowed from the cache: callers must not mutate them.
+ */
+export function listSqliteSessionEntriesSlim(
+  scope: Partial<Omit<SessionAccessScope, "sessionKey">> = {},
+): SessionEntrySummary[] {
+  const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
+  const options = toDatabaseOptions(resolved);
+  const database = openOpenClawAgentDatabase(options);
+  const cacheKey = resolveOpenClawAgentSqlitePath(options);
+  const fingerprint = readSlimSessionListFingerprint(database);
+  const cached = slimSessionListCache.get(cacheKey);
+  if (cached && cached.fingerprint === fingerprint) {
+    return cached.entries;
+  }
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select([
+        "session_key",
+        sql<string>`json_remove(entry_json, '$.systemPromptReport', '$.skillsSnapshot')`.as(
+          "entry_json",
+        ),
+        "session_id",
+        "updated_at",
+      ])
+      .orderBy("session_key", "asc"),
+  ).rows;
+  const entries = rows
+    .map((row) => {
+      if (isInternalSessionEffectsKey(row.session_key)) {
+        return undefined;
+      }
+      const entry = parseSessionEntryRow(row);
+      return entry ? { sessionKey: row.session_key, entry } : undefined;
+    })
+    .filter((entry): entry is SessionEntrySummary => entry !== undefined);
+  slimSessionListCache.set(cacheKey, { fingerprint, entries });
+  return entries;
 }
 
 /** Lists only entries whose normalized session row has one of the requested statuses. */

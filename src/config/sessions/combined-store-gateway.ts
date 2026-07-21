@@ -10,7 +10,7 @@ import {
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { listSessionEntries } from "./session-accessor.js";
+import { listSessionEntriesSlim } from "./session-accessor.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
@@ -28,9 +28,8 @@ function loadGatewayStoreEntries(params: {
   storePath: string;
 }): Record<string, SessionEntry> {
   return Object.fromEntries(
-    listSessionEntries({
+    listSessionEntriesSlim({
       agentId: params.agentId,
-      clone: false,
       storePath: params.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
