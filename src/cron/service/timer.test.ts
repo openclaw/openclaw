@@ -476,6 +476,51 @@ describe("cron service timer seam coverage", () => {
     expect(requestHeartbeat).not.toHaveBeenCalled();
   });
 
+  // Regression: a cancelled script could still enqueue notify/wake side
+  // effects after the executor returned. The post-exec abort gate added
+  // in #111272 must suppress stale outcomes from an aborted run.
+  it("suppresses side effects when a main-target script was cancelled", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-07-19T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const controller = new AbortController();
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      cronConfig: { triggers: { enabled: true } },
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+      // Simulate: script executor did its work but the run was cancelled
+      // mid-flight (operator cancelled or restart generation advanced).
+      runScriptJob: vi.fn(async () => {
+        controller.abort("Cancelled by operator.");
+        return {
+          status: "ok" as const,
+          notify: "stale queue",
+          wake: "now" as const,
+        };
+      }),
+    });
+
+    const result = await executeJobCore(
+      state,
+      createDueScriptJob({ now, sessionTarget: "main" }),
+      controller.signal,
+    );
+
+    expect(result).toMatchObject({
+      status: "skipped",
+      error: "cron script job was cancelled",
+    });
+    // Must NOT emit side effects — the stale outcome belongs to a dead run.
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
+
   it("rejects nextCheck without pacing before applying state", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-07-18T12:00:00.000Z");
