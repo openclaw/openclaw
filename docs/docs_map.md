@@ -9126,7 +9126,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Global rule: image sanitization
   - H2: Global rule: malformed tool calls
   - H2: Global rule: tool result pairing
-  - H2: Global rule: incomplete reasoning-only turns
+  - H2: Global rule: incomplete or silent reasoning-only turns
   - H2: Global rule: inter-session input provenance
   - H2: Provider matrix (current behavior)
   - H2: Historical behavior (pre-2026.1.22)
