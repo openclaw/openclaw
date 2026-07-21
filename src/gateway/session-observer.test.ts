@@ -4,6 +4,7 @@ import {
   SessionObserverDigestSchema,
   type SessionObserverDigest,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSessionObserverModelOutput } from "./session-observer-model.js";
 import {
   createHarness,

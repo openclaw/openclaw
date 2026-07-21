@@ -12,7 +12,10 @@ import type {
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntryReadOnly,
+  patchSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
@@ -247,7 +250,9 @@ function normalizeModelString(value: string, maxChars: number): string {
 }
 
 export function defaultReadSession(sessionKey: string, agentId: string): SessionEntry | undefined {
-  return loadSessionEntry({ sessionKey, agentId });
+  // Read-only: observation must never materialize agent state (dirs, agent DB
+  // registration) for agents that are not configured.
+  return loadSessionEntryReadOnly({ sessionKey, agentId });
 }
 
 export async function defaultPersistDigest(params: {
