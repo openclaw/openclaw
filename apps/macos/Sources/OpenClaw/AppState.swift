@@ -54,6 +54,7 @@ final class AppState {
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
     @ObservationIgnored private var activeComputerPresenceTask: Task<Void, Never>?
+    @ObservationIgnored private var activeComputerPresenceUpdateGeneration: UInt64 = 0
 
     private func ifNotPreview(_ action: () -> Void) {
         guard !self.isPreview else { return }
@@ -87,6 +88,18 @@ final class AppState {
 
     static func resolveActiveComputerPresenceEnabled(defaults: UserDefaults = .standard) -> Bool {
         defaults.bool(forKey: activeComputerPresenceEnabledKey)
+    }
+
+    static func activeComputerPresenceUpdateIsCurrent(
+        capturedGeneration: UInt64,
+        currentGeneration: UInt64,
+        capturedEnabled: Bool,
+        currentEnabled: Bool,
+        isCancelled: Bool) -> Bool
+    {
+        !isCancelled &&
+            capturedGeneration == currentGeneration &&
+            capturedEnabled == currentEnabled
     }
 
     var onboardingSeen: Bool {
@@ -273,9 +286,20 @@ final class AppState {
                     enabled,
                     forKey: activeComputerPresenceEnabledKey)
                 PresenceReporter.shared.sendImmediate(reason: "activity-sharing-changed")
-                let previous = self.activeComputerPresenceTask
-                self.activeComputerPresenceTask = Task {
-                    await previous?.value
+                self.activeComputerPresenceUpdateGeneration &+= 1
+                let generation = self.activeComputerPresenceUpdateGeneration
+                self.activeComputerPresenceTask?.cancel()
+                // Apply the newest privacy choice immediately. An older network-bound
+                // enable may resume later, but the reporter's generation guard contains it.
+                self.activeComputerPresenceTask = Task { @MainActor [weak self] in
+                    guard let self,
+                          Self.activeComputerPresenceUpdateIsCurrent(
+                              capturedGeneration: generation,
+                              currentGeneration: self.activeComputerPresenceUpdateGeneration,
+                              capturedEnabled: enabled,
+                              currentEnabled: self.activeComputerPresenceEnabled,
+                              isCancelled: Task.isCancelled)
+                    else { return }
                     await MacNodeModeCoordinator.shared.setPresenceActivityReportingEnabled(enabled)
                 }
             }

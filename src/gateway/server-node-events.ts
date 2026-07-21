@@ -1146,7 +1146,7 @@ export const handleNodeEvent = async (
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
         return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
-      if (obj.action === "clear") {
+      if ("action" in obj) {
         const cleared = ctx.clearNodePresenceActivity?.({ nodeId, connId: opts?.connId });
         if (cleared === null || cleared === undefined) {
           return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };

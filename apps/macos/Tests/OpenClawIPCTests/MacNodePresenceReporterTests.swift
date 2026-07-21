@@ -14,6 +14,27 @@ struct MacNodePresenceReporterTests {
         #expect(AppState.resolveActiveComputerPresenceEnabled(defaults: defaults))
     }
 
+    @Test func `only the latest active computer presence update applies`() {
+        #expect(AppState.activeComputerPresenceUpdateIsCurrent(
+            capturedGeneration: 4,
+            currentGeneration: 4,
+            capturedEnabled: false,
+            currentEnabled: false,
+            isCancelled: false))
+        #expect(!AppState.activeComputerPresenceUpdateIsCurrent(
+            capturedGeneration: 3,
+            currentGeneration: 4,
+            capturedEnabled: true,
+            currentEnabled: false,
+            isCancelled: false))
+        #expect(!AppState.activeComputerPresenceUpdateIsCurrent(
+            capturedGeneration: 4,
+            currentGeneration: 4,
+            capturedEnabled: false,
+            currentEnabled: false,
+            isCancelled: true))
+    }
+
     @Test func `disabled reporter does not sample idle time`() async {
         let idleProbe = PresenceIdleProbe(seconds: 3)
         let sender = PresenceSenderRecorder()
