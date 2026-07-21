@@ -382,7 +382,11 @@ export function resolveEffectiveToolPolicy(params: {
     (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
   const agentConfig =
     params.config && agentId ? resolveAgentConfig(params.config, agentId) : undefined;
-  const agentTools = agentConfig?.tools;
+  // Prefer resolved agent tools (list entry, or agents.defaults when entry omits tools /
+  // agent is not yet in the list). Fall back to agents.defaults.tools explicitly so
+  // config that only sets defaults remains fail-closed even if resolveAgentConfig
+  // returns undefined for non-containment reasons.
+  const agentTools = agentConfig?.tools ?? params.config?.agents?.defaults?.tools;
   const globalTools = params.config?.tools;
 
   const profile = agentTools?.profile ?? globalTools?.profile;

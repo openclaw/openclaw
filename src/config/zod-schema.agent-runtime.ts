@@ -723,7 +723,7 @@ const MessageToolConfigSchema = z
   .strict()
   .optional();
 
-const AgentToolsSchema = z
+export const AgentToolsSchema = z
   .object({
     ...CommonToolPolicyFields,
     codeMode: CodeModeSchema,

@@ -119,10 +119,20 @@ export function resolveAgentConfig(
 ): ResolvedAgentConfig | undefined {
   const id = normalizeAgentId(agentId);
   const entry = resolveAgentEntry(cfg, id);
-  if (!entry) {
-    return undefined;
-  }
   const agentDefaults = cfg.agents?.defaults;
+  if (!entry) {
+    // Fail-closed for containment fields only: if the operator declared default
+    // tools/sandbox policy, surface it even when the agent is not yet present in
+    // agents.list (enrollment race / dynamic agent ids). Other fields stay unset
+    // so workspace/model resolution continues to use their existing fallbacks.
+    if (!agentDefaults?.tools && !agentDefaults?.sandbox) {
+      return undefined;
+    }
+    return {
+      sandbox: agentDefaults?.sandbox,
+      tools: agentDefaults?.tools,
+    };
+  }
   return {
     name: readStringValue(entry.name),
     workspace: readStringValue(entry.workspace),
@@ -162,8 +172,11 @@ export function resolveAgentConfig(
       typeof entry.embeddedAgent === "object" && entry.embeddedAgent
         ? entry.embeddedAgent
         : undefined,
-    sandbox: entry.sandbox,
-    tools: entry.tools,
+    // Prefer per-agent tools/sandbox, but inherit agents.defaults when omitted.
+    // Without this, defaults.tools.deny / defaults.sandbox are inert for any
+    // list entry that does not restate them (fail-open host tool access).
+    sandbox: entry.sandbox ?? agentDefaults?.sandbox,
+    tools: entry.tools ?? agentDefaults?.tools,
   };
 }
 

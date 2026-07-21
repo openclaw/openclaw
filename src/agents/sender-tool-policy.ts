@@ -36,7 +36,7 @@ export function resolveSenderToolPolicy(
   };
   const agentTools =
     params.agentId && params.agentId.trim()
-      ? resolveAgentConfig(cfg, params.agentId)?.tools
+      ? (resolveAgentConfig(cfg, params.agentId)?.tools ?? cfg.agents?.defaults?.tools)
       : undefined;
   const agentPolicy = resolveToolsBySender({
     toolsBySender: agentTools?.toolsBySender,

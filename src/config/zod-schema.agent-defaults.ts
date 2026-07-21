@@ -9,6 +9,7 @@ import {
   AgentModelPolicySchema,
   AgentModelSchema,
   AgentToolModelSchema,
+  AgentToolsSchema,
   MemorySearchSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
@@ -257,6 +258,12 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * Default tool policy applied when an agent list entry omits `tools`,
+     * and as the fail-closed baseline for agents that are not yet present
+     * in `agents.list` (see resolveAgentConfig / resolveEffectiveToolPolicy).
+     */
+    tools: AgentToolsSchema,
     sandbox: AgentSandboxSchema,
   })
   .strict()
