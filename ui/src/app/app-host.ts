@@ -687,6 +687,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     this.agentsListSource = null;
     this.sessionKeyClient = null;
     this.activeSessionTitleRow = null;
+    syncControlUiDocumentTitle({ sessionKey: null });
     this.runtimeConfigClient = null;
     this.runtimeConfigSource = null;
     if (this.agentRosterRefreshTimer !== null) {

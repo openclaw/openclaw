@@ -68,13 +68,17 @@ function resolveSafeSessionTitle(row: GatewaySessionRow, sessionKey: string): st
   }
   const displayName = normalizeOptionalString(row.displayName);
   if (
-    !displayName ||
-    isRawSessionKeyTitle(displayName, row.key, sessionKey) ||
-    isGeneratedConversationDisplayNameRow(row)
+    displayName &&
+    !isRawSessionKeyTitle(displayName, row.key, sessionKey) &&
+    !isGeneratedConversationDisplayNameRow(row)
   ) {
-    return null;
+    return applyTypedSessionPrefix(row.key, displayName);
   }
-  return applyTypedSessionPrefix(row.key, displayName);
+  const derivedTitle = normalizeOptionalString(row.derivedTitle);
+  if (derivedTitle && !isRawSessionKeyTitle(derivedTitle, row.key, sessionKey)) {
+    return applyTypedSessionPrefix(row.key, derivedTitle);
+  }
+  return null;
 }
 
 export function resolveControlUiDocumentTitle(state: DocumentTitleState): string {

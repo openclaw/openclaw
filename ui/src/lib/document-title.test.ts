@@ -99,6 +99,36 @@ describe("resolveControlUiDocumentTitle", () => {
       }),
     ).toBe(CONTROL_UI_DOCUMENT_TITLE);
   });
+
+  it("falls back to the derived title when label and display name are absent", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:dashboard:uuid",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:dashboard:uuid",
+            kind: "global",
+            derivedTitle: "Quarterly launch plan",
+          }),
+        ]),
+      }),
+    ).toBe("Quarterly launch plan - OpenClaw Control");
+  });
+
+  it("ignores a derived title that is the raw session key", () => {
+    expect(
+      resolveControlUiDocumentTitle({
+        sessionKey: "agent:main:dashboard:uuid",
+        sessionsResult: sessionsResult([
+          sessionRow({
+            key: "agent:main:dashboard:uuid",
+            kind: "global",
+            derivedTitle: "agent:main:dashboard:uuid",
+          }),
+        ]),
+      }),
+    ).toBe(CONTROL_UI_DOCUMENT_TITLE);
+  });
 });
 
 describe("syncControlUiDocumentTitle", () => {
