@@ -113,6 +113,10 @@ openclaw commitments --status snoozed
 openclaw commitments dismiss cm_abc123
 ```
 
+The `snoozed` status is reserved: filters accept it, but no built-in flow
+currently snoozes a commitment; snoozed records can appear only when imported
+from legacy state.
+
 See [`openclaw commitments`](/cli/commitments) for the full command reference.
 
 ## Privacy and cost
