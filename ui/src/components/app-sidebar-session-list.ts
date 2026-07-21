@@ -158,6 +158,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           ></openclaw-viewer-facepile>
           ${renderSessionRowBadges({
             ...session,
+            pullRequest: session.pullRequest ?? display?.pullRequest,
             hasApproval: sessionHasPendingApproval(this.approvalBadgeSnapshot(), session.key),
           })}
           ${pinnedState}

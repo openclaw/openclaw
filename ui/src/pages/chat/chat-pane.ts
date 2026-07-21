@@ -5,6 +5,7 @@ import { property, state as litState } from "lit/decorators.js";
 import {
   GATEWAY_SERVER_CAPS,
   type SessionCatalogHost,
+  type SessionCatalogPullRequestSummary,
   type SessionCatalogSession,
   type SessionCatalogTranscriptItem,
   type SessionDiscussionInfo,
@@ -357,6 +358,21 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
 
+function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+): SessionCatalogPullRequestSummary | undefined {
+  const current = pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  return {
+    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+      .slice(0, 20)
+      .toSorted((left, right) => left - right),
+    state: current.state,
+  };
+}
+
 function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event
     .composedPath()
@@ -634,7 +650,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.requestUpdate();
       return;
     }
-    const openPullRequestEpoch = scope.context.sessions.captureOpenPullRequestEpoch(sessionKey);
+    const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequests>(
         "controlUi.sessionPullRequests",
@@ -653,10 +669,10 @@ class ChatPane extends OpenClawLightDomElement {
       }
       this.sessionPullRequests = result.pullRequests;
       if (!result.rateLimited || result.pullRequests.length > 0) {
-        scope.context.sessions.setOpenPullRequest(
+        scope.context.sessions.setPullRequestSummary(
           sessionKey,
-          result.pullRequests.some((item) => item.state === "open" || item.state === "draft"),
-          openPullRequestEpoch,
+          summarizeSessionPullRequests(result.pullRequests),
+          pullRequestEpoch,
         );
       }
       this.sessionPullRequestsBranch = result.branch;

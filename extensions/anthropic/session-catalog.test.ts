@@ -854,6 +854,7 @@ describe("Claude session catalog", () => {
                 status: "stored",
                 source: "claude-cli",
                 modelProvider: "anthropic",
+                pullRequest: { numbers: [1234], state: "open" },
                 archived: false,
               },
             ],
@@ -890,6 +891,7 @@ describe("Claude session catalog", () => {
     const hosts = await provider?.list({ hostIds: ["node:node-a"] });
     expect(hosts?.[0]?.sessions[0]).toMatchObject({
       threadId,
+      pullRequest: { numbers: [1234], state: "open" },
       canContinue: true,
       canOpenTerminal: true,
     });
@@ -1154,6 +1156,87 @@ describe("Claude session catalog", () => {
 
     await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
       sessions: [{ threadId: sessionId, customGroup: "Release", source: "claude-desktop" }],
+    });
+  });
+
+  it("retains the current Claude Desktop pull request when history is truncated", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-pull-requests";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "pull request prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "pull-requests", {
+      sessionId: "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop pull requests",
+      prNumber: 111772,
+      prs: [
+        { prNumber: 111772, state: "MERGED" },
+        { prNumber: 111179, state: "MERGED", dismissed: true },
+        ...Array.from({ length: 20 }, (_value, index) => ({
+          prNumber: index + 1,
+          state: "CLOSED",
+        })),
+      ],
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          pullRequest: {
+            numbers: [...Array.from({ length: 19 }, (_value, index) => index + 2), 111772],
+            state: "merged",
+          },
+          source: "claude-desktop",
+        },
+      ],
+    });
+  });
+
+  it("adds the current Claude Desktop pull request when history omits it", async () => {
+    const home = await createHome();
+    const sessionId = "desktop-current-pull-request";
+    await writeProject({
+      home,
+      entries: [
+        {
+          sessionId,
+          fullPath: path.join(home, ".claude", "projects", "-workspace", `${sessionId}.jsonl`),
+          projectPath: "/work/openclaw",
+          isSidechain: false,
+        },
+      ],
+      transcripts: { [sessionId]: [message(sessionId, "user", "draft prompt", 1)] },
+    });
+    await writeDesktopMetadata(home, "current-pull-request", {
+      sessionId: "local_bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      cliSessionId: sessionId,
+      cwd: "/work/openclaw",
+      title: "Desktop pull request",
+      prNumber: 107302,
+      prState: "OPEN",
+      prs: [{ prNumber: 107301, state: "CLOSED" }],
+    });
+
+    await expect(listLocalClaudeSessionPage({}, home)).resolves.toMatchObject({
+      sessions: [
+        {
+          threadId: sessionId,
+          pullRequest: { numbers: [107301, 107302], state: "open" },
+          source: "claude-desktop",
+        },
+      ],
     });
   });
 
