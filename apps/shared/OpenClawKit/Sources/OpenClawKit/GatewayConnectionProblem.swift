@@ -757,6 +757,35 @@ extension GatewayConnectionProblemMapper {
                 retryable: false,
                 pauseReconnect: true,
                 technicalDetails: tlsError.localizedDescription)
+        case .pinStorageUnavailable:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUnavailable,
+                owner: .unknown,
+                title: "Could not save Gateway certificate pin",
+                message: "OpenClaw could not securely save the TLS certificate pin for \(failure.host).",
+                actionLabel: "Retry",
+                messagePresentation: .localizedFormat(
+                    "OpenClaw could not securely save the TLS certificate pin for %@.",
+                    [failure.host]),
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: true,
+                pauseReconnect: false,
+                technicalDetails: tlsError.localizedDescription)
+        case .authorityMismatch:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUntrusted,
+                owner: .network,
+                title: "Gateway TLS authority changed",
+                message: "The TLS challenge came from a different host or port than the requested Gateway.",
+                actionLabel: "Check Gateway URL",
+                messagePresentation: .localized(
+                    "The TLS challenge came from a different host or port than the requested Gateway."),
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: false,
+                pauseReconnect: true,
+                technicalDetails: tlsError.localizedDescription)
         }
     }
 
