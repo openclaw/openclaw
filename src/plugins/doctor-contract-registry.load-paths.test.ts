@@ -13,7 +13,6 @@ import {
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
 
 const tempDirs: string[] = [];
-const repoRoot = path.resolve(import.meta.dirname, "../..");
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(
