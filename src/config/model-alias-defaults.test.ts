@@ -429,6 +429,63 @@ describe("applyModelDefaults", () => {
     expect(model?.maxTokens).toBe(8192);
   });
 
+  it("inherits provider-level contextWindow and maxTokens", () => {
+    const cfg = buildProxyProviderConfig();
+    const provider = cfg.models.providers.myproxy;
+    Object.assign(provider, { contextWindow: 50_000, maxTokens: 4096 });
+    const modelConfig = provider.models[0] as { contextWindow?: number; maxTokens?: number };
+    delete modelConfig.contextWindow;
+    delete modelConfig.maxTokens;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(50_000);
+    expect(model?.maxTokens).toBe(4096);
+  });
+
+  it("keeps per-model token limits above provider defaults", () => {
+    const cfg = buildProxyProviderConfig({ contextWindow: 32_768, maxTokens: 2048 });
+    const provider = cfg.models.providers.myproxy;
+    Object.assign(provider, { contextWindow: 50_000, maxTokens: 4096 });
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(32_768);
+    expect(model?.maxTokens).toBe(2048);
+  });
+
+  it("clamps inherited provider maxTokens to the inherited contextWindow", () => {
+    const cfg = buildProxyProviderConfig();
+    const provider = cfg.models.providers.myproxy;
+    Object.assign(provider, { contextWindow: 4096, maxTokens: 8192 });
+    const modelConfig = provider.models[0] as { contextWindow?: number; maxTokens?: number };
+    delete modelConfig.contextWindow;
+    delete modelConfig.maxTokens;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(4096);
+    expect(model?.maxTokens).toBe(4096);
+  });
+
+  it("ignores invalid provider-level token defaults", () => {
+    const cfg = buildProxyProviderConfig();
+    const provider = cfg.models.providers.myproxy;
+    Object.assign(provider, { contextWindow: 0, maxTokens: -1 });
+    const modelConfig = provider.models[0] as { contextWindow?: number; maxTokens?: number };
+    delete modelConfig.contextWindow;
+    delete modelConfig.maxTokens;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.myproxy?.models?.[0];
+
+    expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(model?.maxTokens).toBe(8192);
+  });
+
   it("clamps maxTokens to contextWindow", () => {
     const cfg = buildProxyProviderConfig({ contextWindow: 32768, maxTokens: 40960 });
 
@@ -447,6 +504,21 @@ describe("applyModelDefaults", () => {
 
     expect(model?.contextWindow).toBe(262144);
     expect(model?.maxTokens).toBe(16384);
+  });
+
+  it("normalizes inherited mistral maxTokens that match the full context window", () => {
+    const cfg = buildMistralProviderConfig();
+    const provider = cfg.models.providers.mistral;
+    Object.assign(provider, { contextWindow: 262_144, maxTokens: 262_144 });
+    const modelConfig = provider.models[0] as { contextWindow?: number; maxTokens?: number };
+    delete modelConfig.contextWindow;
+    delete modelConfig.maxTokens;
+
+    const next = applyModelDefaults(cfg);
+    const model = next.models?.providers?.mistral?.models?.[0];
+
+    expect(model?.contextWindow).toBe(262_144);
+    expect(model?.maxTokens).toBe(16_384);
   });
 
   it("propagates a provider policy api default to models", () => {
