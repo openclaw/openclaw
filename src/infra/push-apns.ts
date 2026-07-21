@@ -1,6 +1,6 @@
 // Manages APNs registration state and direct/relay push sending.
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
-import fs from "node:fs/promises";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -38,6 +38,7 @@ import {
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
+import { tryReadSecretFileSync } from "./secret-file.js";
 
 export {
   clearApnsRegistrationIfCurrent,
@@ -227,17 +228,31 @@ export async function resolveApnsAuthConfigFromEnv(
     };
   }
   try {
-    const privateKey = normalizePrivateKey(await fs.readFile(keyPath, "utf8"));
+    // Bound credential reads like other secret files so a mistaken huge path cannot
+    // allocate unbounded memory into the APNs JWT signer. Symlink/hardlink layouts
+    // stay allowed for operator secret managers.
+    const fileValue = tryReadSecretFileSync(keyPath, "APNs private key", {
+      rejectHardlinks: false,
+    });
+    if (!fileValue) {
+      return {
+        ok: false,
+        error: `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${keyPath}): file is missing or empty`,
+      };
+    }
     return {
       ok: true,
       value: {
         teamId,
         keyId,
-        privateKey,
+        privateKey: normalizePrivateKey(fileValue),
       },
     };
   } catch (err) {
-    const message = formatErrorMessage(err);
+    const message =
+      err instanceof FsSafeError && err.code === "too-large"
+        ? "APNs private key file is too large"
+        : formatErrorMessage(err);
     return {
       ok: false,
       error: `failed reading OPENCLAW_APNS_PRIVATE_KEY_PATH (${keyPath}): ${message}`,
