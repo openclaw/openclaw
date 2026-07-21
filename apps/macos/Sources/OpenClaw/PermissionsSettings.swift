@@ -30,7 +30,9 @@ struct PermissionsSettings: View {
                     SettingsCardToggleRow(
                         title: "Active computer detection",
                         subtitle: """
-                        Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently and route node alerts. Never sends keys, pointer positions, app names, or window titles. Requires Accessibility.
+                        Share this Mac's idle duration so OpenClaw can identify the Mac you used most recently \
+                        and route node alerts. Never sends keys, pointer positions, app names, or window titles. \
+                        Requires Accessibility.
                         """,
                         binding: self.$state.activeComputerPresenceEnabled,
                         showsDivider: false)

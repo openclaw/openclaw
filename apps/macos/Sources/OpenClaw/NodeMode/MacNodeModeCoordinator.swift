@@ -358,111 +358,6 @@ final class MacNodeModeCoordinator: NSObject {
         return task
     }
 
-    static func endpointTransitionRequiresDisconnect(
-        from previous: GatewayEndpointState,
-        to next: GatewayEndpointState) -> Bool
-    {
-        self.effectiveEndpoint(from: previous) != self.effectiveEndpoint(from: next)
-    }
-
-    nonisolated static func endpointAttemptIsCurrent(
-        capturedGeneration: UInt64,
-        currentGeneration: UInt64) -> Bool
-    {
-        capturedGeneration == currentGeneration
-    }
-
-    nonisolated static func pausedStateRequiresDisconnect(_ isPaused: Bool) -> Bool {
-        isPaused
-    }
-
-    nonisolated static func controlTransitionRequiresRouteInvalidation(
-        previousPaused: Bool,
-        nextPaused: Bool,
-        previousComputerControlEnabled: Bool,
-        nextComputerControlEnabled: Bool) -> Bool
-    {
-        (!previousPaused && nextPaused) ||
-            (previousComputerControlEnabled && !nextComputerControlEnabled)
-    }
-
-    nonisolated static func endpointState(
-        _ state: GatewayEndpointState,
-        matches config: GatewayConnection.Config) -> Bool
-    {
-        guard case let .ready(_, url, token, password, _) = state else { return false }
-        return url == config.url && token == config.token && password == config.password
-    }
-
-    nonisolated static func endpointAttemptCanConnect(
-        capturedGeneration: UInt64,
-        currentGeneration: UInt64,
-        isCancelled: Bool,
-        isPaused: Bool,
-        capturedConfig: GatewayConnection.Config,
-        currentConfig: GatewayConnection.Config) -> Bool
-    {
-        capturedGeneration == currentGeneration &&
-            !isCancelled &&
-            !isPaused &&
-            capturedConfig.url == currentConfig.url &&
-            capturedConfig.token == currentConfig.token &&
-            capturedConfig.password == currentConfig.password
-    }
-
-    nonisolated static func routeAuthorityAllowsInvoke(
-        capturedRouteAuthorityGeneration: UInt64,
-        currentRouteAuthorityGeneration: UInt64,
-        completedRouteAuthorityGeneration: UInt64,
-        isPaused: Bool) -> Bool
-    {
-        capturedRouteAuthorityGeneration == currentRouteAuthorityGeneration &&
-            currentRouteAuthorityGeneration == completedRouteAuthorityGeneration &&
-            !isPaused
-    }
-
-    nonisolated static func routeSnapshotAllowsCodexCatalogInvoke(
-        command: String,
-        catalogAdvertised: Bool) -> Bool
-    {
-        !MacNodeCodexThreadCatalogContract.commands.contains(command) || catalogAdvertised
-    }
-
-    nonisolated static func routeSnapshotAllowsClaudeCatalogInvoke(
-        command: String,
-        catalogAdvertised: Bool) -> Bool
-    {
-        !MacNodeClaudeSessionCatalogContract.commands.contains(command) || catalogAdvertised
-    }
-
-    nonisolated static func stalePostConnectRequiresDisconnect(
-        capturedRouteAuthorityGeneration: UInt64,
-        currentRouteAuthorityGeneration: UInt64,
-        completedRouteAuthorityGeneration: UInt64,
-        isCancelled: Bool,
-        isPaused: Bool,
-        capturedConfig: GatewayConnection.Config,
-        currentConfig: GatewayConnection.Config) -> Bool
-    {
-        capturedRouteAuthorityGeneration != currentRouteAuthorityGeneration ||
-            currentRouteAuthorityGeneration != completedRouteAuthorityGeneration ||
-            isCancelled ||
-            isPaused ||
-            capturedConfig.url != currentConfig.url ||
-            capturedConfig.token != currentConfig.token ||
-            capturedConfig.password != currentConfig.password
-    }
-
-    private static func effectiveEndpoint(from state: GatewayEndpointState) -> EffectiveEndpoint? {
-        guard case let .ready(mode, url, token, password, routeRevision) = state else { return nil }
-        return EffectiveEndpoint(
-            mode: mode,
-            url: url,
-            token: token,
-            password: password,
-            routeRevision: routeRevision)
-    }
-
     private func invalidateRuntimeRoute(authorityGeneration: UInt64) async {
         self.presenceReporter.stop()
         _ = await self.nodeHostWorker?.setRoute(nil, authorityGeneration: authorityGeneration)
@@ -977,6 +872,111 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
+    static func endpointTransitionRequiresDisconnect(
+        from previous: GatewayEndpointState,
+        to next: GatewayEndpointState) -> Bool
+    {
+        self.effectiveEndpoint(from: previous) != self.effectiveEndpoint(from: next)
+    }
+
+    nonisolated static func endpointAttemptIsCurrent(
+        capturedGeneration: UInt64,
+        currentGeneration: UInt64) -> Bool
+    {
+        capturedGeneration == currentGeneration
+    }
+
+    nonisolated static func pausedStateRequiresDisconnect(_ isPaused: Bool) -> Bool {
+        isPaused
+    }
+
+    nonisolated static func controlTransitionRequiresRouteInvalidation(
+        previousPaused: Bool,
+        nextPaused: Bool,
+        previousComputerControlEnabled: Bool,
+        nextComputerControlEnabled: Bool) -> Bool
+    {
+        (!previousPaused && nextPaused) ||
+            (previousComputerControlEnabled && !nextComputerControlEnabled)
+    }
+
+    nonisolated static func endpointState(
+        _ state: GatewayEndpointState,
+        matches config: GatewayConnection.Config) -> Bool
+    {
+        guard case let .ready(_, url, token, password, _) = state else { return false }
+        return url == config.url && token == config.token && password == config.password
+    }
+
+    nonisolated static func endpointAttemptCanConnect(
+        capturedGeneration: UInt64,
+        currentGeneration: UInt64,
+        isCancelled: Bool,
+        isPaused: Bool,
+        capturedConfig: GatewayConnection.Config,
+        currentConfig: GatewayConnection.Config) -> Bool
+    {
+        capturedGeneration == currentGeneration &&
+            !isCancelled &&
+            !isPaused &&
+            capturedConfig.url == currentConfig.url &&
+            capturedConfig.token == currentConfig.token &&
+            capturedConfig.password == currentConfig.password
+    }
+
+    nonisolated static func routeAuthorityAllowsInvoke(
+        capturedRouteAuthorityGeneration: UInt64,
+        currentRouteAuthorityGeneration: UInt64,
+        completedRouteAuthorityGeneration: UInt64,
+        isPaused: Bool) -> Bool
+    {
+        capturedRouteAuthorityGeneration == currentRouteAuthorityGeneration &&
+            currentRouteAuthorityGeneration == completedRouteAuthorityGeneration &&
+            !isPaused
+    }
+
+    nonisolated static func routeSnapshotAllowsCodexCatalogInvoke(
+        command: String,
+        catalogAdvertised: Bool) -> Bool
+    {
+        !MacNodeCodexThreadCatalogContract.commands.contains(command) || catalogAdvertised
+    }
+
+    nonisolated static func routeSnapshotAllowsClaudeCatalogInvoke(
+        command: String,
+        catalogAdvertised: Bool) -> Bool
+    {
+        !MacNodeClaudeSessionCatalogContract.commands.contains(command) || catalogAdvertised
+    }
+
+    nonisolated static func stalePostConnectRequiresDisconnect(
+        capturedRouteAuthorityGeneration: UInt64,
+        currentRouteAuthorityGeneration: UInt64,
+        completedRouteAuthorityGeneration: UInt64,
+        isCancelled: Bool,
+        isPaused: Bool,
+        capturedConfig: GatewayConnection.Config,
+        currentConfig: GatewayConnection.Config) -> Bool
+    {
+        capturedRouteAuthorityGeneration != currentRouteAuthorityGeneration ||
+            currentRouteAuthorityGeneration != completedRouteAuthorityGeneration ||
+            isCancelled ||
+            isPaused ||
+            capturedConfig.url != currentConfig.url ||
+            capturedConfig.token != currentConfig.token ||
+            capturedConfig.password != currentConfig.password
+    }
+
+    private static func effectiveEndpoint(from state: GatewayEndpointState) -> EffectiveEndpoint? {
+        guard case let .ready(mode, url, token, password, routeRevision) = state else { return nil }
+        return EffectiveEndpoint(
+            mode: mode,
+            url: url,
+            token: token,
+            password: password,
+            routeRevision: routeRevision)
+    }
+
     nonisolated static func advertisedPermissions(
         _ statuses: [Capability: CapabilityAuthorizationStatus]) -> [String: Bool]
     {

@@ -111,8 +111,8 @@ extension PresenceReporter {
 
     static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
         [
-            "lastInputSeconds": AnyHashable(Self.legacyClearedLastInputSeconds),
-            "tags": AnyHashable([Self.clearLastInputTag]),
+            "lastInputSeconds": AnyHashable(self.legacyClearedLastInputSeconds),
+            "tags": AnyHashable([self.clearLastInputTag]),
         ]
     }
 }

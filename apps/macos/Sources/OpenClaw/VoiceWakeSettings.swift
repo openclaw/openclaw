@@ -163,7 +163,10 @@ struct VoiceWakeSettings: View {
                         SettingsCardToggleRow(
                             title: "Enable Voice Wake",
                             subtitle: self.selectedLocaleSupportsOnDeviceRecognition
-                                ? "Listen for a wake phrase before running voice commands. Wake-phrase recognition stays on this Mac."
+                                ? """
+                                Listen for a wake phrase before running voice commands. \
+                                Wake-phrase recognition stays on this Mac.
+                                """
                                 : "On-device recognition is unavailable for the selected language on this Mac.",
                             binding: self.voiceWakeBinding)
                             .disabled(!self.selectedLocaleSupportsOnDeviceRecognition && !self.state.swabbleEnabled)
@@ -595,13 +598,15 @@ struct VoiceWakeSettings: View {
             }
 
             if !self.selectedLocaleSupportsOnDeviceRecognition {
-                Text(
-                    "Voice Wake needs on-device recognition for its selected language. Push-to-talk and Talk Mode remain available.")
-                    .font(.footnote)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
+                Text("""
+                Voice Wake needs on-device recognition for its selected language. \
+                Push-to-talk and Talk Mode remain available.
+                """)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
 
             SettingsCardRow(
