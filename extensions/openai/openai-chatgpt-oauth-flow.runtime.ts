@@ -156,8 +156,7 @@ async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
         resolve({
           close: () => {
             server.close();
-            // An accepted socket can stay idle without ever receiving a response.
-            // Force it closed so the completed auth flow cannot pin the CLI process.
+            // Force-close preconnected sockets so they cannot pin the CLI process.
             server.closeAllConnections();
           },
           cancelWait: () => {

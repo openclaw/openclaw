@@ -1,4 +1,5 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
+import { once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -69,10 +70,7 @@ function connectIdleSocket(url: string): Promise<Socket> {
     host: resolveOpenAICallbackHost(),
     port: Number(callbackUrl.port),
   });
-  return new Promise((resolve, reject) => {
-    socket.once("connect", () => resolve(socket));
-    socket.once("error", reject);
-  });
+  return once(socket, "connect").then(() => socket);
 }
 
 function mockTokenResponse(body: unknown, status = 200): void {
