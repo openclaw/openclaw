@@ -2898,7 +2898,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     # Hosted runs may still be finalizing large Swift caches after every test
     # passes; keep that post-job work non-blocking.
-    timeout-minutes: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 30 || 20 }}
+    timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
@@ -3097,15 +3097,48 @@ jobs:
           done
           exit 1
 
-      - name: Exec approvals integrated macOS proof
+  macos-exec-approvals-proof:
+    permissions:
+      contents: read
+    name: "macos-exec-approvals-proof"
+    needs: [preflight]
+    if: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.run_macos_swift == 'true' }}
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Checkout literal PR head
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Verify literal PR head checkout
         env:
-          OPENCLAW_MACOS_INTEGRATION_PROOF: "1"
-          PROOF_HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || needs.preflight.outputs.checkout_revision }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          if [[ "$tested_sha" != "$EXPECTED_HEAD_SHA" ]]; then
+            echo "::error::Literal PR head mismatch: expected $EXPECTED_HEAD_SHA, got $tested_sha"
+            exit 1
+          fi
+          [[ -z "$(git status --porcelain)" ]]
+
+      - name: Exec approvals literal-head macOS proof
+        env:
+          OPENCLAW_MACOS_INTEGRATION_PROOF: "1"
+          PROOF_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          tested_sha="$(git rev-parse HEAD)"
+          [[ "$tested_sha" == "$PROOF_HEAD_SHA" ]]
           proof_log="$RUNNER_TEMP/macos-exec-approvals-proof.log"
           printf 'MACOS_EXEC_APPROVALS_PROOF candidate-head=%s tested-sha=%s macos=%s arch=%s\n' \
-            "$PROOF_HEAD_SHA" "$(git rev-parse HEAD)" \
+            "$PROOF_HEAD_SHA" "$tested_sha" \
             "$(sw_vers -productVersion)" "$(uname -m)" | tee "$proof_log"
           swift test --package-path apps/macos \
             --filter ExecApprovalsIntegratedProofTests 2>&1 | tee -a "$proof_log"
@@ -3437,6 +3470,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-exec-approvals-proof
       - ios-build
       - android
     if: ${{ always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
@@ -3468,6 +3502,7 @@ jobs:
             checks-windows=${{ needs.checks-windows.result }}
             macos-node=${{ needs.macos-node.result }}
             macos-swift=${{ needs.macos-swift.result }}
+            macos-exec-approvals-proof=${{ needs.macos-exec-approvals-proof.result }}
             ios-build=${{ needs.ios-build.result }}
             android=${{ needs.android.result }}
         run: |
@@ -3525,6 +3560,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-exec-approvals-proof
       - ios-build
       - android
     # Re-enable this job when we want to collect CI timing data for timing optimization.
