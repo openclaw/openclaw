@@ -60,6 +60,33 @@ describe("buildSlackBlocksFallbackText", () => {
     ).toBe("Pipeline report (table)\n- Account: Acme; ARR: 125000");
   });
 
+  it("renders basic table rows with plain or mrkdwn-safe cells", () => {
+    const table = {
+      type: "table",
+      rows: [
+        [
+          { type: "raw_text", text: "Owner\tname" },
+          {
+            type: "rich_text",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "text", text: "<!channel>\n*literal*" }],
+              },
+            ],
+          },
+        ],
+      ],
+    };
+
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "plain" })).toBe(
+      "Owner\\tname\t<!channel>\\n*literal*",
+    );
+    expect(renderSlackBlockFallbackText(table, { nativeDataFormat: "mrkdwn-safe" })).toBe(
+      "Owner\\tname\t&lt;!channel&gt;\\n\\*literal\\*",
+    );
+  });
+
   it("uses only visible action labels and select placeholders", () => {
     const fallback = buildSlackBlocksFallbackText([
       {
