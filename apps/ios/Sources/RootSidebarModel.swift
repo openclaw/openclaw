@@ -61,24 +61,47 @@ extension NodeAppModel {
             -> OpenClawChatSessionsListResponse) async throws -> ChatSessionRosterSnapshot
     {
         var sessions: [OpenClawChatSessionEntry] = []
+        var seenKeys = Set<String>()
         var offset = 0
+        // Offset pages are separate live requests: a session created or moved
+        // between them can shift rows across the boundary, duplicating one row
+        // and dropping another. Duplicates or a shifting totalCount demote the
+        // snapshot to incomplete instead of claiming exact totals.
+        var sawConsistencyDrift = false
+        var firstTotalCount: Int?
 
         for pageIndex in 0..<maximumPageCount {
             let page = try await fetchPage(pageSize, offset, archived)
             guard (page.offset ?? 0) == offset else { throw URLError(.cannotParseResponse) }
+            if let total = page.totalCount {
+                if let known = firstTotalCount, known != total {
+                    sawConsistencyDrift = true
+                } else if firstTotalCount == nil {
+                    firstTotalCount = total
+                }
+            }
 
             let remainingCapacity = maximumSessionCount - sessions.count
             guard remainingCapacity > 0 else {
                 return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
             }
             let pageWasTruncated = page.sessions.count > remainingCapacity
-            sessions.append(contentsOf: page.sessions.prefix(remainingCapacity))
+            for entry in page.sessions.prefix(remainingCapacity) {
+                if seenKeys.insert(entry.key).inserted {
+                    sessions.append(entry)
+                } else {
+                    sawConsistencyDrift = true
+                }
+            }
             guard !pageWasTruncated else {
                 return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: false)
             }
 
             if page.hasMore == false {
-                return ChatSessionRosterSnapshot(sessions: sessions, isCached: false, isComplete: true)
+                return ChatSessionRosterSnapshot(
+                    sessions: sessions,
+                    isCached: false,
+                    isComplete: !sawConsistencyDrift)
             }
             if page.hasMore == nil {
                 let totalIsLoaded = page.totalCount.map { sessions.count >= $0 } ?? false
@@ -86,7 +109,7 @@ extension NodeAppModel {
                 return ChatSessionRosterSnapshot(
                     sessions: sessions,
                     isCached: false,
-                    isComplete: totalIsLoaded || pageWasShort)
+                    isComplete: (totalIsLoaded || pageWasShort) && !sawConsistencyDrift)
             }
 
             guard pageIndex + 1 < maximumPageCount,

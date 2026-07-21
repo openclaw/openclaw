@@ -128,6 +128,42 @@ struct RootTabsPresentationTests {
         #expect(!bounded.isComplete)
     }
 
+    @Test func `session roster pagination demotes drifted snapshots to incomplete`() async throws {
+        // A row moving across the page boundary between requests repeats on the
+        // next page; the merged snapshot must dedupe and refuse completeness.
+        let pages = [
+            OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: 2,
+                defaults: nil,
+                sessions: [Self.sessionEntry(key: "one"), Self.sessionEntry(key: "two")],
+                totalCount: 3,
+                offset: nil,
+                nextOffset: 2,
+                hasMore: true),
+            OpenClawChatSessionsListResponse(
+                ts: nil,
+                path: nil,
+                count: 2,
+                defaults: nil,
+                sessions: [Self.sessionEntry(key: "two"), Self.sessionEntry(key: "three")],
+                totalCount: 3,
+                offset: 2,
+                nextOffset: nil,
+                hasMore: false),
+        ]
+        var pageIndex = 0
+
+        let drifted = try await NodeAppModel.loadChatSessionRosterPages(pageSize: 2) { _, _, _ in
+            defer { pageIndex += 1 }
+            return pages[pageIndex]
+        }
+
+        #expect(drifted.sessions.map(\.key) == ["one", "two", "three"])
+        #expect(!drifted.isComplete)
+    }
+
     @Test func `failed cron attention ignores disabled jobs`() {
         #expect(RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: true, status: "error")))
         #expect(!RootSidebarModel.isFailedCronJob(Self.cronJob(enabled: false, status: "error")))

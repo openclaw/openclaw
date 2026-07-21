@@ -126,10 +126,10 @@ struct CommandCenterTab: View {
                 value: self.overviewSessionCountText)
             self.threadTile(
                 title: String(localized: "Live"),
-                value: self.overviewLiveCount.formatted())
+                value: self.overviewLiveCountText)
             self.threadTile(
                 title: String(localized: "Unread"),
-                value: self.overviewUnreadCount.formatted())
+                value: self.overviewUnreadCountText)
             self.threadTile(
                 title: String(localized: "Tokens"),
                 value: self.overviewTokenText)
@@ -278,8 +278,18 @@ struct CommandCenterTab: View {
         }
     }
 
+    private var overviewLiveCountText: String {
+        let prefix = self.dashboardModel?.isSessionRosterComplete == false ? "~" : ""
+        return "\(prefix)\(self.overviewLiveCount.formatted())"
+    }
+
     private var overviewUnreadCount: Int {
         self.overviewSessions.count { $0.unread == true }
+    }
+
+    private var overviewUnreadCountText: String {
+        let prefix = self.dashboardModel?.isSessionRosterComplete == false ? "~" : ""
+        return "\(prefix)\(self.overviewUnreadCount.formatted())"
     }
 
     private var overviewTokenText: String {
