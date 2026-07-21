@@ -1,5 +1,6 @@
 // Memory Core plugin module implements qmd manager behavior.
 import crypto from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -117,6 +118,19 @@ const QMD_EMBED_LEASE_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_WRITE_LEASE_MIN_WAIT_MS = 5 * 60 * 1000;
 const QMD_EMBED_QUEUE_KEY = Symbol.for("openclaw.qmdEmbedQueueTail");
 const QMD_UPDATE_QUEUE_KEY = Symbol.for("openclaw.qmdUpdateQueueState");
+
+function qmdIndexExists(indexPath: string): boolean {
+  try {
+    fsSync.statSync(indexPath);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return false;
+    }
+    throw err;
+  }
+}
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   ".cache",
@@ -1093,6 +1107,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       return false;
     }
     try {
+      if (!qmdIndexExists(this.indexPath)) {
+        this.vectorAvailable = false;
+        this.vectorStatusDetail = "QMD index is missing; semantic search is unavailable";
+        return false;
+      }
       const timeoutMs = this.qmd.limits.timeoutMs;
       const result = await this.runQmd(["status"], {
         timeoutMs,
@@ -1903,6 +1922,12 @@ export class QmdMemoryManager implements MemorySearchManager {
     sourceCounts: Array<{ source: MemorySource; files: number; chunks: number }>;
   } {
     try {
+      if (!qmdIndexExists(this.indexPath)) {
+        return {
+          totalDocuments: 0,
+          sourceCounts: Array.from(this.sources).map((source) => ({ source, files: 0, chunks: 0 })),
+        };
+      }
       const db = this.ensureDb();
       const rows = db
         .prepare(

@@ -127,6 +127,14 @@ const mockCloseMemoryIndexManagersForAgent = vi.hoisted(() => vi.fn(async () => 
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
 );
+const resolveMemorySearchConfigMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+  resolveMemorySearchConfigMock.mockImplementation(actual.resolveMemorySearchConfig);
+  return { ...actual, resolveMemorySearchConfig: resolveMemorySearchConfigMock };
+});
 
 vi.mock("./qmd-manager.js", () => ({
   QmdMemoryManager: {
@@ -329,9 +337,541 @@ beforeEach(async () => {
   checkQmdBinaryAvailability.mockClear();
   checkQmdBinaryAvailability.mockResolvedValue({ available: true });
   createQmdManagerMock.mockClear();
+  resolveMemorySearchConfigMock.mockClear();
 });
 
 describe("getMemorySearchManager caching", () => {
+  it("returns no manager for a disabled agent before probing qmd", async () => {
+    const agentId = "disabled-qmd-agent";
+    const cfg = {
+      ...createQmdCfg(agentId),
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const result = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
+
+    expect(result.manager).toBeNull();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(createQmdManagerMock).not.toHaveBeenCalled();
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+    expect(mockCloseMemoryIndexManagersForAgent).not.toHaveBeenCalled();
+  });
+
+  it("acquires enabled qmd without invoking builtin memory validation", async () => {
+    const agentId = "enabled-qmd-agent";
+    resolveMemorySearchConfigMock.mockImplementationOnce(() => {
+      throw new Error("builtin embedding validation invoked");
+    });
+
+    const result = await getMemorySearchManager({ cfg: createQmdCfg(agentId), agentId });
+
+    expect(result.manager?.status().backend).toBe("qmd");
+    expect(resolveMemorySearchConfigMock).not.toHaveBeenCalled();
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires only the disabled agent cached qmd manager and recreates it when re-enabled", async () => {
+    const agentId = "hot-disabled-qmd-agent";
+    const otherAgentId = "other-hot-disabled-qmd-agent";
+    const enabledCfg = createQmdCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const firstPrimary = createQmdManagerInstanceMock();
+    const otherPrimary = createQmdManagerInstanceMock();
+    const reenabledPrimary = createQmdManagerInstanceMock();
+    createQmdManagerMock
+      .mockImplementationOnce(async () => firstPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => otherPrimary as unknown as QmdManagerInstance)
+      .mockImplementationOnce(async () => reenabledPrimary as unknown as QmdManagerInstance);
+
+    const first = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const other = await getMemorySearchManager({
+      cfg: createQmdCfg(otherAgentId),
+      agentId: otherAgentId,
+    });
+    const disabled = await getMemorySearchManager({ cfg: disabledCfg, agentId });
+    const reenabled = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const otherAgain = await getMemorySearchManager({
+      cfg: createQmdCfg(otherAgentId),
+      agentId: otherAgentId,
+    });
+
+    expect(disabled.manager).toBeNull();
+    expect(firstPrimary.close).toHaveBeenCalledTimes(1);
+    expect(otherPrimary.close).not.toHaveBeenCalled();
+    expect(reenabled.manager).not.toBe(first.manager);
+    expect(otherAgain.manager).toBe(other.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retires a pending qmd create when the agent is disabled and re-enables fresh", async () => {
+    const agentId = "hot-disabled-pending-qmd-agent";
+    const enabledCfg = createQmdCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const createGate = createDeferred<QmdManagerInstance>();
+    const pendingPrimary = createQmdManagerInstanceMock();
+    const reenabledPrimary = createQmdManagerInstanceMock();
+    createQmdManagerMock
+      .mockImplementationOnce(async () => await createGate.promise)
+      .mockImplementationOnce(async () => reenabledPrimary as unknown as QmdManagerInstance);
+
+    const pendingAcquire = getMemorySearchManager({ cfg: enabledCfg, agentId });
+    await vi.waitFor(() => {
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+    });
+    const disabledAcquire = getMemorySearchManager({ cfg: disabledCfg, agentId });
+    createGate.resolve(pendingPrimary as unknown as QmdManagerInstance);
+    const [invalidated, disabled] = await Promise.all([pendingAcquire, disabledAcquire]);
+    const reenabled = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+
+    expect(invalidated.manager).toBeNull();
+    expect(invalidated.error).toBeUndefined();
+    expect(disabled.manager).toBeNull();
+    expect(pendingPrimary.close).toHaveBeenCalledTimes(1);
+    expect(reenabled.manager?.status().backend).toBe("qmd");
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+  });
+
+  it("clears the disabled agent qmd open-failure cooldown before re-enable", async () => {
+    const agentId = "hot-disabled-failed-qmd-agent";
+    const enabledCfg = createQmdCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    checkQmdBinaryAvailability
+      .mockResolvedValueOnce({ available: false, reason: "binary", error: "qmd missing" })
+      .mockResolvedValueOnce({ available: true });
+
+    const failed = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const disabled = await getMemorySearchManager({ cfg: disabledCfg, agentId });
+    const reenabled = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+
+    expect(failed.manager).toBe(fallbackManager);
+    expect(disabled.manager).toBeNull();
+    expect(reenabled.manager?.status().backend).toBe("qmd");
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(2);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retires only the disabled agent loaded builtin fallback state", async () => {
+    const agentId = "hot-disabled-builtin-fallback-agent";
+    const otherAgentId = "other-hot-disabled-builtin-fallback-agent";
+    const enabledCfg = createQmdCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const agentFallback = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const otherFallback = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    mockMemoryIndexGet
+      .mockResolvedValueOnce(agentFallback)
+      .mockResolvedValueOnce(otherFallback)
+      .mockResolvedValueOnce(otherFallback);
+    checkQmdBinaryAvailability.mockResolvedValue({
+      available: false,
+      reason: "binary",
+      error: "qmd missing",
+    });
+
+    const first = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const other = await getMemorySearchManager({
+      cfg: createQmdCfg(otherAgentId),
+      agentId: otherAgentId,
+    });
+    const disabled = await getMemorySearchManager({ cfg: disabledCfg, agentId });
+    const otherAgain = await getMemorySearchManager({
+      cfg: createQmdCfg(otherAgentId),
+      agentId: otherAgentId,
+    });
+
+    expect(first.manager).toBe(agentFallback);
+    expect(other.manager).toBe(otherFallback);
+    expect(disabled.manager).toBeNull();
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(1);
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledWith({
+      cfg: disabledCfg,
+      agentId,
+    });
+    expect(otherFallback.close).not.toHaveBeenCalled();
+    expect(otherAgain.manager).toBe(otherFallback);
+    expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(2);
+  });
+
+  it("serializes concurrent re-enable behind disabled builtin cleanup", async () => {
+    const agentId = "builtin-disable-reenable-race";
+    const enabledCfg = createBuiltinCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        ...enabledCfg.agents,
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const initialManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const reenabledManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const closeGate = createDeferred<void>();
+    mockMemoryIndexGet
+      .mockResolvedValueOnce(initialManager)
+      .mockResolvedValueOnce(reenabledManager);
+    mockCloseMemoryIndexManagersForAgent.mockImplementationOnce(async () => {
+      await closeGate.promise;
+    });
+
+    const initial = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const disabledPromise = getMemorySearchManager({ cfg: disabledCfg, agentId });
+    await vi.waitFor(() => {
+      expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(1);
+    });
+    const reenabledPromise = getMemorySearchManager({ cfg: enabledCfg, agentId });
+    await Promise.resolve();
+
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    closeGate.resolve(undefined);
+    const [disabled, reenabled] = await Promise.all([disabledPromise, reenabledPromise]);
+
+    expect(initial.manager).toBe(initialManager);
+    expect(disabled.manager).toBeNull();
+    expect(reenabled.manager).toBe(reenabledManager);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a re-enable queued between two disables survive", async () => {
+    const agentId = "builtin-disable-reenable-disable-race";
+    const enabledCfg = createBuiltinCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        ...enabledCfg.agents,
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const initialManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const finalManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const firstCloseGate = createDeferred<void>();
+    mockMemoryIndexGet.mockResolvedValueOnce(initialManager).mockResolvedValueOnce(finalManager);
+    mockCloseMemoryIndexManagersForAgent
+      .mockImplementationOnce(async () => await firstCloseGate.promise)
+      .mockResolvedValueOnce(undefined);
+
+    const initial = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const firstDisable = getMemorySearchManager({ cfg: disabledCfg, agentId });
+    await vi.waitFor(() => {
+      expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(1);
+    });
+    const queuedEnable = getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const secondDisable = getMemorySearchManager({ cfg: disabledCfg, agentId });
+    await Promise.resolve();
+
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    firstCloseGate.resolve(undefined);
+    const [firstDisabled, staleEnabled, secondDisabled] = await Promise.all([
+      firstDisable,
+      queuedEnable,
+      secondDisable,
+    ]);
+
+    expect(initial.manager).toBe(initialManager);
+    expect(firstDisabled.manager).toBeNull();
+    expect(staleEnabled.manager).toBeNull();
+    expect(secondDisabled.manager).toBeNull();
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(2);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+
+    const finalEnabled = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    expect(finalEnabled.manager).toBe(finalManager);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps re-enable ordered after a disabled cleanup failure", async () => {
+    const agentId = "builtin-disable-cleanup-failure";
+    const enabledCfg = createBuiltinCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        ...enabledCfg.agents,
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const initialManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const reenabledManager = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const cleanupGate = createDeferred<void>();
+    mockMemoryIndexGet
+      .mockResolvedValueOnce(initialManager)
+      .mockResolvedValueOnce(reenabledManager);
+    mockCloseMemoryIndexManagersForAgent.mockImplementationOnce(async () => {
+      await cleanupGate.promise;
+      throw new Error("builtin cleanup failed");
+    });
+
+    await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const disabledPromise = getMemorySearchManager({ cfg: disabledCfg, agentId });
+    const disabledFailure = expect(disabledPromise).rejects.toThrow("builtin cleanup failed");
+    await vi.waitFor(() => {
+      expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(1);
+    });
+    const reenabledPromise = getMemorySearchManager({ cfg: enabledCfg, agentId });
+    await Promise.resolve();
+
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    cleanupGate.resolve(undefined);
+    await disabledFailure;
+    const reenabled = await reenabledPromise;
+
+    expect(reenabled.manager).toBe(reenabledManager);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["status", "cli"] as const)(
+    "closes a stale transient builtin %s manager created while disable is pending",
+    async (purpose) => {
+      const agentId = `builtin-stale-${purpose}`;
+      const enabledCfg = createBuiltinCfg(agentId);
+      const disabledCfg = {
+        ...enabledCfg,
+        agents: {
+          ...enabledCfg.agents,
+          list: [
+            {
+              id: agentId,
+              default: true,
+              workspace: "/tmp/workspace",
+              memorySearch: { enabled: false },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+      const staleManager = createManagerMock({
+        backend: "builtin",
+        provider: "openai",
+        model: "text-embedding-3-small",
+        requestedProvider: "openai",
+      });
+      const createGate = createDeferred<typeof staleManager>();
+      mockMemoryIndexGet.mockImplementationOnce(async () => await createGate.promise);
+
+      const transientAcquire = getMemorySearchManager({ cfg: enabledCfg, agentId, purpose });
+      await vi.waitFor(() => {
+        expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+      });
+      const disabledAcquire = getMemorySearchManager({ cfg: disabledCfg, agentId });
+      createGate.resolve(staleManager);
+      const [transient, disabled] = await Promise.all([transientAcquire, disabledAcquire]);
+
+      expect(transient.manager).toBeNull();
+      expect(disabled.manager).toBeNull();
+      expect(staleManager.close).toHaveBeenCalledTimes(1);
+      expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("blocks a pre-disable qmd failure from creating a late builtin fallback", async () => {
+    const agentId = "late-builtin-fallback-after-disable";
+    const enabledCfg = createQmdCfg(agentId);
+    const disabledCfg = {
+      ...enabledCfg,
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const searchGate = createDeferred<ManagerSearchResult>();
+    const primary = createQmdManagerInstanceMock();
+    primary.search.mockImplementationOnce(async () => await searchGate.promise);
+    createQmdManagerMock.mockImplementationOnce(
+      async () => primary as unknown as QmdManagerInstance,
+    );
+
+    const acquired = await getMemorySearchManager({ cfg: enabledCfg, agentId });
+    const manager = requireManager(acquired);
+    const searchPromise = manager.search("late fallback");
+    await vi.waitFor(() => {
+      expect(primary.search).toHaveBeenCalledTimes(1);
+    });
+    const disabled = await getMemorySearchManager({ cfg: disabledCfg, agentId });
+    searchGate.reject(new Error("qmd failed after disable"));
+
+    await expect(searchPromise).rejects.toThrow();
+    expect(disabled.manager).toBeNull();
+    expect(mockMemoryIndexGet).not.toHaveBeenCalled();
+  });
+
+  it("disposes a builtin fallback already being created when disable begins", async () => {
+    const agentId = "pending-builtin-fallback-after-disable";
+    const qmdCfg = createQmdCfg(agentId);
+    const disabledCfg = {
+      ...qmdCfg,
+      agents: {
+        list: [
+          {
+            id: agentId,
+            default: true,
+            workspace: "/tmp/workspace",
+            memorySearch: { enabled: false },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const primary = createQmdManagerInstanceMock();
+    primary.search.mockRejectedValueOnce(new Error("qmd failed before disable"));
+    createQmdManagerMock.mockImplementationOnce(
+      async () => primary as unknown as QmdManagerInstance,
+    );
+    const staleFallback = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const freshBuiltin = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const fallbackGate = createDeferred<typeof staleFallback>();
+    mockMemoryIndexGet
+      .mockImplementationOnce(async () => await fallbackGate.promise)
+      .mockResolvedValueOnce(freshBuiltin);
+
+    const acquired = await getMemorySearchManager({ cfg: qmdCfg, agentId });
+    const searchPromise = requireManager(acquired).search("pending fallback");
+    const searchFailure = expect(searchPromise).rejects.toThrow();
+    await vi.waitFor(() => {
+      expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    });
+    const disabledPromise = getMemorySearchManager({ cfg: disabledCfg, agentId });
+    fallbackGate.resolve(staleFallback);
+
+    await searchFailure;
+    const disabled = await disabledPromise;
+    expect(disabled.manager).toBeNull();
+    expect(staleFallback.close).toHaveBeenCalledTimes(1);
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledTimes(1);
+
+    const reenabled = await getMemorySearchManager({ cfg: createBuiltinCfg(agentId), agentId });
+    expect(reenabled.manager).toBe(freshBuiltin);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(2);
+  });
+
   it("repairs an invalid shared singleton cache shape before using qmd cache maps", async () => {
     await closeAllMemorySearchManagers();
     vi.resetModules();
@@ -1155,7 +1695,33 @@ describe("getMemorySearchManager caching", () => {
 
     fallbackGate.resolve(fallbackManager);
     await expect(Promise.all([firstSearch, secondSearch])).resolves.toHaveLength(2);
+    expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
     expect(fallbackSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it("closes a fallback candidate that resolves after its qmd wrapper is closed", async () => {
+    const agentId = "retry-agent-pending-fallback-close";
+    const { manager } = await createFailedQmdSearchHarness({
+      agentId,
+      errorMessage: "qmd query failed",
+    });
+    const staleFallback = createManagerMock({
+      backend: "builtin",
+      provider: "openai",
+      model: "text-embedding-3-small",
+      requestedProvider: "openai",
+    });
+    const fallbackGate = createDeferred<typeof staleFallback>();
+    mockMemoryIndexGet.mockImplementationOnce(async () => await fallbackGate.promise);
+
+    const searchPromise = manager.search("pending fallback");
+    const searchFailure = expect(searchPromise).rejects.toThrow("memory search manager is closed");
+    await vi.waitFor(() => expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1));
+    await manager.close?.();
+    fallbackGate.resolve(staleFallback);
+
+    await searchFailure;
+    expect(staleFallback.close).toHaveBeenCalledTimes(1);
   });
 
   it("gives same-call qmd-to-builtin fallback a fresh default deadline", async () => {

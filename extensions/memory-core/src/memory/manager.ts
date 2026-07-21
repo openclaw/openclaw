@@ -8,6 +8,7 @@ import {
   createSubsystemLogger,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveGlobalSingleton,
   resolveMemorySearchConfig,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -103,6 +104,8 @@ const FTS_TABLE = MEMORY_INDEX_FTS_TABLE;
 const PATH_FTS_TABLE = MEMORY_INDEX_PATHS_FTS_TABLE;
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
+const MEMORY_INDEX_MANAGER_LIFECYCLE_KEY = Symbol.for("openclaw.memoryIndexManagerLifecycle");
+const MEMORY_INDEX_MANAGER_GENERATIONS_KEY = Symbol.for("openclaw.memoryIndexManagerGenerations");
 const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const EXACT_PATH_CANDIDATE_LIMIT = 200;
@@ -116,6 +119,34 @@ type MemoryEmbeddingProviderRequirement = {
 
 const { cache: INDEX_CACHE, pending: INDEX_CACHE_PENDING } =
   resolveSingletonManagedCache<MemoryIndexManager>(MEMORY_INDEX_MANAGER_CACHE_KEY);
+const INDEX_AGENT_LIFECYCLE_TAILS = resolveGlobalSingleton<Map<string, Promise<void>>>(
+  MEMORY_INDEX_MANAGER_LIFECYCLE_KEY,
+  () => new Map<string, Promise<void>>(),
+);
+const INDEX_AGENT_LIFECYCLE_GENERATIONS = resolveGlobalSingleton<Map<string, number>>(
+  MEMORY_INDEX_MANAGER_GENERATIONS_KEY,
+  () => new Map<string, number>(),
+);
+
+async function runMemoryIndexManagerLifecycle<T>(
+  agentId: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const previous = INDEX_AGENT_LIFECYCLE_TAILS.get(agentId) ?? Promise.resolve();
+  const run = previous.catch(() => {}).then(task);
+  const tail = run.then(
+    () => {},
+    () => {},
+  );
+  INDEX_AGENT_LIFECYCLE_TAILS.set(agentId, tail);
+  try {
+    return await run;
+  } finally {
+    if (INDEX_AGENT_LIFECYCLE_TAILS.get(agentId) === tail) {
+      INDEX_AGENT_LIFECYCLE_TAILS.delete(agentId);
+    }
+  }
+}
 
 type EmbeddingProbeCacheEntry = {
   result: MemoryEmbeddingProbeResult;
@@ -181,12 +212,54 @@ export async function closeMemoryIndexManagersForAgent(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): Promise<void> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-  await closeMemoryIndexManagersForScope({
-    agentId: params.agentId,
-    workspaceDir,
-    purpose: "default",
-  });
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const { pendingEntries, cachedEntries } = await runMemoryIndexManagerLifecycle(
+    normalizedAgentId,
+    async () => {
+      INDEX_AGENT_LIFECYCLE_GENERATIONS.set(
+        normalizedAgentId,
+        (INDEX_AGENT_LIFECYCLE_GENERATIONS.get(normalizedAgentId) ?? 0) + 1,
+      );
+      const agentCacheKeyPrefix = resolveMemoryIndexManagerAgentCacheKeyPrefix(normalizedAgentId);
+      const ownsKey = (key: string) => key.startsWith(agentCacheKeyPrefix);
+      const detachedPendingEntries = Array.from(INDEX_CACHE_PENDING.entries()).filter(([key]) =>
+        ownsKey(key),
+      );
+      for (const [key, promise] of detachedPendingEntries) {
+        if (INDEX_CACHE_PENDING.get(key) === promise) {
+          INDEX_CACHE_PENDING.delete(key);
+        }
+      }
+      const detachedCachedEntries = Array.from(INDEX_CACHE.entries()).filter(
+        ([, manager]) => manager.normalizedAgentId === normalizedAgentId,
+      );
+      for (const [key, manager] of detachedCachedEntries) {
+        if (INDEX_CACHE.get(key) === manager) {
+          INDEX_CACHE.delete(key);
+        }
+      }
+      return {
+        pendingEntries: detachedPendingEntries,
+        cachedEntries: detachedCachedEntries,
+      };
+    },
+  );
+  const managers = new Set(cachedEntries.map(([, manager]) => manager));
+  const pendingResults = await Promise.allSettled(pendingEntries.map(([, promise]) => promise));
+  for (const result of pendingResults) {
+    if (result.status === "fulfilled" && result.value.normalizedAgentId === normalizedAgentId) {
+      managers.add(result.value);
+    }
+  }
+  for (const manager of managers) {
+    try {
+      await manager.close();
+    } catch (err) {
+      log.warn(
+        `failed to close memory index manager for agent ${normalizedAgentId}: ${String(err)}`,
+      );
+    }
+  }
 }
 
 function resolveEffectiveMemorySearchSettings(
@@ -247,16 +320,22 @@ function resolveMemoryIndexManagerCacheKey(params: {
   settings: ResolvedMemorySearchConfig;
   providerRequirement: MemoryEmbeddingProviderRequirement;
   purpose: MemoryIndexManagerPurpose;
+  lifecycleGeneration: number;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 }): string {
-  return [
-    params.agentId,
+  const scopedIdentity = [
+    String(params.lifecycleGeneration),
     params.workspaceDir,
     JSON.stringify(params.settings),
     JSON.stringify(params.providerRequirement),
     resolveMemoryCoreLocalServiceHostIdentity(params.acquireLocalService),
     params.purpose,
   ].join(":");
+  return `${resolveMemoryIndexManagerAgentCacheKeyPrefix(params.agentId)}${scopedIdentity}`;
+}
+
+function resolveMemoryIndexManagerAgentCacheKeyPrefix(agentId: string): string {
+  return `${encodeURIComponent(normalizeAgentId(agentId))}:`;
 }
 
 function isMemoryIndexManagerCacheKeyInScope(
@@ -265,11 +344,13 @@ function isMemoryIndexManagerCacheKeyInScope(
     agentId: string;
     workspaceDir: string;
     purpose: MemoryIndexManagerPurpose;
+    lifecycleGeneration: number;
   },
 ): boolean {
   return (
-    key.startsWith(`${params.agentId}:${params.workspaceDir}:`) &&
-    key.endsWith(`:${params.purpose}`)
+    key.startsWith(
+      `${resolveMemoryIndexManagerAgentCacheKeyPrefix(params.agentId)}${params.lifecycleGeneration}:${params.workspaceDir}:`,
+    ) && key.endsWith(`:${params.purpose}`)
   );
 }
 
@@ -277,6 +358,7 @@ async function closeMemoryIndexManagersForScope(params: {
   agentId: string;
   workspaceDir: string;
   purpose: MemoryIndexManagerPurpose;
+  lifecycleGeneration: number;
   exceptKey?: string;
 }): Promise<void> {
   const isScopedKey = (key: string) =>
@@ -299,6 +381,7 @@ async function closeMemoryIndexManagersForScope(params: {
 }
 
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
+  readonly normalizedAgentId: string;
   private readonly cacheKey: string;
   private readonly purpose: MemoryIndexManagerPurpose;
   protected override readonly acquireLocalService?: MemoryCoreAcquireLocalService;
@@ -396,65 +479,71 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     purpose?: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }): Promise<MemoryIndexManager | null> {
-    const { cfg, agentId } = params;
-    const settings = resolveMemorySearchConfig(cfg, agentId);
-    if (!settings) {
-      return null;
-    }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const purpose =
-      params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
-    const providerRequirement = resolveMemoryEmbeddingProviderRequirement({
-      cfg,
-      agentId,
-      settings,
-    });
-    const key = resolveMemoryIndexManagerCacheKey({
-      agentId,
-      workspaceDir,
-      settings,
-      providerRequirement,
-      purpose,
-      acquireLocalService: params.acquireLocalService,
-    });
-    const transient = purpose === "status" || purpose === "cli";
-    if (!transient) {
-      await closeMemoryIndexManagersForScope({
-        agentId,
-        workspaceDir,
-        purpose,
-        exceptKey: key,
+    const normalizedAgentId = normalizeAgentId(params.agentId);
+    return await runMemoryIndexManagerLifecycle(normalizedAgentId, async () => {
+      const { cfg } = params;
+      const settings = resolveMemorySearchConfig(cfg, normalizedAgentId);
+      if (!settings) {
+        return null;
+      }
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, normalizedAgentId);
+      const purpose =
+        params.purpose === "status" || params.purpose === "cli" ? params.purpose : "default";
+      const lifecycleGeneration = INDEX_AGENT_LIFECYCLE_GENERATIONS.get(normalizedAgentId) ?? 0;
+      const providerRequirement = resolveMemoryEmbeddingProviderRequirement({
+        cfg,
+        agentId: normalizedAgentId,
+        settings,
       });
-    }
-    return await getOrCreateManagedCacheEntry({
-      cache: INDEX_CACHE,
-      pending: INDEX_CACHE_PENDING,
-      key,
-      bypassCache: transient,
-      create: async () => {
-        const manager = new MemoryIndexManager({
-          cacheKey: key,
-          cfg,
-          agentId,
+      const key = resolveMemoryIndexManagerCacheKey({
+        agentId: normalizedAgentId,
+        workspaceDir,
+        settings,
+        providerRequirement,
+        purpose,
+        lifecycleGeneration,
+        acquireLocalService: params.acquireLocalService,
+      });
+      const transient = purpose === "status" || purpose === "cli";
+      if (!transient) {
+        await closeMemoryIndexManagersForScope({
+          agentId: normalizedAgentId,
           workspaceDir,
-          settings,
-          providerRequirement,
-          purpose: params.purpose,
-          acquireLocalService: params.acquireLocalService,
+          purpose,
+          lifecycleGeneration,
+          exceptKey: key,
         });
-        // Lightweight dirty-file detection for status mode: check for unindexed
-        // session files on disk without triggering a full sync. This runs before
-        // any caller reads manager.status(), so the dirty flag is accurate when
-        // status() reads sessionsDirty.
-        if (purpose === "status" && manager.sources.has("sessions")) {
-          try {
-            await manager.markSessionStartupCatchupDirtyFiles();
-          } catch (err) {
-            log.warn("memory status session dirty detection failed: " + String(err));
+      }
+      return await getOrCreateManagedCacheEntry({
+        cache: INDEX_CACHE,
+        pending: INDEX_CACHE_PENDING,
+        key,
+        bypassCache: transient,
+        create: async () => {
+          const manager = new MemoryIndexManager({
+            cacheKey: key,
+            cfg,
+            agentId: normalizedAgentId,
+            workspaceDir,
+            settings,
+            providerRequirement,
+            purpose: params.purpose,
+            acquireLocalService: params.acquireLocalService,
+          });
+          // Lightweight dirty-file detection for status mode: check for unindexed
+          // session files on disk without triggering a full sync. This runs before
+          // any caller reads manager.status(), so the dirty flag is accurate when
+          // status() reads sessionsDirty.
+          if (purpose === "status" && manager.sources.has("sessions")) {
+            try {
+              await manager.markSessionStartupCatchupDirtyFiles();
+            } catch (err) {
+              log.warn("memory status session dirty detection failed: " + String(err));
+            }
           }
-        }
-        return manager;
-      },
+          return manager;
+        },
+      });
     });
   }
 
@@ -470,6 +559,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     acquireLocalService?: MemoryCoreAcquireLocalService;
   }) {
     super();
+    this.normalizedAgentId = normalizeAgentId(params.agentId);
     const effectiveSettings = resolveEffectiveMemorySearchSettings(params.settings);
     this.cacheKey = params.cacheKey;
     this.acquireLocalService = params.acquireLocalService;
