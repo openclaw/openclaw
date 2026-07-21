@@ -343,7 +343,8 @@ export function createTelegramHandlerMessageRuntime({
         // collapses an "unknown" inference to document for this deliverable-only surface.
         const inferredKind = kindFromMime(entry.mediaType);
         const mediaKind =
-          entry.mediaKind ?? (inferredKind && inferredKind !== "unknown" ? inferredKind : "document");
+          entry.mediaKind ??
+          (inferredKind && inferredKind !== "unknown" ? inferredKind : "document");
         if (entry.messageId && entry.mediaPath && promptMediaPath) {
           promptContextMediaByMessageId.set(entry.messageId, {
             path: promptMediaPath,
