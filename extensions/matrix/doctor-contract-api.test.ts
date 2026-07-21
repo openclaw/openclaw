@@ -561,7 +561,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "ops",
       "matrix.example.org__bot",
-      "token-a",
+      "095229939bddc71b",
     );
     const jsonRoot = path.join(
       stateDir,
@@ -569,7 +569,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-b",
+      "244f8f54ac105364",
     );
     fs.mkdirSync(sqliteRoot, { recursive: true });
     fs.mkdirSync(jsonRoot, { recursive: true });
@@ -674,6 +674,59 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
+  it("does not open or modify archived inbound dedupe SQLite roots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const storageParent = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "default",
+      "matrix.example.org__bot",
+    );
+    const archivedRoots = [
+      path.join(storageParent, "095229939bddc71b.pre-stable-token-20260716"),
+      path.join(storageParent, "244f8f54ac105364.apr24-cutover-20260424"),
+      path.join(storageParent, "244f8f54ac105364.apr9-backup-20260409"),
+      path.join(storageParent, "c1aa2a8a235f5f53.reset-20260720"),
+      path.join(storageParent, "sync-cache-backup-after-limit1-20260720", "244f8f54ac105364"),
+    ];
+    const archivedFiles: string[] = [];
+    const archivedMtime = new Date("2026-07-16T12:00:00.000Z");
+    for (const storageRootDir of archivedRoots) {
+      const stateRoot = path.join(storageRootDir, "state");
+      fs.mkdirSync(stateRoot, { recursive: true });
+      for (const filename of ["openclaw.sqlite", "openclaw.sqlite-wal"]) {
+        const filePath = path.join(stateRoot, filename);
+        fs.writeFileSync(filePath, `preserved-${filename}`);
+        fs.utimesSync(filePath, archivedMtime, archivedMtime);
+        archivedFiles.push(filePath);
+      }
+    }
+    const mtimesBefore = new Map(
+      archivedFiles.map((filePath) => [filePath, fs.statSync(filePath).mtimeMs]),
+    );
+    const openedStateDirs: string[] = [];
+    const params = createMigrationParams(stateDir);
+    params.context = {
+      openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
+        openedStateDirs.push(options.env?.OPENCLAW_STATE_DIR ?? "");
+        throw new Error("archived Matrix state must not be opened");
+      },
+    };
+
+    const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(openedStateDirs).toEqual([]);
+    for (const filePath of archivedFiles) {
+      expect(fs.statSync(filePath).mtimeMs).toBe(mtimesBefore.get(filePath));
+    }
+  });
+
   it("archives malformed inbound dedupe JSON without importing it", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
     tempDirs.push(stateDir);
@@ -683,7 +736,7 @@ describe("matrix doctor contract state migrations", () => {
       "accounts",
       "home",
       "matrix.example.org__bot",
-      "token-a",
+      "0123456789abcdef",
     );
     fs.mkdirSync(jsonRoot, { recursive: true });
     const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");

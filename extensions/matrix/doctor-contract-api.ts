@@ -65,27 +65,16 @@ import {
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { readLegacyMatrixIdbSnapshotState } from "./src/matrix/sdk/idb-persistence.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
-import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
+import {
+  isMatrixStateArchiveDirectory,
+  isMatrixTokenHashPathSegment,
+  resolveMatrixCredentialsDir,
+} from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 
 const MATRIX_SYNC_CACHE_FILENAME = "bot-storage.json";
 const MATRIX_STORAGE_META_FILENAME = "storage-meta.json";
-const MATRIX_TOKEN_HASH_DIRECTORY_PATTERN = /^[a-f0-9]{16}$/u;
-const MATRIX_STATE_ARCHIVE_DIRECTORY_PREFIXES = [
-  ".pre-stable-token-",
-  ".reset-",
-  "crypto-backup-",
-  "sync-cache-backup-",
-] as const;
-
-function isMatrixStateArchiveDirectory(name: string): boolean {
-  const normalized = name.toLowerCase();
-  return (
-    (normalized.startsWith(".") && normalized.includes("-cutover-")) ||
-    MATRIX_STATE_ARCHIVE_DIRECTORY_PREFIXES.some((prefix) => normalized.startsWith(prefix))
-  );
-}
 
 type LegacyMatrixCredentialSource = {
   accountId: string | null;
@@ -164,7 +153,7 @@ async function collectLegacyMatrixStateRoots(
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isFile() && entry.name === filename) {
-        if (MATRIX_TOKEN_HASH_DIRECTORY_PATTERN.test(path.basename(dir))) {
+        if (isMatrixTokenHashPathSegment(path.basename(dir))) {
           roots.push(dir);
         }
         continue;

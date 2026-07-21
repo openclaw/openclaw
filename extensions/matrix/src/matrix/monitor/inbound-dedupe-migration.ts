@@ -20,6 +20,10 @@ import {
 } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
 import { isRecord } from "../../record-shared.js";
+import {
+  isMatrixStateArchiveDirectory,
+  isMatrixTokenHashPathSegment,
+} from "../../storage-paths.js";
 import { normalizeMatrixStorageMetadata } from "../client/storage.js";
 import {
   buildMatrixInboundDedupeEventKey,
@@ -68,13 +72,19 @@ export async function collectMatrixInboundDedupeSources(stateDir: string): Promi
       if (entry.isFile()) {
         // Legacy per-root dedupe rows live in `<storageRoot>/state/openclaw.sqlite`.
         if (entry.name === "openclaw.sqlite" && path.basename(dir) === "state") {
-          sqliteRoots.add(path.dirname(dir));
-        } else if (entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME) {
+          const storageRootDir = path.dirname(dir);
+          if (isMatrixTokenHashPathSegment(path.basename(storageRootDir))) {
+            sqliteRoots.add(storageRootDir);
+          }
+        } else if (
+          entry.name === MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME &&
+          isMatrixTokenHashPathSegment(path.basename(dir))
+        ) {
           jsonRoots.add(dir);
         }
         continue;
       }
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() && !isMatrixStateArchiveDirectory(entry.name)) {
         await visit(entryPath);
       }
     }
