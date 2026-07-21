@@ -1,0 +1,24 @@
+{
+  "name": "mythos-demo",
+  "version": "1.0.0",
+  "description": "Complete demo application showcasing Mythos-class features",
+  "type": "module",
+  "scripts": {
+    "demo:memory": "tsx src/memory-demo.ts",
+    "demo:agents": "tsx src/agents-demo.ts",
+    "demo:workflows": "tsx src/workflows-demo.ts",
+    "demo:performance": "tsx src/performance-demo.ts",
+    "demo:all": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@openclaw/mythos-core": "workspace:*",
+    "chalk": "^5.3.0",
+    "ora": "^8.0.1",
+    "cli-table3": "^0.6.3"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "@types/node": "^20.10.6"
+  }
+}
