@@ -7,6 +7,7 @@ import {
   type JsonSchemaObject,
   validateJsonSchemaValue,
 } from "openclaw/plugin-sdk/json-schema-runtime";
+import { DEFAULT_SECRET_FILE_MAX_BYTES } from "openclaw/plugin-sdk/secret-file-runtime";
 import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -245,7 +246,7 @@ describe("qqbot config", () => {
   it("rejects oversized client secret files", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-client-secret-"));
     const secretFile = path.join(tempDir, "secret");
-    fs.writeFileSync(secretFile, "x".repeat(16 * 1024 + 1));
+    fs.writeFileSync(secretFile, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1));
 
     try {
       const resolved = resolveQQBotAccount({
