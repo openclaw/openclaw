@@ -194,6 +194,7 @@ describe("dead config keys", () => {
     "hooks.internal.installs",
     "plugins.bundledDiscovery",
     "tts.prefsPath",
+    "tts.personas.test.prompt.profile",
     "logging.redactSensitive",
     "commands.useAccessGroups",
     "gateway.controlUi.allowInsecureAuth",

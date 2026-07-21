@@ -452,7 +452,7 @@ templates, seeds, and voice settings.
 }
 ```
 
-### Full persona (provider-neutral prompt)
+### Full persona (provider-specific shaping)
 
 ```json5
 {
@@ -465,15 +465,6 @@ templates, seeds, and voice settings.
         description: "Dry, warm British butler narrator.",
         provider: "google",
         fallbackPolicy: "preserve-persona",
-        prompt: {
-          profile: "A brilliant British butler. Dry, witty, warm, charming, emotionally expressive, never generic.",
-          scene: "A quiet late-night study. Close-mic narration for a trusted operator.",
-          sampleContext: "The speaker is answering a private technical request with concise confidence and dry warmth.",
-          style: "Refined, understated, lightly amused.",
-          accent: "British English.",
-          pacing: "Measured, with short dramatic pauses.",
-          constraints: ["Do not read configuration values aloud.", "Do not explain the persona."],
-        },
         providers: {
           google: {
             model: "gemini-3.1-flash-tts-preview",
@@ -523,32 +514,15 @@ For each provider attempt, OpenClaw merges configs in this order:
 3. Trusted request overrides
 4. Allowed model-emitted TTS directive overrides
 
-### How providers use persona prompts
+### Custom persona shaping
 
-Persona prompt fields (`profile`, `scene`, `sampleContext`, `style`, `accent`,
-`pacing`, `constraints`) are **provider-neutral**. Each provider decides how
-to use them:
-
-<AccordionGroup>
-  <Accordion title="Google Gemini">
-    Wraps persona prompt fields in a Gemini TTS prompt structure **only when**
-    the effective Google provider config sets `promptTemplate: "audio-profile-v1"`
-    or `personaPrompt`. The older `audioProfile` and `speakerName` fields are
-    still prepended as Google-specific prompt text. Inline audio tags such as
-    `[whispers]` or `[laughs]` inside a `[[tts:text]]` block are preserved
-    inside the Gemini transcript; OpenClaw does not generate these tags.
-  </Accordion>
-  <Accordion title="OpenAI">
-    Maps persona prompt fields to the request `instructions` field **only when**
-    no explicit OpenAI `instructions` is configured. Explicit `instructions`
-    always wins.
-  </Accordion>
-  <Accordion title="Other providers">
-    Use only the provider-specific persona bindings under
-    `personas.<id>.providers.<provider>`. Persona prompt fields are ignored
-    unless the provider implements its own persona-prompt mapping.
-  </Accordion>
-</AccordionGroup>
+Provider-neutral `personas.<id>.prompt.*` config is retired. Doctor removes
+those fields and points to the speech-provider seam. Put built-in provider
+settings under `personas.<id>.providers.<provider>` (for example Google
+`personaPrompt` or OpenAI `instructions`). For custom shaping, implement a
+speech provider plugin with `prepareSynthesis(ctx)` and return adjusted text,
+provider config, or overrides before `synthesize()` runs. This keeps expressive
+prompt construction in provider code where request semantics are known.
 
 ### Fallback policy
 

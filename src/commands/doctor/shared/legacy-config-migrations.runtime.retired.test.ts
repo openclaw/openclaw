@@ -511,6 +511,34 @@ describe("retired runtime config migrations", () => {
     expect(result.raw).toHaveProperty("agents.entries.voice.tts.prefsPath", "/voice/tts.json");
   });
 
+  it("strips TTS persona prompts with a prepareSynthesis migration pointer", () => {
+    const result = applyAll({
+      tts: {
+        personas: {
+          alfred: {
+            prompt: { style: "dry" },
+            providers: {
+              custom: { tts: { personas: { voice: { prompt: { owned: true } } } } },
+            },
+          },
+        },
+      },
+      agents: {
+        entries: {
+          voice: { tts: { personas: { narrator: { prompt: { pacing: "slow" } } } } },
+        },
+      },
+    });
+
+    expect(result.raw).not.toHaveProperty("tts.personas.alfred.prompt");
+    expect(result.raw).toHaveProperty(
+      "tts.personas.alfred.providers.custom.tts.personas.voice.prompt.owned",
+      true,
+    );
+    expect(result.raw).not.toHaveProperty("agents.entries.voice.tts.personas.narrator.prompt");
+    expect(result.changes.join("\n")).toContain("prepareSynthesis");
+  });
+
   it("copies responsePrefix to supported channels while retaining custom-channel fallback", () => {
     const result = applyAll({
       messages: { responsePrefix: "[bot]" },

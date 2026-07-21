@@ -260,8 +260,6 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Named TTS personas that define stable spoken identity plus provider-specific speech bindings.",
   "tts.personas.*":
     "One TTS persona. Use provider-specific bindings for exact voices/models and prompt templates.",
-  "tts.personas.*.prompt":
-    "Provider-neutral persona prompt intent. Providers decide whether and how to map this into request instructions.",
   "tts.personas.*.providers":
     "Provider-specific TTS persona bindings keyed by speech provider id. These merge over tts.providers for the active persona.",
   "tts.providers":

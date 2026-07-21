@@ -1185,9 +1185,57 @@ function migrateWebEnabled(raw: Record<string, unknown>, changes: string[]): boo
   return true;
 }
 
+function stripPromptsFromTtsConfig(ttsValue: unknown, path: string, changes: string[]): void {
+  const tts = getRecord(ttsValue);
+  const personas = getRecord(tts?.personas);
+  if (personas) {
+    for (const [personaId, personaValue] of Object.entries(personas)) {
+      const persona = getRecord(personaValue);
+      if (persona && Object.hasOwn(persona, "prompt")) {
+        delete persona.prompt;
+        changes.push(
+          `Removed ${path}.personas.${personaId}.prompt; move custom shaping into a speech provider prepareSynthesis implementation.`,
+        );
+      }
+    }
+  }
+}
+
+function stripTtsPersonaPrompts(raw: Record<string, unknown>, changes: string[]): void {
+  stripPromptsFromTtsConfig(raw.tts, "tts", changes);
+  visitAgentConfigScopes(raw, (scope, path) => {
+    stripPromptsFromTtsConfig(scope.tts, `${path}.tts`, changes);
+  });
+  const channels = getRecord(raw.channels);
+  if (!channels) {
+    return;
+  }
+  for (const [channelId, channelValue] of Object.entries(channels)) {
+    const channel = getRecord(channelValue);
+    if (!channel) {
+      continue;
+    }
+    const stripEntry = (entry: Record<string, unknown>, path: string) => {
+      stripPromptsFromTtsConfig(entry.tts, `${path}.tts`, changes);
+      stripPromptsFromTtsConfig(getRecord(entry.voice)?.tts, `${path}.voice.tts`, changes);
+    };
+    stripEntry(channel, `channels.${channelId}`);
+    const accounts = getRecord(channel.accounts);
+    if (accounts) {
+      for (const [accountId, accountValue] of Object.entries(accounts)) {
+        const account = getRecord(accountValue);
+        if (account) {
+          stripEntry(account, `channels.${channelId}.accounts.${accountId}`);
+        }
+      }
+    }
+  }
+}
+
 function migrateTierEvalTranche(raw: Record<string, unknown>, changes: string[]): void {
   const initialChangeCount = changes.length;
   let stripped = false;
+  stripTtsPersonaPrompts(raw, changes);
   stripped = migratePresenceEnabled(raw, changes) || stripped;
   moveMcpWorkingDirectory(raw, changes);
   migrateChannelAliases(raw, changes);

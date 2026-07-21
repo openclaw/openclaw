@@ -865,7 +865,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "tts.persona": "TTS Persona",
   "tts.personas": "TTS Personas",
   "tts.personas.*": "TTS Persona",
-  "tts.personas.*.prompt": "TTS Persona Prompt",
   "tts.personas.*.providers": "TTS Persona Provider Bindings",
   "tts.providers": "TTS Provider Settings",
   "tts.providers.*": "TTS Provider Config",
