@@ -63,7 +63,7 @@ describe("cron service store seam coverage", () => {
     vi.restoreAllMocks();
   });
 
-  it("loads stored jobs, recomputes next runs, and does not rewrite the store on load", async () => {
+  it("loads stored jobs, recomputes next runs, and persists missing ownership state", async () => {
     const { storePath } = await makeStorePath();
 
     await writeSingleJobStore(storePath, {
@@ -110,6 +110,8 @@ describe("cron service store seam coverage", () => {
     expect(persistedDelivery?.mode).toBe("announce");
     expect(persistedDelivery?.channel).toBe("telegram");
     expect(persistedDelivery?.to).toBe("123");
+    expect(persistedJob?.state.instanceId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(persistedJob?.state.nextRunAtMs).toBeUndefined();
     await expectPathMissing(storePath);
 
     await persist(state);
@@ -482,6 +484,193 @@ describe("cron service store seam coverage", () => {
         nextRunAtMs: undefined,
       }),
     );
+  });
+
+  it("persists owner revision bumps detected during force reload", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 3_600_000;
+    const instanceId = "owner-revision-instance";
+    const initialJob = createReloadCronJob({
+      trigger: { script: "return true" },
+      state: { instanceId, scheduleRevision: 4, stateRevision: 7, nextRunAtMs },
+    });
+
+    await saveCronStore(storePath, { version: 1, jobs: [initialJob] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          trigger: { script: "return false" },
+          updatedAtMs: STORE_TEST_NOW,
+          state: { instanceId, scheduleRevision: 4, stateRevision: 7, nextRunAtMs },
+        }),
+      ],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.state.scheduleRevision).toBe(5);
+    expect(reloadedJob.state.stateRevision).toBe(8);
+    const persistedJob = (await loadCronStore(storePath)).jobs[0];
+    expect(persistedJob?.state.scheduleRevision).toBe(5);
+    expect(persistedJob?.state.stateRevision).toBe(8);
+  });
+
+  it("persists owner revisions for state-only changes detected during force reload", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 3_600_000;
+    const instanceId = "state-only-owner-revision-instance";
+    const initialJob = createReloadCronJob({
+      state: {
+        instanceId,
+        scheduleRevision: 4,
+        stateRevision: 7,
+        nextRunAtMs,
+        triggerState: { owner: "before" },
+      },
+    });
+
+    await saveCronStore(storePath, { version: 1, jobs: [initialJob] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          updatedAtMs: STORE_TEST_NOW,
+          state: {
+            instanceId,
+            scheduleRevision: 4,
+            stateRevision: 7,
+            nextRunAtMs: nextRunAtMs + 60_000,
+            triggerState: { owner: "external" },
+          },
+        }),
+      ],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.state.scheduleRevision).toBe(5);
+    expect(reloadedJob.state.stateRevision).toBe(8);
+    const persistedJob = (await loadCronStore(storePath)).jobs[0];
+    expect(persistedJob?.state.scheduleRevision).toBe(5);
+    expect(persistedJob?.state.stateRevision).toBe(8);
+  });
+
+  it("does not regress owner revisions advanced by the durable writer", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 3_600_000;
+    const instanceId = "advanced-owner-revision-instance";
+    const initialJob = createReloadCronJob({
+      trigger: { script: "return true" },
+      state: { instanceId, scheduleRevision: 4, stateRevision: 7, nextRunAtMs },
+    });
+
+    await saveCronStore(storePath, { version: 1, jobs: [initialJob] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          trigger: { script: "return false" },
+          updatedAtMs: STORE_TEST_NOW,
+          state: { instanceId, scheduleRevision: 9, stateRevision: 12, nextRunAtMs },
+        }),
+      ],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.state.scheduleRevision).toBe(9);
+    expect(reloadedJob.state.stateRevision).toBe(12);
+    const persistedJob = (await loadCronStore(storePath)).jobs[0];
+    expect(persistedJob?.state.scheduleRevision).toBe(9);
+    expect(persistedJob?.state.stateRevision).toBe(12);
+  });
+
+  it("preserves owner revisions when a stale writer keeps the same inputs", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 3_600_000;
+    const instanceId = "stale-owner-revision-instance";
+    const initialJob = createReloadCronJob({
+      state: { instanceId, scheduleRevision: 9, stateRevision: 12, nextRunAtMs },
+    });
+
+    await saveCronStore(storePath, { version: 1, jobs: [initialJob] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          updatedAtMs: STORE_TEST_NOW,
+          state: { instanceId, scheduleRevision: 2, stateRevision: 3, nextRunAtMs },
+        }),
+      ],
+    });
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.state.scheduleRevision).toBe(9);
+    expect(reloadedJob.state.stateRevision).toBe(12);
+    const persistedJob = (await loadCronStore(storePath)).jobs[0];
+    expect(persistedJob?.state.scheduleRevision).toBe(9);
+    expect(persistedJob?.state.stateRevision).toBe(12);
+  });
+
+  it("rejects ownership reloads that cannot persist their repairs", async () => {
+    const { storePath } = await makeStorePath();
+    const nextRunAtMs = STORE_TEST_NOW + 3_600_000;
+    const instanceId = "failed-owner-repair-instance";
+    const initialJob = createReloadCronJob({
+      trigger: { script: "return true" },
+      state: { instanceId, scheduleRevision: 4, stateRevision: 7, nextRunAtMs },
+    });
+
+    await saveCronStore(storePath, { version: 1, jobs: [initialJob] });
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        createReloadCronJob({
+          trigger: { script: "return false" },
+          updatedAtMs: STORE_TEST_NOW,
+          state: { instanceId, scheduleRevision: 4, stateRevision: 7, nextRunAtMs },
+        }),
+      ],
+    });
+    vi.spyOn(cronStoreModule, "saveCronJobsStore").mockRejectedValueOnce(
+      new Error("ownership write failed"),
+    );
+
+    await expect(ensureLoaded(state, { forceReload: true, skipRecompute: true })).rejects.toThrow(
+      "ownership write failed",
+    );
+
+    const retainedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(retainedJob.trigger).toEqual({ script: "return true" });
+    expect(retainedJob.state.scheduleRevision).toBe(4);
+    expect(retainedJob.state.stateRevision).toBe(7);
+
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.trigger).toEqual({ script: "return false" });
+    expect(reloadedJob.state.scheduleRevision).toBe(5);
+    expect(reloadedJob.state.stateRevision).toBe(8);
   });
 
   it("clears a paced slot and its provenance after force reload changes pacing", async () => {

@@ -1,8 +1,15 @@
 /** Loads, normalizes, quarantines, and persists cron service store state. */
+import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
-import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import {
+  cronRunSchedulingInputsEqual,
+  cronRunStateDefinitionsEqual,
+  cronRunTriggerDefinitionsEqual,
+  cronSchedulingInputsEqual,
+} from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
   loadCronJobsStoreWithConfigJobs,
@@ -26,6 +33,28 @@ export type CronRollbackSnapshot = {
 
 function durableNextRunsFromJobs(jobs: readonly CronJob[]) {
   return new Map(jobs.map((job) => [job.id, job.state.nextRunAtMs] as const));
+}
+
+function normalizeOwnershipRevision(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : undefined;
+}
+
+function resolveOwnershipRevision(params: {
+  previous: unknown;
+  incoming: unknown;
+  inputsChanged: boolean;
+}): number | undefined {
+  const previousRevision = normalizeOwnershipRevision(params.previous);
+  const incomingRevision = normalizeOwnershipRevision(params.incoming);
+  if (!params.inputsChanged && previousRevision === undefined && incomingRevision === undefined) {
+    return undefined;
+  }
+  if (params.inputsChanged) {
+    return Math.max(incomingRevision ?? 0, (previousRevision ?? 0) + 1);
+  }
+  return Math.max(previousRevision ?? 0, incomingRevision ?? 0);
 }
 
 function publishDurableNextRunChanges(params: {
@@ -75,10 +104,51 @@ function publishDurableNextRunChanges(params: {
 function invalidateStaleNextRunOnScheduleChange(params: {
   previousJobsById: ReadonlyMap<string, CronJob>;
   hydrated: CronJob;
-}) {
+}): boolean {
   const previousJob = params.previousJobsById.get(params.hydrated.id);
-  if (!previousJob || cronSchedulingInputsEqual(previousJob, params.hydrated)) {
-    return;
+  if (!previousJob) {
+    return false;
+  }
+  let ownershipStateChanged = false;
+  const runOwnershipInputsChanged =
+    previousJob.state.nextRunAtMs !== params.hydrated.state.nextRunAtMs ||
+    !cronRunSchedulingInputsEqual(previousJob, params.hydrated);
+  const scheduleRevision = resolveOwnershipRevision({
+    previous: previousJob.state.scheduleRevision,
+    incoming: params.hydrated.state.scheduleRevision,
+    inputsChanged: runOwnershipInputsChanged,
+  });
+  if (scheduleRevision !== params.hydrated.state.scheduleRevision) {
+    params.hydrated.state.scheduleRevision = scheduleRevision;
+    ownershipStateChanged = true;
+  }
+  const stateOwnershipInputsChanged =
+    !isDeepStrictEqual(previousJob.state.triggerState, params.hydrated.state.triggerState) ||
+    !cronRunStateDefinitionsEqual(previousJob, params.hydrated);
+  const stateRevision = resolveOwnershipRevision({
+    previous: previousJob.state.stateRevision,
+    incoming: params.hydrated.state.stateRevision,
+    inputsChanged: stateOwnershipInputsChanged,
+  });
+  if (stateRevision !== params.hydrated.state.stateRevision) {
+    params.hydrated.state.stateRevision = stateRevision;
+    ownershipStateChanged = true;
+  }
+  const triggerOwnershipInputsChanged = !cronRunTriggerDefinitionsEqual(
+    previousJob,
+    params.hydrated,
+  );
+  const triggerRevision = resolveOwnershipRevision({
+    previous: previousJob.state.triggerRevision,
+    incoming: params.hydrated.state.triggerRevision,
+    inputsChanged: triggerOwnershipInputsChanged,
+  });
+  if (triggerRevision !== params.hydrated.state.triggerRevision) {
+    params.hydrated.state.triggerRevision = triggerRevision;
+    ownershipStateChanged = true;
+  }
+  if (cronSchedulingInputsEqual(previousJob, params.hydrated)) {
+    return ownershipStateChanged;
   }
   // Runtime nextRunAtMs and paced provenance belong to the old scheduling
   // identity; clear them together so the current inputs recompute atomically.
@@ -87,6 +157,7 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   params.hydrated.state.startupCatchupAtMs = undefined;
   params.hydrated.state.pacedNextRunAtMs = undefined;
   params.hydrated.state.forcePreservedNextRunAtMs = undefined;
+  return true;
 }
 
 function warnInvalidPersistedCronJob(params: {
@@ -169,6 +240,7 @@ export async function ensureLoaded(
   // store boundary and only trust the CronJob shape after validation below.
   const loadedJobs = (loaded.store.jobs ?? []) as unknown as Record<string, unknown>[];
   const jobs: CronJob[] = [];
+  let repairedRuntimeOwnershipState = false;
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
   for (const [index, raw] of loadedJobs.entries()) {
@@ -218,16 +290,44 @@ export async function ensureLoaded(
     }
     // Validated above, so the raw record is now a trusted CronJob.
     const hydrated = hydratedRaw as unknown as CronJob;
+    if (
+      typeof hydrated.state.instanceId !== "string" ||
+      hydrated.state.instanceId.trim().length === 0
+    ) {
+      hydrated.state.instanceId = randomUUID();
+      repairedRuntimeOwnershipState = true;
+    }
     jobs.push(hydrated);
     // Capture the value SQLite actually held before schedule-identity repair
     // mutates the runtime view. A later save can then publish that transition.
     durableNextRunAtMsByJobId.set(hydrated.id, hydrated.state.nextRunAtMs);
-    invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated });
+    repairedRuntimeOwnershipState =
+      invalidateStaleNextRunOnScheduleChange({ previousJobsById, hydrated }) ||
+      repairedRuntimeOwnershipState;
   }
-  state.store = {
+  const nextStore: CronStoreFile = {
     version: 1,
     jobs,
   };
+
+  if (repairedRuntimeOwnershipState) {
+    try {
+      // Persist generation tokens and reload-detected owner revisions before a
+      // run can outlive this process and recover against stale ownership.
+      await saveCronJobsStore(state.deps.storePath, nextStore, { stateOnly: true });
+    } catch (error) {
+      state.deps.log.error(
+        {
+          storePath: state.deps.storePath,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        "cron: refusing to load jobs without durable ownership state",
+      );
+      throw error;
+    }
+  }
+
+  state.store = nextStore;
   state.durableNextRunAtMsByJobId = durableNextRunAtMsByJobId;
   state.storeLoadedAtMs = state.deps.nowMs();
 

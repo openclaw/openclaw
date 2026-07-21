@@ -1,5 +1,7 @@
 // Shared execution admission for scheduled, manual, and on-exit cron runs.
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import { clearCronActiveRunOwnershipState } from "../schedule-identity.js";
+import type { CronJobState } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
 export function resolveRunConcurrency(): number {
@@ -131,7 +133,7 @@ export function clearQueuedCronRunReservationMarker(
   state: CronServiceState,
   jobId: string,
   identity: object,
-  jobState: { queuedAtMs?: number; runningAtMs?: number; lastError?: string },
+  jobState: CronJobState,
 ): boolean {
   const reservation = state.queuedRunReservationsByJobId.get(jobId);
   if (reservation?.identity !== identity) {
@@ -148,6 +150,7 @@ export function clearQueuedCronRunReservationMarker(
   }
   if (runningMatches) {
     delete jobState.runningAtMs;
+    clearCronActiveRunOwnershipState(jobState);
   }
   return true;
 }

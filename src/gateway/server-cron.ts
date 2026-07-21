@@ -26,6 +26,7 @@ import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
+import { tryCronRunScheduleIdentity } from "../cron/schedule-identity.js";
 import { CronService, type CronEvent } from "../cron/service.js";
 import {
   resolveCronDeliverySessionKey,
@@ -101,6 +102,14 @@ function addOnExitRunSummary(payload: CronPayload, exit: CronExitResult): CronPa
     return { ...payload, message: `${payload.message}\n\n${summary}` };
   }
   return payload;
+}
+
+function requireCronRunScheduleIdentity(job: CronJob): string {
+  const identity = tryCronRunScheduleIdentity(job);
+  if (!identity) {
+    throw new Error(`cron-exit: invalid schedule identity for job ${job.id}`);
+  }
+  return identity;
 }
 
 /**
@@ -885,16 +894,23 @@ export function buildGatewayCronService(params: {
 
   exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
-    persistCompletion: async (jobId) =>
+    persistCompletion: async (job) =>
       await runWithGatewayIndependentRootWorkAdmission(async () => {
-        await cron.update(jobId, { enabled: false });
+        const expectedIdentity = requireCronRunScheduleIdentity(job);
+        const updated = await cron.updateWithPrecondition(job.id, { enabled: false }, (current) => {
+          if (tryCronRunScheduleIdentity(current) !== expectedIdentity) {
+            throw new Error(`cron-exit: job ${job.id} changed before watcher completion`);
+          }
+        });
+        return requireCronRunScheduleIdentity(updated);
       }),
-    fireOnExit: (job, exit) =>
-      runWithGatewayIndependentRootWorkAdmission(async () =>
+    fireOnExit: (job, exit, completedIdentity) => {
+      return runWithGatewayIndependentRootWorkAdmission(async () =>
         fireOnExitJob(job, exit, {
-          run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
+          run: (jobId, payload) => cron.runOnExit(jobId, payload, completedIdentity),
         }),
-      ),
+      );
+    },
     logger: cronLogger,
   });
   const getCronSuspensionBlockerCount = cron.getSuspensionBlockerCount.bind(cron);

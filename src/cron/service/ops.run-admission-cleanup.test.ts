@@ -80,6 +80,10 @@ describe("cron service run admission cleanup", () => {
         (entry) => entry.id === job.id,
       );
       expect(persistedJob?.state.runningAtMs).toBeUndefined();
+      expect(persistedJob?.state.activeRunInstanceIdentity).toBeUndefined();
+      expect(persistedJob?.state.activeRunScheduleIdentity).toBeUndefined();
+      expect(persistedJob?.state.activeRunScheduleMode).toBeUndefined();
+      expect(persistedJob?.state.activeRunStateIdentity).toBeUndefined();
       expect(persistedJob?.state.lastError).toBe("prior failure");
     },
   );
@@ -285,6 +289,10 @@ describe("cron service run admission cleanup", () => {
         (entry) => entry.id === job.id,
       );
       expect(persistedJob?.state.runningAtMs).toBeUndefined();
+      expect(persistedJob?.state.activeRunInstanceIdentity).toBeUndefined();
+      expect(persistedJob?.state.activeRunScheduleIdentity).toBeUndefined();
+      expect(persistedJob?.state.activeRunScheduleMode).toBeUndefined();
+      expect(persistedJob?.state.activeRunStateIdentity).toBeUndefined();
       expect(persistedJob?.state.lastError).toBe("prior failure");
     },
   );

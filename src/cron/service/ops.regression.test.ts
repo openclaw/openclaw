@@ -1043,7 +1043,10 @@ describe("cron service ops regressions", () => {
           : vi.fn().mockResolvedValue({ status: "error", error: "boom" }),
       onEvent: (event) => events.push(event),
     });
-    await expect(run(state, params.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    await expect(run(state, params.id, "force", { consumeSchedule: true })).resolves.toEqual({
+      ok: true,
+      ran: true,
+    });
 
     const memoryJob = state.store?.jobs.find((entry) => entry.id === params.id);
     const durableJob = (await loadCronStore(store.storePath)).jobs.find(

@@ -35,6 +35,16 @@ import {
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
+import {
+  clearCronActiveRunOwnershipState,
+  createCronActiveRunOwnershipState,
+  cronRunInstanceInputsEqual,
+  cronRunStateInputsEqual,
+  cronRunTriggerInputsEqual,
+  tryCronRunScheduleIdentity,
+  tryCronRunStateIdentity,
+  tryCronRunTriggerIdentity,
+} from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
@@ -744,6 +754,23 @@ function resolveDeliveryState(params: {
   return { status: "unknown", failureNotification: { status: "not-requested" } };
 }
 
+export type CronRunScheduleMode = "advance" | "preserve";
+
+/** Resolves whether an outcome still owns the current job's schedule. */
+export function resolveCronRunScheduleMode(
+  executionJob: CronJob,
+  currentJob: CronJob,
+  requestedMode: CronRunScheduleMode = "advance",
+): CronRunScheduleMode {
+  const executionIdentity = tryCronRunScheduleIdentity(executionJob);
+  const currentIdentity = tryCronRunScheduleIdentity(currentJob);
+  return requestedMode === "preserve" ||
+    executionIdentity === undefined ||
+    executionIdentity !== currentIdentity
+    ? "preserve"
+    : "advance";
+}
+
 /** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
 export function applyJobResult(
   state: CronServiceState,
@@ -751,7 +778,7 @@ export function applyJobResult(
   result: CronJobRunResult,
   opts?: {
     // Manual force runs update outcome state but are out-of-band for cadence.
-    scheduleMode?: "advance" | "preserve";
+    scheduleMode?: CronRunScheduleMode;
     // Startup replay restores alert cooldown bookkeeping without redelivery.
     replayFailureAlertAtMs?: number;
   },
@@ -759,9 +786,11 @@ export function applyJobResult(
   const previousScheduleState = {
     nextRunAtMs: job.state.nextRunAtMs,
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
+    startupCatchupAtMs: job.state.startupCatchupAtMs,
   };
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  clearCronActiveRunOwnershipState(job.state);
   job.state.pacedNextRunAtMs = undefined;
   job.state.forcePreservedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
@@ -853,11 +882,25 @@ export function applyJobResult(
   // The gateway watcher disables on-exit jobs before firing; successful removal here
   // completes the same deleteAfterRun contract as a one-shot at schedule.
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
-  const shouldDelete = isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
+  // A replacement schedule is a new scheduler-owned slot. The old run may
+  // update outcome history, but it must not delete or disable that new slot.
+  const preserveCurrentSchedule = opts?.scheduleMode === "preserve";
+  const shouldDelete =
+    !preserveCurrentSchedule &&
+    isOneShotSchedule &&
+    job.deleteAfterRun === true &&
+    result.status === "ok";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
 
   if (!shouldDelete) {
-    if (job.schedule.kind === "at") {
+    if (preserveCurrentSchedule) {
+      // Force runs and stale outcomes do not consume, replace, or repair the
+      // slot currently owned by the scheduler.
+      job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
+      job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
+      job.state.startupCatchupAtMs = previousScheduleState.startupCatchupAtMs;
+      job.state.forcePreservedNextRunAtMs = previousScheduleState.nextRunAtMs;
+    } else if (job.schedule.kind === "at") {
       if (retryDisabledHeartbeatOneShot) {
         const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
           cronConfig: state.deps.cronConfig,
@@ -1122,9 +1165,17 @@ export function applyTriggerRunResult(
       ? result.triggerEval
       : { ...result.triggerEval, stateChanged: false, state: undefined };
   applyTriggerEvaluationState(job, persistedEval, result.endedAt);
+  applyTriggerOnceDisarm(job, result);
+}
+
+/** Applies trigger lifecycle policy without overwriting concurrently edited shared state. */
+export function applyTriggerOnceDisarm(
+  job: CronJob,
+  result: { status: CronRunStatus; triggerEval?: CronTriggerEvalOutcome },
+): void {
   // A once trigger disarms only after the fired payload succeeds. Errors keep
   // it armed so the normal backoff path can evaluate and retry later.
-  if (result.triggerEval.fired && job.trigger?.once === true && result.status === "ok") {
+  if (result.triggerEval?.fired && job.trigger?.once === true && result.status === "ok") {
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
   }
@@ -1147,12 +1198,13 @@ export function applyTriggerNoFireResult(
   state: CronServiceState,
   job: CronJob,
   result: { startedAt: number; endedAt: number; triggerEval: CronTriggerEvalOutcome },
-  opts?: { scheduleMode?: "advance" | "preserve" },
+  opts?: { scheduleMode?: CronRunScheduleMode; applyTriggerState?: boolean },
 ): void {
   const previousNextRunAtMs = job.state.nextRunAtMs;
   const previousPacedNextRunAtMs = job.state.pacedNextRunAtMs;
   job.state.queuedAtMs = undefined;
   job.state.runningAtMs = undefined;
+  clearCronActiveRunOwnershipState(job.state);
   job.updatedAtMs = result.endedAt;
   if (!result.triggerEval.busy) {
     // A non-firing evaluation is successful scheduler work, not a payload run;
@@ -1160,7 +1212,9 @@ export function applyTriggerNoFireResult(
     job.state.consecutiveErrors = 0;
     job.state.scheduleErrorCount = 0;
     job.state.lastFailureAlertAtMs = undefined;
-    applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
+    if (opts?.applyTriggerState !== false) {
+      applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
+    }
   }
   if (opts?.scheduleMode === "preserve") {
     job.state.nextRunAtMs = previousNextRunAtMs;
@@ -1219,25 +1273,57 @@ function applyOutcomeToStoredJob(
     return undefined;
   }
 
+  const scheduleMode = resolveCronRunScheduleMode(result.job, job);
+  if (!cronRunInstanceInputsEqual(result.job, job)) {
+    if (result.status === "ok" && result.triggerEval?.fired === false) {
+      tryFinishCronTaskRunWithoutHistory(state, result);
+      return undefined;
+    }
+    // The public id was reused by a new row while this run was active. Finish
+    // history against the execution snapshot without mutating the replacement.
+    applyJobResult(state, result.job, result, { scheduleMode: "preserve" });
+    emitJobFinished(state, result.job, result, result.startedAt, "preserve");
+    state.deps.log.info(
+      { jobId: result.jobId },
+      "cron: finalized run after its job id was recreated during execution",
+    );
+    return undefined;
+  }
+  const ownsRunState = cronRunStateInputsEqual(result.job, job);
+  const ownsRunTrigger = cronRunTriggerInputsEqual(result.job, job);
   if (result.status === "ok" && result.triggerEval && !result.triggerEval.fired) {
     // Quiet trigger ticks intentionally emit no finished event: run history,
     // plugin hooks, and completion notifications represent payload runs only.
-    applyTriggerNoFireResult(state, job, {
-      startedAt: result.startedAt,
-      endedAt: result.endedAt,
-      triggerEval: result.triggerEval,
-    });
-    job.state.startupCatchupAtMs = undefined;
-    job.state.pacedNextRunAtMs = undefined;
+    applyTriggerNoFireResult(
+      state,
+      job,
+      {
+        startedAt: result.startedAt,
+        endedAt: result.endedAt,
+        triggerEval: result.triggerEval,
+      },
+      { scheduleMode, applyTriggerState: ownsRunState },
+    );
+    if (scheduleMode === "advance") {
+      job.state.startupCatchupAtMs = undefined;
+    }
     return undefined;
   }
 
-  const shouldDelete = applyJobResult(state, job, result);
-  applyTriggerRunResult(job, result);
-  applyScriptRunResult(job, result);
-  job.state.startupCatchupAtMs = undefined;
+  const shouldDelete = applyJobResult(state, job, result, { scheduleMode });
+  if (ownsRunState) {
+    applyTriggerRunResult(job, result);
+    applyScriptRunResult(job, result);
+  } else if (ownsRunTrigger) {
+    // Trigger consumption is independent from payload/trigger shared-state
+    // ownership. Otherwise a concurrent state edit can re-arm a fired `once`.
+    applyTriggerOnceDisarm(job, result);
+  }
+  if (scheduleMode === "advance") {
+    job.state.startupCatchupAtMs = undefined;
+  }
 
-  emitJobFinished(state, job, result, result.startedAt);
+  emitJobFinished(state, job, result, result.startedAt, scheduleMode);
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
@@ -1696,6 +1782,7 @@ async function onAdmittedTimer(state: CronServiceState) {
                 const activationRollbackSnapshot = snapshotStoreForRollback(state);
                 delete job.state.queuedAtMs;
                 job.state.runningAtMs = startedAt;
+                Object.assign(job.state, createCronActiveRunOwnershipState(job, "advance"));
                 job.state.lastError = undefined;
                 await persistOrRestore(state, activationRollbackSnapshot);
                 updateQueuedCronRunReservationMarker(
@@ -1710,6 +1797,7 @@ async function onAdmittedTimer(state: CronServiceState) {
                   job.state.lastError = previousLastError;
                   const rollbackSnapshot = snapshotStoreForRollback(state);
                   delete job.state.runningAtMs;
+                  clearCronActiveRunOwnershipState(job.state);
                   await persistOrRestore(state, rollbackSnapshot);
                   releaseQueuedCronRun(state, due.id, due.reservationIdentity);
                   return undefined;
@@ -2235,6 +2323,7 @@ async function executeStartupCatchupPlan(
           const activationRollbackSnapshot = snapshotStoreForRollback(state);
           delete job.state.queuedAtMs;
           job.state.runningAtMs = startedAt;
+          Object.assign(job.state, createCronActiveRunOwnershipState(job, "advance"));
           job.state.lastError = undefined;
           await persistOrRestore(state, activationRollbackSnapshot);
           updateQueuedCronRunReservationMarker(
@@ -2248,6 +2337,7 @@ async function executeStartupCatchupPlan(
             job.state.lastError = previousLastError;
             const rollbackSnapshot = snapshotStoreForRollback(state);
             delete job.state.runningAtMs;
+            clearCronActiveRunOwnershipState(job.state);
             await persistOrRestore(state, rollbackSnapshot);
             releaseQueuedCronRun(state, candidate.jobId, candidate.reservationIdentity);
             return undefined;
@@ -2902,7 +2992,11 @@ function emitJobFinished(
   job: CronJob,
   result: TimedCronRunOutcome,
   runAtMs: number,
+  runScheduleMode: CronRunScheduleMode = "advance",
 ) {
+  const runScheduleIdentity = tryCronRunScheduleIdentity(result.job);
+  const runTriggerIdentity = tryCronRunTriggerIdentity(result.job);
+  const runStateIdentity = tryCronRunStateIdentity(result.job);
   const event = {
     jobId: job.id,
     action: "finished",
@@ -2929,6 +3023,10 @@ function emitJobFinished(
   tryFinishCronTaskRun(state, {
     taskRunId: result.taskRunId,
     job,
+    ...(runScheduleIdentity ? { runScheduleIdentity } : {}),
+    ...(runTriggerIdentity ? { runTriggerIdentity } : {}),
+    ...(runStateIdentity ? { runStateIdentity } : {}),
+    runScheduleMode,
     event,
     ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
     ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),

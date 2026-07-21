@@ -13,7 +13,7 @@ import {
   type CronWakeMode,
   createCronServiceState,
 } from "./service/state.js";
-import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
+import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "./types.js";
 
 export type { CronEvent } from "./service/state.js";
 
@@ -130,6 +130,19 @@ export class CronService implements CronServiceContract {
     opts?: CronServiceRunOptions,
   ): Promise<CronServiceRunResult> {
     return await ops.run(this.state, id, mode, opts);
+  }
+
+  /** Gateway watcher completion consumes its matching on-exit schedule. */
+  async runOnExit(
+    id: string,
+    payload: CronPayload | undefined,
+    expectedScheduleIdentity: string,
+  ): Promise<CronServiceRunResult> {
+    return await ops.run(this.state, id, "force", {
+      ...(payload ? { payload } : {}),
+      consumeSchedule: true,
+      expectedScheduleIdentity,
+    });
   }
 
   async enqueueRun(id: string, mode?: "due" | "force"): Promise<CronServiceRunResult> {

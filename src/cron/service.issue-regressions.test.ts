@@ -73,7 +73,7 @@ describe("Cron issue regressions", () => {
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "stable" },
-          state: { nextRunAtMs: scheduledAt },
+          state: { instanceId: "startup-stable-instance", nextRunAtMs: scheduledAt },
         },
       ],
     });

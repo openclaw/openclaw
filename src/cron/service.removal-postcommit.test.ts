@@ -32,7 +32,7 @@ function createDueOneShot(id: string, nowMs: number): CronJob {
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "do work" },
-    state: { nextRunAtMs: runAtMs },
+    state: { instanceId: `removal-${id}`, nextRunAtMs: runAtMs },
   };
 }
 
@@ -59,7 +59,7 @@ async function executeRemovalPath(
   jobId: string,
 ): Promise<void> {
   if (path === "manual") {
-    await run(state, jobId, "force");
+    await run(state, jobId, "due");
     return;
   }
   if (path === "timer") {

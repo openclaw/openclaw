@@ -17,11 +17,22 @@ import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registr
 import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
+import {
+  tryCronRunInstanceIdentity,
+  tryCronRunScheduleIdentity,
+  tryCronRunStateIdentity,
+  tryCronRunTriggerIdentity,
+} from "../schedule-identity.js";
 import { cronStoreKey } from "../store/key.js";
 import {
   cronRunLogEntryToTaskDetail,
   cronRunStatusToTaskStatus,
   cronTaskRecordStoreKey,
+  cronTaskRecordRunInstanceIdentity,
+  cronTaskRecordRunScheduleIdentity,
+  cronTaskRecordRunScheduleMode,
+  cronTaskRecordRunStateIdentity,
+  cronTaskRecordRunTriggerIdentity,
   cronTaskRecordToRunLogEntry,
   cronTaskRecordToScriptRunResult,
   cronTaskRecordToTriggerEval,
@@ -87,6 +98,7 @@ export function tryCreateCronTaskRun(params: {
   startedAt: number;
   runIdStartedAt?: number;
   publicRunId?: string;
+  runScheduleMode?: "advance" | "preserve";
 }): string | undefined {
   const runId = createCronTaskRunId(
     params.job.id,
@@ -99,6 +111,7 @@ export function tryCreateCronTaskRun(params: {
     jobId: params.job.id,
     startedAt: params.startedAt,
     runId,
+    runScheduleMode: params.runScheduleMode ?? "advance",
   });
 }
 
@@ -138,17 +151,45 @@ function findLatestCronTaskRunForRecovery(
     )[0];
 }
 
-/** Finds the unique task identity owned by one persisted cron reservation. */
-export function tryFindCronTaskRunIdForRecovery(
+/** Reads the durable ownership captured when a cron run was admitted. */
+export function tryFindCronTaskRunForRecovery(
   state: CronServiceState,
   jobId: string,
   startedAt: number,
-): string | undefined {
+):
+  | {
+      taskRunId: string;
+      runInstanceIdentity?: string;
+      runScheduleIdentity?: string;
+      runScheduleMode?: "advance" | "preserve";
+      runTriggerIdentity?: string;
+      runStateIdentity?: string;
+    }
+  | undefined {
   try {
-    return findLatestCronTaskRunForRecovery(jobId, startedAt, cronStoreKey(state.deps.storePath))
-      ?.runId;
+    const task = findLatestCronTaskRunForRecovery(
+      jobId,
+      startedAt,
+      cronStoreKey(state.deps.storePath),
+    );
+    if (!task?.runId) {
+      return undefined;
+    }
+    const runInstanceIdentity = cronTaskRecordRunInstanceIdentity(task);
+    const runScheduleIdentity = cronTaskRecordRunScheduleIdentity(task);
+    const runScheduleMode = cronTaskRecordRunScheduleMode(task);
+    const runTriggerIdentity = cronTaskRecordRunTriggerIdentity(task);
+    const runStateIdentity = cronTaskRecordRunStateIdentity(task);
+    return {
+      taskRunId: task.runId,
+      ...(runInstanceIdentity ? { runInstanceIdentity } : {}),
+      ...(runScheduleIdentity ? { runScheduleIdentity } : {}),
+      ...(runScheduleMode ? { runScheduleMode } : {}),
+      ...(runTriggerIdentity ? { runTriggerIdentity } : {}),
+      ...(runStateIdentity ? { runStateIdentity } : {}),
+    };
   } catch (error) {
-    state.deps.log.warn({ jobId, error }, "cron: failed to read task ledger recovery record");
+    state.deps.log.warn({ jobId, error }, "cron: failed to read task ledger recovery ownership");
     return undefined;
   }
 }
@@ -163,6 +204,11 @@ export function tryFindFinalizedCronTaskRun(
       entry: CronRunLogEntry & { status: CronRunStatus };
       scriptResult?: { scriptStateChanged: true; scriptState?: JsonValue };
       triggerEval?: { fired: true; stateChanged: boolean; state?: JsonValue };
+      runInstanceIdentity?: string;
+      runScheduleIdentity?: string;
+      runScheduleMode?: "advance" | "preserve";
+      runTriggerIdentity?: string;
+      runStateIdentity?: string;
     }
   | undefined {
   try {
@@ -180,10 +226,20 @@ export function tryFindFinalizedCronTaskRun(
     }
     const triggerEval = cronTaskRecordToTriggerEval(task);
     const scriptResult = cronTaskRecordToScriptRunResult(task);
+    const runInstanceIdentity = cronTaskRecordRunInstanceIdentity(task);
+    const runScheduleIdentity = cronTaskRecordRunScheduleIdentity(task);
+    const runScheduleMode = cronTaskRecordRunScheduleMode(task);
+    const runTriggerIdentity = cronTaskRecordRunTriggerIdentity(task);
+    const runStateIdentity = cronTaskRecordRunStateIdentity(task);
     return {
       entry: { ...entry, status: entry.status },
       ...(scriptResult ? { scriptResult } : {}),
       ...(triggerEval ? { triggerEval } : {}),
+      ...(runInstanceIdentity ? { runInstanceIdentity } : {}),
+      ...(runScheduleIdentity ? { runScheduleIdentity } : {}),
+      ...(runScheduleMode ? { runScheduleMode } : {}),
+      ...(runTriggerIdentity ? { runTriggerIdentity } : {}),
+      ...(runStateIdentity ? { runStateIdentity } : {}),
     };
   } catch (error) {
     state.deps.log.warn({ jobId, error }, "cron: failed to read finalized task ledger record");
@@ -198,8 +254,16 @@ function tryCreateCronTaskRunRecord(params: {
   startedAt: number;
   runId: string;
   childSessionKey?: string;
+  runScheduleMode?: "advance" | "preserve";
 }): string | undefined {
   try {
+    const job = params.job;
+    const runInstanceIdentity = job ? tryCronRunInstanceIdentity(job) : undefined;
+    const runScheduleIdentity =
+      job && runInstanceIdentity ? tryCronRunScheduleIdentity(job) : undefined;
+    const runStateIdentity = job && runInstanceIdentity ? tryCronRunStateIdentity(job) : undefined;
+    const runTriggerIdentity =
+      job && runInstanceIdentity ? tryCronRunTriggerIdentity(job) : undefined;
     const task = createRunningTaskRun({
       runtime: "cron",
       sourceId: params.jobId,
@@ -227,7 +291,20 @@ function tryCreateCronTaskRunRecord(params: {
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
       progressSummary: CRON_TASK_RUNNING_PROGRESS_SUMMARY,
-      detail: { storeKey: cronStoreKey(params.state.deps.storePath) },
+      detail: {
+        storeKey: cronStoreKey(params.state.deps.storePath),
+        ...(params.job
+          ? {
+              ...(runInstanceIdentity ? { runInstanceIdentity } : {}),
+              ...(runScheduleIdentity ? { runScheduleIdentity } : {}),
+              ...(runInstanceIdentity
+                ? { runScheduleMode: params.runScheduleMode ?? "advance" }
+                : {}),
+              ...(runTriggerIdentity ? { runTriggerIdentity } : {}),
+              ...(runStateIdentity ? { runStateIdentity } : {}),
+            }
+          : {}),
+      },
     });
     if (!task) {
       params.state.deps.log.warn(
@@ -295,6 +372,11 @@ export function tryFinishCronTaskRun(
     event: CronEvent & { action: "finished" };
     scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
     triggerEval?: { fired: boolean; stateChanged: boolean; state?: unknown };
+    runInstanceIdentity?: string;
+    runScheduleIdentity?: string;
+    runScheduleMode?: "advance" | "preserve";
+    runTriggerIdentity?: string;
+    runStateIdentity?: string;
   },
 ): void {
   const entry = cronRunLogEntryFromEvent(result.event, state.deps.nowMs());
@@ -319,8 +401,28 @@ export function tryFinishCronTaskRun(
     }
     const storeKey = cronStoreKey(state.deps.storePath);
     const legacyRecoveryRunId = createCronExecutionId(entry.jobId, startedAt);
+    const runInstanceIdentity =
+      result.runInstanceIdentity ??
+      (existingCandidate ? cronTaskRecordRunInstanceIdentity(existingCandidate) : undefined);
+    const runScheduleIdentity =
+      result.runScheduleIdentity ??
+      (existingCandidate ? cronTaskRecordRunScheduleIdentity(existingCandidate) : undefined);
+    const runScheduleMode =
+      result.runScheduleMode ??
+      (existingCandidate ? cronTaskRecordRunScheduleMode(existingCandidate) : undefined);
+    const runStateIdentity =
+      result.runStateIdentity ??
+      (existingCandidate ? cronTaskRecordRunStateIdentity(existingCandidate) : undefined);
+    const runTriggerIdentity =
+      result.runTriggerIdentity ??
+      (existingCandidate ? cronTaskRecordRunTriggerIdentity(existingCandidate) : undefined);
     const detail = cronRunLogEntryToTaskDetail(entry, {
       storeKey,
+      ...(runInstanceIdentity ? { runInstanceIdentity } : {}),
+      ...(runScheduleIdentity ? { runScheduleIdentity } : {}),
+      ...(runScheduleMode ? { runScheduleMode } : {}),
+      ...(runTriggerIdentity ? { runTriggerIdentity } : {}),
+      ...(runStateIdentity ? { runStateIdentity } : {}),
       ...(result.scriptResult ? { scriptResult: result.scriptResult } : {}),
       ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
     });

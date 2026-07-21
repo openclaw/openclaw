@@ -12,6 +12,7 @@ import { isCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
+import { clearCronActiveRunOwnershipState } from "../schedule-identity.js";
 import {
   coerceFiniteScheduleNumber,
   computeNextRunAtMs,
@@ -698,6 +699,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       !isCronJobActive(job.id)
     ) {
       job.state.runningAtMs = undefined;
+      clearCronActiveRunOwnershipState(job.state);
       changed = true;
     }
     return { changed, skip: true };
@@ -743,6 +745,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
       "cron: clearing stuck running marker",
     );
     job.state.runningAtMs = undefined;
+    clearCronActiveRunOwnershipState(job.state);
     changed = true;
     const nextRun = job.state.nextRunAtMs;
     const lastRun = job.state.lastRunAtMs;
@@ -1058,6 +1061,9 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
       ...input.state,
+      // A replacement may deliberately reuse a public id. Keep in-flight run
+      // ownership tied to this concrete row so the old run cannot mutate it.
+      instanceId: crypto.randomUUID(),
     },
   };
   assertSupportedJobSpec(job);

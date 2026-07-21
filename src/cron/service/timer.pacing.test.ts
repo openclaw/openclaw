@@ -4,7 +4,7 @@ import { createNoopLogger } from "../service.test-harness.js";
 import type { CronJob, CronPacing } from "../types.js";
 import { recomputeNextRunsForMaintenance } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
-import { applyJobResult } from "./timer.js";
+import { applyJobResult, applyTriggerNoFireResult } from "./timer.js";
 
 const ENDED_AT = Date.parse("2026-07-18T12:00:00.000Z");
 const STARTED_AT = ENDED_AT - 1_000;
@@ -64,6 +64,21 @@ describe("applyJobResult dynamic cadence", () => {
     expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
     expect(job.state.pacedNextRunAtMs).toBeUndefined();
     expect(job.state.forcePreservedNextRunAtMs).toBeUndefined();
+  });
+
+  it("clears a consumed paced slot after a normal quiet trigger tick", () => {
+    const job = makePacedJob({ min: "15m", max: "4h" });
+    job.trigger = { script: "return false" };
+    job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
+
+    applyTriggerNoFireResult(makeState(), job, {
+      startedAt: STARTED_AT,
+      endedAt: ENDED_AT,
+      triggerEval: { fired: false, stateChanged: false },
+    });
+
+    expect(job.state.pacedNextRunAtMs).toBeUndefined();
+    expect(job.state.nextRunAtMs).toBe(STARTED_AT + 60 * 60_000);
   });
 
   it.each([

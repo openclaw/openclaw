@@ -38,7 +38,7 @@ import type {
 import { cancelActiveCronTaskRun } from "./active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "./active-run-cancellation.test-support.js";
 import { computeJobNextRunAtMs, recomputeNextRunsForMaintenance } from "./jobs.js";
-import { run as runManualCronJob, stop } from "./ops.js";
+import { run as runManualCronJob, stop, update } from "./ops.js";
 import { createCronServiceState as createBaseCronServiceState, type CronEvent } from "./state.js";
 import { applyJobResult, executeJobCoreWithTimeout, runMissedJobs } from "./timer.js";
 import { executeJobCore, onTimer } from "./timer.test-support.js";
@@ -2747,6 +2747,114 @@ describe("cron service timer regressions", () => {
     expect(event.summary).toBe(`finished ${selfRemovingJob.id}`);
     expect(event.delivered).toBe(true);
     expect(event.deliveryStatus).toBe("delivered");
+  });
+
+  it("keeps a one-shot that is rescheduled while its scheduled run is active", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const futureAt = dueAt + 3_600_000;
+    const job = createDueIsolatedJob({
+      id: "scheduled-active-reschedule",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    job.schedule = { kind: "at", at: new Date(dueAt).toISOString() };
+    job.deleteAfterRun = true;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const started = createDeferred<void>();
+    const finish = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => {
+        started.resolve();
+        return await finish.promise;
+      }),
+    });
+
+    const timerRun = onTimer(state);
+    await started.promise;
+    await update(state, job.id, {
+      schedule: { kind: "at", at: new Date(futureAt).toISOString() },
+    });
+    finish.resolve({ status: "ok", summary: "old slot complete" });
+    await timerRun;
+
+    for (const storedJob of [
+      requireJob(state, job.id),
+      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id),
+    ]) {
+      expect(storedJob).toMatchObject({
+        enabled: true,
+        schedule: { kind: "at", at: new Date(futureAt).toISOString() },
+        state: { lastStatus: "ok", nextRunAtMs: futureAt },
+      });
+    }
+  });
+
+  it("keeps a recreated scheduled job untouched when the old run completes", async () => {
+    const store = timerRegressionFixtures.makeStorePath();
+    const dueAt = Date.parse("2026-02-06T10:05:01.000Z");
+    const job = createDueIsolatedJob({
+      id: "scheduled-active-recreated",
+      nowMs: dueAt,
+      nextRunAtMs: dueAt,
+    });
+    job.deleteAfterRun = true;
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const events: CronEvent[] = [];
+    const started = createDeferred<void>();
+    const finish = createDeferred<{ status: "ok"; summary: string }>();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: store.storePath,
+      log: noopLogger,
+      nowMs: () => dueAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      onEvent: (event) => events.push(event),
+      runIsolatedAgentJob: vi.fn(async () => {
+        started.resolve();
+        return await finish.promise;
+      }),
+    });
+
+    const timerRun = onTimer(state);
+    await started.promise;
+    const activeStore = await loadCronStore(store.storePath);
+    const replacement = structuredClone(activeStore.jobs[0]);
+    if (!replacement) {
+      throw new Error("expected active cron job");
+    }
+    replacement.state.instanceId = "scheduled-replacement-instance";
+    replacement.state.lastRunStatus = "error";
+    replacement.state.lastStatus = "error";
+    replacement.state.queuedAtMs = undefined;
+    replacement.state.runningAtMs = undefined;
+    await saveCronStore(store.storePath, { version: 1, jobs: [replacement] });
+
+    finish.resolve({ status: "ok", summary: "old instance complete" });
+    await timerRun;
+
+    for (const storedJob of [
+      requireJob(state, job.id),
+      (await loadCronStore(store.storePath)).jobs.find((entry) => entry.id === job.id),
+    ]) {
+      expect(storedJob?.state.instanceId).toBe("scheduled-replacement-instance");
+      expect(storedJob?.state.lastRunStatus).toBe("error");
+      expect(storedJob?.state.lastStatus).toBe("error");
+    }
+    expect(
+      events.some(
+        (event) => event.jobId === job.id && event.action === "finished" && event.status === "ok",
+      ),
+    ).toBe(true);
   });
 
   it("keeps missing-job discard semantics for failed isolated outcomes", async () => {

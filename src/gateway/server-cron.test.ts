@@ -424,6 +424,66 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("fires on-exit after its completion update disables the watched job", async () => {
+    vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
+    const exited = createDeferred<{
+      exitCode: number;
+      reason: string;
+      stdout: string;
+      stderr: string;
+      timedOut: boolean;
+      noOutputTimedOut: boolean;
+    }>();
+    const spawn = vi.fn(async () => ({
+      runId: "run-on-exit-complete",
+      startedAtMs: 0,
+      wait: () => exited.promise,
+      cancel: vi.fn(),
+    }));
+    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const cfg = createCronConfig("server-cron-complete-exit-watcher");
+    loadConfigMock.mockReturnValue(cfg);
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    try {
+      const job = await state.cron.add({
+        name: "watch successful command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "on-exit", command: "true" },
+        payload: { kind: "systemEvent", text: "watched command finished" },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+      });
+      await state.reconcileExitWatchers?.();
+      await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
+
+      exited.resolve({
+        exitCode: 0,
+        reason: "exit",
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+
+      await vi.waitFor(() => {
+        expect(state.cron.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "ok" },
+        });
+      });
+      expect(requestHeartbeatMock).toHaveBeenCalled();
+    } finally {
+      state.cron.stop();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
     const runnerEntered = createDeferred();
@@ -889,7 +949,7 @@ describe("buildGatewayCronService", () => {
         delivery: { mode: "announce", bestEffort: false },
       });
 
-      await state.cron.run(job.id, "force");
+      await state.cron.run(job.id, "due");
 
       const updated = state.cron.getJob(job.id);
       expect(updated?.state.lastRunStatus).toBe("error");
@@ -972,7 +1032,7 @@ describe("buildGatewayCronService", () => {
         },
       });
 
-      await state.cron.run(job.id, "force");
+      await state.cron.run(job.id, "due");
 
       expect(state.cron.getJob(job.id)).toBeUndefined();
     } finally {

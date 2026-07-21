@@ -1,11 +1,19 @@
 /** Repairs interrupted and finalized cron runs while the service starts. */
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
+import {
+  clearCronActiveRunOwnershipState,
+  tryCronRunInstanceIdentity,
+  tryCronRunScheduleIdentity,
+  tryCronRunStateIdentity,
+  tryCronRunTriggerIdentity,
+} from "../schedule-identity.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import type { CronServiceState } from "./state.js";
 import {
   applyJobResult,
   applyScriptRunResult,
+  applyTriggerOnceDisarm,
   applyTriggerRunResult,
   type CronTriggerEvalOutcome,
 } from "./timer.js";
@@ -17,6 +25,11 @@ export type InterruptedStartupRun = {
   taskRunId?: string;
   runAtMs: number;
   durationMs: number;
+  ownsJobInstance: boolean;
+  runInstanceIdentity?: string;
+  runScheduleIdentity?: string;
+  runScheduleMode?: "advance" | "preserve";
+  runStateIdentity?: string;
 };
 
 function resolveInterruptedStartupFailureNotificationStatus(params: {
@@ -33,14 +46,63 @@ function resolveInterruptedStartupFailureNotificationStatus(params: {
   return primaryPlan.mode === "announce" && primaryPlan.requested ? "unknown" : "not-requested";
 }
 
+function hasLegacyInterruptedScheduleReplacement(job: CronJob, runningAtMs: number): boolean {
+  const hasFutureSlot =
+    typeof job.state.nextRunAtMs === "number" && job.state.nextRunAtMs > runningAtMs;
+  return (
+    hasFutureSlot ||
+    (job.schedule.kind === "at" && !job.enabled && job.updatedAtMs > runningAtMs) ||
+    (job.schedule.kind === "on-exit" && (job.enabled || job.updatedAtMs > runningAtMs))
+  );
+}
+
 export function markInterruptedStartupRun(params: {
   state: CronServiceState;
   job: CronJob;
   taskRunId?: string;
   runningAtMs: number;
   nowMs: number;
+  runInstanceIdentity?: string;
+  runScheduleIdentity?: string;
+  runScheduleMode?: "advance" | "preserve";
+  runStateIdentity?: string;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
+  const ownsJobInstance =
+    params.runInstanceIdentity === undefined ||
+    params.runInstanceIdentity === tryCronRunInstanceIdentity(job);
+  if (!ownsJobInstance) {
+    params.state.deps.log.info(
+      { jobId: job.id, runningAtMs },
+      "cron: retained replacement job while finalizing interrupted prior instance",
+    );
+    return {
+      jobId: job.id,
+      ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
+      runAtMs: runningAtMs,
+      durationMs: Math.max(0, nowMs - runningAtMs),
+      ownsJobInstance: false,
+      ...(params.runInstanceIdentity ? { runInstanceIdentity: params.runInstanceIdentity } : {}),
+      ...(params.runScheduleIdentity ? { runScheduleIdentity: params.runScheduleIdentity } : {}),
+      ...(params.runScheduleMode ? { runScheduleMode: params.runScheduleMode } : {}),
+      ...(params.runStateIdentity ? { runStateIdentity: params.runStateIdentity } : {}),
+    };
+  }
+  const preserveSchedule =
+    params.runScheduleMode === "preserve" ||
+    (params.runScheduleIdentity === undefined &&
+      hasLegacyInterruptedScheduleReplacement(job, runningAtMs)) ||
+    (params.runScheduleIdentity !== undefined &&
+      params.runScheduleIdentity !== tryCronRunScheduleIdentity(job));
+  const preservedScheduleState = preserveSchedule
+    ? {
+        enabled: job.enabled,
+        nextRunAtMs: job.state.nextRunAtMs,
+        startupCatchupAtMs: job.state.startupCatchupAtMs,
+        pacedNextRunAtMs: job.state.pacedNextRunAtMs,
+        forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
+      }
+    : undefined;
   // A persisted running marker means the gateway stopped mid-run; mark it as a
   // normal failed run so retries, alerts, and run logs all see one outcome.
   const failureNotificationStatus = resolveInterruptedStartupFailureNotificationStatus({
@@ -58,6 +120,7 @@ export function markInterruptedStartupRun(params: {
   );
 
   job.state.runningAtMs = undefined;
+  clearCronActiveRunOwnershipState(job.state);
   job.state.lastRunAtMs = runningAtMs;
   job.state.lastRunStatus = "error";
   job.state.lastStatus = "error";
@@ -76,12 +139,27 @@ export function markInterruptedStartupRun(params: {
   if (job.schedule.kind === "at") {
     job.enabled = false;
   }
+  if (preservedScheduleState) {
+    job.enabled = preservedScheduleState.enabled;
+    job.state.nextRunAtMs = preservedScheduleState.nextRunAtMs;
+    job.state.startupCatchupAtMs = preservedScheduleState.startupCatchupAtMs;
+    job.state.pacedNextRunAtMs = preservedScheduleState.pacedNextRunAtMs;
+    job.state.forcePreservedNextRunAtMs =
+      params.runScheduleMode === "preserve"
+        ? preservedScheduleState.nextRunAtMs
+        : preservedScheduleState.forcePreservedNextRunAtMs;
+  }
 
   return {
     jobId: job.id,
     ...(params.taskRunId ? { taskRunId: params.taskRunId } : {}),
     runAtMs: runningAtMs,
     durationMs: job.state.lastDurationMs,
+    ownsJobInstance: true,
+    ...(params.runInstanceIdentity ? { runInstanceIdentity: params.runInstanceIdentity } : {}),
+    ...(params.runScheduleIdentity ? { runScheduleIdentity: params.runScheduleIdentity } : {}),
+    ...(params.runScheduleMode ? { runScheduleMode: params.runScheduleMode } : {}),
+    ...(params.runStateIdentity ? { runStateIdentity: params.runStateIdentity } : {}),
   };
 }
 
@@ -92,9 +170,40 @@ export function restoreFinalizedStartupRun(params: {
   entry: CronRunLogEntry & { status: CronRunStatus };
   scriptResult?: { scriptStateChanged: true; scriptState?: unknown };
   triggerEval?: CronTriggerEvalOutcome;
+  runScheduleIdentity?: string;
+  runScheduleMode?: "advance" | "preserve";
+  runTriggerIdentity?: string;
+  runStateIdentity?: string;
 }): boolean {
   const { state, job, runningAtMs, entry } = params;
   const startedAt = entry.runAtMs ?? runningAtMs;
+  // Older finalized task rows have no execution identity. A job edited after
+  // admission is replacement scheduler state and must survive recovery.
+  const hasReplacementTimedSlot =
+    typeof job.state.nextRunAtMs === "number" &&
+    job.state.nextRunAtMs > runningAtMs &&
+    (job.schedule.kind === "at" || job.state.nextRunAtMs !== entry.nextRunAtMs);
+  const preserveLegacyReplacement =
+    params.runScheduleIdentity === undefined &&
+    (hasReplacementTimedSlot ||
+      (job.schedule.kind === "at" && !job.enabled && job.updatedAtMs > runningAtMs) ||
+      (job.schedule.kind === "on-exit" && (job.enabled || job.updatedAtMs > runningAtMs)));
+  const currentRunScheduleIdentity = tryCronRunScheduleIdentity(job);
+  const mayApplyRecoveredState =
+    params.runStateIdentity !== undefined
+      ? params.runStateIdentity === tryCronRunStateIdentity(job)
+      : job.updatedAtMs <= runningAtMs;
+  const mayApplyRecoveredTrigger =
+    params.runTriggerIdentity !== undefined
+      ? params.runTriggerIdentity === tryCronRunTriggerIdentity(job)
+      : mayApplyRecoveredState;
+  const scheduleMode =
+    params.runScheduleMode === "preserve" ||
+    preserveLegacyReplacement ||
+    (params.runScheduleIdentity !== undefined &&
+      params.runScheduleIdentity !== currentRunScheduleIdentity)
+      ? "preserve"
+      : "advance";
   const shouldDelete = applyJobResult(
     state,
     job,
@@ -103,7 +212,7 @@ export function restoreFinalizedStartupRun(params: {
       startedAt,
       endedAt: entry.ts,
     },
-    { replayFailureAlertAtMs: entry.ts },
+    { replayFailureAlertAtMs: entry.ts, scheduleMode },
   );
 
   // The finalized row captured post-run state before the stale cron store write.
@@ -115,20 +224,27 @@ export function restoreFinalizedStartupRun(params: {
   job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery?.delivered;
   job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery?.status;
   job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery?.error;
-  job.state.nextRunAtMs = entry.nextRunAtMs;
-  // The finalized ledger row owns the schedule decision made before the stale
-  // store write. No next run means that one-shot was permanently disabled.
-  if (job.schedule.kind === "at" && entry.nextRunAtMs === undefined) {
-    job.enabled = false;
+  if (scheduleMode === "advance") {
+    job.state.nextRunAtMs = entry.nextRunAtMs;
+    // The finalized ledger row owns the schedule decision made before the stale
+    // store write. No next run means that one-shot was permanently disabled.
+    if (job.schedule.kind === "at" && entry.nextRunAtMs === undefined) {
+      job.enabled = false;
+    }
   }
-  if (params.triggerEval) {
+  if (params.triggerEval && mayApplyRecoveredState) {
     applyTriggerRunResult(job, {
       status: entry.status,
       endedAt: entry.ts,
       triggerEval: params.triggerEval,
     });
+  } else if (params.triggerEval && mayApplyRecoveredTrigger) {
+    applyTriggerOnceDisarm(job, {
+      status: entry.status,
+      triggerEval: params.triggerEval,
+    });
   }
-  if (params.scriptResult) {
+  if (params.scriptResult && mayApplyRecoveredState) {
     // The payload script is the final writer when a trigger and payload both
     // update their shared state during the same successful run.
     applyScriptRunResult(job, { status: entry.status, ...params.scriptResult });
