@@ -482,6 +482,24 @@ const config = {
       ],
       project: ["src/**/*.ts!"],
     },
+    "packages/normalization-core": {
+      // Mirror package.json exports; root and UI builds consume these source subpaths directly.
+      entry: [
+        "src/index.ts!",
+        "src/agent-id.ts!",
+        "src/boolean-coercion.ts!",
+        "src/error-coercion.ts!",
+        "src/expect.ts!",
+        "src/number-coercion.ts!",
+        "src/phone-presentation.ts!",
+        "src/record-coerce.ts!",
+        "src/result.ts!",
+        "src/string-coerce.ts!",
+        "src/string-normalization.ts!",
+        "src/utf16-slice.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
     "packages/net-policy": {
       entry: ["src/index.ts!", "src/ip.ts!"],
       project: ["src/**/*.ts!"],
