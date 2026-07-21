@@ -336,7 +336,21 @@ export const streamOpenAICompletions: StreamFunction<
           partial: output,
         });
       };
+      const appendRecoveredVisibleDelta = (delta: string) => {
+        for (const routedDelta of reasoningTagTextPartitioner.pushVisible(delta)) {
+          if (routedDelta.kind === "text") {
+            appendTextDelta(routedDelta.text);
+          }
+        }
+      };
       const appendThinkingDelta = (thinkingSignature: string, delta: string) => {
+        if (
+          reasoningTagTextPartitioner.isInsideUnclosedVisibleInlineCode() &&
+          !reasoningTagTextPartitioner.isInsideReasoning()
+        ) {
+          appendRecoveredVisibleDelta(delta);
+          return;
+        }
         const block = ensureThinkingBlock(thinkingSignature);
         block.thinking += delta;
         stream.push({
@@ -394,6 +408,11 @@ export const streamOpenAICompletions: StreamFunction<
             appendTextDelta(delta.text);
           }
         }
+      };
+      const textLeavesUnclosedVisibleInlineCode = (text: string) => {
+        const probe = createReasoningTagTextPartitioner();
+        probe.pushVisible(text);
+        return probe.isInsideUnclosedVisibleInlineCode();
       };
       const flushPartitionedContent = () => {
         for (const delta of reasoningTagTextPartitioner.flush()) {
@@ -477,6 +496,19 @@ export const streamOpenAICompletions: StreamFunction<
           if (foundReasoningField) {
             reasoningTagTextPartitioner.markStrict();
           }
+          const contentText =
+            typeof choiceDelta.content === "string" && choiceDelta.content.length > 0
+              ? choiceDelta.content
+              : null;
+          const partitionConcurrentContentFirst = Boolean(
+            foundReasoningField &&
+            contentText &&
+            (reasoningTagTextPartitioner.isInsideUnclosedVisibleInlineCode() ||
+              (/`+$/.test(contentText) && textLeavesUnclosedVisibleInlineCode(contentText))),
+          );
+          if (partitionConcurrentContentFirst && contentText) {
+            appendPartitionedContent(contentText, true);
+          }
           if (shouldEmitReasoning && foundReasoningField) {
             const delta = deltaFields[foundReasoningField];
             if (typeof delta === "string" && delta.length > 0) {
@@ -487,12 +519,8 @@ export const streamOpenAICompletions: StreamFunction<
               appendThinkingDelta(thinkingSignature, delta);
             }
           }
-          if (
-            choiceDelta.content !== null &&
-            choiceDelta.content !== undefined &&
-            choiceDelta.content.length > 0
-          ) {
-            appendPartitionedContent(choiceDelta.content, Boolean(foundReasoningField));
+          if (contentText && (!foundReasoningField || !partitionConcurrentContentFirst)) {
+            appendPartitionedContent(contentText, Boolean(foundReasoningField));
           }
 
           // Chat Completions can put safety/structured-output refusals in a

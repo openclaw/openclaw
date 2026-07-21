@@ -1192,6 +1192,121 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
   });
 
+  it("recovers visible content when reasoning and content straddle an inline code span", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Visible. It uses a `",
+            },
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              reasoning_content: " blocks) and more",
+            },
+          },
+        ],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const result = await stream.result();
+    const visibleText = result.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("Visible. It uses a ` blocks) and more");
+    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("recovers same-chunk reasoning content that closes an inline code span", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Visible. It uses a `",
+              reasoning_content: "code` and more",
+            },
+          },
+        ],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const result = await stream.result();
+    const visibleText = result.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("Visible. It uses a `code` and more");
+    expect(result.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("updates partitioner state after recovered visible reasoning content", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Visible `",
+              reasoning_content: "code` then ",
+            },
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "<think>private</think>done",
+              reasoning_content: "private",
+            },
+          },
+        ],
+      },
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const result = await stream.result();
+    const visibleText = result.content
+      .filter((block): block is { type: "text"; text: string } => block.type === "text")
+      .map((block) => block.text)
+      .join("");
+
+    expect(visibleText).toBe("Visible `code` then done");
+    expect(visibleText).not.toContain("private");
+  });
+
   it("partitions inline reasoning tags out of visible text", async () => {
     mockChunksRef.chunks = [
       {

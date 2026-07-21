@@ -473,6 +473,15 @@ async function processOpenAICompletionsStream(
   };
   const appendThinkingDelta = (reasoningDelta: { signature: string; text: string }) => {
     flushPendingPostToolCallDeltas();
+    if (
+      reasoningTagTextPartitioner.isInsideUnclosedVisibleInlineCode() &&
+      !reasoningTagTextPartitioner.isInsideReasoning()
+    ) {
+      for (const routedDelta of reasoningTagTextPartitioner.pushVisible(reasoningDelta.text)) {
+        appendPartitionedVisibleDelta(routedDelta);
+      }
+      return;
+    }
     appendThinkingDeltaInternal(reasoningDelta);
   };
   const appendTextDelta = (text: string) => {
