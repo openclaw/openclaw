@@ -23,9 +23,6 @@ function throwAbortError(): never {
  * including non-Error rejections.
  */
 function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) {
-    return Promise.reject(createAbortError("Aborted"));
-  }
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
@@ -44,6 +41,9 @@ function raceWithAbortSignal<T>(promise: Promise<T>, signal: AbortSignal): Promi
         reject(error);
       },
     );
+    if (signal.aborted) {
+      onAbort();
+    }
   });
 }
 

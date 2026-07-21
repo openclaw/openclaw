@@ -50,6 +50,28 @@ describe("wrapToolWithAbortSignal", () => {
     expect(rejection).toMatchObject({ name: "AbortError", message: "Aborted" });
   });
 
+  it("handles a tool rejection when execute aborts the run synchronously", async () => {
+    const runAbort = new AbortController();
+    let rejectTool!: (error: unknown) => void;
+    const execute = vi.fn(() => {
+      runAbort.abort();
+      return new Promise((_, reject) => {
+        rejectTool = reject;
+      });
+    });
+    const wrapped = wrapToolWithAbortSignal(
+      asAgentTool({ name: "synchronous-abort", execute }),
+      runAbort.signal,
+    );
+
+    await expect(wrapped.execute("call-1", {})).rejects.toMatchObject({
+      name: "AbortError",
+      message: "Aborted",
+    });
+    rejectTool(new Error("tool observed the abort"));
+    await flushMicrotasks();
+  });
+
   it("rejects with AbortError when the per-call signal aborts through the combined signal", async () => {
     const runAbort = new AbortController();
     const callAbort = new AbortController();
