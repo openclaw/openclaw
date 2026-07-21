@@ -311,7 +311,7 @@ export function warnAboutUntrackedLoadedPlugins(params: {
     ) {
       continue;
     }
-    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with '${formatPluginInspectCommand(plugin.id)}', then pin trust via plugins.allow (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }) or reinstall from a trusted source so OpenClaw records install provenance.`;
+    const message = `loaded without install/load-path provenance; treat as untracked local code. Verify source with '${formatPluginInspectCommand(plugin.id)}'. plugins.allow controls which plugin ids may load (e.g. "plugins": { "allow": [${JSON.stringify(plugin.id)}] }); it does not grant trusted-only capabilities such as openKeyedStore. If this is an official plugin that requires those capabilities, reinstall it from an OpenClaw-trusted npm or ClawHub source so OpenClaw records trusted install provenance.`;
     params.registry.diagnostics.push({
       level: "warn",
       pluginId: plugin.id,

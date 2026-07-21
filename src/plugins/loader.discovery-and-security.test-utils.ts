@@ -1039,7 +1039,7 @@ describe("loadOpenClawPlugins", () => {
     expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
   });
 
-  it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
+  it("distinguishes load permission from capability trust in the untracked-provenance warning", () => {
     useNoBundledPlugins();
     const stateDir = makeTempDir();
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
@@ -1071,7 +1071,12 @@ describe("loadOpenClawPlugins", () => {
       expect(untrackedWarning).toBeDefined();
       expect(untrackedWarning).toContain('"warn-untracked-remediation"');
       expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(untrackedWarning).toContain("reinstall from a trusted source");
+      expect(untrackedWarning).toContain("plugins.allow controls which plugin ids may load");
+      expect(untrackedWarning).toContain(
+        "does not grant trusted-only capabilities such as openKeyedStore",
+      );
+      expect(untrackedWarning).toContain("OpenClaw-trusted npm or ClawHub source");
+      expect(untrackedWarning).not.toContain("pin trust via plugins.allow");
 
       const diagnostic = registry.diagnostics.find(
         (entry) =>
@@ -1080,7 +1085,12 @@ describe("loadOpenClawPlugins", () => {
       );
       expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
       expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
-      expect(diagnostic?.message).toContain("reinstall from a trusted source");
+      expect(diagnostic?.message).toContain("plugins.allow controls which plugin ids may load");
+      expect(diagnostic?.message).toContain(
+        "does not grant trusted-only capabilities such as openKeyedStore",
+      );
+      expect(diagnostic?.message).toContain("OpenClaw-trusted npm or ClawHub source");
+      expect(diagnostic?.message).not.toContain("pin trust via plugins.allow");
     });
   });
 
