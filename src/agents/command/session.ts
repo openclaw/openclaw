@@ -459,10 +459,9 @@ export function resolveSession(opts: {
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
+  const persistedThinking = sessionEntry?.thinkingLevel
+    ? normalizeThinkLevel(sessionEntry.thinkingLevel)
+    : undefined;
   const persistedVerbose =
     fresh && sessionEntry?.verboseLevel
       ? normalizeVerboseLevel(sessionEntry.verboseLevel)

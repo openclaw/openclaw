@@ -9,6 +9,8 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { resolveAutoAgentHarnessId } from "./harness/support.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
+import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { resolveSessionRuntimeOverrideForProvider } from "./session-runtime-compat.js";
 
 /** Convert residual auto policy into the built-in fallback when no registry selection is needed. */
@@ -53,6 +55,42 @@ export function resolveEffectiveAgentRuntime(params: {
   return concretizeAgentRuntime(runtime);
 }
 
+/**
+ * Falls back to the configured provider model row for a provider/model pair
+ * when the caller didn't supply an explicit thinking catalog. Without this,
+ * providers whose thinking-profile policy depends on the catalog's
+ * `reasoning` flag (e.g. Ollama) treat every model as non-reasoning and
+ * silently clamp any requested level down to "off".
+ */
+function resolveConfiguredThinkingCatalogEntry(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  modelId: string,
+): ThinkingCatalogEntry[] | undefined {
+  if (!cfg) {
+    return undefined;
+  }
+  const entry = findModelInCatalog(buildConfiguredModelCatalog({ cfg }), provider, modelId);
+  if (!entry) {
+    return undefined;
+  }
+  return [
+    {
+      provider,
+      id: modelId,
+      api: entry.api,
+      reasoning: entry.reasoning,
+      params: entry.params,
+      compat: entry.compat
+        ? {
+            thinkingFormat: entry.compat.thinkingFormat,
+            supportedReasoningEfforts: entry.compat.supportedReasoningEfforts,
+          }
+        : undefined,
+    },
+  ];
+}
+
 /** Revalidates a turn-local thinking level after fallback selects its actual model/runtime. */
 export function resolveCandidateThinkingLevel(params: {
   cfg?: OpenClawConfig;
@@ -81,11 +119,14 @@ export function resolveCandidateThinkingLevel(params: {
           sessionKey: params.sessionKey,
           sessionEntry: params.sessionEntry,
         });
+  const catalog =
+    params.catalog ??
+    resolveConfiguredThinkingCatalogEntry(params.cfg, params.provider, params.modelId);
   const policy = {
     provider: params.provider,
     model: params.modelId,
     level: params.level,
-    catalog: params.catalog,
+    catalog,
     agentRuntime,
   };
   return isThinkingLevelSupported(policy) ? params.level : resolveSupportedThinkingLevel(policy);
