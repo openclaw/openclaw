@@ -65,10 +65,12 @@ function transcriptionProvider(
 
 describe("Talk relay audio base64", () => {
   afterEach(() => {
-    for (const [relaySessionId, connId] of realtime)
+    for (const [relaySessionId, connId] of realtime) {
       stopTalkRealtimeRelaySession({ relaySessionId, connId });
-    for (const [transcriptionSessionId, connId] of transcription)
+    }
+    for (const [transcriptionSessionId, connId] of transcription) {
       stopTalkTranscriptionRelaySession({ transcriptionSessionId, connId });
+    }
     realtime.clear();
     transcription.clear();
   });
