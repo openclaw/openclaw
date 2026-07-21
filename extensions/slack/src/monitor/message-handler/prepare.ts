@@ -1502,6 +1502,7 @@ export async function prepareSlackMessage(params: {
       : [];
   const inboundHistory = mergeSlackSessionTranscriptInboundHistory({
     sessionEntries: sessionTranscriptEntries,
+    ...(isRoomish && ctx.historyLimit > 0 ? { limit: ctx.historyLimit } : {}),
     inboundHistory:
       isRoomish && ctx.historyLimit > 0
         ? channelHistory.buildInboundHistory({

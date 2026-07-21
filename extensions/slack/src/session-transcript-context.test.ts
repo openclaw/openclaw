@@ -181,4 +181,17 @@ describe("mergeSlackSessionTranscriptInboundHistory", () => {
       "later reply",
     ]);
   });
+
+  it("caps the merged window to the configured history limit", () => {
+    const merged = mergeSlackSessionTranscriptInboundHistory({
+      sessionEntries: [
+        { sender: "Assistant", body: "old reply", timestamp: 1_000 },
+        { sender: "Assistant", body: "recent reply", timestamp: 3_000 },
+      ],
+      inboundHistory: [{ sender: "Alice", body: "middle message", timestamp: 2_000 }],
+      limit: 2,
+    });
+
+    expect(merged?.map((entry) => entry.body)).toEqual(["middle message", "recent reply"]);
+  });
 });

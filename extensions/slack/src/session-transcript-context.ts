@@ -56,6 +56,7 @@ function resolveHistoryTextDedupeKey(entry: HistoryEntry): string | undefined {
 export function mergeSlackSessionTranscriptInboundHistory(params: {
   sessionEntries: HistoryEntry[];
   inboundHistory: HistoryEntry[] | undefined;
+  limit?: number;
 }): HistoryEntry[] | undefined {
   if (params.sessionEntries.length === 0) {
     return params.inboundHistory;
@@ -81,7 +82,8 @@ export function mergeSlackSessionTranscriptInboundHistory(params: {
     seenSessionKeys.add(key);
     return true;
   });
-  return [...sessionOnlyEntries, ...inboundEntries].toSorted(
+  const merged = [...sessionOnlyEntries, ...inboundEntries].toSorted(
     (left, right) => (left.timestamp ?? 0) - (right.timestamp ?? 0),
   );
+  return params.limit === undefined ? merged : merged.slice(-params.limit);
 }
