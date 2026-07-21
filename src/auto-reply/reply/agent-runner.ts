@@ -693,7 +693,10 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
     if (metadataMatch) {
       const start = index;
       const fence = lines[index + 1] ?? "";
-      if (fence.startsWith("```")) {
+      // Generated metadata blocks always use ```json fences (inbound-meta.ts,
+      // untrusted-context.ts); other fence languages are user content and must
+      // stay attributed to user_message.
+      if (fence.trim() === "```json") {
         let end = index + 2;
         while (end < lines.length && !(lines[end] ?? "").startsWith("```")) {
           end += 1;

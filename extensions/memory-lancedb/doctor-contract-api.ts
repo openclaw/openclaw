@@ -55,18 +55,19 @@ function isLegacyEnvelopeContaminatedText(text: unknown): boolean {
 }
 
 async function scanLegacyEnvelopeRowIds(table: LanceDbTable): Promise<string[]> {
-  const rows = (await table.query().select(["id", "text"]).toArray()) as Array<
-    Record<string, unknown>
-  >;
   const contaminatedIds: string[] = [];
-  for (const row of rows) {
-    if (!isLegacyEnvelopeContaminatedText(row.text)) {
-      continue;
+  // Stream record batches instead of toArray(): scan holds one batch of
+  // id/text at a time so large or remote tables do not materialize fully.
+  for await (const batch of table.query().select(["id", "text"])) {
+    for (const row of batch.toArray() as Array<Record<string, unknown>>) {
+      if (!isLegacyEnvelopeContaminatedText(row.text)) {
+        continue;
+      }
+      if (typeof row.id !== "string") {
+        throw new Error("LanceDB legacy envelope row is missing a string id");
+      }
+      contaminatedIds.push(row.id);
     }
-    if (typeof row.id !== "string") {
-      throw new Error("LanceDB legacy envelope row is missing a string id");
-    }
-    contaminatedIds.push(row.id);
   }
   return contaminatedIds;
 }
