@@ -1,5 +1,6 @@
 import { html, nothing, type PropertyValues } from "lit";
 import { state } from "lit/decorators.js";
+import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   serializeSidebarEntry,
   type NavigationRouteId,
@@ -26,7 +27,12 @@ import { sessionHasBoard } from "../lib/board/provider.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent, normalizeAgentId } from "../lib/sessions/session-key.ts";
-import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
+import { pluginTabKey } from "../pages/plugin/route.ts";
+import {
+  renderSidebarPluginTab,
+  shouldHandleNavigationClick,
+  sidebarPluginTabs,
+} from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionListElement } from "./app-sidebar-session-list.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
@@ -83,6 +89,7 @@ class AppSidebar extends AppSidebarSessionListElement {
   @state() private debouncedDisconnected = false;
 
   private offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private renderedSidebarEntries: ReadonlySet<string> | null = null;
 
   constructor() {
     super();
@@ -138,6 +145,29 @@ class AppSidebar extends AppSidebarSessionListElement {
     super.willUpdate(changed);
     if (changed.has("connected")) {
       this.syncOfflineIndicator();
+    }
+  }
+
+  override updated(changed: PropertyValues<this>) {
+    super.updated(changed);
+    const entries = [...this.querySelectorAll<HTMLElement>("[data-sidebar-entry]")];
+    const next = new Set(entries.flatMap((entry) => entry.dataset.sidebarEntry ?? []));
+    const previous = this.renderedSidebarEntries;
+    this.renderedSidebarEntries = next;
+    if (!previous || globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      return;
+    }
+    for (const entry of entries) {
+      const key = entry.dataset.sidebarEntry;
+      if (key && !previous.has(key)) {
+        entry.animate?.(
+          [
+            { opacity: 0, transform: "translateX(-8px) scale(0.98)" },
+            { opacity: 1, transform: "translateX(0) scale(1)" },
+          ],
+          { duration: 180, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+        );
+      }
     }
   }
 
@@ -441,6 +471,21 @@ class AppSidebar extends AppSidebarSessionListElement {
     `;
   }
 
+  private renderPluginTabEntry(tab: GatewayControlUiPluginTab) {
+    const ref = { pluginId: tab.pluginId, id: tab.id };
+    const key = pluginTabKey(ref);
+    return html`
+      <div class="sidebar-zone-entry" data-sidebar-entry=${`plugin:${key}`}>
+        ${renderSidebarPluginTab({
+          tab,
+          basePath: this.basePath,
+          active: this.activeRouteId === "plugin" && this.activePluginTabId === key,
+          onNavigate: (search) => this.onNavigate?.("plugin", { search }),
+        })}
+      </div>
+    `;
+  }
+
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
     return html`
@@ -463,6 +508,9 @@ class AppSidebar extends AppSidebarSessionListElement {
                 ${this.renderHomeRow()}
                 ${sidebarZone.entries.map((entry) =>
                   this.renderSidebarZoneEntry(entry, sidebarZone.sessionRows),
+                )}
+                ${sidebarPluginTabs(this.context?.gateway.snapshot.hello?.controlUiTabs).map(
+                  (tab) => this.renderPluginTabEntry(tab),
                 )}
               </div>
             </nav>

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
   createGateway,
+  createGatewayHarness,
   createSessionsHarness,
   mountSidebar,
   type SidebarLifecycleState,
@@ -181,6 +182,77 @@ describe("AppSidebar interleaved zone", () => {
     expect(labels).toEqual(["Usage", "Alpha", "Plugins"]);
     expect(sidebar.querySelector('[data-session-section="pinned"]')).toBeNull();
     expect(sidebar.querySelector(".nav-item--home")?.hasAttribute("draggable")).toBe(false);
+  });
+
+  it("renders plugin tabs as sidebar entries", async () => {
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", ["agent:main:main"]);
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      },
+    });
+    await sidebar.updateComplete;
+
+    const entry = sidebar.querySelector<HTMLAnchorElement>(
+      '[data-sidebar-entry="plugin:logbook/logbook"] > .nav-item',
+    );
+    expect(entry?.textContent).toContain("Logbook");
+    expect(entry?.getAttribute("href")).toBe("/plugin?plugin=logbook&id=logbook");
+
+    gateway.publish({
+      hello: {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        controlUiTabs: [],
+      },
+    });
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector('[data-sidebar-entry="plugin:logbook/logbook"]')).toBeNull();
+  });
+
+  it("animates a newly inserted sidebar entry", async () => {
+    const { sidebar } = await mountZone();
+    await sidebar.updateComplete;
+    const animate = vi.fn();
+    const originalAnimate = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "animate");
+    const originalMatchMedia = Object.getOwnPropertyDescriptor(globalThis, "matchMedia");
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      configurable: true,
+      value: animate,
+    });
+
+    try {
+      sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks"];
+      await sidebar.updateComplete;
+      expect(animate).toHaveBeenCalledOnce();
+      expect(animate.mock.calls[0]?.[1]).toMatchObject({ duration: 180 });
+
+      Object.defineProperty(globalThis, "matchMedia", {
+        configurable: true,
+        value: () => ({ matches: true }),
+      });
+      sidebar.sidebarEntries = ["route:usage", "route:plugins", "route:tasks", "route:sessions"];
+      await sidebar.updateComplete;
+      expect(animate).toHaveBeenCalledOnce();
+    } finally {
+      if (originalAnimate) {
+        Object.defineProperty(HTMLElement.prototype, "animate", originalAnimate);
+      } else {
+        delete (HTMLElement.prototype as { animate?: unknown }).animate;
+      }
+      if (originalMatchMedia) {
+        Object.defineProperty(globalThis, "matchMedia", originalMatchMedia);
+      } else {
+        delete (globalThis as { matchMedia?: unknown }).matchMedia;
+      }
+    }
   });
 
   it("writes reordered entries after a route drop", async () => {
