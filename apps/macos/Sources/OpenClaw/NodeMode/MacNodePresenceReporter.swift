@@ -4,15 +4,19 @@ import Foundation
 @MainActor
 final class MacNodePresenceReporter {
     typealias Sender = @MainActor @Sendable (_ event: String, _ payloadJSON: String) async -> Bool
+    typealias Clearer = @MainActor @Sendable () async -> ClearDeliveryResult
+    typealias UnsupportedClearHandler = @MainActor @Sendable () -> Void
     typealias IdleSecondsProvider = @MainActor @Sendable () -> Int?
+
+    enum ClearDeliveryResult: Equatable, Sendable {
+        case cleared
+        case retry
+        case unsupported
+    }
 
     private struct Payload: Codable {
         let idleSeconds: Int
         let saturated: Bool?
-    }
-
-    private struct ClearPayload: Codable {
-        let action = "clear"
     }
 
     private struct IdleSample {
@@ -33,10 +37,15 @@ final class MacNodePresenceReporter {
 
     private var task: Task<Void, Never>?
     private var sender: Sender?
+    private var clearer: Clearer?
+    private var unsupportedClearHandler: UnsupportedClearHandler?
     private var delivery: DeliveryState?
     private var reportingEnabled: Bool
     private var clearPending = false
+    private var hasDeliveredActivity = false
+    private var unsupportedClearHandled = false
     private var generation: UInt64 = 0
+    private var routeGeneration: UInt64 = 0
     private let idleSecondsProvider: IdleSecondsProvider
 
     init(
@@ -50,11 +59,21 @@ final class MacNodePresenceReporter {
         self.idleSecondsProvider = idleSecondsProvider
     }
 
-    func start(sender: @escaping Sender) {
+    func start(
+        sender: @escaping Sender,
+        clearer: @escaping Clearer,
+        onUnsupportedClear: @escaping UnsupportedClearHandler)
+    {
         self.stop()
         self.sender = sender
+        self.clearer = clearer
+        self.unsupportedClearHandler = onUnsupportedClear
         self.generation &+= 1
-        self.clearPending = !self.reportingEnabled
+        // Registration creates a fresh server-side node session. Starting disabled
+        // therefore needs no clear and cannot turn a legacy reconnect into a loop.
+        self.clearPending = false
+        self.hasDeliveredActivity = false
+        self.unsupportedClearHandled = false
         self.task = Task {
             while !Task.isCancelled {
                 await self.reportCurrentState()
@@ -65,11 +84,16 @@ final class MacNodePresenceReporter {
 
     func stop() {
         self.generation &+= 1
+        self.routeGeneration &+= 1
         self.task?.cancel()
         self.task = nil
         self.sender = nil
+        self.clearer = nil
+        self.unsupportedClearHandler = nil
         self.delivery = nil
         self.clearPending = false
+        self.hasDeliveredActivity = false
+        self.unsupportedClearHandled = false
     }
 
     func setReportingEnabled(_ enabled: Bool) async {
@@ -85,9 +109,10 @@ final class MacNodePresenceReporter {
         self.delivery = nil
         if enabled {
             self.clearPending = false
+            self.unsupportedClearHandled = false
             await self.reportCurrentState()
         } else {
-            self.clearPending = true
+            self.clearPending = self.hasDeliveredActivity
             await self.sendPendingClear()
         }
     }
@@ -116,19 +141,24 @@ final class MacNodePresenceReporter {
               let payloadJSON = String(data: data, encoding: .utf8)
         else { return }
         let generation = self.generation
+        let routeGeneration = self.routeGeneration
         guard await sender(Self.eventName, payloadJSON) else { return }
+        // Setting changes can cross this await and still belong to this route.
+        // A stop/start cannot transfer the old route's delivery into the new one.
+        guard routeGeneration == self.routeGeneration else { return }
+        self.hasDeliveredActivity = true
         guard generation == self.generation else {
             self.delivery = nil
             if self.reportingEnabled {
                 await self.reportCurrentState()
             } else {
-                self.clearPending = true
+                self.clearPending = self.hasDeliveredActivity
                 await self.sendPendingClear()
             }
             return
         }
         guard self.reportingEnabled else {
-            self.clearPending = true
+            self.clearPending = self.hasDeliveredActivity
             await self.sendPendingClear()
             return
         }
@@ -137,24 +167,42 @@ final class MacNodePresenceReporter {
 
     private func sendPendingClear() async {
         guard self.clearPending,
-              let sender = self.sender,
-              let data = try? JSONEncoder().encode(ClearPayload()),
-              let payloadJSON = String(data: data, encoding: .utf8)
+              let clearer = self.clearer
         else { return }
         let generation = self.generation
-        guard await sender(Self.eventName, payloadJSON) else { return }
+        let routeGeneration = self.routeGeneration
+        let result = await clearer()
+        guard routeGeneration == self.routeGeneration else { return }
         guard generation == self.generation else {
             if self.reportingEnabled {
                 self.clearPending = false
                 self.delivery = nil
                 await self.reportCurrentState()
             } else {
-                self.clearPending = true
+                self.clearPending = self.hasDeliveredActivity
                 await self.sendPendingClear()
             }
             return
         }
-        self.clearPending = false
+        guard !self.reportingEnabled else {
+            self.clearPending = false
+            self.delivery = nil
+            await self.reportCurrentState()
+            return
+        }
+        switch result {
+        case .cleared:
+            self.clearPending = false
+            self.hasDeliveredActivity = false
+        case .retry:
+            break
+        case .unsupported:
+            self.clearPending = false
+            self.hasDeliveredActivity = false
+            guard !self.unsupportedClearHandled else { return }
+            self.unsupportedClearHandled = true
+            self.unsupportedClearHandler?()
+        }
     }
 
     private static func idleSample(seconds: Int) -> IdleSample {

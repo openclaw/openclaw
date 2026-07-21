@@ -17,24 +17,34 @@ struct MacNodePresenceReporterTests {
     @Test func `disabled reporter does not sample idle time`() async {
         let idleProbe = PresenceIdleProbe(seconds: 3)
         let sender = PresenceSenderRecorder()
+        let clear = PresenceClearRecorder()
         let reporter = MacNodePresenceReporter(
             reportingEnabled: false,
             idleSecondsProvider: idleProbe.read)
-        reporter.start(sender: sender.send)
-        await sender.waitForPayloadCount(1)
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
+        for _ in 0..<20 { await Task.yield() }
         reporter.stop()
 
         #expect(idleProbe.calls == 0)
-        #expect(sender.payloadObjects.last?["action"] as? String == "clear")
+        #expect(sender.payloads.isEmpty)
+        #expect(clear.calls == 0)
+        #expect(clear.unsupportedCalls == 0)
     }
 
     @Test func `enabling sends an immediate activity sample`() async throws {
         let idleProbe = PresenceIdleProbe(seconds: 7)
         let sender = PresenceSenderRecorder()
+        let clear = PresenceClearRecorder()
         let reporter = MacNodePresenceReporter(
             reportingEnabled: false,
             idleSecondsProvider: idleProbe.read)
-        reporter.start(sender: sender.send)
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
         await reporter.setReportingEnabled(true)
         reporter.stop()
 
@@ -46,53 +56,74 @@ struct MacNodePresenceReporterTests {
 
     @Test func `disabling sends a same connection clear`() async throws {
         let sender = PresenceSenderRecorder()
+        let clear = PresenceClearRecorder()
         let reporter = MacNodePresenceReporter(
             reportingEnabled: false,
             idleSecondsProvider: { 0 })
-        reporter.start(sender: sender.send)
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
         await reporter.setReportingEnabled(true)
         await reporter.setReportingEnabled(false)
         reporter.stop()
 
         let payload = try #require(sender.payloadObjects.last)
-        #expect(payload["action"] as? String == "clear")
+        #expect(payload["idleSeconds"] as? Int == 0)
+        #expect(clear.calls == 1)
+        #expect(clear.unsupportedCalls == 0)
     }
 
     @Test func `failed clear retries while disabled`() async {
-        let sender = PresenceSenderRecorder(outcomes: [false, true])
+        let sender = PresenceSenderRecorder()
+        let clear = PresenceClearRecorder(outcomes: [.retry, .cleared])
         let reporter = MacNodePresenceReporter(
             reportingEnabled: false,
             idleSecondsProvider: { 0 })
-        reporter.start(sender: sender.send)
-        await sender.waitForPayloadCount(1)
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
+        await reporter.setReportingEnabled(true)
+        await reporter.setReportingEnabled(false)
         await reporter.setReportingEnabled(false)
         reporter.stop()
 
-        #expect(sender.payloadObjects.filter { $0["action"] as? String == "clear" }.count == 2)
+        #expect(clear.calls == 2)
+        #expect(clear.unsupportedCalls == 0)
     }
 
-    @Test func `activity crossing opt out is followed by another clear`() async {
+    @Test func `activity crossing opt out is followed by a clear`() async {
         let sender = SuspendingPresenceSender()
+        let clear = PresenceClearRecorder()
         let reporter = MacNodePresenceReporter(
             reportingEnabled: true,
             idleSecondsProvider: { 0 })
-        reporter.start(sender: sender.send)
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
         await sender.waitForActivitySend()
 
         await reporter.setReportingEnabled(false)
         sender.finishActivitySend()
-        await sender.waitForClearCount(2)
+        await clear.waitForCallCount(1)
         reporter.stop()
 
-        #expect(sender.payloadObjects.last?["action"] as? String == "clear")
+        #expect(clear.calls == 1)
+        #expect(clear.unsupportedCalls == 0)
     }
 
     @Test func `activity crossing disable and re-enable refreshes the enabled sample`() async {
         let sender = SuspendingPresenceSender()
+        let clear = PresenceClearRecorder()
         let reporter = MacNodePresenceReporter(
             reportingEnabled: true,
             idleSecondsProvider: { 0 })
-        reporter.start(sender: sender.send)
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
         await sender.waitForActivitySend()
 
         await reporter.setReportingEnabled(false)
@@ -102,6 +133,63 @@ struct MacNodePresenceReporterTests {
         reporter.stop()
 
         #expect(sender.payloadObjects.last?["idleSeconds"] as? Int == 0)
+        #expect(clear.calls == 0)
+    }
+
+    @Test func `unsupported clear requests one reconnect and fresh disabled start stays silent`() async {
+        let sender = PresenceSenderRecorder()
+        let clear = PresenceClearRecorder(outcomes: [.unsupported])
+        let reporter = MacNodePresenceReporter(
+            reportingEnabled: false,
+            idleSecondsProvider: { 0 })
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
+
+        await reporter.setReportingEnabled(true)
+        await reporter.setReportingEnabled(false)
+        await reporter.setReportingEnabled(false)
+        reporter.stop()
+        reporter.start(
+            sender: sender.send,
+            clearer: clear.clear,
+            onUnsupportedClear: clear.handleUnsupported)
+        for _ in 0..<20 { await Task.yield() }
+        reporter.stop()
+
+        #expect(sender.payloadObjects.filter { $0["idleSeconds"] != nil }.count == 1)
+        #expect(clear.calls == 1)
+        #expect(clear.unsupportedCalls == 1)
+    }
+
+    @Test func `stale activity completion cannot attach to a restarted disabled route`() async {
+        let staleSender = SuspendingPresenceSender()
+        let staleClear = PresenceClearRecorder()
+        let reporter = MacNodePresenceReporter(
+            reportingEnabled: true,
+            idleSecondsProvider: { 0 })
+        reporter.start(
+            sender: staleSender.send,
+            clearer: staleClear.clear,
+            onUnsupportedClear: staleClear.handleUnsupported)
+        await staleSender.waitForActivitySend()
+
+        reporter.stop()
+        await reporter.setReportingEnabled(false)
+        let freshSender = PresenceSenderRecorder()
+        let freshClear = PresenceClearRecorder(outcomes: [.unsupported])
+        reporter.start(
+            sender: freshSender.send,
+            clearer: freshClear.clear,
+            onUnsupportedClear: freshClear.handleUnsupported)
+        staleSender.finishActivitySend()
+        for _ in 0..<20 { await Task.yield() }
+        reporter.stop()
+
+        #expect(freshSender.payloads.isEmpty)
+        #expect(freshClear.calls == 0)
+        #expect(freshClear.unsupportedCalls == 0)
     }
 
     @Test func `first activity sample sends immediately`() {
@@ -162,12 +250,7 @@ private final class PresenceIdleProbe {
 
 @MainActor
 private final class PresenceSenderRecorder {
-    private var outcomes: [Bool]
     private(set) var payloads: [String] = []
-
-    init(outcomes: [Bool] = []) {
-        self.outcomes = outcomes
-    }
 
     var payloadObjects: [[String: Any]] {
         self.payloads.compactMap { payload in
@@ -178,15 +261,35 @@ private final class PresenceSenderRecorder {
 
     func send(_: String, _ payload: String) async -> Bool {
         self.payloads.append(payload)
-        return self.outcomes.isEmpty ? true : self.outcomes.removeFirst()
+        return true
+    }
+}
+
+@MainActor
+private final class PresenceClearRecorder {
+    private var outcomes: [MacNodePresenceReporter.ClearDeliveryResult]
+    private(set) var calls = 0
+    private(set) var unsupportedCalls = 0
+
+    init(outcomes: [MacNodePresenceReporter.ClearDeliveryResult] = []) {
+        self.outcomes = outcomes
     }
 
-    func waitForPayloadCount(_ expected: Int) async {
+    func clear() async -> MacNodePresenceReporter.ClearDeliveryResult {
+        self.calls += 1
+        return self.outcomes.isEmpty ? .cleared : self.outcomes.removeFirst()
+    }
+
+    func handleUnsupported() {
+        self.unsupportedCalls += 1
+    }
+
+    func waitForCallCount(_ expected: Int) async {
         for _ in 0..<1000 {
-            if self.payloads.count >= expected { return }
+            if self.calls >= expected { return }
             await Task.yield()
         }
-        Issue.record("timed out waiting for \(expected) presence payloads")
+        Issue.record("timed out waiting for \(expected) presence clear calls")
     }
 }
 
@@ -225,14 +328,6 @@ private final class SuspendingPresenceSender {
     func finishActivitySend() {
         self.activityContinuation?.resume(returning: true)
         self.activityContinuation = nil
-    }
-
-    func waitForClearCount(_ expected: Int) async {
-        for _ in 0..<1000 {
-            if self.payloadObjects.filter({ $0["action"] as? String == "clear" }).count >= expected { return }
-            await Task.yield()
-        }
-        Issue.record("timed out waiting for \(expected) presence clears")
     }
 
     func waitForActivityCount(_ expected: Int) async {

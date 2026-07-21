@@ -10,6 +10,7 @@ final class PresenceReporter {
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 180 // a few minutes
     private let instanceId: String = InstanceIdentity.instanceId
+    private static let clearLastInputTag = "system-presence-clear-last-input"
 
     func start() {
         guard self.task == nil else { return }
@@ -44,7 +45,9 @@ final class PresenceReporter {
             "version": AnyHashable(version),
             "platform": AnyHashable(platform),
             "deviceFamily": AnyHashable("Mac"),
-            "lastInputSeconds": AnyHashable(NSNull()),
+            // Older Gateways accept tags but reject JSON null in this closed schema.
+            // Current Gateways interpret this marker as an explicit privacy clear.
+            "tags": AnyHashable([Self.clearLastInputTag]),
             "reason": AnyHashable(reason),
         ]
         if let model = InstanceIdentity.modelIdentifier { params["modelIdentifier"] = AnyHashable(model) }
@@ -102,6 +105,10 @@ extension PresenceReporter {
 
     static func _testPrimaryIPv4Address() -> String? {
         SystemPresenceInfo.primaryIPv4Address()
+    }
+
+    static func _testActivityPrivacyParameters() -> [String: AnyHashable] {
+        ["tags": AnyHashable([Self.clearLastInputTag])]
     }
 }
 #endif

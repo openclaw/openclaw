@@ -273,6 +273,27 @@ final class MacNodeModeCoordinator: NSObject {
         await self.presenceReporter.setReportingEnabled(enabled)
     }
 
+    private func clearPresenceActivity(
+        ifCurrentRoute route: GatewayNodeSessionRoute) async -> MacNodePresenceReporter.ClearDeliveryResult
+    {
+        do {
+            let result = try await self.session.requestEventResult(
+                event: "node.presence.activity",
+                payloadJSON: #"{"action":"clear"}"#,
+                ifCurrentRoute: route)
+            guard let result else { return .unsupported }
+            return result.ok && result.handled ? .cleared : .unsupported
+        } catch is GatewayResponseError {
+            // Gateways predating the structured node-event result can reject the
+            // new payload at the request boundary instead of returning handled=false.
+            return .unsupported
+        } catch {
+            self.logger.error(
+                "mac node presence clear failed: \(error.localizedDescription, privacy: .public)")
+            return .retry
+        }
+    }
+
     func refreshCanvasPluginSurfaceRoute(replacing observedURL: String?) async -> GatewayCanvasHostRoute? {
         await self.session.refreshCanvasHostRoute(replacing: observedURL)
     }
@@ -641,13 +662,25 @@ final class MacNodeModeCoordinator: NSObject {
                 let currentRoute = await self.session.currentRoute()
                 guard routeStillAuthoritative, currentRoute == installedRoute else { return }
                 await self.runtime.updateMainSessionKey(mainSessionKey)
-                await self.presenceReporter.start { [weak self] event, payload in
-                    guard let self else { return false }
-                    return await self.session.sendEvent(
-                        event: event,
-                        payloadJSON: payload,
-                        ifCurrentRoute: installedRoute)
-                }
+                await self.presenceReporter.start(
+                    sender: { [weak self] event, payload in
+                        guard let self else { return false }
+                        return await self.session.sendEvent(
+                            event: event,
+                            payloadJSON: payload,
+                            ifCurrentRoute: installedRoute)
+                    },
+                    clearer: { [weak self] in
+                        guard let self else { return .retry }
+                        return await self.clearPresenceActivity(ifCurrentRoute: installedRoute)
+                    },
+                    onUnsupportedClear: { [weak self] in
+                        guard let self else { return }
+                        // Disconnect is the only clear operation older Gateways understand.
+                        // Fresh disabled routes emit no clear, so this fallback is one-shot.
+                        self.logger.info("reconnecting mac node to clear legacy presence activity")
+                        _ = self.enqueueRouteInvalidation(yieldRefresh: true)
+                    })
             },
             onDisconnected: { [weak self] reason in
                 guard let self else { return }

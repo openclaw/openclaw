@@ -3,6 +3,9 @@ import { Type } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 
+/** Backward-compatible system-presence marker for removing retained input recency. */
+export const SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG = "system-presence-clear-last-input";
+
 /** Operator event plus optional presence metadata and exact-session wake routing. */
 const SystemEventParamsSchema = closedObject({
   text: Type.String(),
@@ -18,7 +21,7 @@ const SystemEventParamsSchema = closedObject({
   platform: Type.Optional(Type.String()),
   deviceFamily: Type.Optional(Type.String()),
   modelIdentifier: Type.Optional(Type.String()),
-  lastInputSeconds: Type.Optional(Type.Union([Type.Number(), Type.Null()])),
+  lastInputSeconds: Type.Optional(Type.Number()),
   reason: Type.Optional(Type.String()),
   roles: Type.Optional(Type.Array(Type.String())),
   scopes: Type.Optional(Type.Array(Type.String())),

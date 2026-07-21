@@ -61,7 +61,9 @@ cannot drift forward and incorrectly become the newest computer.
 Disabling **Active computer detection** stops sampling and sends an authenticated
 clear event over the current node connection. The Gateway immediately removes
 that Mac's retained activity timestamps and recomputes the active computer;
-other node capabilities and in-flight work stay connected.
+other node capabilities and in-flight work stay connected. If the connected
+Gateway predates this clear action, the Mac node reconnects once so disconnect
+cleanup can remove the retained activity instead.
 
 The Gateway accepts activity only when all of these are true:
 

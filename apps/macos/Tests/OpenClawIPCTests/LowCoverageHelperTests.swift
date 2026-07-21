@@ -121,6 +121,11 @@ struct LowCoverageHelperTests {
         #expect(!PresenceReporter._testAppVersionString().isEmpty)
         #expect(!PresenceReporter._testPlatformString().isEmpty)
         _ = PresenceReporter._testPrimaryIPv4Address()
+        let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
+        #expect(privacyParameters["lastInputSeconds"] == nil)
+        #expect(
+            privacyParameters["tags"]?.base as? [String] ==
+                ["system-presence-clear-last-input"])
     }
 
     @Test func `port guardian parses listeners and builds reports`() {

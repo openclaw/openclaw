@@ -60,7 +60,10 @@ stay tracked because test suites use them as stand-ins for real clients.
 Clients can send richer periodic beacons via the `system-event` method. The mac
 app uses this to report host name, IP, version, and liveness metadata. Physical
 input activity is not part of this generic beacon; the purpose-specific native
-node event described in [Active computer presence](/nodes/presence) owns it.
+node event described in [Active computer presence](/nodes/presence) owns it. The
+Mac tags these beacons with `system-presence-clear-last-input`; current Gateways
+use that backward-compatible marker to remove any input recency retained from an
+older app without making older closed schemas reject the beacon.
 
 ### 4) Node connects (role: node)
 

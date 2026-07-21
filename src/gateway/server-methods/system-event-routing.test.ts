@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG } from "../../../packages/gateway-protocol/src/schema.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -181,19 +182,28 @@ describe("system-event routing", () => {
       getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
     };
 
-    for (const lastInputSeconds of [5, null]) {
-      await handler({
-        params: {
-          text: "Node: Operator Mac",
-          instanceId,
-          host: "Operator Mac",
-          mode: "ui",
-          lastInputSeconds,
-        },
-        respond: vi.fn(),
-        context,
-      } as unknown as GatewayRequestHandlerOptions);
-    }
+    await handler({
+      params: {
+        text: "Node: Operator Mac",
+        instanceId,
+        host: "Operator Mac",
+        mode: "ui",
+        lastInputSeconds: 5,
+      },
+      respond: vi.fn(),
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
+    await handler({
+      params: {
+        text: "Node: Operator Mac",
+        instanceId,
+        host: "Operator Mac",
+        mode: "ui",
+        tags: [SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG],
+      },
+      respond: vi.fn(),
+      context,
+    } as unknown as GatewayRequestHandlerOptions);
 
     const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
     expect(entry?.lastInputSeconds).toBeUndefined();
