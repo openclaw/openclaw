@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import OpenClawIPC
 import OpenClawKit
 import OSLog
 
@@ -873,8 +874,8 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func currentPermissions() async -> [String: Bool] {
-        let statuses = await PermissionManager.grantedStatus()
-        return Dictionary(uniqueKeysWithValues: statuses.map { ($0.key.rawValue, $0.value) })
+        let statuses = await PermissionManager.authorizationStatus()
+        return Self.advertisedPermissions(statuses)
     }
 
     private func currentCommands(caps: [String]) -> [String] {
@@ -976,6 +977,17 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
+    nonisolated static func advertisedPermissions(
+        _ statuses: [Capability: CapabilityAuthorizationStatus]) -> [String: Bool]
+    {
+        // Unknown TCC state is not denial. Omitting it keeps the node surface
+        // narrow without turning a later confirmed grant into a false upgrade.
+        Dictionary(uniqueKeysWithValues: statuses.compactMap { capability, status in
+            guard status != .unknown else { return nil }
+            return (capability.rawValue, status == .granted)
+        })
+    }
+
     nonisolated static func resolvedCaps(
         browserControlEnabled: Bool,
         cameraEnabled: Bool,
