@@ -235,7 +235,9 @@ describe("runAgentTurnWithFallback: provider failures", () => {
       if (result.kind === "final") {
         expect(result.payload.isError).toBe(true);
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toContain("rate-limited");
+        expect(result.payload.text).toBe(
+          "⚠️ The model request was rate-limited. Please try again in a few minutes.",
+        );
       }
     },
   );
