@@ -484,6 +484,13 @@ describe("cron view run history", () => {
           summary: "zero duration",
           durationMs: 0,
         },
+        {
+          ts: 1.5,
+          jobId: "job-invalid",
+          status: "ok",
+          summary: "invalid duration",
+          durationMs: -1,
+        },
         { ts: 1, jobId: "job-unknown", status: "ok", summary: "unknown duration" },
       ],
     });
@@ -509,6 +516,9 @@ describe("cron view run history", () => {
     expect(split?.querySelector(".cron-run-entry__meta")?.textContent).toContain("500ms");
     expect(entryFor("job-zero")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
       "0ms",
+    );
+    expect(entryFor("job-invalid")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
+      "n/a",
     );
     expect(entryFor("job-unknown")?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
       "n/a",

@@ -319,7 +319,7 @@ function renderRun(
           <div class="muted">
             ${typeof entry.durationMs === "number" && Number.isFinite(entry.durationMs)
               ? (formatDurationCompact(entry.durationMs, { spaced: true }) ??
-                formatDurationHuman(entry.durationMs))
+                formatDurationHuman(entry.durationMs, t("common.na")))
               : t("common.na")}
           </div>
           ${typeof entry.nextRunAtMs === "number"
