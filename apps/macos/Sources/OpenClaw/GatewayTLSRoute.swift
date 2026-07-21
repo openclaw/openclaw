@@ -45,7 +45,7 @@ struct GatewayTLSRoute: Equatable, Sendable {
     }
 
     static func storeKey(for url: URL) -> String {
-        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().nonEmpty ?? "gateway"
+        let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? "gateway"
         return "\(host):\(url.port ?? 443)"
     }
 

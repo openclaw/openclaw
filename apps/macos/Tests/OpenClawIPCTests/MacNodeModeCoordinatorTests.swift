@@ -852,6 +852,12 @@ struct MacNodeModeCoordinatorTests {
         #expect(GatewayTLSRoute.storeKey(for: url) == "gateway.example.ts.net:443")
     }
 
+    @Test func `tls pin store key preserves the shipped host identity`() throws {
+        let url = try #require(URL(string: "wss://Gateway.Example.ts.net"))
+
+        #expect(GatewayTLSRoute.storeKey(for: url) == "Gateway.Example.ts.net:443")
+    }
+
     @Test func `remote tls params prefer configured fingerprint over stored pin`() throws {
         let url = try #require(URL(string: "wss://gateway.example.com"))
         let root: [String: Any] = [
