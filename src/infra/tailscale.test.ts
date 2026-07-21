@@ -5,6 +5,7 @@ import * as tailscale from "./tailscale.js";
 
 const {
   getTailnetHostname,
+  getTailnetHostnameAfterServe,
   readTailscaleWhoisIdentity,
   enableTailscaleServe,
   disableTailscaleServe,
@@ -76,14 +77,10 @@ describe("tailscale helpers", () => {
   });
 
   it.each([
-    [new Error("failed to connect to local tailscaled; it doesn't appear to be running")],
-    [
-      Object.assign(new Error("Command failed: tailscale status --json"), {
-        killed: true,
-        signal: "SIGTERM",
-      }),
-    ],
-  ])("retries tailscale status after a transient failure", async (failure) => {
+    [new Error("Failed to connect to local Tailscale daemon; not running?")],
+    [Object.assign(new Error("Command timed out"), { timedOut: true, signal: "SIGTERM" })],
+  ])("retries post-Serve status after a transient failure", async (failure) => {
+    vi.useFakeTimers();
     const exec = vi
       .fn()
       .mockRejectedValueOnce(failure)
@@ -93,35 +90,48 @@ describe("tailscale helpers", () => {
         }),
       });
 
-    const host = await getTailnetHostname(exec, tailscaleBin);
+    const hostPromise = getTailnetHostnameAfterServe(exec);
+    await vi.runAllTimersAsync();
+    const host = await hostPromise;
 
     expect(host).toBe("retry.tailnet.ts.net");
     expect(exec).toHaveBeenCalledTimes(2);
     expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
       timeoutMs: 5000,
       maxBuffer: 400_000,
+      logOutput: false,
     });
     expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
       timeoutMs: 5000,
       maxBuffer: 400_000,
+      logOutput: false,
     });
   });
 
   it.each([
     ["missing binary", new Error("spawn tailscale ENOENT")],
     ["permission failure", new Error("permission denied")],
-  ])("does not retry tailscale status after a permanent %s", async (_name, failure) => {
+  ])("does not retry post-Serve status after a permanent %s", async (_name, failure) => {
     const exec = vi.fn().mockRejectedValue(failure);
 
-    await expect(getTailnetHostname(exec, tailscaleBin)).rejects.toThrow(failure.message);
+    await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(failure.message);
 
     expect(exec).toHaveBeenCalledTimes(1);
   });
 
-  it("does not retry malformed tailscale status JSON", async () => {
+  it("does not retry malformed post-Serve status JSON", async () => {
     const exec = vi.fn().mockResolvedValue({ stdout: "{not json}" });
 
-    await expect(getTailnetHostname(exec, tailscaleBin)).rejects.toThrow(SyntaxError);
+    await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(SyntaxError);
+
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ordinary hostname lookup single-attempt", async () => {
+    const failure = new Error("Failed to connect to local Tailscale daemon; not running?");
+    const exec = vi.fn().mockRejectedValue(failure);
+
+    await expect(getTailnetHostname(exec, tailscaleBin)).rejects.toThrow(failure.message);
 
     expect(exec).toHaveBeenCalledTimes(1);
   });
