@@ -71,6 +71,12 @@ export function buildRateLimitCooldownMessage(err: unknown): string {
     }
     return `⚠️ Rate-limited — ready in ~${Math.ceil(secsLeft / 60)} min. Please try again shortly.`;
   }
+  const attemptedModels = new Set(
+    err.attempts.map((attempt) => `${attempt.provider}/${attempt.model}`),
+  );
+  if (attemptedModels.size > 1 && isPureTransientRateLimitSummary(err)) {
+    return "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.";
+  }
   return RATE_LIMIT_RETRY_MESSAGE;
 }
 

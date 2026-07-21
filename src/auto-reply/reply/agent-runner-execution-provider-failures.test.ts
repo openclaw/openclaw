@@ -273,6 +273,35 @@ describe("runAgentTurnWithFallback: provider failures", () => {
     },
   );
 
+  it("scopes fallback exhaustion copy to the attempted models", () => {
+    const payload = buildKnownAgentRunFailureReplyPayload({
+      err: Object.assign(new Error("fallback exhausted"), {
+        name: "FallbackSummaryError",
+        attempts: [
+          {
+            provider: "anthropic",
+            model: "claude-opus-4-1",
+            error: "rate limited",
+            reason: "rate_limit",
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: "overloaded",
+            reason: "overloaded",
+          },
+        ],
+        soonestCooldownExpiry: null,
+      }),
+      sessionCtx: createMinimalRunAgentTurnParams().sessionCtx,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(payload?.text).toBe(
+      "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.",
+    );
+  });
+
   it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
     const periodicLimitMessage = "You've hit your weekly limit · resets 6pm (UTC)";
     const payload = buildKnownAgentRunFailureReplyPayload({
