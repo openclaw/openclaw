@@ -386,8 +386,13 @@ export class CronStreamOutput {
     if (this.discardUntilNewline[channel]) {
       return;
     }
-    if (truncatedTail || Buffer.byteLength(text, "utf8") > maxBatchBytes) {
-      const rawLine = truncateUtf8Prefix(text, maxBatchBytes);
+    // Retain partial lines up to the raw-intake bound, not the delivery cap:
+    // a complete line split across pipe callbacks must match identically to
+    // the same line arriving in one callback. Only a line the intake bound
+    // itself cut is an unprovable prefix.
+    const partialCapBytes = maxBatchBytes * INTAKE_CAP_MULTIPLIER;
+    if (truncatedTail || Buffer.byteLength(text, "utf8") > partialCapBytes) {
+      const rawLine = truncateUtf8Prefix(text, partialCapBytes);
       if (rawLine) {
         await this.acceptLine(
           rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine,
@@ -714,10 +719,10 @@ export class CronStreamOutput {
         continue;
       }
       if (this.matcher) {
-        // Mirror acceptLine: an oversized leftover would be truncated before
-        // matching, so match mode must not count it as accepted input.
+        // Mirror acceptChunk: a leftover past the raw-intake bound would be
+        // truncated before matching, so match mode must not count it.
         const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
-        if (Buffer.byteLength(text, "utf8") > maxBatchBytes) {
+        if (Buffer.byteLength(text, "utf8") > maxBatchBytes * INTAKE_CAP_MULTIPLIER) {
           continue;
         }
       }

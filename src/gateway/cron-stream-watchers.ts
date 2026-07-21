@@ -368,7 +368,17 @@ export function createCronStreamWatchers(params: {
         await stopOwnerLogged(owner, stopReason, job);
         continue;
       }
-      await startOwner(job, mutationSnapshot.get(job.id) ?? 0, currentReconcileEpoch);
+      try {
+        await startOwner(job, mutationSnapshot.get(job.id) ?? 0, currentReconcileEpoch);
+      } catch (error) {
+        // A schedule replacement can reject when the old child refuses to
+        // exit; contain it like the stop branches so one stubborn source
+        // cannot leave the remaining jobs unreconciled.
+        params.logger.warn(
+          { jobId: job.id, err: String(error) },
+          "cron-stream: reconcile start failed",
+        );
+      }
     }
   };
 

@@ -112,6 +112,45 @@ describe("cron stream output", () => {
     await watchers.stopAll("shutdown");
   });
 
+  it("matches an over-cap line identically whether or not callbacks split it", async () => {
+    vi.useFakeTimers();
+    const fake = fakeSupervisor();
+    const fireBatch = vi.fn(async (_job: CronJob, _batch: string) => "fired" as const);
+    const watchers = createWatchers({
+      getProcessSupervisor: () => fake.supervisor,
+      minIntervalMs: 1,
+      updateState: vi.fn(async () => {}),
+      recordFailure: vi.fn(async () => {}),
+      fireBatch,
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    await watchers.start(
+      job({
+        schedule: {
+          kind: "stream",
+          command: ["stream-source"],
+          mode: "match",
+          match: "^keep",
+          batchMs: 50,
+          maxBatchBytes: 1_024,
+        },
+      }),
+    );
+
+    // A complete 1.9 KB line arriving in two callbacks must match exactly
+    // like the same line in one callback: pipe chunking is not semantics.
+    fake.inputs[0]?.onStdout?.(`keep ${"x".repeat(1_500)}`);
+    await settle();
+    fake.inputs[0]?.onStdout?.(`${"x".repeat(400)}\n`);
+    await settle();
+    await vi.advanceTimersByTimeAsync(100);
+    await settle();
+    expect(fireBatch).toHaveBeenCalledOnce();
+    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/^keep x/u);
+    expect(fireBatch.mock.calls[0]?.[1]).toMatch(/\[truncated\]$/u);
+    await watchers.stopAll("shutdown");
+  });
+
   it("matches raw source text without treating the truncation marker as input", async () => {
     vi.useFakeTimers();
     const fake = fakeSupervisor();

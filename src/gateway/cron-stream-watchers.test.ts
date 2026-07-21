@@ -208,6 +208,65 @@ describe("cron stream watchers", () => {
     expect(watchers.inspect("healthy-job")?.state).toBe("stopped");
   });
 
+  it("continues reconciling after a stubborn schedule replacement fails", async () => {
+    vi.useFakeTimers();
+    const cancels: Record<string, ReturnType<typeof vi.fn>> = {};
+    const spawn = vi.fn(async (input: { sessionId: string; argv: string[] }) => {
+      const jobId = input.sessionId.replace("cron-stream:", "");
+      const stubborn = jobId === "stubborn-job" && input.argv[0] === "stream-source";
+      let resolveWait!: (result: RunExit) => void;
+      const wait = new Promise<RunExit>((resolve) => {
+        resolveWait = resolve;
+      });
+      const cancel = vi.fn(() => {
+        if (!stubborn) {
+          resolveWait(exitResult({ reason: "manual-cancel" }));
+        }
+      });
+      cancels[jobId] = cancel;
+      return {
+        runId: `run-${jobId}-${input.argv[0]}`,
+        startedAtMs: Date.now(),
+        cancel,
+        detachOutput: vi.fn(),
+        wait: () => wait,
+      } satisfies ManagedRun;
+    });
+    const supervisor = {
+      spawn,
+      cancel: vi.fn(),
+      cancelScope: vi.fn(),
+      getRecord: vi.fn(),
+    } as unknown as ProcessSupervisor;
+    const watchers = createWatchers({
+      getProcessSupervisor: () => supervisor,
+      minIntervalMs: 1,
+      updateState: vi.fn(async () => {}),
+      recordFailure: vi.fn(async () => {}),
+      fireBatch: vi.fn(async () => "fired" as const),
+      logger: { info: vi.fn(), warn: vi.fn() },
+    });
+    await watchers.reconcile([job({ id: "stubborn-job" })], true);
+    await settle();
+    expect(spawn).toHaveBeenCalledTimes(1);
+
+    // The stubborn child refuses to exit, so its schedule replacement rejects
+    // after the bounded stop. The sweep must still start the sibling job.
+    const replaced = job({
+      id: "stubborn-job",
+      schedule: { kind: "stream", command: ["replacement"], batchMs: 50 },
+    });
+    const sweep = watchers.reconcile([replaced, job({ id: "healthy-job" })], true);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await sweep;
+    expect(spawn.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(watchers.inspect("healthy-job")?.state).toBe("running");
+    // The stubborn child also fails shutdown; advance its bounded stop.
+    const shutdown = watchers.stopAll("shutdown").catch(() => undefined);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await shutdown;
+  });
+
   it("leaves an exit queued ahead of a requested stop to the stop operation", async () => {
     const fake = fakeSupervisor();
     const updateState = vi.fn(async (_jobId: string, _patch: Partial<CronJob["state"]>) => {});
