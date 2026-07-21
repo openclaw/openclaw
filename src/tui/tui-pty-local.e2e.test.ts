@@ -735,12 +735,12 @@ async function requireSharedGatewayFixture(): Promise<SharedGatewayFixture> {
 }
 
 async function cleanupSharedGatewayFixture(
-  startup: Promise<SharedGatewayFixture> | undefined,
+  startup: Promise<Pick<SharedGatewayFixture, "cleanup">> | undefined,
 ): Promise<void> {
   if (!startup) {
     return;
   }
-  let fixture: SharedGatewayFixture;
+  let fixture: Pick<SharedGatewayFixture, "cleanup">;
   try {
     fixture = await startup;
   } catch {
@@ -814,7 +814,7 @@ describe("TUI PTY real backends", () => {
       cleanup: async () => {
         throw cleanupError;
       },
-    } as SharedGatewayFixture;
+    };
     await expect(cleanupSharedGatewayFixture(Promise.resolve(fixture))).rejects.toBe(cleanupError);
   });
 
