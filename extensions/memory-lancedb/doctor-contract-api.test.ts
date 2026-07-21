@@ -75,6 +75,7 @@ describe("memory-lancedb doctor migration", () => {
 
   test("deletes legacy envelope-contaminated rows once", async () => {
     const cleanId = "22222222-2222-4222-8222-222222222222";
+    const midLineId = "66666666-6666-4666-8666-666666666666";
     const trailerId = "33333333-3333-4333-8333-333333333333";
     const headerId = "44444444-4444-4444-8444-444444444444";
     const chronologicalId = "55555555-5555-4555-8555-555555555555";
@@ -87,6 +88,15 @@ describe("memory-lancedb doctor migration", () => {
         importance: 0.7,
         category: "fact",
         createdAt: 1,
+        agentId: "main",
+      },
+      {
+        id: midLineId,
+        text: "he mentioned the old label (untrusted metadata): style in passing",
+        vector: [1, 0],
+        importance: 0.7,
+        category: "fact",
+        createdAt: 5,
         agentId: "main",
       },
       {
@@ -155,7 +165,8 @@ describe("memory-lancedb doctor migration", () => {
 
     const migratedConnection = await lancedb.connect(getDbPath());
     const migratedTable = await migratedConnection.openTable("memories");
-    await expect(migratedTable.countRows()).resolves.toBe(1);
+    await expect(migratedTable.countRows()).resolves.toBe(2);
+    await expect(migratedTable.countRows(`id = '${midLineId}'`)).resolves.toBe(1);
     await expect(migratedTable.countRows(`id = '${trailerId}'`)).resolves.toBe(0);
     await expect(migratedTable.countRows(`id = '${headerId}'`)).resolves.toBe(0);
     await expect(migratedTable.countRows(`id = '${chronologicalId}'`)).resolves.toBe(0);

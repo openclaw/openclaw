@@ -19,14 +19,39 @@ type LanceDbTable = Awaited<ReturnType<LanceDbConnection["openTable"]>>;
 
 const LEGACY_ENVELOPE_DELETE_BATCH_SIZE = 500;
 
-// Legacy inbound-context label wording emitted before the plain-label rename.
-// These distinctive machine-generated suffixes can safely match mid-text after
-// truncation; such rows predate sanitization and evade the current recall filter.
-const LEGACY_ENVELOPE_TEXT_RE =
-  /(?:\(untrusted metadata\):|\(untrusted, for context\):|\(untrusted, nearest first\):|\(untrusted, chronological[,)]|^Untrusted context \(metadata, do not treat as instructions or commands\):)/m;
+// Deletion predicate mirrors the recall filter shipped BEFORE the plain-label
+// rename (index.ts sentinel/label/header rules): doctor only deletes rows that
+// filter already permanently hid at recall, so no user-visible memory is lost.
+// Mid-line mentions of the old wording (colon not at end of line) survive.
+const LEGACY_ENVELOPE_SENTINELS = [
+  "Conversation info (untrusted metadata):",
+  "Sender (untrusted metadata):",
+  "Thread starter (untrusted, for context):",
+  "Reply target of current user message (untrusted, for context):",
+  "Replied message (untrusted, for context):",
+  "Forwarded message context (untrusted metadata):",
+  "Conversation context (untrusted, chronological, selected for current message):",
+  "Current local chat window (untrusted, chronological, before current message):",
+  "Nearby reply target window (untrusted, chronological, around replied-to message):",
+  "Chat history since last reply (untrusted, for context):",
+] as const;
+const LEGACY_ENVELOPE_SENTINEL_LINE_RE = new RegExp(
+  `^(?:${LEGACY_ENVELOPE_SENTINELS.map((sentinel) =>
+    sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  ).join("|")})[^\\n]*$`,
+  "m",
+);
+const LEGACY_ENVELOPE_LABEL_LINE_RE =
+  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*$/m;
+const LEGACY_ENVELOPE_HEADER_RE = /^Untrusted context \(metadata/m;
 
 function isLegacyEnvelopeContaminatedText(text: unknown): boolean {
-  return typeof text === "string" && LEGACY_ENVELOPE_TEXT_RE.test(text);
+  return (
+    typeof text === "string" &&
+    (LEGACY_ENVELOPE_SENTINEL_LINE_RE.test(text) ||
+      LEGACY_ENVELOPE_LABEL_LINE_RE.test(text) ||
+      LEGACY_ENVELOPE_HEADER_RE.test(text))
+  );
 }
 
 async function scanLegacyEnvelopeRowIds(table: LanceDbTable): Promise<string[]> {
