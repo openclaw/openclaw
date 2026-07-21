@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "./node-wake-state.test-support.js";
+import {
   captureNodeWakeLifecycle,
   clearNodeWakeState,
-  getNodeWakeStateSnapshot,
   invalidateNodeWakeState,
   isNodeWakeLifecycleCurrent,
   releaseNodeWakeLifecycle,
-  resetNodeWakeStateForTest,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
   type NodeWakeAttempt,

@@ -44,10 +44,7 @@ function testRemoteSession(
 
 function setTestSkillsRemoteRegistry(
   nodeIds: string | readonly string[],
-  registry: Record<string, unknown> & {
-    get: (nodeId: string) => ReturnType<NodeRegistry["get"]>;
-    listCurrentConnectedSync?: NodeRegistry["listCurrentConnectedSync"];
-  },
+  registry: Partial<NodeRegistry> & Pick<NodeRegistry, "get">,
 ): void {
   const ids = typeof nodeIds === "string" ? [nodeIds] : nodeIds;
   setSkillsRemoteRegistry({
@@ -89,6 +86,7 @@ function createRemoteSkillWorkspace(bin: string): { cfg: OpenClawConfig; workspa
 function recordRemoteMacWithSystemWhich(nodeId: string): void {
   recordRemoteNodeInfo({
     nodeId,
+    connId: `conn-${nodeId}`,
     pairingGeneration: TEST_PAIRING_GENERATION,
     displayName: "Remote Mac",
     platform: "darwin",
@@ -196,8 +194,11 @@ describe("skills-remote", () => {
   });
 
   it("reconciles persistent generation before constructing node-hosted skills", () => {
-    const nodeId = `node-${randomUUID()}`;
-    const skillName = `skill-${randomUUID()}`;
+    const legacyNodeId = `node-${randomUUID()}`;
+    const missingConnectionNodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    const legacySkillName = `skill-${randomUUID()}`;
+    const missingConnectionSkillName = `skill-${randomUUID()}`;
     const listCurrentConnectedSync = vi.fn(() => []);
     try {
       setSkillsRemoteRegistry({
@@ -205,64 +206,49 @@ describe("skills-remote", () => {
         listCurrentConnectedSync,
       } as unknown as NodeRegistry);
       recordRemoteNodeInfo({
-        nodeId,
+        nodeId: legacyNodeId,
         connId: "conn-retired",
-        displayName: "Retired Mac",
+        displayName: "Legacy Mac",
         platform: "darwin",
         commands: ["system.run"],
       });
       replaceRemoteNodeSkills({
-        nodeId,
-        displayName: "Retired Mac",
+        nodeId: legacyNodeId,
+        displayName: "Legacy Mac",
         skills: [
           {
-            name: skillName,
-            description: "Retired remote skill",
-            content: `---\nname: ${skillName}\ndescription: Retired remote skill\n---\n`,
+            name: legacySkillName,
+            description: "Legacy remote skill",
+            content: `---\nname: ${legacySkillName}\ndescription: Legacy remote skill\n---\n`,
           },
         ],
       });
-
-      expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
-      expect(listCurrentConnectedSync).toHaveBeenCalled();
-    } finally {
-      removeRemoteNodeInfo(nodeId);
-    }
-  });
-
-  it("fails closed for remote projections without a connection id during reconciliation", () => {
-    const nodeId = `node-${randomUUID()}`;
-    const bin = `bin-${randomUUID()}`;
-    const skillName = `skill-${randomUUID()}`;
-    try {
-      setSkillsRemoteRegistry({
-        listConnected: () => [],
-        listCurrentConnectedSync: () => [],
-      } as unknown as NodeRegistry);
       recordRemoteNodeInfo({
-        nodeId,
+        nodeId: missingConnectionNodeId,
         pairingGeneration: TEST_PAIRING_GENERATION,
         displayName: "Retired Mac",
         platform: "darwin",
         commands: ["system.run", "system.which"],
       });
-      recordRemoteNodeBins(nodeId, [bin], TEST_PAIRING_GENERATION);
+      recordRemoteNodeBins(missingConnectionNodeId, [bin], TEST_PAIRING_GENERATION);
       replaceRemoteNodeSkills({
-        nodeId,
+        nodeId: missingConnectionNodeId,
         displayName: "Retired Mac",
         skills: [
           {
-            name: skillName,
+            name: missingConnectionSkillName,
             description: "Retired remote skill",
-            content: `---\nname: ${skillName}\ndescription: Retired remote skill\n---\n`,
+            content: `---\nname: ${missingConnectionSkillName}\ndescription: Retired remote skill\n---\n`,
           },
         ],
       });
 
       expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
       expect(mergeRemoteNodeSkillEntries([], { canExec: true })).toEqual([]);
+      expect(listCurrentConnectedSync).toHaveBeenCalled();
     } finally {
-      removeRemoteNodeInfo(nodeId);
+      removeRemoteNodeInfo(legacyNodeId);
+      removeRemoteNodeInfo(missingConnectionNodeId);
     }
   });
 
@@ -526,6 +512,14 @@ describe("skills-remote", () => {
           connectivityCalls.push(connId);
           if (connectivityCalls.length === 1) {
             connId = "conn-new";
+            recordRemoteNodeInfo({
+              nodeId,
+              connId,
+              pairingGeneration: TEST_PAIRING_GENERATION,
+              displayName: "Remote Mac",
+              platform: "darwin",
+              commands: ["system.run", "system.which"],
+            });
             return {
               ok: false,
               error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
@@ -543,6 +537,7 @@ describe("skills-remote", () => {
       } as unknown as NodeRegistry);
       recordRemoteNodeInfo({
         nodeId,
+        connId,
         pairingGeneration: TEST_PAIRING_GENERATION,
         displayName: "Remote Mac",
         platform: "darwin",

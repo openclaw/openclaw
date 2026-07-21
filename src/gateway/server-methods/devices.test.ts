@@ -10,10 +10,12 @@ import {
 } from "../../infra/diagnostic-events.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import {
-  captureNodeWakeLifecycle,
   getNodeWakeStateSnapshot,
-  releaseNodeWakeLifecycle,
   resetNodeWakeStateForTest,
+} from "../node-wake-state.test-support.js";
+import {
+  captureNodeWakeLifecycle,
+  releaseNodeWakeLifecycle,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
 } from "../node-wake-state.js";

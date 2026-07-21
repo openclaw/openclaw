@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../../infra/push-apns.js", () => mocks);
 
-import { getNodeWakeStateSnapshot, resetNodeWakeStateForTest } from "../node-wake-state.js";
+import {
+  getNodeWakeStateSnapshot,
+  resetNodeWakeStateForTest,
+} from "../node-wake-state.test-support.js";
 import { maybeWakeNodeWithApns } from "./nodes.js";
 
 describe("maybeWakeNodeWithApns no-registration cleanup", () => {

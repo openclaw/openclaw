@@ -32,14 +32,14 @@ vi.mock("../../infra/node-pairing-state.js", () => ({
 }));
 
 vi.mock("../node-wake-state.js", () => ({
+  NODE_WAKE_RECONNECT_WAIT_MS: 3_000,
+  NODE_WAKE_RECONNECT_RETRY_WAIT_MS: 12_000,
   captureNodeWakeLifecycle: mocks.captureNodeWakeLifecycle,
   isNodeWakeLifecycleCurrent: mocks.isNodeWakeLifecycleCurrent,
   releaseNodeWakeLifecycle: mocks.releaseNodeWakeLifecycle,
 }));
 
 vi.mock("./nodes.js", () => ({
-  NODE_WAKE_RECONNECT_WAIT_MS: 3_000,
-  NODE_WAKE_RECONNECT_RETRY_WAIT_MS: 12_000,
   maybeWakeNodeWithApns: mocks.maybeWakeNodeWithApns,
   maybeSendNodeWakeNudge: mocks.maybeSendNodeWakeNudge,
   waitForNodeReconnect: mocks.waitForNodeReconnect,

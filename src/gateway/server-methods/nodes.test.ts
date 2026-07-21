@@ -27,9 +27,11 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import {
-  captureNodeWakeLifecycle,
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
+} from "../node-wake-state.test-support.js";
+import {
+  captureNodeWakeLifecycle,
   runNodeWakeAttempt,
   runNodeWakeNudgeAttempt,
 } from "../node-wake-state.js";

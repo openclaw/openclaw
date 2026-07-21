@@ -163,7 +163,7 @@ export function removePendingNodeAction(params: {
   });
 }
 
-export function clearPendingNodeActions(nodeId: string): void {
+function clearPendingNodeActions(nodeId: string): void {
   pendingNodeActionsById.delete(nodeId);
 }
 

@@ -1,4 +1,11 @@
 // Gateway-owned APNs wake, reconnect nudge, and cancellation state.
+import {
+  nodeWakeOwnerBySignal,
+  nodeWakeStateByOwner,
+  nodeWakeStateKey,
+  type NodeWakeOwnerState,
+} from "./node-wake-state-store.js";
+
 export const NODE_WAKE_RECONNECT_WAIT_MS = 3_000;
 export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 export const NODE_WAKE_RECONNECT_POLL_MS = 150;
@@ -29,25 +36,6 @@ export type NodeWakeNudgeAttempt = {
 };
 
 export type NodeWakeLifecycle = AbortSignal;
-
-type NodeWakeOwnerState = {
-  nodeId: string;
-  stateKey: string;
-  lastWakeAtMs: number;
-  inFlightWake?: Promise<NodeWakeAttempt>;
-  lastNudgeAtMs: number;
-  lifecycle?: {
-    controller: AbortController;
-    users: number;
-  };
-};
-
-const nodeWakeStateByOwner = new Map<string, NodeWakeOwnerState>();
-const nodeWakeOwnerBySignal = new WeakMap<NodeWakeLifecycle, NodeWakeOwnerState>();
-
-function nodeWakeStateKey(nodeId: string, pairingGeneration?: string): string {
-  return JSON.stringify([nodeId.trim(), pairingGeneration?.trim() || null]);
-}
 
 function getOrCreateNodeWakeOwner(nodeId: string, pairingGeneration?: string): NodeWakeOwnerState {
   const normalizedNodeId = nodeId.trim();
@@ -203,34 +191,4 @@ export function invalidateNodeWakeState(nodeId: string): void {
     }
     nodeWakeStateByOwner.delete(owner.stateKey);
   }
-}
-
-/** Read-only test/debug projection; callers cannot mutate lifecycle ownership. */
-export function getNodeWakeStateSnapshot(
-  nodeId: string,
-  pairingGeneration?: string,
-):
-  | {
-      lastWakeAtMs: number;
-      wakeInFlight: boolean;
-      lastNudgeAtMs: number;
-      lifecycleUsers: number;
-    }
-  | undefined {
-  const owner = nodeWakeStateByOwner.get(nodeWakeStateKey(nodeId, pairingGeneration));
-  return owner
-    ? {
-        lastWakeAtMs: owner.lastWakeAtMs,
-        wakeInFlight: owner.inFlightWake !== undefined,
-        lastNudgeAtMs: owner.lastNudgeAtMs,
-        lifecycleUsers: owner.lifecycle?.users ?? 0,
-      }
-    : undefined;
-}
-
-export function resetNodeWakeStateForTest(): void {
-  for (const owner of nodeWakeStateByOwner.values()) {
-    owner.lifecycle?.controller.abort();
-  }
-  nodeWakeStateByOwner.clear();
 }

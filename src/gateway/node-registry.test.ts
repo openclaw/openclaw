@@ -1834,7 +1834,7 @@ describe("gateway/node-registry", () => {
 
     registry.updateSurface(
       "node-1",
-      { permissions: { accessibility: true } },
+      { commands: [], permissions: { accessibility: true } },
       {
         expectedConnId: "conn-1",
         expectedPairingIdentity: "identity-a",
