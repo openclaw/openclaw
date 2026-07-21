@@ -211,8 +211,8 @@ async function promptWebToolsConfig(
   note(
     [
       "Web search lets your agent look things up online using the `web_search` tool.",
-      "Codex-capable models can use Codex's built-in hosted search.",
-      "Models without that capability use a separate search provider, such as Brave or DuckDuckGo, which you can configure here.",
+      "Codex-capable models can use native Codex web search.",
+      "Other models use a separate web search provider, which you can configure here.",
       "Docs: https://docs.openclaw.ai/tools/web",
     ].join("\n"),
     "Web search",
@@ -240,9 +240,9 @@ async function promptWebToolsConfig(
     if (codexRelevant) {
       note(
         [
-          "Codex-capable models can use Codex's built-in hosted search instead of a separate provider.",
-          "Models without that capability need a separate provider, such as Brave or DuckDuckGo.",
-          "If you do not choose one, OpenClaw can auto-detect an API-backed provider from available credentials; otherwise those models may not have web search.",
+          "Codex-capable models can use native Codex web search instead of a separate provider.",
+          "Other models need a separate web search provider.",
+          "If you do not choose one, OpenClaw can select a provider from available credentials; otherwise other models may not have web search.",
           ...(describeCodexNativeWebSearch(nextConfig)
             ? [describeCodexNativeWebSearch(nextConfig)!]
             : []),
@@ -252,7 +252,7 @@ async function promptWebToolsConfig(
 
       const enableCodexNative = guardCancel(
         await confirm({
-          message: "Enable Codex-hosted web search for Codex-capable models?",
+          message: "Enable native Codex web search for Codex-capable models?",
           initialValue: existingSearch?.openaiCodex?.enabled === true,
         }),
         runtime,
@@ -262,7 +262,7 @@ async function promptWebToolsConfig(
       if (enableCodexNative) {
         const codexMode = guardCancel(
           await select({
-            message: "Codex-hosted web search mode",
+            message: "Native Codex web search mode",
             options: [
               {
                 value: "cached",
@@ -292,7 +292,7 @@ async function promptWebToolsConfig(
           await confirm({
             message: existingSearch?.provider
               ? `Change the separate web search provider (currently ${existingSearch.provider})?`
-              : "Also configure a separate web search provider for models without Codex-hosted search?",
+              : "Also configure a separate web search provider for other models?",
             initialValue: Boolean(existingSearch?.provider),
           }),
           runtime,
@@ -348,8 +348,7 @@ async function promptWebToolsConfig(
   note(
     [
       "`web_fetch` is a separate tool for reading a specific URL.",
-      "It works independently of Codex-hosted search and any separate search provider.",
-      "By default, it fetches pages directly without a search-provider API key.",
+      "It does not require an API key and works independently of web search providers, including Codex.",
     ].join("\n"),
     "Web fetch",
   );
