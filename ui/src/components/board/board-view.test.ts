@@ -2,6 +2,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
 import type { BoardViewWidget } from "../../lib/board/view-types.ts";
 import { recordBoardWidgetTicketReceipt } from "../../lib/board/widget-ticket-lifetime.ts";
+// Side-effect import: registers the custom elements mount() depends on
+// without relying on transitive fixture imports.
+import "./board-view.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import {
@@ -14,7 +17,6 @@ import {
   settleCells,
   snapshot,
 } from "./board-view.test-support.ts";
-import "./board-view.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -571,6 +573,27 @@ describe("openclaw-board-view", () => {
     await vi.waitFor(() => expect(reject?.disabled).toBe(false));
     reject?.click();
     await vi.waitFor(() => expect(grant).toHaveBeenCalledWith("alpha", "rejected"));
+  });
+
+  it.each([
+    { profile: "read-only", canMutate: false, canGrant: false, controls: false },
+    { profile: "writer with approvals", canMutate: true, canGrant: true, controls: true },
+  ])("gates dashboard controls for the $profile scope profile", async (profile) => {
+    const view = await mount({
+      snapshot: snapshot({ widgets: [boardWidget({ grantState: "pending" })] }),
+      canMutate: profile.canMutate,
+      canGrant: profile.canGrant,
+    });
+
+    expect(view.querySelector(".board-widget__drag-handle") !== null).toBe(profile.controls);
+    expect(view.querySelector(".board-widget__resize-handle") !== null).toBe(profile.controls);
+    expect(view.querySelector(".board-widget__menu") !== null).toBe(profile.controls);
+    expect(
+      view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-allow"]')?.disabled,
+    ).toBe(!profile.canGrant);
+    expect(
+      view.querySelector<HTMLButtonElement>('[data-test-id="board-grant-reject"]')?.disabled,
+    ).toBe(!profile.canGrant);
   });
 
   it("renders MCP App widgets through the bridge element while approval is pending", async () => {

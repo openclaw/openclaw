@@ -13,6 +13,7 @@ import { createShowWidgetTool } from "./widget-tool.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const WIDGET_CODE_MAX_CHARS = 262_144;
+const PINNED_WIDGET_MAX_UTF8_BYTES = 256 * 1024;
 const WIDGET_MAX_PER_SCOPE = 32;
 const tempDirs: string[] = [];
 
@@ -42,6 +43,7 @@ async function executeWidget(params: {
   name?: string;
   tab?: string;
   size?: "sm" | "md" | "lg" | "xl" | "full";
+  presentation?: "card" | "full-bleed" | "frameless";
   after?: string;
   capabilities?: { netOrigins?: string[]; tools?: string[] };
 }) {
@@ -59,6 +61,7 @@ async function executeWidget(params: {
     ...(params.name ? { name: params.name } : {}),
     ...(params.tab ? { tab: params.tab } : {}),
     ...(params.size ? { size: params.size } : {}),
+    ...(params.presentation ? { presentation: params.presentation } : {}),
     ...(params.after ? { after: params.after } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),
   });
@@ -88,6 +91,21 @@ async function executeWidget(params: {
 }
 
 describe("show_widget", () => {
+  it("uses flat provider-safe enums for dashboard options", () => {
+    const tool = createShowWidgetTool();
+    const properties = (
+      tool.parameters as {
+        properties?: Record<string, { anyOf?: unknown; enum?: string[] }>;
+      }
+    ).properties;
+    expect(properties?.size).toMatchObject({ enum: ["sm", "md", "lg", "xl", "full"] });
+    expect(properties?.presentation).toMatchObject({
+      enum: ["card", "full-bleed", "frameless"],
+    });
+    expect(properties?.size?.anyOf).toBeUndefined();
+    expect(properties?.presentation?.anyOf).toBeUndefined();
+  });
+
   it("keeps the wrapped document bytes stable", () => {
     const html = buildWidgetDocument(
       "Status <live>",
@@ -133,6 +151,54 @@ describe("show_widget", () => {
         pin: true,
       }),
     ).rejects.toThrow("pin requires an agent session");
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
+  it("rejects multibyte pin input that exceeds the wrapped UTF-8 budget", async () => {
+    const stateDir = await createStateDir();
+    const callGateway = vi.fn();
+    const title = "Multibyte";
+    const wrapperBytes = Buffer.byteLength(buildWidgetDocument(title, ""), "utf8");
+    const widgetCode = "é".repeat(
+      Math.floor((PINNED_WIDGET_MAX_UTF8_BYTES - wrapperBytes) / 2) + 1,
+    );
+    expect(widgetCode.length).toBeLessThan(WIDGET_CODE_MAX_CHARS);
+    expect(Buffer.byteLength(buildWidgetDocument(title, widgetCode), "utf8")).toBeGreaterThan(
+      PINNED_WIDGET_MAX_UTF8_BYTES,
+    );
+    const tool = createShowWidgetTool({
+      stateDir,
+      sessionId: "wrapped-budget",
+      agentSessionKey: "agent:main:wrapped-budget",
+      callGateway,
+    });
+
+    await expect(
+      tool.execute("pin", { title, widget_code: widgetCode, pin: true }),
+    ).rejects.toThrow(
+      `pin exceeds effective dashboard budget (${PINNED_WIDGET_MAX_UTF8_BYTES} UTF-8 bytes after wrapping)`,
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
+  });
+
+  it("does not create an inline Canvas document when dashboard pinning fails", async () => {
+    const stateDir = await createStateDir();
+    const callGateway = vi.fn(async () => {
+      throw new Error("board tab not found: missing");
+    });
+
+    await expect(
+      executeWidget({
+        stateDir,
+        agentSessionKey: "agent:main:failed-pin",
+        widgetCode: "<p>never materialized</p>",
+        pin: true,
+        tab: "missing",
+        callGateway,
+      }),
+    ).rejects.toThrow("board tab not found: missing");
+    expect(callGateway).toHaveBeenCalledOnce();
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();
   });
 
@@ -243,6 +309,7 @@ describe("show_widget", () => {
       name: "release-status",
       tab: "main",
       size: "lg",
+      presentation: "frameless",
       callGateway,
     });
     const pinnedTitle = Array.from(title).slice(0, 80).join("");
@@ -252,6 +319,7 @@ describe("show_widget", () => {
       revision: 1,
     });
     expect(store.getSnapshot("agent:main:pinned").widgets[0]?.title).toBe(pinnedTitle);
+    expect(store.getSnapshot("agent:main:pinned").widgets[0]?.presentation).toBe("frameless");
     expect(result.resultText).toContain("pinned to dashboard tab main as release-status (lg)");
     expect(result.boardWidgetName).toBe("release-status");
     expect(broadcast).toHaveBeenCalledWith("board.changed", {

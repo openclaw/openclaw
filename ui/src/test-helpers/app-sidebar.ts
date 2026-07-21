@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
   SessionCatalog,
+  SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -165,6 +166,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const groupsPut = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -205,6 +207,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
+    setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
+      if (summary) {
+        pullRequestSummaries.set(key, summary);
+      } else {
+        pullRequestSummaries.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
     groupsRename,
