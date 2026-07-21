@@ -1,4 +1,3 @@
-/** Audits configured secrets and reports plaintext/ref migration status. */
 import fs from "node:fs";
 import os from "node:os";
 import {
@@ -16,7 +15,13 @@ import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.j
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import type {
+  SecretsAuditFinding,
+  SecretsAuditReport,
+  SecretsAuditStatus,
+} from "./audit-report.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
+export { parseSecretsAuditSeverity, resolveSecretsAuditExitCode } from "./audit-report.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { getSkippedExecRefStaticError, selectRefsForExecPolicy } from "./exec-resolution-policy.js";
 import { isLikelySensitiveModelProviderHeaderName } from "./model-provider-header-policy.js";
@@ -42,45 +47,6 @@ import {
   readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
-
-/** Stable finding codes emitted by `openclaw secrets audit`. */
-type SecretsAuditCode = "PLAINTEXT_FOUND" | "REF_UNRESOLVED" | "REF_SHADOWED" | "LEGACY_RESIDUE";
-
-/** Audit severity used for CLI output and check-mode exit behavior. */
-type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
-
-/** One secret audit finding with file/path context. */
-type SecretsAuditFinding = {
-  code: SecretsAuditCode;
-  severity: SecretsAuditSeverity;
-  file: string;
-  jsonPath: string;
-  message: string;
-  provider?: string;
-  profileId?: string;
-};
-
-/** Overall audit state derived from findings and unresolved refs. */
-type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
-
-/** Structured report returned by the secrets audit command. */
-type SecretsAuditReport = {
-  version: 1;
-  status: SecretsAuditStatus;
-  resolution: {
-    refsChecked: number;
-    skippedExecRefs: number;
-    resolvabilityComplete: boolean;
-  };
-  filesScanned: string[];
-  summary: {
-    plaintextCount: number;
-    unresolvedRefCount: number;
-    shadowedRefCount: number;
-    legacyResidueCount: number;
-  };
-  findings: SecretsAuditFinding[];
-};
 
 type RefAssignment = {
   file: string;
@@ -708,15 +674,4 @@ export async function runSecretsAudit(
     summary,
     findings: collector.findings,
   };
-}
-
-/** Maps audit results to CLI exit codes. */
-export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
-  if (report.summary.unresolvedRefCount > 0) {
-    return 2;
-  }
-  if (check && report.findings.length > 0) {
-    return 1;
-  }
-  return 0;
 }
