@@ -799,8 +799,24 @@ describe("SystemAgentChatEngine", () => {
       planWithAssistant: async () => null,
       deps: { loadOverview: fakeOverviewLoader() },
       runChannelSetupWizard: async (_channel, prompter) => {
-        runs.push(await prompter.select({ message: "DM mode", options: [{ value: "pair", label: "Pairing" }, { value: "open", label: "Open" }] }));
-        runs.push(await prompter.multiselect({ message: "Features", options: [{ value: "alerts", label: "Alerts" }, { value: "logs", label: "Logs" }] }));
+        runs.push(
+          await prompter.select({
+            message: "DM mode",
+            options: [
+              { value: "pair", label: "Pairing" },
+              { value: "open", label: "Open" },
+            ],
+          }),
+        );
+        runs.push(
+          await prompter.multiselect({
+            message: "Features",
+            options: [
+              { value: "alerts", label: "Alerts" },
+              { value: "logs", label: "Logs" },
+            ],
+          }),
+        );
       },
     });
     expect((await engine.handle("connect telegram")).text).toContain("1. Pairing");
@@ -808,7 +824,10 @@ describe("SystemAgentChatEngine", () => {
     expect(runs).toEqual([]);
     expect((await engine.handle("1")).text).toContain("1. Alerts");
     expect((await engine.handle("0x1")).text).toContain("I could not match that answer.");
-    expect(await engine.handle("1,2")).toHaveProperty("text", expect.stringContaining("telegram is configured"));
+    expect(await engine.handle("1,2")).toHaveProperty(
+      "text",
+      expect.stringContaining("telegram is configured"),
+    );
     expect(runs).toEqual(["pair", ["alerts", "logs"]]);
   });
 
