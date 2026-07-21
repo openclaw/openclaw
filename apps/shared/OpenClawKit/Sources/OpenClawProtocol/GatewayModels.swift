@@ -869,28 +869,6 @@ public struct BoardDataReadParams: Codable, Sendable {
     }
 }
 
-public struct BoardActionParams: Codable, Sendable {
-    public let ticket: String
-    public let action: String
-    public let jobid: String
-
-    public init(
-        ticket: String,
-        action: String,
-        jobid: String)
-    {
-        self.ticket = ticket
-        self.action = action
-        self.jobid = jobid
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case ticket
-        case action
-        case jobid = "jobId"
-    }
-}
-
 public struct BoardChangedEvent: Codable, Sendable {
     public let sessionkey: String
     public let revision: Int

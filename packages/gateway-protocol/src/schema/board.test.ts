@@ -1,6 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  BoardActionParamsSchema,
   BoardSnapshotSchema,
   BoardWidgetAppViewParamsSchema,
   BoardWidgetAppViewResultSchema,
@@ -8,6 +9,32 @@ import {
   BoardWidgetPutParamsSchema,
   BoardWidgetResizeOpSchema,
 } from "./board.js";
+
+describe("BoardActionParamsSchema", () => {
+  it("accepts both exact cron triggers and plugin action verbs", () => {
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "cron.trigger",
+        jobId: "nightly",
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "workboard.dispatch",
+        params: { boardId: "release" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(BoardActionParamsSchema, {
+        ticket: "v1.ticket.signature",
+        action: "workboard.dispatch",
+        params: "release",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("BoardSnapshotSchema", () => {
   it("accepts optional HTML widget view metadata", () => {

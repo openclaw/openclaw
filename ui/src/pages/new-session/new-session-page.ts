@@ -290,17 +290,38 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   handleEvent(event: Event) {
     const picker = this.querySelector<HTMLDetailsElement>(".chat-controls__model[open]");
-    if (picker && !event.composedPath().includes(picker)) {
+    if (!picker) {
+      return;
+    }
+    if (event.type === "keydown") {
+      const keyEvent = event as KeyboardEvent;
+      if (keyEvent.defaultPrevented || keyEvent.key !== "Escape") {
+        return;
+      }
+      const restoreFocus = event.composedPath().includes(picker);
+      keyEvent.preventDefault();
+      picker.open = false;
+      // Closing details does not move focus out of its now-hidden controls.
+      if (restoreFocus) {
+        picker.querySelector<HTMLElement>("summary")?.focus();
+      }
+      return;
+    }
+    if (!event.composedPath().includes(picker)) {
       picker.open = false;
     }
   }
 
   override connectedCallback() {
     super.connectedCallback();
+    // /new renders chat controls without ChatPane, so the route owns both
+    // pointer and Escape light-dismissal for the combined picker.
+    document.addEventListener("keydown", this, true);
     document.addEventListener("pointerdown", this, true);
   }
 
   override disconnectedCallback() {
+    document.removeEventListener("keydown", this, true);
     document.removeEventListener("pointerdown", this, true);
     this.subscriptions.clear();
     // This invalidates submitRequestToken before payload release below, so a

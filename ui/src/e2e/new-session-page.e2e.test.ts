@@ -521,6 +521,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         await page.locator('.new-session-page__triggers [data-chat-model-select="true"]').count(),
       ).toBe(0);
       await modelSelect.click();
+      const pickerOpen = () =>
+        modelSelect.evaluate(
+          (element) => element.closest("details")?.hasAttribute("open") ?? false,
+        );
       const modelTriggerBox = await modelSelect.boundingBox();
       const modelMenuBox = await page
         .locator(".chat-controls__inline-select-menu--combined")
@@ -533,11 +537,16 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         0,
       );
       await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await expect.poll(pickerOpen).toBe(true);
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      const pickerOpen = () =>
-        modelSelect.evaluate(
-          (element) => element.closest("details")?.hasAttribute("open") ?? false,
-        );
+      // Inside changes stay grouped; only explicit light-dismissal closes the picker.
+      await expect.poll(pickerOpen).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(pickerOpen).toBe(false);
+      await expect
+        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await modelSelect.click();
       await expect.poll(pickerOpen).toBe(true);
       await page.mouse.click(8, 8);
       await expect.poll(pickerOpen).toBe(false);
