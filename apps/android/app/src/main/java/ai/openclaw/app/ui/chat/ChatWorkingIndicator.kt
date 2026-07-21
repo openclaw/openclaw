@@ -1,13 +1,12 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.R
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeStringResource
 import android.database.ContentObserver
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
-import androidx.annotation.StringRes
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
@@ -32,7 +31,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -247,7 +245,7 @@ internal fun WorkingClawIcon(
     }
     if (stance == WorkingClawStance.Shadowbox && animationsEnabled) {
       Text(
-        text = "✦",
+        text = nativeStringResource("✦"),
         color = color,
         fontSize = 11.sp,
         lineHeight = 11.sp,
@@ -365,47 +363,50 @@ internal fun workingPhraseIndex(
   seed: String,
   bucket: Long,
 ): Int {
-  val length = workingPhraseResources.size
+  val length = WORKING_PHRASE_COUNT
   val offset = workingClawHash("$seed:offset").toUInt().toLong() % length
   val stride = 1L + (workingClawHash("$seed:stride").toUInt().toLong() % (length - 1))
   return ((offset + (bucket % length) * stride) % length).toInt()
 }
 
-@StringRes
-internal fun workingPhraseResource(
+internal fun workingPhraseIndexForElapsed(
   seed: String,
   elapsedMs: Long,
 ): Int? {
   if (elapsedMs < WORKING_PHRASE_SHOW_AFTER_MS) return null
   val bucket = (elapsedMs - WORKING_PHRASE_SHOW_AFTER_MS) / WORKING_PHRASE_ROTATE_EVERY_MS
-  return workingPhraseResources[workingPhraseIndex(seed, bucket)]
+  return workingPhraseIndex(seed, bucket)
 }
 
 @Composable
 internal fun workingPhraseText(
   seed: String,
   elapsedMs: Long,
-): String? = workingPhraseResource(seed, elapsedMs)?.let { stringResource(it) + "…" }
+): String? = workingPhraseIndexForElapsed(seed, elapsedMs)?.let { localizedWorkingPhrase(it) + "…" }
 
-private val workingPhraseResources =
-  listOf(
-    R.string.chat_progress_shelling,
-    R.string.chat_progress_scuttling,
-    R.string.chat_progress_clawing,
-    R.string.chat_progress_pinching,
-    R.string.chat_progress_molting,
-    R.string.chat_progress_bubbling,
-    R.string.chat_progress_tiding,
-    R.string.chat_progress_reefing,
-    R.string.chat_progress_cracking,
-    R.string.chat_progress_sifting,
-    R.string.chat_progress_brining,
-    R.string.chat_progress_nautiling,
-    R.string.chat_progress_krilling,
-    R.string.chat_progress_barnacling,
-    R.string.chat_progress_lobstering,
-    R.string.chat_progress_tidepooling,
-    R.string.chat_progress_pearling,
-    R.string.chat_progress_snapping,
-    R.string.chat_progress_surfacing,
-  )
+private const val WORKING_PHRASE_COUNT = 19
+
+@Composable
+private fun localizedWorkingPhrase(index: Int): String =
+  when (index) {
+    0 -> nativeStringResource("Shelling")
+    1 -> nativeStringResource("Scuttling")
+    2 -> nativeStringResource("Clawing")
+    3 -> nativeStringResource("Pinching")
+    4 -> nativeStringResource("Molting")
+    5 -> nativeStringResource("Bubbling")
+    6 -> nativeStringResource("Tiding")
+    7 -> nativeStringResource("Reefing")
+    8 -> nativeStringResource("Cracking")
+    9 -> nativeStringResource("Sifting")
+    10 -> nativeStringResource("Brining")
+    11 -> nativeStringResource("Nautiling")
+    12 -> nativeStringResource("Krilling")
+    13 -> nativeStringResource("Barnacling")
+    14 -> nativeStringResource("Lobstering")
+    15 -> nativeStringResource("Tidepooling")
+    16 -> nativeStringResource("Pearling")
+    17 -> nativeStringResource("Snapping")
+    18 -> nativeStringResource("Surfacing")
+    else -> error("working phrase index out of range: $index")
+  }

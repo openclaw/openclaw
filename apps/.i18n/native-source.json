@@ -12043,7 +12043,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 171,
+      "line": 172,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Preparing audio…",
       "surface": "android",
@@ -12051,7 +12051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 171,
+      "line": 172,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Speaking…",
       "surface": "android",
@@ -12059,7 +12059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 278,
+      "line": 279,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Preview · $domain",
       "surface": "android",
@@ -12067,7 +12067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 287,
+      "line": 288,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Expand link preview",
       "surface": "android",
@@ -12075,7 +12075,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 330,
+      "line": 331,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Loading preview…",
       "surface": "android",
@@ -12083,7 +12083,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 331,
+      "line": 332,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "No preview available",
       "surface": "android",
@@ -12091,7 +12091,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 378,
+      "line": 379,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Working",
       "surface": "android",
@@ -12099,15 +12099,15 @@
     },
     {
       "kind": "ui-call",
-      "line": 388,
+      "line": 389,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
-      "source": "· $it",
+      "source": "· $phrase",
       "surface": "android",
-      "id": "native.android.041a6d12ff08aa87"
+      "id": "native.android.6e7be1773c946de3"
     },
     {
       "kind": "ui-named-argument",
-      "line": 405,
+      "line": 406,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Tools",
       "surface": "android",
@@ -12115,7 +12115,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 408,
+      "line": 409,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Running tools...",
       "surface": "android",
@@ -12123,7 +12123,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 412,
+      "line": 413,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "${display.emoji} ${display.label}",
       "surface": "android",
@@ -12131,7 +12131,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 429,
+      "line": 430,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "... +${toolCalls.size - 6} more",
       "surface": "android",
@@ -12139,7 +12139,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 450,
+      "line": 451,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Queued — sends when reconnected",
       "surface": "android",
@@ -12147,7 +12147,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 451,
+      "line": 452,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Sending…",
       "surface": "android",
@@ -12155,7 +12155,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 452,
+      "line": 453,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Sent — confirming delivery…",
       "surface": "android",
@@ -12163,7 +12163,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 457,
+      "line": 458,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Failed",
       "surface": "android",
@@ -12171,7 +12171,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 457,
+      "line": 458,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Failed — $it",
       "surface": "android",
@@ -12179,7 +12179,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 461,
+      "line": 462,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "user",
       "surface": "android",
@@ -12187,7 +12187,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 469,
+      "line": 470,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "📎 ${attachment.fileName}",
       "surface": "android",
@@ -12195,7 +12195,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 485,
+      "line": 486,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Retry",
       "surface": "android",
@@ -12203,7 +12203,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 490,
+      "line": 491,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Delete",
       "surface": "android",
@@ -12211,7 +12211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 521,
+      "line": 522,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "assistant",
       "surface": "android",
@@ -12219,7 +12219,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 522,
+      "line": 523,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "OpenClaw · Live",
       "surface": "android",
@@ -12227,7 +12227,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 558,
+      "line": 559,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "You",
       "surface": "android",
@@ -12235,7 +12235,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 559,
+      "line": 560,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "System",
       "surface": "android",
@@ -12243,7 +12243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 560,
+      "line": 561,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "OpenClaw",
       "surface": "android",
@@ -12251,7 +12251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 583,
+      "line": 584,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Attachment",
       "surface": "android",
@@ -12259,7 +12259,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 596,
+      "line": 597,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Open image preview",
       "surface": "android",
@@ -12267,7 +12267,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 614,
+      "line": 615,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Image preview",
       "surface": "android",
@@ -12275,7 +12275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 628,
+      "line": 629,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Close image preview",
       "surface": "android",
@@ -12283,7 +12283,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 637,
+      "line": 638,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Unsupported attachment",
       "surface": "android",
@@ -13010,8 +13010,32 @@
       "id": "native.android.3200f8564c25a1fa"
     },
     {
+      "kind": "ui-call",
+      "line": 222,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
+      "source": "1 token",
+      "surface": "android",
+      "id": "native.android.c2dc3a65302976c0"
+    },
+    {
+      "kind": "ui-call",
+      "line": 224,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
+      "source": "$count tokens",
+      "surface": "android",
+      "id": "native.android.e7059e3a756908c4"
+    },
+    {
+      "kind": "ui-call",
+      "line": 234,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
+      "source": "Done in $duration",
+      "surface": "android",
+      "id": "native.android.c32ff602fa622e4b"
+    },
+    {
       "kind": "conditional-branch",
-      "line": 254,
+      "line": 253,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "${decimal(count / 1_000_000.0)}M",
       "surface": "android",
@@ -13019,7 +13043,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 254,
+      "line": 253,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatTurnRecap.kt",
       "source": "${thousands}k",
       "surface": "android",
@@ -13027,7 +13051,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 347,
+      "line": 345,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${days}d",
       "surface": "android",
@@ -13035,7 +13059,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 351,
+      "line": 349,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${hours}h",
       "surface": "android",
@@ -13043,7 +13067,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 355,
+      "line": 353,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${minutes}m",
       "surface": "android",
@@ -13051,11 +13075,163 @@
     },
     {
       "kind": "ui-call",
-      "line": 359,
+      "line": 357,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
       "source": "${seconds}s",
       "surface": "android",
       "id": "native.android.6d5683b5537bdbaf"
+    },
+    {
+      "kind": "ui-call",
+      "line": 392,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Shelling",
+      "surface": "android",
+      "id": "native.android.e2f387a31240c8a3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 393,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Scuttling",
+      "surface": "android",
+      "id": "native.android.70a6de7c24baffb7"
+    },
+    {
+      "kind": "ui-call",
+      "line": 394,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Clawing",
+      "surface": "android",
+      "id": "native.android.0ed1354a65faa07e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 395,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Pinching",
+      "surface": "android",
+      "id": "native.android.42d24b16fc658ed3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 396,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Molting",
+      "surface": "android",
+      "id": "native.android.69d5b3ca23a7bec3"
+    },
+    {
+      "kind": "ui-call",
+      "line": 397,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Bubbling",
+      "surface": "android",
+      "id": "native.android.80bfb2d6720f8dc5"
+    },
+    {
+      "kind": "ui-call",
+      "line": 398,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Tiding",
+      "surface": "android",
+      "id": "native.android.e984f80d309c2d01"
+    },
+    {
+      "kind": "ui-call",
+      "line": 399,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Reefing",
+      "surface": "android",
+      "id": "native.android.60bb819ee08cbbc1"
+    },
+    {
+      "kind": "ui-call",
+      "line": 400,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Cracking",
+      "surface": "android",
+      "id": "native.android.7f465ae2654f0c25"
+    },
+    {
+      "kind": "ui-call",
+      "line": 401,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Sifting",
+      "surface": "android",
+      "id": "native.android.cfc143346cf262c8"
+    },
+    {
+      "kind": "ui-call",
+      "line": 402,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Brining",
+      "surface": "android",
+      "id": "native.android.72b67956ab234898"
+    },
+    {
+      "kind": "ui-call",
+      "line": 403,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Nautiling",
+      "surface": "android",
+      "id": "native.android.3ecce1d21d8ab752"
+    },
+    {
+      "kind": "ui-call",
+      "line": 404,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Krilling",
+      "surface": "android",
+      "id": "native.android.305ed08fbb829753"
+    },
+    {
+      "kind": "ui-call",
+      "line": 405,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Barnacling",
+      "surface": "android",
+      "id": "native.android.c39933b1ec86d7a9"
+    },
+    {
+      "kind": "ui-call",
+      "line": 406,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Lobstering",
+      "surface": "android",
+      "id": "native.android.32a8072679db94bb"
+    },
+    {
+      "kind": "ui-call",
+      "line": 407,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Tidepooling",
+      "surface": "android",
+      "id": "native.android.de205a44a6d159fb"
+    },
+    {
+      "kind": "ui-call",
+      "line": 408,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Pearling",
+      "surface": "android",
+      "id": "native.android.8d97a105339c7a20"
+    },
+    {
+      "kind": "ui-call",
+      "line": 409,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Snapping",
+      "surface": "android",
+      "id": "native.android.7bdb054d45ca1b23"
+    },
+    {
+      "kind": "ui-call",
+      "line": 410,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatWorkingIndicator.kt",
+      "source": "Surfacing",
+      "surface": "android",
+      "id": "native.android.c2210ea40e357fcd"
     },
     {
       "kind": "ui-call",
@@ -13765,189 +13941,13 @@
       "kind": "resource-string",
       "line": 7,
       "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Shelling",
-      "surface": "android",
-      "id": "native.android.c252e918afa5286b"
-    },
-    {
-      "kind": "resource-string",
-      "line": 8,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Scuttling",
-      "surface": "android",
-      "id": "native.android.076907ebff3a1e72"
-    },
-    {
-      "kind": "resource-string",
-      "line": 9,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Clawing",
-      "surface": "android",
-      "id": "native.android.1eec45d2fbb9ebea"
-    },
-    {
-      "kind": "resource-string",
-      "line": 10,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Pinching",
-      "surface": "android",
-      "id": "native.android.bc3b5f340a9fb97d"
-    },
-    {
-      "kind": "resource-string",
-      "line": 11,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Molting",
-      "surface": "android",
-      "id": "native.android.d198a8fcec568337"
-    },
-    {
-      "kind": "resource-string",
-      "line": 12,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Bubbling",
-      "surface": "android",
-      "id": "native.android.bf2aa48015e740c2"
-    },
-    {
-      "kind": "resource-string",
-      "line": 13,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Tiding",
-      "surface": "android",
-      "id": "native.android.36724d7c4209680b"
-    },
-    {
-      "kind": "resource-string",
-      "line": 14,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Reefing",
-      "surface": "android",
-      "id": "native.android.9884fbf4b1f82790"
-    },
-    {
-      "kind": "resource-string",
-      "line": 15,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Cracking",
-      "surface": "android",
-      "id": "native.android.fecb6a6984076ecc"
-    },
-    {
-      "kind": "resource-string",
-      "line": 16,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Sifting",
-      "surface": "android",
-      "id": "native.android.74498c70c3d5e501"
-    },
-    {
-      "kind": "resource-string",
-      "line": 17,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Brining",
-      "surface": "android",
-      "id": "native.android.d9bf779cb5909813"
-    },
-    {
-      "kind": "resource-string",
-      "line": 18,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Nautiling",
-      "surface": "android",
-      "id": "native.android.3000826d690f1a01"
-    },
-    {
-      "kind": "resource-string",
-      "line": 19,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Krilling",
-      "surface": "android",
-      "id": "native.android.3e11bfec3d3650b9"
-    },
-    {
-      "kind": "resource-string",
-      "line": 20,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Barnacling",
-      "surface": "android",
-      "id": "native.android.34e9f5589e90e086"
-    },
-    {
-      "kind": "resource-string",
-      "line": 21,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Lobstering",
-      "surface": "android",
-      "id": "native.android.a29cc69e7babdf89"
-    },
-    {
-      "kind": "resource-string",
-      "line": 22,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Tidepooling",
-      "surface": "android",
-      "id": "native.android.6f84f2d9ab5bc465"
-    },
-    {
-      "kind": "resource-string",
-      "line": 23,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Pearling",
-      "surface": "android",
-      "id": "native.android.3b378cfd77cf12b9"
-    },
-    {
-      "kind": "resource-string",
-      "line": 24,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Snapping",
-      "surface": "android",
-      "id": "native.android.eed207a795d67439"
-    },
-    {
-      "kind": "resource-string",
-      "line": 25,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Surfacing",
-      "surface": "android",
-      "id": "native.android.542063339d025491"
-    },
-    {
-      "kind": "resource-string",
-      "line": 26,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "Done in %1$s",
-      "surface": "android",
-      "id": "native.android.d88103473e175c65"
-    },
-    {
-      "kind": "resource-string",
-      "line": 27,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "%1$s tokens",
-      "surface": "android",
-      "id": "native.android.9b7cd2d5d8be90cf"
-    },
-    {
-      "kind": "resource-string",
-      "line": 28,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
-      "source": "1 token",
-      "surface": "android",
-      "id": "native.android.b4ac0adbaecebcf1"
-    },
-    {
-      "kind": "resource-string",
-      "line": 29,
-      "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Verify the certificate fingerprint before trusting this gateway.\n\n%1$s",
       "surface": "android",
       "id": "native.android.288b83f93172c633"
     },
     {
       "kind": "resource-string",
-      "line": 30,
+      "line": 8,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s",
       "surface": "android",
@@ -13955,7 +13955,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 31,
+      "line": 9,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Unknown",
       "surface": "android",
@@ -13963,7 +13963,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 32,
+      "line": 10,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "VERSION",
       "surface": "android",
@@ -13971,7 +13971,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 33,
+      "line": 11,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "COMMIT",
       "surface": "android",
@@ -13979,7 +13979,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 34,
+      "line": 12,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "BUILT",
       "surface": "android",
@@ -13987,7 +13987,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 35,
+      "line": 13,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Version %1$s",
       "surface": "android",
@@ -13995,7 +13995,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 36,
+      "line": 14,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Git commit %1$s",
       "surface": "android",
@@ -14003,7 +14003,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 37,
+      "line": 15,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Built %1$s UTC, timestamp %2$s",
       "surface": "android",
@@ -14011,7 +14011,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 38,
+      "line": 16,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Build date %1$s",
       "surface": "android",
@@ -14019,7 +14019,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 39,
+      "line": 17,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Copy full Git commit hash",
       "surface": "android",
@@ -14027,7 +14027,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 40,
+      "line": 18,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Copy full build timestamp",
       "surface": "android",
@@ -14035,7 +14035,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 41,
+      "line": 19,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "OpenClaw Git commit",
       "surface": "android",
@@ -14043,7 +14043,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 42,
+      "line": 20,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "OpenClaw build timestamp",
       "surface": "android",
@@ -14051,7 +14051,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 43,
+      "line": 21,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Git commit copied",
       "surface": "android",
@@ -14059,7 +14059,7 @@
     },
     {
       "kind": "resource-string",
-      "line": 44,
+      "line": 22,
       "path": "apps/android/app/src/main/res/values/strings.xml",
       "source": "Build timestamp copied",
       "surface": "android",

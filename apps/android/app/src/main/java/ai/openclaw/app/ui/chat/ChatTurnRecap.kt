@@ -1,7 +1,7 @@
 package ai.openclaw.app.ui.chat
 
-import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
@@ -11,7 +11,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
@@ -220,9 +219,9 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
     recap.outputTokens?.let { count ->
       val format = turnRecapTokenFormat(count)
       if (format.singular) {
-        stringResource(R.string.chat_turn_recap_tokens_one)
+        nativeStringResource("1 token")
       } else {
-        stringResource(R.string.chat_turn_recap_tokens, format.count)
+        nativeStringResource("\$count tokens", format.count)
       }
     }
   Row(
@@ -232,12 +231,12 @@ internal fun ChatTurnRecapRow(recap: TurnRecap) {
   ) {
     WorkingClawIcon(runKey = "turn-recap", color = ClawTheme.colors.primary, parked = true)
     Text(
-      text = stringResource(R.string.chat_turn_recap_done_in, duration),
+      text = nativeStringResource("Done in \$duration", duration),
       style = ClawTheme.type.caption,
       color = ClawTheme.colors.textMuted,
     )
     tokens?.let {
-      Text(text = "·", style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
+      Text(text = nativeStringResource("·"), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle)
       Text(text = it, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
     }
   }

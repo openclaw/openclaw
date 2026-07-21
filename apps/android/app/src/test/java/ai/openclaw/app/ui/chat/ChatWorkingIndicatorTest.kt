@@ -46,10 +46,10 @@ class ChatWorkingIndicatorTest {
 
   @Test
   fun phraseWaitsThirtySecondsAndRotatesEveryFortyFive() {
-    assertEquals(null, workingPhraseResource("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS - 1L))
-    val first = workingPhraseResource("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS)
-    assertEquals(first, workingPhraseResource("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS + 44_999L))
-    assertNotEquals(first, workingPhraseResource("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS + 45_000L))
+    assertEquals(null, workingPhraseIndexForElapsed("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS - 1L))
+    val first = workingPhraseIndexForElapsed("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS)
+    assertEquals(first, workingPhraseIndexForElapsed("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS + 44_999L))
+    assertNotEquals(first, workingPhraseIndexForElapsed("run-phrase", WORKING_PHRASE_SHOW_AFTER_MS + 45_000L))
   }
 
   @Test

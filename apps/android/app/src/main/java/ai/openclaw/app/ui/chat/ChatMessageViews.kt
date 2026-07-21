@@ -9,6 +9,7 @@ import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.normalizeVisibleChatMessageRole
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeStringResource
 import ai.openclaw.app.tools.ToolDisplayRegistry
 import ai.openclaw.app.ui.MobileColorsAccessor
 import ai.openclaw.app.ui.design.ClawTheme
@@ -385,7 +386,7 @@ fun ChatTypingIndicatorBubble(
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
         Text(formatLocalizedChatDurationCompact(elapsedMs), style = mobileCallout, color = mobileTextSecondary)
-        phrase?.let { Text("· $it", style = mobileCallout, color = mobileTextSecondary) }
+        phrase?.let { Text(nativeStringResource("· \$phrase", it), style = mobileCallout, color = mobileTextSecondary) }
       }
     }
   }
