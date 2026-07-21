@@ -101,7 +101,7 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 }
 
 describe("Tool Search", () => {
-  const searchTool = expectDefined(
+  const limitSearchTool = expectDefined(
     createToolSearchTools({}).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME),
     "tool_search test invariant",
   );
@@ -115,11 +115,11 @@ describe("Tool Search", () => {
     { limit: -1, valid: false },
   ])("validates schema limit $limit", ({ limit, valid }) => {
     const input = limit === undefined ? { query: "test" } : { query: "test", limit };
-    expect(Value.Check(searchTool.parameters, input)).toBe(valid);
+    expect(Value.Check(limitSearchTool.parameters, input)).toBe(valid);
   });
 
   it.each([5.5, 0, -1])("rejects runtime limit %s", async (limit) => {
-    await expect(searchTool.execute("call-limit", { query: "test", limit })).rejects.toThrow(
+    await expect(limitSearchTool.execute("call-limit", { query: "test", limit })).rejects.toThrow(
       "limit must be a positive integer",
     );
   });
