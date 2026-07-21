@@ -417,8 +417,8 @@ export async function persistCliTurnTranscript(params: {
   skipUserTurn?: boolean;
 }): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
-  const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
-  const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
+  const provider = params.result.meta.agentMeta?.provider?.trim() || "cli";
+  const model = params.result.meta.agentMeta?.model?.trim() || "default";
   const gapFill = params.embeddedAssistantGapFill ?? false;
   const skipUserTurn = gapFill || params.skipUserTurn === true;
 
