@@ -281,7 +281,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                       <div class="chat-bubble"><div class="chat-text">Keep this visible.</div></div>
                     </div>
                   </div>
-                  <div class="chat-group assistant">
+                  <div class="chat-group assistant chat-group--with-footer">
                     <div class="chat-avatar assistant">A</div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble"><div class="chat-text">It stays readable.</div></div>
@@ -291,13 +291,13 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
                         </div>
                       </div>
-                      <div class="chat-group-footer">
-                        <div class="chat-group-footer__meta">
-                          <span class="chat-sender-name">Assistant</span>
-                          <span class="chat-group-timestamp">9:41 PM</span>
-                        </div>
-                        ${chatFooterActionsHtml()}
+                    </div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <span class="chat-group-timestamp">9:41 PM</span>
                       </div>
+                      ${chatFooterActionsHtml()}
                     </div>
                   </div>
                 </div>
@@ -696,20 +696,23 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             <div class="chat-thread-inner chat-thread-inner--virtual" style="width: 220px;">
               <div class="chat-virtual-sizer" style="height: 400px;">
                 <div class="chat-virtual-row" data-first-row style="transform: translateY(0px);">
-                  <div class="chat-group assistant" style="--chat-message-max-width: 120px;">
+                  <div
+                    class="chat-group assistant chat-group--with-footer"
+                    style="--chat-message-max-width: 120px;"
+                  >
                     <div class="chat-avatar assistant">A</div>
                     <div class="chat-group-messages">
                       <div class="chat-bubble"><div class="chat-text">A narrow assistant message.</div></div>
-                      <div class="chat-group-footer">
-                        <div class="chat-group-footer__meta">
-                          <span class="chat-sender-name">Assistant</span>
-                          <span class="chat-group-timestamp">9:41 PM</span>
-                        </div>
-                        <div class="chat-group-footer-actions">
-                          <button type="button">${iconSvg()}</button>
-                          <button type="button">${iconSvg()}</button>
-                          <button type="button">${iconSvg()}</button>
-                        </div>
+                    </div>
+                    <div class="chat-group-footer">
+                      <div class="chat-group-footer__meta">
+                        <span class="chat-sender-name">Assistant</span>
+                        <span class="chat-group-timestamp">9:41 PM</span>
+                      </div>
+                      <div class="chat-group-footer-actions">
+                        <button type="button">${iconSvg()}</button>
+                        <button type="button">${iconSvg()}</button>
+                        <button type="button">${iconSvg()}</button>
                       </div>
                     </div>
                   </div>
@@ -726,12 +729,18 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const layout = await page.evaluate(() => {
         const first = document.querySelector<HTMLElement>("[data-first-row]")!;
         const second = document.querySelector<HTMLElement>("[data-second-row]")!;
+        const avatar = first.querySelector<HTMLElement>(".chat-avatar")!;
+        const bubble = first.querySelector<HTMLElement>(".chat-bubble")!;
         const footer = first.querySelector<HTMLElement>(".chat-group-footer")!;
         second.style.transform = `translateY(${first.getBoundingClientRect().height}px)`;
         const firstRect = first.getBoundingClientRect();
         const secondRect = second.getBoundingClientRect();
+        const avatarRect = avatar.getBoundingClientRect();
+        const bubbleRect = bubble.getBoundingClientRect();
         const footerRect = footer.getBoundingClientRect();
         return {
+          avatarBottom: avatarRect.bottom,
+          bubbleBottom: bubbleRect.bottom,
           firstBottom: firstRect.bottom,
           footerBottom: footerRect.bottom,
           footerHeight: footerRect.height,
@@ -740,6 +749,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
 
       expect(layout.footerHeight).toBeGreaterThan(24);
+      expect(layout.bubbleBottom - layout.avatarBottom).toBeCloseTo(4, 0);
       expect(layout.footerBottom).toBeLessThanOrEqual(layout.firstBottom + 1);
       expect(layout.secondTop).toBeGreaterThanOrEqual(layout.firstBottom - 1);
     } finally {
@@ -770,6 +780,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const lane = await getRect(page, "[data-image-lane]");
       const image = await getRect(page, ".chat-message-image");
       expect(image.width).toBeLessThanOrEqual(lane.width + 1);
+      expect(image.width / image.height).toBeCloseTo(6, 1);
     } finally {
       await closeBrowserPage(page);
     }
@@ -849,6 +860,56 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       await closeBrowserPage(page);
     }
   });
+
+  it(
+    "remeasures a populated composer when the viewport width changes",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      if (!realChatServer) {
+        throw new Error("Expected the Control UI server to be ready");
+      }
+      const page = await openBrowserPage(900, 800);
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      try {
+        await installMockGateway(page);
+        await page.goto(`${realChatServer.baseUrl}chat`, {
+          waitUntil: "domcontentloaded",
+          timeout: APP_FIRST_RENDER_TIMEOUT_MS,
+        });
+        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        await textarea.waitFor({ timeout: APP_FIRST_RENDER_TIMEOUT_MS });
+        await textarea.fill(
+          "Resize this populated draft across a narrow pane so its wrapped lines change height without waiting for another input event. ".repeat(
+            2,
+          ),
+        );
+        await waitForLayoutSettled(page);
+        const wideHeight = (await textarea.boundingBox())?.height ?? 0;
+
+        await page.setViewportSize({ width: 430, height: 800 });
+        await page.waitForFunction((previousHeight) => {
+          const element = document.querySelector<HTMLTextAreaElement>(
+            ".agent-chat__composer-combobox > textarea",
+          );
+          return element !== null && element.getBoundingClientRect().height > previousHeight + 1;
+        }, wideHeight);
+        const narrowHeight = (await textarea.boundingBox())?.height ?? 0;
+        expect(narrowHeight).toBeGreaterThan(wideHeight + 1);
+
+        await page.setViewportSize({ width: 900, height: 800 });
+        await page.waitForFunction((previousHeight) => {
+          const element = document.querySelector<HTMLTextAreaElement>(
+            ".agent-chat__composer-combobox > textarea",
+          );
+          return element !== null && element.getBoundingClientRect().height < previousHeight - 1;
+        }, narrowHeight);
+        expect(pageErrors.filter((message) => message.includes("ResizeObserver loop"))).toEqual([]);
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it(
     "reveals, pins, and dismisses message context from the timestamp",
@@ -1241,19 +1302,19 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
             <div class="chat-thread" role="log">
               <div class="chat-thread-inner">
-                <div class="chat-group assistant">
+                <div class="chat-group assistant chat-group--with-footer">
                   <div class="chat-avatar assistant">A</div>
                   <div class="chat-group-messages">
                     <div class="chat-bubble">
                       <div class="chat-text"><p>Done.</p></div>
                     </div>
-                    <div class="chat-group-footer">
-                      <div class="chat-group-footer__meta">
-                        <span class="chat-sender-name">Assistant</span>
-                        <span class="chat-group-timestamp">9:41 PM</span>
-                      </div>
-                      ${chatFooterActionsHtml()}
+                  </div>
+                  <div class="chat-group-footer">
+                    <div class="chat-group-footer__meta">
+                      <span class="chat-sender-name">Assistant</span>
+                      <span class="chat-group-timestamp">9:41 PM</span>
                     </div>
+                    ${chatFooterActionsHtml()}
                   </div>
                 </div>
               </div>

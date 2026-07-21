@@ -3,9 +3,11 @@
    ============================================= */
 
 /* Chat Group Layout - default (assistant/other on left). Groups without a
-   footer keep the shared 26px rhythm directly; footer-bearing groups get the
-   same space from the message-column gap plus the footer's measured height. */
+   footer keep the shared 26px rhythm directly. Footer-bearing groups split
+   message content and footer into separate rows so each row keeps the avatar
+   gutter while only the message row controls avatar alignment. */
 .chat-group {
+  --chat-message-column-max: var(--chat-message-max-width, min(900px, 68%));
   display: flex;
   gap: 10px;
   align-items: flex-start;
@@ -14,14 +16,45 @@
   margin-right: 16px;
 }
 
-.chat-group:has(> .chat-group-messages > .chat-group-footer) {
-  padding-bottom: 0;
-}
-
 /* User messages on right */
 .chat-group.user {
   flex-direction: row-reverse;
   justify-content: flex-start;
+}
+
+.chat-group.chat-group--with-footer {
+  --chat-group-avatar-column: 1;
+  --chat-group-content-column: 2;
+  display: grid;
+  grid-template-columns: 36px minmax(0, var(--chat-message-column-max));
+  grid-template-rows: auto auto;
+  gap: 2px 10px;
+  justify-content: start;
+  padding-bottom: 0;
+}
+
+.chat-group.user.chat-group--with-footer {
+  --chat-group-avatar-column: 2;
+  --chat-group-content-column: 1;
+  grid-template-columns: minmax(0, var(--chat-message-column-max)) 36px;
+  justify-content: end;
+}
+
+.chat-group.chat-group--with-footer .chat-avatar {
+  grid-column: var(--chat-group-avatar-column);
+  grid-row: 1;
+}
+
+.chat-group.chat-group--with-footer > .chat-group-messages {
+  grid-column: var(--chat-group-content-column);
+  grid-row: 1;
+  max-width: none;
+}
+
+.chat-group.chat-group--with-footer > .chat-group-footer {
+  grid-column: var(--chat-group-content-column);
+  grid-row: 2;
+  max-width: none;
 }
 
 .chat-group-messages {
@@ -30,9 +63,9 @@
   flex-direction: column;
   gap: 2px;
   flex: 1 1 auto;
-  width: 100%;
-  max-width: var(--chat-message-max-width, min(900px, 68%));
   align-items: flex-start;
+  width: 100%;
+  max-width: var(--chat-message-column-max);
   min-width: 0;
 }
 
@@ -41,8 +74,8 @@
   align-items: flex-end;
 }
 
-.chat-group.tool .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+.chat-group.tool {
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.user .chat-group-footer {
@@ -422,8 +455,8 @@ img.chat-avatar {
 /* Assistant replies render as a flat text stream: only user messages keep the
    bubble card. Border collapses to 0 so the streaming border pulse and hover
    outline become no-ops without extra rules. */
-.chat-group.assistant .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
+.chat-group.assistant {
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
 }
 
 .chat-group.assistant .chat-bubble {
@@ -461,12 +494,15 @@ img.chat-avatar {
   margin-inline: 0;
 }
 
-.chat-thread--direct .chat-group.assistant .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, 100%));
+.chat-thread--direct .chat-group.chat-group--with-footer {
+  --chat-group-avatar-column: 1;
+  --chat-group-content-column: 1;
+  grid-template-columns: minmax(0, var(--chat-message-column-max));
 }
 
-.chat-thread--direct .chat-group.tool .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(980px, 100%));
+.chat-thread--direct .chat-group.assistant,
+.chat-thread--direct .chat-group.tool {
+  --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
 }
 
 .chat-duplicate-count {
@@ -872,23 +908,31 @@ details.msg-meta:not([open]) .msg-meta__details {
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-group {
+    --chat-message-column-max: 82%;
     margin-left: 0;
     margin-right: 0;
   }
 
-  .chat-group-messages {
-    max-width: 82%;
-  }
-
-  .chat-group.tool .chat-group-messages,
-  .chat-group.assistant .chat-group-messages {
-    max-width: calc(100% - 46px);
+  .chat-group.tool,
+  .chat-group.assistant {
+    --chat-message-column-max: calc(100% - 46px);
   }
 }
 
 @media (max-width: 400px) {
-  .chat-group-messages {
-    max-width: 88%;
+  .chat-group {
+    --chat-message-column-max: 88%;
+  }
+
+  .chat-group.chat-group--with-footer {
+    --chat-group-avatar-column: 1;
+    --chat-group-content-column: 1;
+    grid-template-columns: minmax(0, var(--chat-message-column-max));
+  }
+
+  .chat-group.tool,
+  .chat-group.assistant {
+    --chat-message-column-max: calc(100% - 46px);
   }
 
   .chat-avatar,

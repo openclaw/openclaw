@@ -357,7 +357,15 @@ export function resetChatComposerState(paneId?: string) {
   goalElapsedTimers.clear();
 }
 
-const composerTextareaResizeObservers = new WeakMap<HTMLTextAreaElement, ResizeObserver>();
+type ComposerTextareaResizeObserverState = {
+  observer: ResizeObserver;
+  adjustmentFrame: number | null;
+};
+
+const composerTextareaResizeObservers = new WeakMap<
+  HTMLTextAreaElement,
+  ComposerTextareaResizeObserverState
+>();
 const questionDockResizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function updateTextareaOverflow(el: HTMLTextAreaElement) {
@@ -382,18 +390,33 @@ function observeTextareaOverflow(el: HTMLTextAreaElement) {
     const nextWidth = el.getBoundingClientRect().width;
     if (nextWidth !== width) {
       width = nextWidth;
-      adjustTextareaHeight(el);
+      const state = composerTextareaResizeObservers.get(el);
+      if (state && state.adjustmentFrame === null) {
+        state.adjustmentFrame = requestAnimationFrame(() => {
+          state.adjustmentFrame = null;
+          if (composerTextareaResizeObservers.get(el) === state) {
+            adjustTextareaHeight(el);
+          }
+        });
+      }
       return;
     }
     updateTextareaOverflow(el);
   });
   observer.observe(el);
-  composerTextareaResizeObservers.set(el, observer);
+  composerTextareaResizeObservers.set(el, { observer, adjustmentFrame: null });
 }
 
 function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
-  composerTextareaResizeObservers.get(el)?.disconnect();
+  const state = composerTextareaResizeObservers.get(el);
   composerTextareaResizeObservers.delete(el);
+  if (!state) {
+    return;
+  }
+  state.observer.disconnect();
+  if (state.adjustmentFrame !== null) {
+    cancelAnimationFrame(state.adjustmentFrame);
+  }
 }
 
 function syncQuestionDockHeight(el: HTMLElement): void {
