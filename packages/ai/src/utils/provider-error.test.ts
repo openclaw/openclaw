@@ -34,4 +34,14 @@ describe("formatProviderError", () => {
 
     expect(formatProviderError(error)).toBe(body);
   });
+
+  it("does not split surrogate pairs when truncating a provider error body", () => {
+    const body = `${"x".repeat(3999)}😀details`;
+    const error = Object.assign(new Error("502 status code (no body)"), { status: 502, body });
+
+    const formatted = formatProviderError(error);
+
+    expect(formatted).toBe(`502: ${"x".repeat(3999)}... [truncated]`);
+    expect(Buffer.from(formatted).toString("utf8")).toBe(formatted);
+  });
 });
