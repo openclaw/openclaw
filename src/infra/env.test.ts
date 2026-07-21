@@ -129,6 +129,49 @@ describe("logAcceptedEnvOption", () => {
     expect(loggerMocks.info).not.toHaveBeenCalled();
   });
 
+  it("records key only after accepting a nonblank value (blank probe does not suppress later log)", async () => {
+    loggerMocks.info.mockClear();
+
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_BLANK_THEN_VALID: "",
+      },
+      () => {
+        // First probe with blank value — should not record the key
+        logAcceptedEnvOption({
+          key: "OPENCLAW_BLANK_THEN_VALID",
+          description: "blank probe",
+        });
+      },
+    );
+
+    // Second call with valid value in a separate env scope
+    withEnv(
+      {
+        VITEST: "",
+        NODE_ENV: "development",
+        OPENCLAW_BLANK_THEN_VALID: "actual-value",
+      },
+      () => {
+        logAcceptedEnvOption({
+          key: "OPENCLAW_BLANK_THEN_VALID",
+          description: "valid call after blank probe",
+        });
+      },
+    );
+
+    // The value was read synchronously inside withEnv; the async logger
+    // completes after env is restored, but the captured message is correct.
+    await vi.waitFor(() => {
+      expect(loggerMocks.info).toHaveBeenCalledTimes(1);
+    });
+    expect(loggerMocks.info).toHaveBeenCalledWith(
+      "env: OPENCLAW_BLANK_THEN_VALID=actual-value (valid call after blank probe)",
+    );
+  });
+
   it("keeps bounded non-secret values UTF-16 well-formed", async () => {
     withEnv(
       {

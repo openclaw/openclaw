@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-
 let log: SubsystemLogger | null = null;
 const loadLog = createLazyPromise(
   () =>
@@ -45,11 +44,11 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return;
   }
-  if (loggedEnv.has(option.key)) {
-    return;
-  }
   const rawValue = option.value ?? process.env[option.key];
   if (!rawValue || !rawValue.trim()) {
+    return;
+  }
+  if (loggedEnv.has(option.key)) {
     return;
   }
   loggedEnv.add(option.key);
