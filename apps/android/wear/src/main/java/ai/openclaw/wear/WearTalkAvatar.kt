@@ -238,13 +238,15 @@ internal class AndroidWearAnimatorScaleSource(
   private val context: Context,
   private val lifecycleOwner: LifecycleOwner,
 ) : WearAnimatorScaleSource {
+  private val powerManager = context.getSystemService(PowerManager::class.java)
+
   override fun currentScale(): Float =
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       ValueAnimator.getDurationScale().coerceAtLeast(0f)
-    } else if (ValueAnimator.areAnimatorsEnabled()) {
-      1f
     } else {
-      0f
+      // Compose owns the user duration scale. Legacy Android exposes no listener
+      // for Battery Saver's separate override, so keep only that signal here.
+      if (powerManager.isPowerSaveMode) 0f else 1f
     }
 
   override fun subscribe(onScaleChanged: (Float) -> Unit): WearAnimatorScaleSubscription =
