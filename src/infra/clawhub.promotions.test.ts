@@ -190,6 +190,22 @@ describe("fetchClawHubPromotionsFeed", () => {
     }
   });
 
+  it("rejects a promotions feed response with invalid UTF-8 bytes", async () => {
+    const feedJson = JSON.stringify(validFeed);
+    const pivot = feedJson.indexOf("Free Example");
+    mockHttp.intercept({
+      url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
+      reply: {
+        body: new Uint8Array([
+          ...new TextEncoder().encode(feedJson.slice(0, pivot)),
+          0xff,
+          ...new TextEncoder().encode(feedJson.slice(pivot)),
+        ]),
+      },
+    });
+    await expect(fetchClawHubPromotionsFeed()).rejects.toThrow(/not valid for encoding/);
+  });
+
   it("sends If-None-Match and maps 304 to not-modified", async () => {
     mockHttp.intercept({
       url: `${CLAWHUB_URL}/api/v1/feeds/promotions`,
