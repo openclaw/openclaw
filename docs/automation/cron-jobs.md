@@ -707,3 +707,39 @@ openclaw doctor
 - [Background Tasks](/automation/tasks) — task ledger for cron executions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Timezone](/concepts/timezone) — timezone configuration
+
+
+## Job precheck gate (zero-token skip)
+
+Optional **shell precheck** on any job ([#112371](https://github.com/openclaw/openclaw/issues/112371)) runs **before** the payload (including before an `agentTurn` model session). When the gate reports no work, the run is recorded as `skipped` with reason `precheck-no-work` and **no model call** is started. Skipped precheck runs use the consecutive-skip counter (not execution-error backoff).
+
+```json
+{
+  "precheck": {
+    "kind": "exec",
+    "command": "bash ~/.openclaw/scripts/inbox-has-mail.sh",
+    "timeoutMs": 30000
+  },
+  "payload": { "kind": "agentTurn", "message": "Triage unread mail…" }
+}
+```
+
+**Default exit-code contract**
+
+| Exit | Meaning |
+|------|---------|
+| `0` | Work exists → run payload |
+| `2` | No work → `skipped` / `precheck-no-work` |
+| other | Precheck error (`status=error`), unless `onError: "skip"` |
+
+Stdout prefixes `WORK_NEEDED` / `NO_WORK` at the start of stdout override the exit code when present.
+
+```bash
+openclaw cron add --name inbox-poll --cron "*/15 * * * *" \
+  --session isolated \
+  --precheck-command 'bash ~/.openclaw/scripts/inbox-has-mail.sh' \
+  --message 'Triage unread inbox…'
+```
+
+Use this for poller-style jobs that are usually quiet. Prefer **condition triggers** (`--trigger-script`) when you need JSON state, tool calls, or richer watchers — those use the code-mode executor and require `cron.triggers.enabled`. Prefer **command** / **script** payloads when the whole job is non-LLM automation rather than “maybe then think.”
+

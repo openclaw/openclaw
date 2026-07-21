@@ -146,6 +146,18 @@ export function registerCronAddCommand(cron: Command) {
       .option("--no-output-timeout-seconds <n>", "No-output timeout seconds for command jobs")
       .option("--output-max-bytes <n>", "Maximum captured stdout/stderr bytes for command jobs")
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
+      .option(
+        "--precheck-command <shell>",
+        "Zero-token shell gate before the payload (exit 0=work, 2=skip; see #112371)",
+      )
+      .option(
+        "--precheck-timeout-ms <n>",
+        "Timeout for --precheck-command in milliseconds (default 30000)",
+      )
+      .option(
+        "--precheck-cwd <path>",
+        "Working directory for --precheck-command",
+      )
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--announce", "Fallback-deliver final text to a chat", false)
       .option("--deliver", "Deprecated (use --announce). Fallback-delivers final text to a chat.")
@@ -502,6 +514,26 @@ export function registerCronAddCommand(cron: Command) {
               sessionTarget,
               wakeMode,
               payload: resolvedPayload,
+              ...(() => {
+                const precheckCommand = normalizeOptionalString(opts.precheckCommand);
+                if (!precheckCommand) {
+                  return {};
+                }
+                const timeoutRaw = normalizeOptionalString(opts.precheckTimeoutMs);
+                const timeoutMs = timeoutRaw ? Number(timeoutRaw) : undefined;
+                return {
+                  precheck: {
+                    kind: "exec" as const,
+                    command: precheckCommand,
+                    ...(timeoutMs !== undefined && Number.isFinite(timeoutMs)
+                      ? { timeoutMs: Math.floor(timeoutMs) }
+                      : {}),
+                    ...(normalizeOptionalString(opts.precheckCwd)
+                      ? { cwd: normalizeOptionalString(opts.precheckCwd) }
+                      : {}),
+                  },
+                };
+              })(),
               delivery: deliveryMode
                 ? {
                     mode: deliveryMode,

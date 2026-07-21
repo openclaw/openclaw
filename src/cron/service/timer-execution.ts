@@ -31,6 +31,11 @@ import {
 import { enqueueCronSystemEvent, requestCronHeartbeat } from "./wake.js";
 
 /** Executes a cron job without mutating persisted job state. */
+import {
+  cronRunOutcomeFromPrecheck,
+  runCronJobPrecheck,
+} from "../job-precheck.js";
+
 export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
@@ -134,6 +139,16 @@ export async function executeJobCore(
     }
     if (evaluation.message !== undefined) {
       effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
+    }
+  }
+  // Optional shell precheck #112371 — skip LLM when a cheap gate says no work.
+  if (effectiveJob.precheck?.command) {
+    const precheckResult = await runCronJobPrecheck(effectiveJob.precheck, {
+      abortSignal,
+    });
+    if (precheckResult.decision !== "run") {
+      const outcome = cronRunOutcomeFromPrecheck(precheckResult, () => state.deps.nowMs());
+      return triggerEval ? { ...outcome, triggerEval } : outcome;
     }
   }
   if (effectiveJob.payload.kind === "script") {

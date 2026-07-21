@@ -10,6 +10,7 @@ import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } f
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
+import { normalizeCronJobPrecheck } from "../job-precheck.js";
 import {
   booleanToInteger,
   integerToBoolean,
@@ -312,6 +313,11 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     payload,
     ...(delivery ? { delivery } : {}),
     ...(failureAlert !== undefined ? { failureAlert } : {}),
+    ...(() => {
+      const cfg = parseJsonObject<Record<string, unknown>>(row.job_json, {});
+      const precheck = normalizeCronJobPrecheck(cfg.precheck);
+      return precheck ? { precheck } : {};
+    })(),
     state: stateFromRow(row),
   };
 }
