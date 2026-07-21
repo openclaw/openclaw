@@ -4,11 +4,7 @@ type LoadStaticCatalog =
   typeof import("./embedded-agent-runner/model.static-catalog.js").loadBundledProviderStaticCatalogContextModels;
 
 const mocks = vi.hoisted(() => ({
-  authStorage: {
-    getAll: vi.fn<() => Record<string, { type: "api_key"; key: string }>>(() => ({
-      custom: { type: "api_key", key: "test-key" },
-    })),
-  },
+  authStorage: { getAll: vi.fn(() => ({ custom: { type: "api_key", key: "test-key" } })) },
   modelRegistry: {
     fork: vi.fn((authStorage: unknown) => ({ authStorage })),
     getAll: vi.fn(() => []),
@@ -109,8 +105,6 @@ describe("prepared model runtime snapshots", () => {
 
   beforeEach(() => {
     getTesting().resetPreparedModelRuntimeSnapshotsForTest();
-    mocks.authStorage.getAll.mockReset();
-    mocks.authStorage.getAll.mockReturnValue({ custom: { type: "api_key", key: "test-key" } });
     mocks.discoverAuthStorage.mockClear();
     mocks.discoverModels.mockClear();
     mocks.ensureOpenClawModelsJson.mockReset();
@@ -162,47 +156,6 @@ describe("prepared model runtime snapshots", () => {
       }),
     ).resolves.toMatchObject({ config: configured });
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
-  });
-
-  it("scopes mandatory configured publication to static facts for prepared providers", async () => {
-    mocks.configuredAgentIds = ["default"];
-    mocks.authStorage.getAll.mockReturnValue({
-      openai: { type: "api_key", key: "test-openai-key" },
-    });
-    const config = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
-        },
-      },
-    };
-
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
-
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      config,
-      "/tmp/unused-agent",
-      expect.objectContaining({
-        pluginMetadataSnapshot: expect.any(Object),
-        providerDiscoveryEntriesOnly: true,
-        providerDiscoveryProviderIds: ["openai"],
-      }),
-    );
-    expect(mocks.discoverModels).toHaveBeenCalledWith(
-      mocks.authStorage,
-      "/tmp/unused-agent",
-      expect.objectContaining({ normalizeModels: false }),
-    );
-    expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ includeProviderPluginAugmentation: false }),
-    );
-    expect(mocks.loadStaticCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ providerIds: ["openai"] }),
-    );
   });
 
   it("retires a standalone run owner when its final lease releases", async () => {

@@ -62,6 +62,18 @@ export type PreparedModelRuntimeLease = Readonly<{
   release: () => void;
 }>;
 
+export type PreparedModelRuntimePublicationOptions = {
+  force?: boolean;
+  provenance?: PreparedModelRuntimeOwner["provenance"];
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+};
+
+export type PreparedModelRuntimeRefreshOptions = {
+  gatewayLifecycle?: boolean;
+  defaultWorkspaceDir?: string;
+  catalogMode?: PreparedModelRuntimeCatalogMode;
+};
+
 export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   environmentFingerprint: string;
@@ -75,6 +87,21 @@ export type PreparedModelRuntimeOwner = {
   buildCompletion?: Promise<void>;
   leaseCount?: number;
 };
+
+export function createPreparedModelRuntimeOwner(
+  input: PreparedModelRuntimeInput,
+  provenance: PreparedModelRuntimeOwner["provenance"],
+  catalogMode: PreparedModelRuntimeCatalogMode = "live",
+): PreparedModelRuntimeOwner {
+  return {
+    input,
+    environmentFingerprint: effectiveEnvironmentFingerprint(input),
+    catalogMode,
+    provenance,
+    generation: 0,
+    needsRefresh: true,
+  };
+}
 
 export type PreparedModelRuntimeReplacement = {
   gateId: PreparedModelRuntimeReplacementGateId;
@@ -493,14 +520,7 @@ export async function publishModelRuntimeSnapshot(
   catalogMode: PreparedModelRuntimeCatalogMode = existing?.catalogMode ?? "live",
 ): Promise<PreparedModelRuntimeSnapshot> {
   const key = ownerKey(input);
-  const owner: PreparedModelRuntimeOwner = existing ?? {
-    input,
-    environmentFingerprint: effectiveEnvironmentFingerprint(input),
-    catalogMode,
-    provenance,
-    generation: 0,
-    needsRefresh: false,
-  };
+  const owner = existing ?? createPreparedModelRuntimeOwner(input, provenance, catalogMode);
   owner.input = input;
   owner.environmentFingerprint = effectiveEnvironmentFingerprint(input);
   owner.catalogMode = catalogMode;
