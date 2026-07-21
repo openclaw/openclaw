@@ -146,7 +146,7 @@ import {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-import { requestSessionObserverAnswer, resolveChatPaneObserverRunId } from "./chat-observer.ts";
+import { requestSessionObserverAnswer } from "./chat-observer.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
