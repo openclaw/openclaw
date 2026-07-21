@@ -1468,9 +1468,6 @@ describe("speech-core native voice-note routing", () => {
           personas: {
             alfred: {
               fallbackPolicy: "provider-defaults",
-              prompt: {
-                profile: "A precise butler.",
-              },
             },
           },
         },
@@ -1486,7 +1483,7 @@ describe("speech-core native voice-note routing", () => {
     expect(prepareContext.personaProviderConfig).toBeUndefined();
   });
 
-  it("preserves persona prompts by default when provider bindings are missing", async () => {
+  it("preserves persona metadata by default when provider bindings are missing", async () => {
     await synthesizeSpeech({
       text: "Use persona prompt.",
       cfg: {
@@ -1496,9 +1493,7 @@ describe("speech-core native voice-note routing", () => {
           persona: "alfred",
           personas: {
             alfred: {
-              prompt: {
-                profile: "A precise butler.",
-              },
+              label: "Alfred",
             },
           },
         },
