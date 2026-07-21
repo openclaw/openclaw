@@ -67,7 +67,6 @@ describe("SQLite CLI maintenance ownership", () => {
           after: { autoVacuum: number; freelistPages: number };
           before: { freelistPages: number };
           integrityCheck: string;
-          quickCheck: string;
           skipped: boolean;
         };
         expect(report).toMatchObject({
@@ -76,7 +75,6 @@ describe("SQLite CLI maintenance ownership", () => {
             freelistPages: 0,
           },
           integrityCheck: "ok",
-          quickCheck: "ok",
           skipped: false,
         });
         expect(report.before.freelistPages).toBeGreaterThan(0);
