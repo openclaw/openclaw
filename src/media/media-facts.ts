@@ -16,7 +16,7 @@ export type MediaFactInput = {
   [Key in keyof MediaFact]?: MediaFact[Key] | null;
 };
 
-export type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
+type MediaFactDefaults<TInput extends MediaFactInput = MediaFactInput> = {
   kind?: MediaKind;
   messageId?: string;
   workspaceDir?: string;
@@ -33,7 +33,7 @@ export type MediaFactLegacyProjection = {
   MediaTranscribedIndexes?: number[];
 };
 
-export function normalizeMediaFact<TInput extends MediaFactInput>(
+function normalizeMediaFact<TInput extends MediaFactInput>(
   media: TInput,
   index: number,
   defaults: MediaFactDefaults<TInput> = {},
