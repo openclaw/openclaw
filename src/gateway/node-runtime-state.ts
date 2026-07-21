@@ -123,7 +123,12 @@ export function acknowledgePendingNodeActions(params: {
   ids: readonly string[];
   ttlMs: number;
 }): PendingNodeAction[] {
-  const pending = listPendingNodeActions(params);
+  const pending = prunePendingNodeActions({
+    nodeId: params.nodeId,
+    pairingGeneration: params.pairingGeneration,
+    nowMs: Date.now(),
+    ttlMs: params.ttlMs,
+  });
   if (params.ids.length === 0) {
     return pending;
   }
@@ -142,7 +147,12 @@ export function removePendingNodeAction(params: {
   actionId: string;
   ttlMs: number;
 }): void {
-  const pending = listPendingNodeActions(params);
+  const pending = prunePendingNodeActions({
+    nodeId: params.nodeId,
+    pairingGeneration: params.pairingGeneration,
+    nowMs: Date.now(),
+    ttlMs: params.ttlMs,
+  });
   const remaining = pending.filter((entry) => entry.id !== params.actionId);
   if (remaining.length === pending.length) {
     return;
