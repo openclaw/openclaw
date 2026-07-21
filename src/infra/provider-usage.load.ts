@@ -153,13 +153,6 @@ export async function loadProviderUsageSummary(
         fetchFn,
       }),
       timeoutMs + 1000,
-      {
-        provider: auth.provider,
-        displayName:
-          displayNames.get(auth.provider) ?? resolveProviderUsageDisplayName(auth.provider),
-        windows: [],
-        error: "Timeout",
-      },
     ).catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       return failureSnapshot(message.trim() || "Fetch failed");

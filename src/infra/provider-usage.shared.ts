@@ -81,15 +81,22 @@ export const ignoredErrors = new Set([
 export const clampPercent = (value: number) =>
   Math.max(0, Math.min(100, Number.isFinite(value) ? value : 0));
 
-/** Resolves a promise with a fallback when usage collection exceeds the timeout. */
-export const withTimeout = async <T>(work: Promise<T>, ms: number, fallback: T): Promise<T> => {
+export class UsageTimeoutError extends Error {
+  constructor() {
+    super("Usage collection timed out");
+    this.name = "UsageTimeoutError";
+  }
+}
+
+/** Rejects on timeout so callers can distinguish timed-out data from real results. */
+export const withTimeout = async <T>(work: Promise<T>, ms: number): Promise<T> => {
   let timeout: NodeJS.Timeout | undefined;
   const timeoutMs = resolveTimerTimeoutMs(ms, 1);
   try {
     return await Promise.race([
       work,
-      new Promise<T>((resolve) => {
-        timeout = setTimeout(() => resolve(fallback), timeoutMs);
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new UsageTimeoutError()), timeoutMs);
       }),
     ]);
   } finally {
