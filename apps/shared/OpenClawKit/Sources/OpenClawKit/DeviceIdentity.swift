@@ -205,9 +205,9 @@ public enum DeviceIdentityStore {
     }
 
     #if compiler(>=6.4)
-    static func withStateDirectory<T>(
+    nonisolated(nonsending) static func withStateDirectory<T>(
         _ url: URL,
-        operation: nonisolated(nonsending) () async throws -> T) async rethrows -> T
+        operation: () async throws -> T) async rethrows -> T
     {
         try await DeviceIdentityPaths.$scopedStateDirURL.withValue(
             url,

@@ -4,7 +4,7 @@
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
-    "ws": "8.21.0"
+    "ws": "8.21.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -19,7 +19,9 @@
     },
     "channel": {
       "id": "signal",
-      "approvalFlags": ["native"],
+      "approvalFlags": [
+        "native"
+      ],
       "label": "Signal",
       "selectionLabel": "Signal (signal-cli)",
       "detailLabel": "Signal REST",

@@ -8,13 +8,13 @@
       "name": "@openclaw/copilot",
       "version": "2026.7.2",
       "dependencies": {
-        "@github/copilot-sdk": "1.0.5"
+        "@github/copilot-sdk": "1.0.7"
       }
     },
     "node_modules/@github/copilot": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot/-/copilot-1.0.68.tgz",
-      "integrity": "sha512-2VPcTlW0RAEsfeS0Ma2ICCkfXgpxy3NL7+SReR8gzvEEPiokSRf0k5JBPlgMbBEFvocSRcJ01S8KvBm84Dw+Fw==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot/-/copilot-1.0.71.tgz",
+      "integrity": "sha512-F3axBi+sXSLYDJbxCBW36bM6MYKNC2rlyAf3Ivo/MjiHKKJW7j5AmaR1IRYS9Gt8r9mxOwWFM1cJFA+CuLaR8g==",
       "license": "SEE LICENSE IN LICENSE.md",
       "dependencies": {
         "detect-libc": "^2.1.2"
@@ -23,20 +23,20 @@
         "copilot": "npm-loader.js"
       },
       "optionalDependencies": {
-        "@github/copilot-darwin-arm64": "1.0.68",
-        "@github/copilot-darwin-x64": "1.0.68",
-        "@github/copilot-linux-arm64": "1.0.68",
-        "@github/copilot-linux-x64": "1.0.68",
-        "@github/copilot-linuxmusl-arm64": "1.0.68",
-        "@github/copilot-linuxmusl-x64": "1.0.68",
-        "@github/copilot-win32-arm64": "1.0.68",
-        "@github/copilot-win32-x64": "1.0.68"
+        "@github/copilot-darwin-arm64": "1.0.71",
+        "@github/copilot-darwin-x64": "1.0.71",
+        "@github/copilot-linux-arm64": "1.0.71",
+        "@github/copilot-linux-x64": "1.0.71",
+        "@github/copilot-linuxmusl-arm64": "1.0.71",
+        "@github/copilot-linuxmusl-x64": "1.0.71",
+        "@github/copilot-win32-arm64": "1.0.71",
+        "@github/copilot-win32-x64": "1.0.71"
       }
     },
     "node_modules/@github/copilot-darwin-arm64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.68.tgz",
-      "integrity": "sha512-0G26AL9dlrwTa5IRTxPEnkX6Kz20CuetIwXzABmWwiXYcsR9rswM/NYICR3k53TOa0zL7aqFPnl98CW7J5XbZw==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-darwin-arm64/-/copilot-darwin-arm64-1.0.71.tgz",
+      "integrity": "sha512-mEWzyqbqRAWgyU7i2uuSRoVPx/TwaFQX0nZmw0bc30aJ0BnO7cy2kYQyCHw8ykmf/tfxT0xauZ6k0BOFmWizzQ==",
       "cpu": [
         "arm64"
       ],
@@ -50,9 +50,9 @@
       }
     },
     "node_modules/@github/copilot-darwin-x64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-darwin-x64/-/copilot-darwin-x64-1.0.68.tgz",
-      "integrity": "sha512-RoClWH4CPH19pv5jrR0E6pBU6ljgrzL7idb7tV2pPtMYGTuwqW//XrIEE4n/5NVZmhzEiVBeq04THzOBeV493A==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-darwin-x64/-/copilot-darwin-x64-1.0.71.tgz",
+      "integrity": "sha512-Md9yEg406OBVBx3w4PeEj62TubulVLBcHleqmCoOoUmPgUxPZotUbrqz3rtbzADbXfrrD7JWvVsbd2UiNL194w==",
       "cpu": [
         "x64"
       ],
@@ -66,9 +66,9 @@
       }
     },
     "node_modules/@github/copilot-linux-arm64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-linux-arm64/-/copilot-linux-arm64-1.0.68.tgz",
-      "integrity": "sha512-SXSOz/2xPeUM/ndKypBiQv+QGYaEM7oGytl1i+Yx4tJnOoIwLkkTmIaWUbBNn0n5DTEjUcWyDqHzxxo/42FKRQ==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-linux-arm64/-/copilot-linux-arm64-1.0.71.tgz",
+      "integrity": "sha512-ykLJYOqBj3jRB5IJCDugLClAqbr7DmtTbUjlNY7+Jdq/n6i+d7xUQGclf1IWL5gnxbGQVAf+zkToD+sRM389Kg==",
       "cpu": [
         "arm64"
       ],
@@ -82,9 +82,9 @@
       }
     },
     "node_modules/@github/copilot-linux-x64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.68.tgz",
-      "integrity": "sha512-YdG1chniWyps7XEJ2YHUOJkcOc6BpDQZby/zOKCVdswzRXx7d3WiZ2P9lfDimBBmXXJEJ81Fqhv2ZK5eOmGlUw==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.71.tgz",
+      "integrity": "sha512-pC0FNHG+BBwZd6yZlM85kkAGN+uJhM6o+THi76N2GnnSxmw7+remb1mvYxdgRVbdCm+LBUIbCKRWJLuMwrfb6A==",
       "cpu": [
         "x64"
       ],
@@ -98,9 +98,9 @@
       }
     },
     "node_modules/@github/copilot-linuxmusl-arm64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-linuxmusl-arm64/-/copilot-linuxmusl-arm64-1.0.68.tgz",
-      "integrity": "sha512-LTYZFOHpeLg4rCtsq3A/LMZxxRKFcCLmhnt8F7ovNYLNDJMkh3xdYanoXP0C0PO3uyUMiNJ+p5YXhZiBuo2yfw==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-linuxmusl-arm64/-/copilot-linuxmusl-arm64-1.0.71.tgz",
+      "integrity": "sha512-hBmDljFTjacxqZTasCEy43H8EIzuXB/hHEBBCMFjhB9J00nIxsO6Dh0woTifKpx7knTYZdpTjjca3D0pAoZlUA==",
       "cpu": [
         "arm64"
       ],
@@ -114,9 +114,9 @@
       }
     },
     "node_modules/@github/copilot-linuxmusl-x64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-linuxmusl-x64/-/copilot-linuxmusl-x64-1.0.68.tgz",
-      "integrity": "sha512-oOMXZ9HPJAJaKSrXZIYuond4uOiUkK1uRhVPI3Cs74n7uEVKPWpNlTN+j/O754dnBa1+HJcuZSDMulTbnOgirg==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-linuxmusl-x64/-/copilot-linuxmusl-x64-1.0.71.tgz",
+      "integrity": "sha512-CfTXU8pa5dxRz22xQzoi3TiG1PJo9+WR8PRDiPSdkIBSyPJ1NvX87DJmfXjTgeAfR+wkjt/p0keDCaBBVhNmUA==",
       "cpu": [
         "x64"
       ],
@@ -130,12 +130,13 @@
       }
     },
     "node_modules/@github/copilot-sdk": {
-      "version": "1.0.5",
-      "resolved": "https://registry.npmjs.org/@github/copilot-sdk/-/copilot-sdk-1.0.5.tgz",
-      "integrity": "sha512-N6Yk2DcpM9orYXWGBcQs5R0FdiVYrCn7UHQ206cUkfJengKYjgcd3f78BvVB6Dot3j0TvO04FnQ85K9/kbRRag==",
+      "version": "1.0.7",
+      "resolved": "https://registry.npmjs.org/@github/copilot-sdk/-/copilot-sdk-1.0.7.tgz",
+      "integrity": "sha512-dgCFCPfxWUkrgclQbrm7WCFzTf5RnJHsK1Lqsc3KjPBbDLPutJT0qIGg3xJ0ZELLyX0icg3TOmVczhR4HdwHxw==",
       "license": "MIT",
       "dependencies": {
-        "@github/copilot": "^1.0.67",
+        "@github/copilot": "^1.0.71",
+        "koffi": "^3.1.0",
         "vscode-jsonrpc": "^8.2.1",
         "zod": "^4.3.6"
       },
@@ -144,9 +145,9 @@
       }
     },
     "node_modules/@github/copilot-win32-arm64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-win32-arm64/-/copilot-win32-arm64-1.0.68.tgz",
-      "integrity": "sha512-ZDqpJMP9Y5vqwvRxnIvZrVl8ibx/P66m3JTXQuzv6pitq7rkMEuNKscZ7cjJYN4N+BCOF5++5LKw8O1WHzXAAA==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-win32-arm64/-/copilot-win32-arm64-1.0.71.tgz",
+      "integrity": "sha512-+HI1DokixXhHUahj06Fw67ZAigBuXKC58BFma4UJOGrQsDgwOSbqeTQHCw6vuymzjKlg3sactfsCUTaefkjscQ==",
       "cpu": [
         "arm64"
       ],
@@ -160,9 +161,9 @@
       }
     },
     "node_modules/@github/copilot-win32-x64": {
-      "version": "1.0.68",
-      "resolved": "https://registry.npmjs.org/@github/copilot-win32-x64/-/copilot-win32-x64-1.0.68.tgz",
-      "integrity": "sha512-eplj/Y2B+amMLJ37oNE6G8gx85j8ucAuJz+CjzpzprNiBUq45lFL8ukGeDtaLMRvIeYAEDYdz5yUzu2XtCE7mA==",
+      "version": "1.0.71",
+      "resolved": "https://registry.npmjs.org/@github/copilot-win32-x64/-/copilot-win32-x64-1.0.71.tgz",
+      "integrity": "sha512-02kXOBd9CwBbCaztuf71WYWn+uGapCuiaasomN4tcMH3HBVZ4gi3J0ZUoRcgcS80xh81uQyeBHbnUKzb/RE/9A==",
       "cpu": [
         "x64"
       ],
@@ -175,6 +176,246 @@
         "copilot-win32-x64": "copilot.exe"
       }
     },
+    "node_modules/@koromix/koffi-darwin-arm64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-darwin-arm64/-/koffi-darwin-arm64-3.1.1.tgz",
+      "integrity": "sha512-+Dl0zQDh1Wb55AWOn9hp7K30qgkODvrvN+ZNkFOh81Q0oFX/rpJQtocgjAuYk2zFAcajSeVDumkcHMPwnKSXzA==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-darwin-x64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-darwin-x64/-/koffi-darwin-x64-3.1.1.tgz",
+      "integrity": "sha512-cDFAKn1qdZBFLrp7dAc9QUDw3l4xAhTJbOdPWWb0LxssVicUdHcRCLZGrDsmPW2tpH6LGNNeLgqRpAoD2Mo8iA==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-freebsd-arm64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-freebsd-arm64/-/koffi-freebsd-arm64-3.1.1.tgz",
+      "integrity": "sha512-zaP7FJISI/scQW9Wa5QicY3a09WmtKBWSbmC+5nfCqPzwWe7Hx2so74Er7mPsDfCiMMR0Ya+evKbJQDkfyXicg==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-freebsd-ia32": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-freebsd-ia32/-/koffi-freebsd-ia32-3.1.1.tgz",
+      "integrity": "sha512-7GejVb688TLM8rbjfc0oezJrATxZc0dn801xWEDJekN2DgmRXu7HquGqWQ6z3NeSq7ZxEggz4T3xtlbCysQapA==",
+      "cpu": [
+        "ia32"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-freebsd-x64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-freebsd-x64/-/koffi-freebsd-x64-3.1.1.tgz",
+      "integrity": "sha512-XLiCFP9OFCyOoGTjAimtDKLhzhfo34WcP1ShVWxRzNCWDGjfz8BYjwd69cp/cDSUXZbxamqs4+/6vmkePq9wxA==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "freebsd"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-linux-arm64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-linux-arm64/-/koffi-linux-arm64-3.1.1.tgz",
+      "integrity": "sha512-HA9xINK7G4dRAkpfnBWD9VfuyIBgW1SuK+KPHjksUwRMOnhgqP8J/JqgrAzdzcDiefGBkqEacIP776OUwz7knQ==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-linux-ia32": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-linux-ia32/-/koffi-linux-ia32-3.1.1.tgz",
+      "integrity": "sha512-jG7IFytmP8K5Qtbx0ro0ZeuX3JjSsLxmYhq+nmXDdrtOAlxIsWGynuiDLS6Jk3vOchVii2m6Y2f/L3GLG2fG5A==",
+      "cpu": [
+        "ia32"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-linux-loong64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-linux-loong64/-/koffi-linux-loong64-3.1.1.tgz",
+      "integrity": "sha512-CIsT1cNnih8FuU52Me/IVlJBpH28SQfoDeYPctJswgJzaARktusF7m4MUbtR1PBDjuquCVM4/vFyNdOzfPonvA==",
+      "cpu": [
+        "loong64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-linux-riscv64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-linux-riscv64/-/koffi-linux-riscv64-3.1.1.tgz",
+      "integrity": "sha512-9D6RmqeKsSvs3U6jILJU9PcAjMwKKyn7yLxNBb5k6z9PCoUoGJ3/BrhXAX0qjrLLwEiIpP/hS/40RuXvH8Lc3Q==",
+      "cpu": [
+        "riscv64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-linux-x64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-linux-x64/-/koffi-linux-x64-3.1.1.tgz",
+      "integrity": "sha512-pyTcX5fePeYbt7TZAwRby69wdlRx3PT+g15ra5IYdat/Pgh3qAKEYeZ+uu7WpPGOy43p/oSRqqZoa2kORzozlA==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-openbsd-ia32": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-openbsd-ia32/-/koffi-openbsd-ia32-3.1.1.tgz",
+      "integrity": "sha512-iPnPzvG2HOfdzaiG1drdkt86sAqmTPDv9mAf+5gL7mRzkeeQC88EVGboRy7eXwdXn7R+v0ntA3iQxdHrBn6yXw==",
+      "cpu": [
+        "ia32"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openbsd"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-openbsd-x64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-openbsd-x64/-/koffi-openbsd-x64-3.1.1.tgz",
+      "integrity": "sha512-/Xqc3R0SVoMCYjMPZnJ9bULtRo364+dKmnQhfDrI83tSpxUHRw7HRNf12vBeL+hPgKxSBjtMpWfQ/ZIyVyLFag==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "openbsd"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-win32-arm64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-win32-arm64/-/koffi-win32-arm64-3.1.1.tgz",
+      "integrity": "sha512-JhqHauEwQvdcWUERxrV5HH/DT9W7hY1A1eU6/o8tB+yck+D3kt5elpRDBt9KjpW6h+vHPy3V0sjDvO0CXyabTA==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-win32-ia32": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-win32-ia32/-/koffi-win32-ia32-3.1.1.tgz",
+      "integrity": "sha512-ZRuyYmlGS/rCc966qqs0qREXDW4FRdul7rDF1VgSWHbVmdc196PUgUT+blq/GjZgTwqzeEXtMRgM+cU8krHjvA==",
+      "cpu": [
+        "ia32"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
+    "node_modules/@koromix/koffi-win32-x64": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/@koromix/koffi-win32-x64/-/koffi-win32-x64-3.1.1.tgz",
+      "integrity": "sha512-KqHPmvj6QILhNyI/To8QSihHsijeVGIYYPBOUnXEpcnH2LuLbargY4Hd6dDeTN3Z90uUUxN+1FWz1UnhVzFOiA==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "win32"
+      ],
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      }
+    },
     "node_modules/detect-libc": {
       "version": "2.1.2",
       "resolved": "https://registry.npmjs.org/detect-libc/-/detect-libc-2.1.2.tgz",
@@ -182,6 +423,33 @@
       "license": "Apache-2.0",
       "engines": {
         "node": ">=8"
+      }
+    },
+    "node_modules/koffi": {
+      "version": "3.1.1",
+      "resolved": "https://registry.npmjs.org/koffi/-/koffi-3.1.1.tgz",
+      "integrity": "sha512-mRX6AMeeKCxSOeOopqAcLAl5jcNvge7NAG8l7rF/8gGJATI0tdHFYjteIdE0mGOtWdsrJOij+PjnP8Q9c1gwgA==",
+      "hasInstallScript": true,
+      "license": "MIT",
+      "funding": {
+        "url": "https://liberapay.com/Koromix"
+      },
+      "optionalDependencies": {
+        "@koromix/koffi-darwin-arm64": "3.1.1",
+        "@koromix/koffi-darwin-x64": "3.1.1",
+        "@koromix/koffi-freebsd-arm64": "3.1.1",
+        "@koromix/koffi-freebsd-ia32": "3.1.1",
+        "@koromix/koffi-freebsd-x64": "3.1.1",
+        "@koromix/koffi-linux-arm64": "3.1.1",
+        "@koromix/koffi-linux-ia32": "3.1.1",
+        "@koromix/koffi-linux-loong64": "3.1.1",
+        "@koromix/koffi-linux-riscv64": "3.1.1",
+        "@koromix/koffi-linux-x64": "3.1.1",
+        "@koromix/koffi-openbsd-ia32": "3.1.1",
+        "@koromix/koffi-openbsd-x64": "3.1.1",
+        "@koromix/koffi-win32-arm64": "3.1.1",
+        "@koromix/koffi-win32-ia32": "3.1.1",
+        "@koromix/koffi-win32-x64": "3.1.1"
       }
     },
     "node_modules/vscode-jsonrpc": {
