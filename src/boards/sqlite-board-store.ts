@@ -11,7 +11,7 @@ import {
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
 } from "../infra/sqlite-transaction.js";
-import { OPENCLAW_AGENT_BOARD_SCHEMA_SQL } from "../state/openclaw-agent-board-schema.js";
+import { ensureOpenClawAgentBoardSchemaInTransaction } from "../state/openclaw-agent-board-schema.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -58,12 +58,13 @@ type StoredBoard = {
 };
 
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
+const presentBoardDatabases = new WeakSet<DatabaseSync>();
 
 // Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
 // no board tables until the first write. Reads must treat that as "no boards",
 // not "no such table".
 function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
-  if (ensuredBoardDatabases.has(database.db)) {
+  if (ensuredBoardDatabases.has(database.db) || presentBoardDatabases.has(database.db)) {
     return true;
   }
   const row = database.db // sqlite-allow-raw: catalog probe before Kysely table access.
@@ -72,7 +73,7 @@ function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolea
   if (!row) {
     return false;
   }
-  ensuredBoardDatabases.add(database.db);
+  presentBoardDatabases.add(database.db);
   return true;
 }
 
@@ -85,7 +86,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   }
   runSqliteImmediateTransactionSync(
     database.db,
-    () => database.db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL), // sqlite-allow-raw: one-time DDL bootstrap before Kysely access.
+    () => ensureOpenClawAgentBoardSchemaInTransaction(database.db),
     {
       databaseLabel: database.path,
       operationLabel: "board.ensure-schema",
@@ -93,6 +94,7 @@ function ensureBoardSchema(database: OpenClawAgentDatabase): void {
   );
   // Additive-surface rule: fold this into the next natural schema bump, then delete this lazy ensure.
   ensuredBoardDatabases.add(database.db);
+  presentBoardDatabases.add(database.db);
 }
 
 type SqliteBoardStoreOptions = {

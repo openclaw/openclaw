@@ -579,6 +579,79 @@ describe("SqliteBoardStore persistence", () => {
     ).toEqual({ name: "idx_agent_board_widgets_tab_position" });
   });
 
+  it("upgrades the unreleased v13 board constraint before storing plugin widgets", () => {
+    const stateDir = tempDirs.make("openclaw-board-plugin-kind-schema-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:board";
+    seedSession(env, "main", sessionKey);
+    const store = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    store.putWidget({
+      sessionKey,
+      name: "existing",
+      content: { kind: "html", html: "preserved" },
+    });
+
+    const opened = openOpenClawAgentDatabase({ agentId: "main", env });
+    const schema = opened.db
+      .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
+      .get() as { sql: string };
+    const legacySchema = schema.sql
+      .replace(
+        "content_kind IN ('html', 'mcp-app', 'plugin')",
+        "content_kind IN ('html', 'mcp-app')",
+      )
+      .replace(
+        /\s+OR\s+\(content_kind = 'plugin' AND html IS NULL AND descriptor_json IS NOT NULL AND view_generation IS NULL\)/u,
+        "",
+      );
+    const legacyCreateSql = legacySchema.replace(
+      /^CREATE TABLE board_widgets/u,
+      "CREATE TABLE board_widgets_legacy",
+    );
+    opened.db.exec(`
+      PRAGMA foreign_keys = OFF;
+      BEGIN IMMEDIATE;
+      ${legacyCreateSql};
+      INSERT INTO board_widgets_legacy SELECT * FROM board_widgets;
+      DROP TABLE board_widgets;
+      ALTER TABLE board_widgets_legacy RENAME TO board_widgets;
+      CREATE INDEX idx_agent_board_widgets_tab_position
+        ON board_widgets(session_key, tab_id, position);
+      COMMIT;
+      PRAGMA foreign_keys = ON;
+    `);
+    closeOpenClawAgentDatabasesForTest();
+
+    const upgradedStore = new SqliteBoardStore({
+      resolveSession: () => ({ agentId: "main", sessionKey }),
+      env,
+    });
+    expect(upgradedStore.getSnapshot(sessionKey).widgets).toEqual([
+      expect.objectContaining({ name: "existing", contentKind: "html" }),
+    ]);
+    upgradedStore.putWidget({
+      sessionKey,
+      name: "plugin",
+      content: { kind: "plugin", pluginKind: "workboard:card", props: { cardId: "123" } },
+    });
+
+    expect(upgradedStore.readWidgetHtml(sessionKey, "existing")?.html).toBe("preserved");
+    expect(upgradedStore.getSnapshot(sessionKey).widgets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "existing", contentKind: "html" }),
+        expect.objectContaining({
+          name: "plugin",
+          contentKind: "plugin",
+          pluginKind: "workboard:card",
+          props: { cardId: "123" },
+        }),
+      ]),
+    );
+  });
+
   it("does not create an unregistered agent database during widget byte lookup", () => {
     const stateDir = tempDirs.make("openclaw-board-no-create-");
     const store = new SqliteBoardStore({
