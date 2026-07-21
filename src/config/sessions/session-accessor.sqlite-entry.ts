@@ -149,8 +149,12 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
       let entries = Object.entries(cached)
         .filter(([key]) => !isInternalSessionEffectsKey(key))
         .map(([sessionKey, entry]) => ({ sessionKey, entry }));
-      if (scope.offset) entries = entries.slice(scope.offset);
-      if (scope.limit) entries = entries.slice(0, scope.limit);
+      if (scope.offset) {
+        entries = entries.slice(scope.offset);
+      }
+      if (scope.limit) {
+        entries = entries.slice(0, scope.limit);
+      }
       return entries;
     }
   }
@@ -161,13 +165,19 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
     .select(["session_key", "entry_json", "session_id", "updated_at"])
     .orderBy("session_key", "asc");
 
-  if (scope.limit) query = query.limit(scope.limit);
-  if (scope.offset) query = query.offset(scope.offset);
+  if (scope.limit) {
+    query = query.limit(scope.limit);
+  }
+  if (scope.offset) {
+    query = query.offset(scope.offset);
+  }
 
   const rows = executeSqliteQuerySync(database.db, query).rows;
   const result = rows
     .map((row) => {
-      if (isInternalSessionEffectsKey(row.session_key)) return undefined;
+      if (isInternalSessionEffectsKey(row.session_key)) {
+        return undefined;
+      }
       const entry = parseSessionEntryRow(row);
       return entry ? { sessionKey: row.session_key, entry } : undefined;
     })
@@ -187,9 +197,7 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
 /** Lists session entries with only metadata fields — skips large blob fields.
  *  systemPromptReport (~62%) and skillsSnapshot (~33%) dominate the entry_json
  *  payload but are unused in list views. */
-export function listSqliteSessionEntriesLight(
-  scope: SessionEntryListScope = {},
-): SessionEntrySummary[] {
+function listSqliteSessionEntriesLight(scope: SessionEntryListScope = {}): SessionEntrySummary[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
   const db = getSessionKysely(database.db);
@@ -202,11 +210,19 @@ export function listSqliteSessionEntriesLight(
   ).rows;
   return rows
     .map((row) => {
-      if (isInternalSessionEffectsKey(row.session_key)) return undefined;
+      if (isInternalSessionEffectsKey(row.session_key)) {
+        return undefined;
+      }
       const entry = parseSessionEntryRow(row);
-      if (!entry) return undefined;
+      if (!entry) {
+        return undefined;
+      }
       // Strip blob fields — not needed for list views
-      const { systemPromptReport, skillsSnapshot, ...lightEntry } = entry;
+      const {
+        systemPromptReport: _systemPromptReport,
+        skillsSnapshot: _skillsSnapshot,
+        ...lightEntry
+      } = entry;
       return { sessionKey: row.session_key, entry: lightEntry as SessionEntry };
     })
     .filter((entry): entry is SessionEntrySummary => entry !== undefined);
