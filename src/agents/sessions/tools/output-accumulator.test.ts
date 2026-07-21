@@ -42,4 +42,17 @@ describe("OutputAccumulator", () => {
     expect(snapshot.fullOutputPath).toBeDefined();
     await rm(snapshot.fullOutputPath!, { force: true });
   });
+
+  it("flushes pending bytes held by every stream lane", () => {
+    // Each lane decodes independently, so a truncated character left on one
+    // pipe must not stop the other pipe's tail from being flushed.
+    const accumulator = new OutputAccumulator();
+
+    accumulator.append(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
+    accumulator.append(Buffer.from([0xe6, 0x97]), "stderr");
+
+    const flushed = accumulator.finish();
+
+    expect(flushed).toBe("��");
+  });
 });

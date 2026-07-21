@@ -83,4 +83,23 @@ describe("bash tool output lifecycle", () => {
 
     expect(result.content[0]).toEqual({ type: "text", text: "before\n" });
   });
+
+  it("decodes a split multi-byte character when the other stream interleaves", async () => {
+    // stdout and stderr are independent pipes: each needs its own decoder, or a
+    // character straddling a stdout read boundary is corrupted by an stderr write
+    // landing between its bytes.
+    const operations: BashOperations = {
+      exec: async (_command, _cwd, { onData }) => {
+        onData(Buffer.from([0xe6, 0x97]), "stdout"); // leading bytes of 日
+        onData(Buffer.from("E"), "stderr"); // interleaves mid-character
+        onData(Buffer.from([0xa5, 0x0a]), "stdout");
+        return { exitCode: 0 };
+      },
+    };
+    const tool = createBashTool(process.cwd(), { operations });
+
+    const result = await tool.execute("call-split-utf8", { command: "ignored" });
+
+    expect(result.content[0]).toEqual({ type: "text", text: "E日\n" });
+  });
 });

@@ -22,7 +22,7 @@ import {
   killProcessTree,
 } from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
-import type { BashOperations } from "./bash-operations.js";
+import type { BashOperations, BashOutputStream } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
 import { getTextOutput, invalidArgText, str } from "./render-utils.js";
 import { formatFullOutputFooter, type BashToolDetails } from "./tool-contracts.js";
@@ -93,9 +93,10 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
           }, timeoutMs);
         }
-        // Stream stdout and stderr.
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
+        // Stream stdout and stderr. Tag each pipe so downstream decode state
+        // stays per-stream; a pending sequence on one must not eat the other.
+        child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
+        child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
         // Handle abort signal by killing the entire process tree.
         const onAbort = () => {
           if (child.pid) {
@@ -374,11 +375,11 @@ export function createBashToolDefinition(
         onUpdate({ content: [], details: undefined });
       }
 
-      const handleData = (data: Buffer) => {
+      const handleData = (data: Buffer, stream?: BashOutputStream) => {
         if (!acceptingOutput) {
           return;
         }
-        output.append(data);
+        output.append(data, stream);
         scheduleOutputUpdate();
       };
 

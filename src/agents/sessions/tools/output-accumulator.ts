@@ -16,8 +16,21 @@ interface OutputAccumulatorOptions {
   maxLines?: number;
   maxBytes?: number;
   tempFilePrefix?: string;
-  transformDecodedText?: (text: string) => string;
+  /**
+   * Builds the decoded-text transform. Called once per stream lane so stateful
+   * transforms (ANSI parsers) cannot consume another stream's pending sequence.
+   */
+  createTextTransform?: () => (text: string) => string;
 }
+
+/** Per-stream decode state. Streams are independent pipes and must not share it. */
+interface DecodeLane {
+  decoder: TextDecoder;
+  transform?: (text: string) => string;
+}
+
+/** Lane key for chunks that arrive without a stream tag. */
+const UNTAGGED_LANE = "";
 
 interface OutputSnapshot {
   content: string;
@@ -41,8 +54,8 @@ export class OutputAccumulator {
   private readonly maxBytes: number;
   private readonly maxRollingBytes: number;
   private readonly tempFilePrefix: string;
-  private readonly transformDecodedText?: (text: string) => string;
-  private readonly decoder = new TextDecoder();
+  private readonly createTextTransform?: () => (text: string) => string;
+  private readonly lanes = new Map<string, DecodeLane>();
 
   private spillChunks: Buffer[] = [];
   private tailText = "";
@@ -64,22 +77,32 @@ export class OutputAccumulator {
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxRollingBytes = Math.max(this.maxBytes * 2, 1);
     this.tempFilePrefix = options.tempFilePrefix ?? "openclaw-output";
-    this.transformDecodedText = options.transformDecodedText;
+    this.createTextTransform = options.createTextTransform;
   }
 
-  append(data: Buffer): string {
+  private lane(stream: string): DecodeLane {
+    let lane = this.lanes.get(stream);
+    if (!lane) {
+      lane = { decoder: new TextDecoder(), transform: this.createTextTransform?.() };
+      this.lanes.set(stream, lane);
+    }
+    return lane;
+  }
+
+  append(data: Buffer, stream = UNTAGGED_LANE): string {
     if (this.finished) {
       throw new Error("Cannot append to a finished output accumulator");
     }
 
     this.totalRawBytes += data.length;
-    const decodedText = this.decoder.decode(data, { stream: true });
-    const text = this.transformDecodedText?.(decodedText) ?? decodedText;
+    const lane = this.lane(stream);
+    const decodedText = lane.decoder.decode(data, { stream: true });
+    const text = lane.transform?.(decodedText) ?? decodedText;
     this.appendDecodedText(text);
 
     // Transformed output must spill exactly what callers see so sanitization
     // cannot be bypassed by reading the full-output file.
-    const spillChunk = this.transformDecodedText ? Buffer.from(text, "utf-8") : data;
+    const spillChunk = this.createTextTransform ? Buffer.from(text, "utf-8") : data;
     if (this.tempFileStream || this.shouldUseTempFile()) {
       this.ensureTempFile();
     }
@@ -92,16 +115,24 @@ export class OutputAccumulator {
       return "";
     }
     this.finished = true;
-    const decodedText = this.decoder.decode();
-    const text = this.transformDecodedText?.(decodedText) ?? decodedText;
-    this.appendDecodedText(text);
-    if (this.transformDecodedText && text.length > 0) {
-      this.appendSpillChunk(Buffer.from(text, "utf-8"));
+    // Every lane holds its own pending bytes, so all of them must be flushed.
+    let flushed = "";
+    for (const lane of this.lanes.values()) {
+      const decodedText = lane.decoder.decode();
+      const text = lane.transform?.(decodedText) ?? decodedText;
+      if (text.length === 0) {
+        continue;
+      }
+      this.appendDecodedText(text);
+      if (this.createTextTransform) {
+        this.appendSpillChunk(Buffer.from(text, "utf-8"));
+      }
+      flushed += text;
     }
     if (this.shouldUseTempFile()) {
       this.ensureTempFile();
     }
-    return text;
+    return flushed;
   }
 
   snapshot(options: { persistIfTruncated?: boolean } = {}): OutputSnapshot {
