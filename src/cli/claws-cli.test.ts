@@ -1,9 +1,9 @@
 // Tests for the experimental grouped Claws CLI.
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { persistClawInstallRecord } from "../claws/provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
@@ -49,18 +49,19 @@ vi.mock("../claws/add.js", async () => ({
 }));
 
 const { registerClawsCli } = await import("./claws-cli.js");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const minimalManifest = { schemaVersion: 1, agent: { id: "demo-agent", name: "Demo Agent" } };
 
 async function writeManifest(value: unknown = minimalManifest): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), "openclaw-claws-cli-"));
+  const dir = tempDirs.make("openclaw-claws-cli-");
   const path = join(dir, "openclaw.claw.json");
   await writeFile(path, JSON.stringify(value), "utf8");
   return path;
 }
 
 async function writePackage(): Promise<{ root: string; workspace: string }> {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claws-cli-package-"));
+  const root = tempDirs.make("openclaw-claws-cli-package-");
   await mkdir(join(root, "workspace"));
   await writeFile(join(root, "workspace", "AGENTS.md"), "# Demo\n", "utf8");
   await writeFile(
@@ -237,7 +238,7 @@ describe("claws cli", () => {
 
   it("applies a minimal Claw only after explicit consent", async () => {
     const manifestPath = await writeManifest();
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
     const plan = JSON.parse(mocks.logs[0] ?? "{}");
     mocks.logs.length = 0;
@@ -268,8 +269,8 @@ describe("claws cli", () => {
 
   it("resumes consented add with the matching in-flight workspace on disk", async () => {
     const manifestPath = await writeManifest();
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
-    const stateRoot = await mkdtemp(join(tmpdir(), "openclaw-claws-state-"));
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
 
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
@@ -303,8 +304,8 @@ describe("claws cli", () => {
 
   it("resumes when config committed before the workspace-ready phase advanced", async () => {
     const manifestPath = await writeManifest();
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
-    const stateRoot = await mkdtemp(join(tmpdir(), "openclaw-claws-state-"));
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
 
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
@@ -337,8 +338,8 @@ describe("claws cli", () => {
 
   it("does not claim an on-disk workspace for a partial record without workspace ownership", async () => {
     const manifestPath = await writeManifest();
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
-    const stateRoot = await mkdtemp(join(tmpdir(), "openclaw-claws-state-"));
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
 
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
@@ -370,8 +371,8 @@ describe("claws cli", () => {
 
   it("preserves a real agent collision while an add is still pending", async () => {
     const manifestPath = await writeManifest();
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
-    const stateRoot = await mkdtemp(join(tmpdir(), "openclaw-claws-state-"));
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
 
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);
@@ -403,8 +404,8 @@ describe("claws cli", () => {
 
   it("does not resume through another agent's configured workspace", async () => {
     const manifestPath = await writeManifest();
-    const workspace = join(await mkdtemp(join(tmpdir(), "openclaw-claws-add-")), "workspace");
-    const stateRoot = await mkdtemp(join(tmpdir(), "openclaw-claws-state-"));
+    const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
+    const stateRoot = tempDirs.make("openclaw-claws-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", join(stateRoot, "state"));
 
     await runCli(["claws", "add", manifestPath, "--dry-run", "--workspace", workspace, "--json"]);

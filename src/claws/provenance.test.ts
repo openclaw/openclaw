@@ -1,8 +1,8 @@
 // Tests root Claw install ownership and the narrow agent/workspace mutation slice.
-import { access, mkdir, mkdtemp, rmdir, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, rmdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -18,6 +18,8 @@ import {
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
@@ -26,7 +28,7 @@ async function makePlan(
   manifestValue: unknown = { schemaVersion: 1, agent: { id: "worker" } },
   options: { workspace?: string } = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-add-"));
+  const root = tempDirs.make("openclaw-claw-add-");
   const parsed = parseClawManifest(manifestValue);
   if (!parsed.ok) {
     throw new Error(JSON.stringify(parsed.diagnostics));
@@ -240,7 +242,7 @@ describe("applyClawAddPlan", () => {
   });
 
   it("rejects overlap with the implicit main workspace before materializing it", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-implicit-main-"));
+    const root = tempDirs.make("openclaw-claw-implicit-main-");
     const mainWorkspace = join(root, "main-workspace");
     const { root: planRoot, plan } = await makePlan(undefined, {
       workspace: join(mainWorkspace, "nested-claw"),
@@ -289,7 +291,7 @@ describe("applyClawAddPlan", () => {
   });
 
   it("rechecks aliased workspace collisions during the config commit", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-workspace-alias-"));
+    const root = tempDirs.make("openclaw-claw-workspace-alias-");
     const canonicalParent = join(root, "canonical");
     const aliasParent = join(root, "alias");
     await mkdir(canonicalParent);
@@ -315,7 +317,7 @@ describe("applyClawAddPlan", () => {
   });
 
   it("rejects workspace ancestry changes after planning", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-workspace-swap-"));
+    const root = tempDirs.make("openclaw-claw-workspace-swap-");
     const canonicalParent = join(root, "canonical");
     const alternateParent = join(root, "alternate");
     await mkdir(canonicalParent);
@@ -354,7 +356,7 @@ describe("applyClawAddPlan", () => {
   });
 
   it("records parent-directory creation failures before workspace mutation", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-add-"));
+    const root = tempDirs.make("openclaw-claw-add-");
     const blockedParent = join(root, "blocked-parent");
     await writeFile(blockedParent, "not a directory", "utf8");
     const { plan } = await makePlan(undefined, {

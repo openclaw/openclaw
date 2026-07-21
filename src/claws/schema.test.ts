@@ -1,12 +1,14 @@
 // Tests for the grouped Claw manifest and read-only add plan.
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { readClawManifestFile } from "./reader.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawManifest, ClawSourceIdentity } from "./types.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const baseManifest = {
   schemaVersion: 1,
@@ -61,7 +63,7 @@ function requireManifest(value: unknown = baseManifest): ClawManifest {
 }
 
 async function createPlanSource(): Promise<{ source: ClawSourceIdentity; workspace: string }> {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-plan-"));
+  const root = tempDirs.make("openclaw-claw-plan-");
   await mkdir(join(root, "workspace", "reference"), { recursive: true });
   await writeFile(join(root, "workspace", "AGENTS.md"), "# Agent\n", "utf8");
   await writeFile(join(root, "workspace", "reference", "policy.md"), "Policy\n", "utf8");
@@ -269,7 +271,7 @@ describe("parseClawManifest", () => {
 
 describe("readClawManifestFile", () => {
   it("takes published identity from package.json", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-package-"));
+    const root = tempDirs.make("openclaw-claw-package-");
     await writeFile(
       join(root, "package.json"),
       JSON.stringify({
@@ -302,7 +304,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("synthesizes explicit development identity for a standalone manifest", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-development-"));
+    const root = tempDirs.make("openclaw-claw-development-");
     const path = join(root, "demo.claw.json");
     await writeFile(
       path,
@@ -324,7 +326,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects workspace sources through an intermediate symlink", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-reader-symlink-"));
+    const root = tempDirs.make("openclaw-claw-reader-symlink-");
     await mkdir(join(root, "workspace"));
     await writeFile(join(root, "workspace", "AGENTS.md"), "# Agent\n", "utf8");
     await symlink(
@@ -352,7 +354,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects a workspace source over the per-file byte limit", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-reader-file-limit-"));
+    const root = tempDirs.make("openclaw-claw-reader-file-limit-");
     await writeFile(join(root, "large.md"), Buffer.alloc(1024 * 1024 + 1));
     const manifestPath = join(root, "demo.claw.json");
     await writeFile(
@@ -374,7 +376,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects aggregate workspace bytes before reading source contents", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-reader-aggregate-limit-"));
+    const root = tempDirs.make("openclaw-claw-reader-aggregate-limit-");
     const files = [];
     for (let index = 0; index < 5; index += 1) {
       const source = `large-${index}.md`;
@@ -401,7 +403,7 @@ describe("readClawManifestFile", () => {
   });
 
   it("rejects package manifests that escape the package root", async () => {
-    const parent = await mkdtemp(join(tmpdir(), "openclaw-claw-escape-"));
+    const parent = tempDirs.make("openclaw-claw-escape-");
     const root = join(parent, "package");
     await mkdir(root);
     await writeFile(
@@ -511,7 +513,7 @@ describe("buildClawAddPlan", () => {
 
   it("canonicalizes a missing workspace through an existing aliased parent", async () => {
     const { source } = await createPlanSource();
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-workspace-alias-"));
+    const root = tempDirs.make("openclaw-claw-workspace-alias-");
     const canonicalParent = join(root, "canonical");
     const aliasParent = join(root, "alias");
     await mkdir(canonicalParent);

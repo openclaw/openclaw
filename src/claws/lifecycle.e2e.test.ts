@@ -1,19 +1,19 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function runOpenClaw(
   args: string[],
   options?: { expectFailure?: boolean; stateDir?: string },
 ) {
-  const stateDir =
-    options?.stateDir ?? (await mkdtemp(join(tmpdir(), "openclaw-claws-lifecycle-e2e-")));
+  const stateDir = options?.stateDir ?? tempDirs.make("openclaw-claws-lifecycle-e2e-");
   const env = {
     ...process.env,
     HOME: stateDir,

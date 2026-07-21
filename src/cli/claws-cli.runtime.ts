@@ -193,7 +193,6 @@ export async function runClawsAddCommand(
   let plan = await buildClawAddPlan({
     manifest: result.manifest,
     source: result.source,
-    snapshot: result.snapshot,
     diagnostics: result.diagnostics,
     context: basePlanContext,
   });
