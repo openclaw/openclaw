@@ -34,6 +34,7 @@ import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.resolveAgentIdFromMainSessionKey
+import ai.openclaw.app.selectableAgents
 import ai.openclaw.app.ui.copyGatewayDiagnosticsReport
 import ai.openclaw.app.ui.design.AgentAvatarSource
 import ai.openclaw.app.ui.design.ClawAgentAvatar
@@ -794,14 +795,15 @@ private fun ChatAgentSelector(
   agents: List<GatewayAgentSummary>,
   onSelectAgent: (String) -> Unit,
 ) {
-  if (agents.size <= 1) return
+  val selectableAgents = agents.selectableAgents()
+  if (selectableAgents.size <= 1) return
 
   Row(
     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    agents.forEach { agent ->
+    selectableAgents.forEach { agent ->
       ChatSessionChip(
         text = chatAgentChipText(agent),
         avatarSource = agentAvatarSource(agent),

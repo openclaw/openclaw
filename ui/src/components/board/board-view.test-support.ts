@@ -110,6 +110,8 @@ export async function mount(
     widgetFrameUrl?: (name: string, revision: number) => string;
     sessions?: readonly GatewaySessionRow[];
     context?: ApplicationContext<RouteId>;
+    canMutate?: boolean;
+    canGrant?: boolean;
   } = {},
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
@@ -118,6 +120,8 @@ export async function mount(
   view.widgetFrameUrl = options.widgetFrameUrl ?? (() => "about:blank");
   view.callbacks = options.callbacks ?? callbacks();
   view.sessions = options.sessions ?? [];
+  view.canMutate = options.canMutate ?? true;
+  view.canGrant = options.canGrant ?? true;
   if (options.context) {
     const provider = createApplicationContextProvider(options.context);
     provider.append(view);
