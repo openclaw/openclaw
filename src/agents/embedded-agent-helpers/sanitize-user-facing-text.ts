@@ -418,6 +418,143 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   return result.join("\n\n");
 }
 
+/**
+ * Stack-frame line emitted by Node.js and other V8-based runtimes.
+ *
+ * Matches both synchronous and async frames so `at async … (path:line:col)`
+ * variants are correctly classified instead of leaking internal paths.
+ * The path portion allows colons for `node:internal/…`, `file:///…`, and
+ * Windows drive-letter paths (`C:\…`).
+ */
+const STACK_FRAME_LINE_RE =
+  /^\s+at\s+(?:async\s+)?(?:[^\s(]+(?:\s+\[as\s+[^\]]+\])?\s*)?\(?(?:[^()]+:\d+:\d+|native)\)?$/;
+
+/**
+ * Safe-prose allow-list for the suffix that follows a classified error-prefix
+ * line.  By the time the suffix reaches this guard, upstream checks have
+ * already rejected every known error class (billing, context overflow, raw API
+ * payloads, streaming parse errors, etc.).  The residual text is in an unknown
+ * error domain, so the default stance is to discard the entire suffix and
+ * return only the classified error label.
+ *
+ * This guard uses a strict positive allow-list, not a negative credential
+ * block-list.  Only three syntactic forms pass through:
+ *
+ * 1. Bullet points (dash / emoji variants)
+ * 2. Numbered lists (`1.` / `1)` ...)
+ * 3. Guidance headings — `CapitalCase label: value` where the label is in a
+ *    fixed safe-word list (`Recommendation`, `Next step`, `Next steps`,
+ *    `Suggested fix`, `Common issues`, `Key finding`, `Key step`,
+ *    `Key takeaway`, `Tip`, `Note`, `Caution`, `Warning`)
+ *
+ * All other forms — including natural sentences like `The password is X` or
+ * `Try restarting the service.` — are rejected by default.  This trades
+ * agent-output coverage for credential safety: a credential embedded in a
+ * free-form natural sentence can never match a known safe label, so it is
+ * discarded without needing to enumerate every possible credential shape.
+ * Prior iterations used a negative credential regex block-list, which
+ * ClawSweeper found could be bypassed by new phrasings on every review cycle
+ * (PR #96107 reviews 2026-07-03 through 2026-07-10); the allow-list design
+ * makes bypass impossible by construction.
+ */
+const SAFE_GUIDANCE_LABELS = [
+  "Recommendation",
+  "Next step",
+  "Next steps",
+  "Suggested fix",
+  "Common issues",
+  "Key finding",
+  "Key step",
+  "Key takeaway",
+  "Tip",
+  "Note",
+  "Caution",
+  "Warning",
+] as const;
+
+const SAFE_GUIDANCE_HEADING_RE = new RegExp(
+  `^\\s*(?:${SAFE_GUIDANCE_LABELS.map((l) => l.replace(/[ ]/g, "\\s+")).join("|")})\\s*:(?:\\s+\\S.*)?$`,
+  "i",
+);
+
+function containsOnlySafeProse(suffix: string): boolean {
+  const lines = suffix.split("\n");
+  if (lines.length === 0) {
+    return false;
+  }
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+
+    // Stack-frame lines — provider/runtime internals.
+    if (STACK_FRAME_LINE_RE.test(line)) {
+      return false;
+    }
+
+    // JSON payloads, HTML error pages.
+    if (
+      trimmed.startsWith("{") ||
+      trimmed.startsWith("[") ||
+      /^\s*<!doctype\s+html\b/i.test(line) ||
+      /^\s*<html\b/i.test(line)
+    ) {
+      return false;
+    }
+
+    // Any HTTP URL (covers diagnostic endpoint URLs and raw API links).
+    if (/https?:\/\//i.test(trimmed)) {
+      return false;
+    }
+
+    // Auth-scheme token lines (`Bearer sk-...`).
+    if (/^\s*Bearer\s+\S+/i.test(trimmed)) {
+      return false;
+    }
+
+    // Strict allow-list — three safe forms.  Everything else is rejected.
+    // 1. Bullet points (dash / emoji variants).
+    if (/^\s*(?:[-•*✓✅＞»▸▪◦◇])\s/.test(line)) {
+      continue;
+    }
+    // 2. Numbered lists.
+    if (/^\s*\d+[.)]\s/.test(line)) {
+      continue;
+    }
+    // 3. Guidance headings with a known safe label.
+    if (SAFE_GUIDANCE_HEADING_RE.test(trimmed)) {
+      continue;
+    }
+
+    // Unrecognized — default to reject.  Natural sentences, label:value
+    // pairs, raw error text, and anything else all land here.
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Classify a single leading error-prefix line through the existing safe
+ * formatters so raw provider details or transport errors never leak into
+ * channel replies.
+ */
+function classifyErrorPrefixLine(line: string): string {
+  const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(line);
+  if (prefixedCopy) {
+    return prefixedCopy;
+  }
+  const transportCopy = formatTransportErrorCopy(line);
+  if (transportCopy) {
+    return transportCopy;
+  }
+  if (isTimeoutErrorMessage(line)) {
+    return "LLM request timed out.";
+  }
+  return formatRawAssistantErrorForUi(line);
+}
+
 export function isLikelyHttpErrorText(raw: string): boolean {
   if (isCloudflareOrHtmlErrorPage(raw)) {
     return true;
@@ -504,18 +641,27 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
       return "LLM streaming response contained a malformed fragment. Please try again.";
     }
     if (ERROR_PREFIX_RE.test(trimmed)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
-      if (prefixedCopy) {
-        return prefixedCopy;
+      // Multi-line text with an error-prefix first line:
+      // 1. Classify the leading error line with the safe formatters.
+      // 2. Append only the safe follow-up prose — recommendations, next steps,
+      //    bullet points — but skip raw stack frames and payload bodies.
+      const firstNewline = trimmed.indexOf("\n");
+      if (firstNewline > 0) {
+        const leadingLine = trimmed.slice(0, firstNewline);
+        // Keep the raw suffix for stack-frame detection so leading whitespace
+        // on the first frame line survives past suffix.trim().
+        const rawSuffix = trimmed.slice(firstNewline + 1);
+        const suffix = rawSuffix.trim();
+        const classified = classifyErrorPrefixLine(leadingLine);
+        if (suffix && containsOnlySafeProse(rawSuffix)) {
+          // Suffix passed containsOnlySafeProse — proven safe prose, not raw
+          // error text.  Append directly without the raw-error formatter's
+          // 600-character truncation so long recommendations stay intact.
+          return `${classified}\n\n${suffix}`;
+        }
+        return classified;
       }
-      const transportCopy = formatTransportErrorCopy(trimmed);
-      if (transportCopy) {
-        return transportCopy;
-      }
-      if (isTimeoutErrorMessage(trimmed)) {
-        return "LLM request timed out.";
-      }
-      return formatRawAssistantErrorForUi(trimmed);
+      return classifyErrorPrefixLine(trimmed);
     }
   }
 
