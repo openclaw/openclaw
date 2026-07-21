@@ -147,7 +147,11 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
         .filter(([key]) => !isInternalSessionEffectsKey(key))
         .map(([sessionKey, entry]) => {
           if (scope.light) {
-            const { systemPromptReport, skillsSnapshot, ...lightEntry } = entry;
+            const {
+              systemPromptReport: _systemPromptReport,
+              skillsSnapshot: _skillsSnapshot,
+              ...lightEntry
+            } = entry;
             return { sessionKey, entry: lightEntry as SessionEntry };
           }
           return { sessionKey, entry };
@@ -191,7 +195,11 @@ export function listSqliteSessionEntries(scope: SessionEntryListScope = {}): Ses
     // Store full entry for cache; return stripped entry for light callers
     storeRecord[row.session_key] = entry;
     if (scope.light) {
-      const { systemPromptReport, skillsSnapshot, ...lightEntry } = entry;
+      const {
+        systemPromptReport: _systemPromptReport,
+        skillsSnapshot: _skillsSnapshot,
+        ...lightEntry
+      } = entry;
       result.push({ sessionKey: row.session_key, entry: lightEntry as SessionEntry });
     } else {
       result.push({ sessionKey: row.session_key, entry });
