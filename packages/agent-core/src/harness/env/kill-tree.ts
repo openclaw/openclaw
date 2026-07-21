@@ -14,7 +14,10 @@ export type KillProcessTreeOptions = {
 /**
  * Best-effort process-tree termination with graceful shutdown.
  * - Windows: use taskkill /T to include descendants. Sends SIGTERM-equivalent
- *   first (without /F), then force-kills if process survives.
+ *   first (without /F), then force-kills if that attempt reports failure or the
+ *   process survives the grace period. Either escalation is skipped when the PID
+ *   is no longer alive, because Windows reuses PIDs and /F /T would take an
+ *   unrelated tree with it.
  * - Unix: send SIGTERM to process group first, wait grace period, then SIGKILL.
  *
  * Group kill (`process.kill(-pid, ...)`) is only used when the PID is verified
@@ -166,32 +169,75 @@ function signalProcessTreeUnix(
   }
 }
 
-function runTaskkill(args: string[]): void {
+function runTaskkill(args: string[], onExit?: (code: number | null) => void): void {
+  // Node emits "close" after "error" when a spawn fails, and that close carries a
+  // negative errno rather than null. Report only the first outcome so a spawn failure
+  // never reaches callers as a non-zero taskkill verdict.
+  let reported = false;
+  const report = (code: number | null) => {
+    if (reported) {
+      return;
+    }
+    reported = true;
+    onExit?.(code);
+  };
+
   try {
     const child = spawn("taskkill", args, {
       stdio: "ignore",
       detached: true,
       windowsHide: true,
     });
-    child.once("error", () => {});
+    child.once("error", () => report(null));
+    child.once("close", (code) => report(code));
   } catch {
-    // Ignore taskkill spawn failures.
+    // Report the spawn failure as "no verdict"; taskkill never ran.
+    report(null);
   }
 }
 
 function killProcessTreeWindows(pid: number, graceMs: number): void {
-  signalProcessTreeWindows(pid, "SIGTERM");
-
-  setTimeout(() => {
+  let forced = false;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
+  const forceKill = () => {
+    // The reported-failure path and the grace timer can both land here; force stays single-shot.
+    if (forced) {
+      return;
+    }
+    forced = true;
+    if (graceTimer !== undefined) {
+      clearTimeout(graceTimer);
+      graceTimer = undefined;
+    }
+    // taskkill reports the same non-zero exit for "needs /F" and "process not found", so a
+    // reported failure is not proof the tree is still there. /T against an exited PID can
+    // tear down an unrelated tree once Windows reuses the number. Latch before this check:
+    // a PID that is dead now can only look alive later by having been reused.
     if (!isProcessAlive(pid)) {
       return;
     }
     signalProcessTreeWindows(pid, "SIGKILL");
-  }, graceMs).unref();
+  };
+
+  // Windows cannot end console processes without /F and reports that refusal as a non-zero
+  // taskkill exit. Escalating on the reported failure keeps cleanup correct when the owning
+  // process exits before the unref'd grace timer fires, which otherwise leaks the whole tree.
+  signalProcessTreeWindows(pid, "SIGTERM", (code) => {
+    if (code !== null && code !== 0) {
+      forceKill();
+    }
+  });
+
+  graceTimer = setTimeout(forceKill, graceMs);
+  graceTimer.unref();
 }
 
-function signalProcessTreeWindows(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+function signalProcessTreeWindows(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+  onExit?: (code: number | null) => void,
+): void {
   const args =
     signal === "SIGKILL" ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
-  runTaskkill(args);
+  runTaskkill(args, onExit);
 }
