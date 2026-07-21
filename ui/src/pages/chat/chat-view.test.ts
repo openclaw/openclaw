@@ -6078,7 +6078,7 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
-  it("preserves the native context menu when text is selected inside the bubble", () => {
+  it("uses the native menu only when the selection intersects the clicked bubble", () => {
     const container = renderChatView({ onSetReply: vi.fn() });
     const section = container.querySelector<HTMLElement>(".card.chat");
     expect(section).not.toBeNull();
@@ -6090,58 +6090,38 @@ describe("right-click Reply", () => {
     bubble.dataset.messageId = "msg-1";
     bubble.dataset.messageText = "selectable text";
     bubble.textContent = "selectable text";
-    group.appendChild(bubble);
+    const otherBubble = document.createElement("div");
+    otherBubble.className = "chat-bubble";
+    otherBubble.dataset.messageText = "other text";
+    otherBubble.textContent = "other text";
+    group.append(bubble, otherBubble);
     section!.querySelector(".chat-thread-inner")!.appendChild(group);
 
-    // Simulate a non-collapsed text selection inside the same bubble
-    const range = document.createRange();
-    range.selectNodeContents(bubble);
+    const bubbleText = expectDefined(bubble.firstChild, "bubble text node");
+    const otherText = expectDefined(otherBubble.firstChild, "other bubble text node");
+    let selectedRange = document.createRange();
+    selectedRange.setStart(bubbleText, 0);
+    selectedRange.setEnd(otherText, otherText.textContent?.length ?? 0);
     const mockSelection = {
       isCollapsed: false,
       rangeCount: 1,
-      getRangeAt: () => range,
-      toString: () => "selectable text",
+      getRangeAt: () => selectedRange,
     } as unknown as Selection;
-    const getSelectionSpy = vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
+    vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
 
-    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    bubble.dispatchEvent(evt);
+    const selectedEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(selectedEvent);
 
-    // The handler should NOT prevent the native menu
-    expect(evt.defaultPrevented).toBe(false);
+    expect(selectedEvent.defaultPrevented).toBe(false);
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
 
-    getSelectionSpy.mockRestore();
-  });
+    selectedRange = document.createRange();
+    selectedRange.selectNodeContents(otherBubble);
+    const disjointEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(disjointEvent);
 
-  it("shows the Reply menu when clicking without a text selection", () => {
-    const container = renderChatView({ onSetReply: vi.fn() });
-    const section = container.querySelector<HTMLElement>(".card.chat");
-    expect(section).not.toBeNull();
-
-    const group = document.createElement("div");
-    group.className = "chat-group";
-    const bubble = document.createElement("div");
-    bubble.className = "chat-bubble";
-    bubble.dataset.messageId = "msg-1";
-    bubble.dataset.messageText = "some text";
-    group.appendChild(bubble);
-    section!.querySelector(".chat-thread-inner")!.appendChild(group);
-
-    // No selection: getSelection returns collapsed or null
-    const mockSelection = {
-      isCollapsed: true,
-      rangeCount: 0,
-    } as unknown as Selection;
-    const getSelectionSpy = vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
-
-    const evt = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
-    bubble.dispatchEvent(evt);
-
-    expect(evt.defaultPrevented).toBe(true);
+    expect(disjointEvent.defaultPrevented).toBe(true);
     expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
-
-    getSelectionSpy.mockRestore();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

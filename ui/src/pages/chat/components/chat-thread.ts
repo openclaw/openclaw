@@ -785,6 +785,18 @@ function handleChatThreadSelectionPointerUp(event: PointerEvent, props: ChatThre
   });
 }
 
+function selectionIntersectsElement(selection: Selection | null, element: Element): boolean {
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    if (selection.getRangeAt(index).intersectsNode(element)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
   if (event.composedPath().some((target) => target instanceof HTMLAnchorElement)) {
     return;
@@ -827,19 +839,8 @@ function handleChatContextMenu(event: MouseEvent, props: ChatThreadProps) {
     return;
   }
 
-  // When text is selected inside the right-clicked bubble, defer to the
-  // browser's native context menu (Copy, Search, spell-check, etc.) instead
-  // of the custom Reply menu.
-  const selection = window.getSelection();
-  if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
-    const range = selection.getRangeAt(0);
-    const container =
-      range.commonAncestorContainer instanceof Element
-        ? range.commonAncestorContainer
-        : range.commonAncestorContainer.parentElement;
-    if (container && bubble.contains(container)) {
-      return;
-    }
+  if (selectionIntersectsElement(window.getSelection(), bubble)) {
+    return;
   }
 
   event.preventDefault();
