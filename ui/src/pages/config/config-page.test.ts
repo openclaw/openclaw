@@ -10,9 +10,13 @@ import type {
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import * as realtimeTalk from "../chat/realtime-talk.ts";
 import { ConfigPage, configSelectionFromSearch, supportsSystemInfo } from "./config-page.ts";
 import { configSectionKeysForPage } from "./config-sections.ts";
 import type { ConfigViewState } from "./view.ts";
+
+const switchActiveRealtimeTalkCameras =
+  vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -25,8 +29,13 @@ function deferred<T>() {
 let localStorageMock: Storage;
 
 beforeEach(() => {
+  vi.spyOn(realtimeTalk, "switchActiveRealtimeTalkCameras").mockImplementation(
+    switchActiveRealtimeTalkCameras,
+  );
   localStorageMock = createStorageMock();
   vi.stubGlobal("localStorage", localStorageMock);
+  switchActiveRealtimeTalkCameras.mockReset();
+  switchActiveRealtimeTalkCameras.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -102,6 +111,41 @@ describe("ConfigPage advanced selection guard", () => {
       activeSection: null,
       activeSubsection: null,
     });
+  });
+});
+
+describe("ConfigPage camera selection", () => {
+  it("clears recovered errors and ignores failures from superseded selections", async () => {
+    let rejectFirst: (error: Error) => void = () => undefined;
+    const first = new Promise<void>((_resolve, reject) => {
+      rejectFirst = reject;
+    });
+    switchActiveRealtimeTalkCameras
+      .mockRejectedValueOnce(new Error("The selected camera is unavailable"))
+      .mockReturnValueOnce(first)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      cameraError: string | null;
+      selectCamera: (deviceId: string) => Promise<void>;
+      applySettings: () => void;
+    };
+    state.applySettings = () => undefined;
+
+    await state.selectCamera("missing-camera");
+    expect(state.cameraError).toBe("The selected camera is unavailable");
+
+    const staleSelection = state.selectCamera("slow-camera");
+    expect(state.cameraError).toBeNull();
+    await state.selectCamera("back-camera");
+    rejectFirst(new Error("The selected camera is unavailable"));
+    await staleSelection;
+    expect(state.cameraError).toBeNull();
+
+    state.cameraError = "Another camera error";
+    await state.selectCamera("");
+    expect(state.cameraError).toBeNull();
   });
 });
 

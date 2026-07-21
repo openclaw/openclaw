@@ -12,6 +12,25 @@ OpenClaw. Operator and node clients (CLI, web UI, macOS app, iOS/Android nodes,
 headless nodes) connect over WebSocket and declare a **role** and **scope** at
 handshake time.
 
+## npm packages
+
+These packages ship with OpenClaw release trains. During the initial rollout,
+npm may return `E404` until the first package-bearing release is published.
+
+- [`@openclaw/gateway-protocol`](https://www.npmjs.com/package/@openclaw/gateway-protocol)
+  publishes the schemas, validators, TypeScript types, lightweight frame and error
+  helpers, and version constants. Its tarball includes the generated
+  [`protocol.schema.json`](https://unpkg.com/@openclaw/gateway-protocol/protocol.schema.json)
+  machine-readable contract.
+- [`@openclaw/gateway-client`](https://www.npmjs.com/package/@openclaw/gateway-client)
+  publishes the reference Node client and a browser-safe entry at
+  `@openclaw/gateway-client/browser`.
+
+For application lifecycle guidance, see
+[Building a Gateway client](https://docs.openclaw.ai/gateway/clients). For apps
+that supervise the Gateway as a child process, see
+[Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding).
+
 ## Transport and framing
 
 - WebSocket, text frames, JSON payloads.
@@ -39,6 +58,11 @@ missing-scope details:
 - Missing scope: `{ code: "MISSING_SCOPE", missingScope, requiredScopes }`.
   `requiredScopes` is the complete known scope set for the requested operation.
   The legacy `missing scope: <scope>` message is retained for older clients.
+
+Clients should read `details` first and use the legacy message only as a compatibility
+fallback. `readMissingScopeError` and `readMissingScopeErrorDetails` are exported from
+`@openclaw/gateway-protocol/gateway-error-details`; the browser-safe gateway client
+re-exports them from `@openclaw/gateway-client/browser`.
 
 The schemas are exported as `GatewayErrorDetailsSchema`,
 `MissingScopeErrorDetailsSchema` from `@openclaw/gateway-protocol/schema`.
@@ -491,8 +515,10 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `talk.session.steer` sends active-run voice control into a gateway-owned agent-backed Talk session: `{ sessionId, text, mode? }`, where `mode` is `status`, `steer`, `cancel`, or `followup`; omitted mode is classified from the spoken text.
     - `talk.session.close` closes a gateway-owned relay, transcription, or managed-room session and emits terminal Talk events.
     - `talk.mode` sets/broadcasts the current Talk mode state for WebChat/Control UI clients.
-    - `talk.client.create` creates a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns config, credentials, instructions, and tool policy.
-    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result.
+    - `talk.client.create` creates or resumes a client-owned realtime provider session using `webrtc` or `provider-websocket` while the gateway owns credentials, instructions, tool policy, and the returned `voiceSessionId`. Clients pass `sessionKey` and reuse `voiceSessionId` when replacing the provider transport during one call.
+    - `talk.client.transcript` appends one finalized `{ role, text }` item to the normal agent session. The required `entryId` is idempotent within `voiceSessionId`; retries do not duplicate transcript messages.
+    - `talk.client.close` closes the logical voice session after pending transcript writes. Closing is idempotent and may deliver a mutation-only call digest to the session's last non-WebChat channel.
+    - `talk.client.toolCall` lets client-owned realtime transports forward provider tool calls to gateway policy. The first supported tool is `openclaw_agent_consult`; clients get a run id and wait for normal chat lifecycle events before submitting the provider-specific tool result. Voice-bound high-impact actions return `VOICE_CONFIRMATION_REQUIRED:<id>` until a later finalized user utterance explicitly confirms that exact action and the next consult supplies the `confirmationId`.
     - `talk.client.steer` sends active-run voice control for client-owned realtime transports. The gateway resolves the active embedded run from `sessionKey` and returns a structured accepted/rejected result instead of silently dropping steering.
     - `talk.event` is the single Talk event channel for realtime, transcription, STT/TTS, managed-room, telephony, and meeting adapters.
     - `talk.speak` synthesizes speech through the active Talk speech provider.
@@ -521,7 +547,7 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
-    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
+    - `agents.list` returns gateway-visible agent entries, including effective model/runtime metadata and optional semantic `kind` (`agent` or `system`). Clients advertise the `agent-kind` handshake capability to receive the complete typed roster; clients without it keep the legacy selector-safe roster without system rows. Kind-aware clients exclude `system` rows from ordinary selectors while retaining them in diagnostic views. Older v4 gateways may return rows without `kind`.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
     - `audit.activity.list` returns the versioned metadata-only activity ledger; `audit.list` remains the compatibility-safe run/tool RPC.
@@ -586,12 +612,20 @@ methods. Treat this as feature discovery, not a full enumeration of
   </Accordion>
 
   <Accordion title="Approval families">
+    - `approval.history` returns newest-first terminal approvals retained for 30 days for exec, plugin, and system-agent requests (scope `operator.approvals`). It supports cursor pagination plus an optional kind filter; pending approvals are not history rows.
     - `approval.get` and `approval.resolve` are the kind-agnostic durable approval methods (scope `operator.approvals`). `approval.get` returns a sanitized pending or retained terminal projection with a stable `urlPath`; `approval.resolve` accepts the canonical approval id, an explicit `kind`, and a decision, applies first-answer-wins resolution, and always returns the recorded canonical result.
     - `exec.approval.request`, `exec.approval.get`, `exec.approval.list`, and `exec.approval.resolve` cover one-shot exec approval requests plus pending approval lookup/replay. They are protocol-boundary adapters over the same durable approval registry.
     - `exec.approval.waitDecision` waits on one pending exec approval and returns the final decision (or `null` on timeout).
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
     - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
+
+  </Accordion>
+
+  <Accordion title="Control UI commands">
+    - `ui.command` lets an `operator.write` caller send typed layout and navigation commands to connected Control UI clients that advertise the `ui-commands` capability.
+    - Commands cover pane split/close/focus, sidebar visibility, terminal/browser panel visibility and dock, and session navigation.
+    - Protocol v1 intentionally fans out to every connected capable Control UI. If none is connected, the request fails with `UNAVAILABLE` instead of pretending the layout changed.
 
   </Accordion>
 
@@ -1132,5 +1166,7 @@ the TypeBox schemas re-exported from `packages/gateway-protocol/src/schema.ts`.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Bridge protocol](/gateway/bridge-protocol)
 - [Gateway runbook](/gateway)

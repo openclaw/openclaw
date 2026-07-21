@@ -4402,6 +4402,57 @@ describe("exec approval handlers", () => {
     expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
+  it.each([
+    ["URL dot segment", ".."],
+    ["ANSI escape", "approval-\u001b[31mred"],
+    ["ASCII control", "approval-\u0000hidden"],
+    ["Unicode control", "approval-\u202Ehidden"],
+    ["lone surrogate", "approval-\ud800hidden"],
+    ["whitespace", "approval unsafe"],
+    ["surrounding whitespace", " approval-safe "],
+    ["whitespace-only value", " "],
+    ["embedded line feed", "approval-\nunsafe"],
+    ["overlong value", "a".repeat(129)],
+  ])("rejects an unsafe explicit approval id containing an %s", async (_label, id) => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id, host: "gateway" },
+    });
+
+    expect(mockCallArg(respond)).toBe(false);
+    expect(mockCallArg(respond, 0, 1)).toBeUndefined();
+    expect(mockCallArg(respond, 0, 2)).toMatchObject({
+      code: "INVALID_REQUEST",
+      details: {
+        code: "EXEC_APPROVAL_ID_INVALID",
+        reason: "INVALID_APPROVAL_ID",
+      },
+    });
+    expect(manager.getSnapshot(id)).toBeNull();
+    expect(broadcasts).toEqual([]);
+  });
+
+  it("accepts an explicit approval id with a leading dash", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "-approval-123", host: "gateway", twoPhase: true },
+    });
+
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+    await requestPromise;
+    expect(id).toBe("-approval-123");
+    expect(manager.getSnapshot(id)).not.toBeNull();
+    expect(mockCallArg(respond)).toBe(true);
+  });
+
   it("rejects explicit approval ids with the reserved plugin prefix", async () => {
     const { handlers, respond, context } = createExecApprovalFixture();
 

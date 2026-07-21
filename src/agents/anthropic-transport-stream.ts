@@ -73,7 +73,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dyn
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { unwrapModelHeaderSentinelsForProviderEgress } from "./provider-secret-egress.js";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { buildGuardedModelFetch, parseRetryAfterSeconds } from "./provider-transport-fetch.js";
 import type { StreamFn } from "./runtime/index.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
@@ -852,9 +852,7 @@ function createAnthropicMessagesClient(params: {
         });
         if (!response.ok) {
           const detail = await readAnthropicMessagesErrorBodySnippet(response);
-          throw new Error(
-            detail || `Anthropic Messages request failed with HTTP ${response.status}`,
-          );
+          throw new Error(formatAnthropicMessagesHttpError(response, detail));
         }
         if (!response.body) {
           return;
@@ -863,6 +861,16 @@ function createAnthropicMessagesClient(params: {
       },
     },
   };
+}
+
+function formatAnthropicMessagesHttpError(response: Response, detail: string): string {
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
+  // Keep retry timing in the canonical error text so every retry owner sees the
+  // same bounded signal without extending the public AssistantMessage contract.
+  const retryAfterSuffix = Number.isFinite(retryAfterSeconds)
+    ? `; Retry-After: ${Math.ceil(retryAfterSeconds ?? 0)} seconds`
+    : "";
+  return `HTTP ${response.status}: ${detail || "Anthropic Messages request failed"}${retryAfterSuffix}`;
 }
 
 async function readAnthropicMessagesErrorBodySnippet(response: Response): Promise<string> {

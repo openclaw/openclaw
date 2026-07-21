@@ -371,7 +371,7 @@ describe("unified approval handlers", () => {
   it("returns an exact-id, deep-linkable exec projection without execution bindings", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
-    const id = "exec:approval/with?reserved";
+    const id = "exec:approval.with_safe-punctuation";
     registerExec(managers.exec, {
       id,
       reviewerDeviceIds: ["reviewer-a"],
@@ -406,7 +406,7 @@ describe("unified approval handlers", () => {
     expect(approvalFromResult(response.result)).toMatchObject({
       id,
       status: "pending",
-      urlPath: "/operator/approve/exec%3Aapproval%2Fwith%3Freserved",
+      urlPath: "/operator/approve/exec%3Aapproval.with_safe-punctuation",
       presentation: {
         kind: "exec",
         commandText: "printf approval-handler",
@@ -1318,11 +1318,11 @@ describe("unified approval handlers", () => {
     expect(context.broadcastToConnIds).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves an overlong canonical id through its fixed-size transport reference", async () => {
+  it("resolves a maximum-length canonical id through its fixed-size transport reference", async () => {
     const databaseOptions = createDatabaseOptions();
     const managers = createManagers(databaseOptions);
     const pending = registerExec(managers.exec, {
-      id: `approval/${"\u{1F4F1}".repeat(40)}/transport-limit`,
+      id: `approval-${"a".repeat(119)}`,
       reviewerDeviceIds: ["telegram"],
     });
     const durable = getOperatorApproval({ id: pending.record.id, databaseOptions });

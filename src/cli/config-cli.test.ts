@@ -7,6 +7,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
@@ -20,10 +21,15 @@ const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
   (
     cfg: OpenClawConfig,
-    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+    options?: {
+      auditOrigin?: "cli";
+      unsetPaths?: string[][];
+      explicitSetPaths?: string[][];
+    },
   ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
+const mockCheckTouchedTextModelRefs = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
 const mockLoadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) =>
   createPluginMetadataSnapshot(),
@@ -33,11 +39,19 @@ vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
   writeConfigFile: (
     cfg: OpenClawConfig,
-    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+    options?: {
+      auditOrigin?: "cli";
+      unsetPaths?: string[][];
+      explicitSetPaths?: string[][];
+    },
   ) => mockWriteConfigFile(cfg, options),
   replaceConfigFile: (params: {
     nextConfig: OpenClawConfig;
-    writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
+    writeOptions?: {
+      auditOrigin?: "cli";
+      unsetPaths?: string[][];
+      explicitSetPaths?: string[][];
+    };
   }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
 }));
 
@@ -47,6 +61,10 @@ vi.mock("../secrets/resolve.js", () => ({
 
 vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
+}));
+
+vi.mock("./config-model-validation.js", () => ({
+  checkTouchedTextModelRefs: (...args: unknown[]) => mockCheckTouchedTextModelRefs(...args),
 }));
 
 vi.mock("../gateway/config-reload-plan.js", () => ({
@@ -380,12 +398,16 @@ function firstWrittenConfig(): OpenClawConfig {
 }
 
 function firstWriteConfigOptions():
-  | { unsetPaths?: string[][]; explicitSetPaths?: string[][] }
+  | { auditOrigin?: "cli"; unsetPaths?: string[][]; explicitSetPaths?: string[][] }
   | undefined {
   return mockWriteConfigFile.mock.calls[0]?.[1];
 }
 
-function requireWriteOptions(): { unsetPaths?: string[][]; explicitSetPaths?: string[][] } {
+function requireWriteOptions(): {
+  auditOrigin?: "cli";
+  unsetPaths?: string[][];
+  explicitSetPaths?: string[][];
+} {
   const options = firstWriteConfigOptions();
   if (!options) {
     throw new Error("expected write options");
@@ -481,6 +503,7 @@ describe("config cli", () => {
       throw new ExitError(code, errorMessages || undefined);
     });
     mockResolveSecretRefValue.mockResolvedValue("resolved-secret");
+    mockCheckTouchedTextModelRefs.mockResolvedValue({ refsChecked: 0, refsTotal: 0, errors: [] });
   });
 
   describe("config set - issue #6070", () => {
@@ -508,6 +531,7 @@ describe("config cli", () => {
       expect(written.tools).toEqual(resolved.tools);
       expect(written.logging).toEqual(resolved.logging);
       expect(written.agents).not.toHaveProperty("defaults");
+      expect(requireWriteOptions().auditOrigin).toBe("cli");
     });
 
     it("marks set paths explicit so default-equal writes persist", async () => {
@@ -660,6 +684,133 @@ describe("config cli", () => {
       });
       expect(written.agents?.defaults?.models).toEqual({
         "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
+        config: written,
+        previousConfig: expect.any(Object),
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+        redactDependencyValues: true,
+      });
+    });
+
+    it("rejects an unresolved primary model before writing config", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
+          'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
+        ],
+      });
+
+      await expect(
+        runConfigCommand(["config", "set", "agents.defaults.model.primary", "missing/nope"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes('Cannot set model reference "missing/nope"');
+      expectErrorIncludes("openclaw models list");
+    });
+
+    it("preserves an authored env placeholder after model validation", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [],
+      });
+
+      await runConfigCommand(["config", "set", "agents.defaults.model.primary", "${MODEL_REF}"]);
+
+      expect(firstWrittenConfig().agents?.defaults?.model).toEqual({
+        primary: "${MODEL_REF}",
+      });
+      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
+        config: expect.objectContaining({
+          agents: expect.objectContaining({
+            defaults: expect.objectContaining({ model: { primary: "${MODEL_REF}" } }),
+          }),
+        }),
+        previousConfig: resolved,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+        redactDependencyValues: true,
+      });
+    });
+
+    it("reports an unresolved primary model in dry-run JSON without writing config", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
+          'Cannot set model reference "missing/nope" at agents.defaults.model.primary: Unknown model: missing/nope. Run openclaw models list to list available models.',
+        ],
+      });
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "agents.defaults.model.primary",
+          '"missing/nope"',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as ConfigSetDryRunResult;
+      expect(payload).toMatchObject({
+        ok: false,
+        checks: { resolvability: true, resolvabilityComplete: true },
+        refsChecked: 1,
+        errors: [
+          {
+            kind: "model",
+            message: expect.stringContaining('Cannot set model reference "missing/nope"'),
+          },
+        ],
+      });
+    });
+
+    it("reports model resolver setup failures as incomplete dry-run JSON", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4-mini" } } },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 0,
+        refsTotal: 1,
+        errors: ["Unable to validate changed model references before writing: catalog unavailable"],
+      });
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "set",
+          "agents.defaults.model.primary",
+          '"openai/gpt-5.4-mini"',
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as ConfigSetDryRunResult;
+      expect(payload).toMatchObject({
+        ok: false,
+        checks: { resolvability: true, resolvabilityComplete: false },
+        refsChecked: 0,
+        errors: [{ kind: "model", message: expect.stringContaining("catalog unavailable") }],
       });
     });
 
@@ -3076,24 +3227,22 @@ describe("config cli", () => {
 
     it("fails dry-run when provider updates make existing refs unresolvable", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: {
+            mode: "token",
+            token: {
+              source: "file",
+              provider: "vaultfile",
+              id: "/providers/search/apiKey",
+            },
+          },
+        },
         secrets: {
           providers: {
             vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: {
-                source: "file",
-                provider: "vaultfile",
-                id: "/providers/search/apiKey",
-              },
-            },
-          },
-        } as never,
       };
       setSnapshot(resolved, resolved);
       mockResolveSecretRefValue.mockImplementationOnce(async () => {
@@ -3117,24 +3266,22 @@ describe("config cli", () => {
 
     it("fails dry-run for nested provider edits that make existing refs unresolvable", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: {
+            mode: "token",
+            token: {
+              source: "file",
+              provider: "vaultfile",
+              id: "/providers/search/apiKey",
+            },
+          },
+        },
         secrets: {
           providers: {
             vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: {
-                source: "file",
-                provider: "vaultfile",
-                id: "/providers/search/apiKey",
-              },
-            },
-          },
-        } as never,
       };
       setSnapshot(resolved, resolved);
       mockResolveSecretRefValue.mockImplementationOnce(async () => {
@@ -3373,6 +3520,7 @@ describe("config cli", () => {
       expect(written.tools?.profile).toBe("coding");
       expect(written.logging).toEqual(resolved.logging);
       expect(firstWriteConfigOptions()).toEqual({
+        auditOrigin: "cli",
         unsetPaths: [["tools", "alsoAllow"]],
       });
     });
@@ -3393,7 +3541,7 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
       const written = firstWrittenConfig();
       expect(written.agents?.list).toEqual([{ id: "agent-a" }, { id: "agent-c" }]);
-      expect(firstWriteConfigOptions()).toBeUndefined();
+      expect(firstWriteConfigOptions()).toEqual({ auditOrigin: "cli" });
     });
 
     it("preserves write-level unset handling for numeric object keys", async () => {
@@ -3419,6 +3567,7 @@ describe("config cli", () => {
         "456": { channels: ["alerts"] },
       });
       expect(firstWriteConfigOptions()).toEqual({
+        auditOrigin: "cli",
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
     });
@@ -3440,6 +3589,87 @@ describe("config cli", () => {
       expect(mockWriteConfigFile).not.toHaveBeenCalled();
       expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
       expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    it("rejects an unset that makes a dependent model reference unresolved", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/main",
+              fallbacks: ["backup"],
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
+          'Cannot set model reference "backup" at agents.defaults.model.fallbacks.0: Unknown model: openai/backup. Run openclaw models list to list available models.',
+        ],
+      });
+
+      await expect(
+        runConfigCommand(["config", "unset", "agents.defaults.model.primary"]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockCheckTouchedTextModelRefs).toHaveBeenCalledWith({
+        config: {
+          agents: { defaults: { model: { fallbacks: ["backup"] } } },
+        },
+        previousConfig: resolved,
+        touchedPaths: [["agents", "defaults", "model", "primary"]],
+        redactDependencyValues: true,
+      });
+      expectErrorIncludes('Cannot set model reference "backup"');
+    });
+
+    it("reports an unset model failure through dry-run JSON", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              primary: "provider-a/main",
+              fallbacks: ["backup"],
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+      mockCheckTouchedTextModelRefs.mockResolvedValueOnce({
+        refsChecked: 1,
+        refsTotal: 1,
+        errors: [
+          'Cannot set model reference "backup" at agents.defaults.model.fallbacks.0: Unknown model: openai/backup. Run openclaw models list to list available models.',
+        ],
+      });
+
+      await expect(
+        runConfigCommand([
+          "config",
+          "unset",
+          "agents.defaults.model.primary",
+          "--dry-run",
+          "--json",
+        ]),
+      ).rejects.toThrow(ExitError);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: false,
+        checks: { resolvability: true, resolvabilityComplete: true },
+        refsChecked: 1,
+        errors: [
+          {
+            kind: "model",
+            message: expect.stringContaining('Cannot set model reference "backup"'),
+          },
+        ],
+      });
     });
 
     it("prints JSON for config unset dry-run", async () => {
@@ -3563,24 +3793,22 @@ describe("config cli", () => {
 
     it("validates existing refs when unset dry-run removes all secret providers", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: {
+            mode: "token",
+            token: {
+              source: "file",
+              provider: "vaultfile",
+              id: "/providers/search/apiKey",
+            },
+          },
+        },
         secrets: {
           providers: {
             vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: {
-                source: "file",
-                provider: "vaultfile",
-                id: "/providers/search/apiKey",
-              },
-            },
-          },
-        } as never,
       };
       setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);
@@ -3601,7 +3829,10 @@ describe("config cli", () => {
 
     it("validates existing refs when unset dry-run removes secret defaults", async () => {
       const resolved: OpenClawConfig = {
-        gateway: { port: 18789 },
+        gateway: {
+          port: 18789,
+          auth: { mode: "token", token: "${WEB_SEARCH_API_KEY}" },
+        },
         secrets: {
           defaults: {
             env: "vaultenv",
@@ -3611,14 +3842,6 @@ describe("config cli", () => {
             vaultenv: { source: "env" },
           },
         },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              apiKey: "${WEB_SEARCH_API_KEY}",
-            },
-          },
-        } as never,
       } as OpenClawConfig;
       setSnapshot(resolved, resolved);
       setSnapshot(resolved, resolved);

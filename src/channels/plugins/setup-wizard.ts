@@ -267,11 +267,21 @@ export function buildChannelSetupWizardAdapterFromSetupWizard(params: {
             defaultAccountId,
           }));
 
-      const accountScope = createWizardAccountScope({
-        cfg,
-        channelKey: plugin.id,
-        accountId,
-      });
+      const channel = getChannelSection(cfg, plugin.id);
+      // Wizards that explicitly own account selection may use defaultAccount as a
+      // top-level routing label. Only inject temporary scope when generic selection
+      // owns the account or an accounts map proves that scoped storage is in use.
+      const shouldScopeAccount =
+        wizard.resolveShouldPromptAccountIds === undefined ||
+        resolvedShouldPromptAccountIds ||
+        channel.accounts !== undefined;
+      const accountScope = shouldScopeAccount
+        ? createWizardAccountScope({
+            cfg,
+            channelKey: plugin.id,
+            accountId,
+          })
+        : { cfg, restore: (currentCfg: OpenClawConfig) => currentCfg };
       let next = accountScope.cfg;
       let credentialValues = collectCredentialValues({
         wizard,

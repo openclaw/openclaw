@@ -38,6 +38,9 @@ type SessionListOptions = {
 const SESSION_PAGE_SIZE = 50;
 const TOTAL_MOCK_SESSIONS = 650;
 const TOTAL_TELEGRAM_SESSIONS = 180;
+const ATTENTION_FIXTURE_EXPIRES_AT = Date.parse("2099-01-01T00:00:00.000Z");
+const NARRATION_DEMO_SESSION_KEY = "agent:main:sidebar-narration-demo";
+const NARRATION_DEMO_RUN_ID = "mock-sidebar-narration-run";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
@@ -1030,12 +1033,22 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     sessionRow("agent:main:main", "Molty", baseTime - 1_000, {
       childSessions: ["agent:main:lisbon-trip"],
     }),
+    sessionRow(NARRATION_DEMO_SESSION_KEY, "Sidebar narration demo", baseTime - 15_000, {
+      hasActiveRun: true,
+      startedAt: baseTime - 45_000,
+      status: "running",
+    }),
     sessionRow("agent:main:tax-research", "Tax filing research", baseTime - 60_000, {
       hasActiveRun: true,
       status: "running",
       childSessions: ["agent:main:subagent:tax-receipts"],
       pinned: true,
       icon: "name:spark",
+    }),
+    sessionRow("agent:main:production-export", "Production export", baseTime - 75_000),
+    sessionRow("agent:main:model-budget", "Model budget review", baseTime - 80_000, {
+      status: "failed",
+      lastRunError: "Model out of credits: openai/gpt-5.6",
     }),
     mainChildRow,
     sessionRow("agent:main:home-server", "Home server migration", baseTime - 240_000, {
@@ -1107,14 +1120,65 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     assistantAgentId: "main",
     assistantName: "Molty",
     defaultAgentId: "main",
-    featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "sessions.files.set"],
+    featureMethods: [
+      "chat.metadata",
+      "chat.startup",
+      "question.list",
+      "sessions.diff",
+      "sessions.files.set",
+    ],
     historyMessages: buildScrollableChatHistory(baseTime),
+    // Lights up the footer facepile and who's-online roster; the email-only
+    // entry keeps the roster's no-display-name row exercised.
+    presenceUsers: [
+      { self: true, id: "presence-riley", name: "Riley", email: "riley@example.com" },
+      { id: "presence-colin", name: "Colin", email: "colin@example.com" },
+      { id: "presence-patricia", email: "patricia.erichsen@example.com" },
+    ],
     methodResponses: {
       ...buildBackgroundTasksMock(baseTime),
       // config.set/config.apply are served statefully by the mock gateway
       // (raw persists, hash advances) because config.get ships a raw fixture.
       "config.get": configMocks.get,
       "config.schema": configMocks.schema,
+      // The sidebar recovers pending questions through question.list after the
+      // hello handshake, so this remains visible after a mock-page refresh.
+      "question.list": {
+        questions: [
+          {
+            id: "mock_tax_question",
+            agentId: "main",
+            sessionKey: "agent:main:tax-research",
+            questions: [
+              {
+                id: "filing_status",
+                header: "Tax filing",
+                question: "Should I submit the draft return?",
+                options: [
+                  { label: "Submit", description: "File the prepared return." },
+                  { label: "Review", description: "Keep the draft open for review." },
+                ],
+              },
+            ],
+            createdAtMs: baseTime - 60_000,
+            expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+            status: "pending",
+          },
+        ],
+      },
+      "exec.approval.list": [
+        {
+          id: "mock-production-export-approval",
+          request: {
+            command: "openclaw export --target production",
+            sessionKey: "agent:main:production-export",
+          },
+          createdAtMs: baseTime - 75_000,
+          expiresAtMs: ATTENTION_FIXTURE_EXPIRES_AT,
+        },
+      ],
+      "plugin.approval.list": [],
+      "openclaw.approval.list": [],
       "sessions.patch": { ok: true },
       "sessions.diff": buildSessionDiffMock(),
       // The worktrees page assumes the gateway contract shape; without this
@@ -1460,6 +1524,31 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
       },
     },
     models: modelProviders.models,
+    repeatingSessionEvents: {
+      intervalMs: 3_000,
+      events: [
+        {
+          event: "agent",
+          payload: {
+            // replace: the demo replays the same snapshot each cycle; without
+            // it the controller's cumulative-length dedupe drops the repeats.
+            data: { replace: true, text: "Rebasing onto main and rerunning the sidebar suite." },
+            runId: NARRATION_DEMO_RUN_ID,
+            sessionKey: NARRATION_DEMO_SESSION_KEY,
+            stream: "assistant",
+          },
+        },
+        {
+          event: "session.tool",
+          payload: {
+            data: { name: "exec" },
+            runId: NARRATION_DEMO_RUN_ID,
+            sessionKey: NARRATION_DEMO_SESSION_KEY,
+            stream: "tool",
+          },
+        },
+      ],
+    },
     sessionArchiveFiltering: true,
     sessionKey: "agent:main:main",
   };
@@ -1546,6 +1635,7 @@ const server = await createServer({
     "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify({
       version: "2026.7.10",
       commit: "0123456789abcdef0123456789abcdef01234567",
+      commitAt: "2026-07-10T11:22:33.000Z",
       builtAt: "2026-07-10T12:34:56.000Z",
       buildId: "mock",
     }),

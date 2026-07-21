@@ -61,6 +61,13 @@ import {
   MODEL_SELECTION_LOCKED_MESSAGE,
 } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
+import {
+  isSessionAgentAttentionIconId,
+  resolveActiveSessionAgentStatus,
+  sanitizeSessionAgentStatusNote,
+  sessionAgentStatusExpiresAt,
+  SESSION_AGENT_STATUS_MAX_TTL_MINUTES,
+} from "../sessions/session-agent-status.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
 import {
   isAgentSessionModelPatchOrigin,
@@ -70,6 +77,38 @@ import {
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+}
+
+export function resolveSessionPatchModelSelection(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  raw: string;
+  defaultProvider: string;
+  defaultModel: string;
+  subagentModelHint?: string;
+}):
+  | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
+  | { ok: false; error: string } {
+  const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
+  const resolved = resolveAllowedModelRef({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    raw: modelWithoutProfile,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.subagentModelHint ?? params.defaultModel,
+  });
+  if ("error" in resolved) {
+    return { ok: false, error: resolved.error };
+  }
+  return {
+    ok: true,
+    provider: resolved.ref.provider,
+    model: resolved.ref.model,
+    ...(profile ? { profile } : {}),
+    isDefault:
+      resolved.ref.provider === params.defaultProvider &&
+      resolved.ref.model === params.defaultModel,
+  };
 }
 
 function normalizeExecSecurity(raw: string): "deny" | "allowlist" | "full" | undefined {
@@ -168,7 +207,7 @@ export async function projectSessionsPatchEntry(params: {
     );
   };
   let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
+  const loadPreparedModelCatalogForPatch = async () => {
     if (loadedModelCatalog) {
       return loadedModelCatalog;
     }
@@ -412,6 +451,44 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
+  if ("statusNote" in patch || "attention" in patch || "ttlMinutes" in patch) {
+    const rawNote = patch.statusNote;
+    const rawAttention = patch.attention;
+    const ttlMinutes = patch.ttlMinutes;
+    if (
+      ttlMinutes !== undefined &&
+      (!Number.isInteger(ttlMinutes) ||
+        ttlMinutes < 1 ||
+        ttlMinutes > SESSION_AGENT_STATUS_MAX_TTL_MINUTES)
+    ) {
+      return invalid(`invalid ttlMinutes (use 1-${SESSION_AGENT_STATUS_MAX_TTL_MINUTES})`);
+    }
+    if (rawNote === null || rawAttention === null) {
+      if (
+        (rawNote !== undefined && rawNote !== null) ||
+        (rawAttention !== undefined && rawAttention !== null)
+      ) {
+        return invalid("cannot clear and set agent status in the same patch");
+      }
+      delete next.agentStatus;
+    } else {
+      const current = resolveActiveSessionAgentStatus(next.agentStatus, now);
+      const note = rawNote === undefined ? current?.note : sanitizeSessionAgentStatusNote(rawNote);
+      if (!note) {
+        return invalid("statusNote required before setting attention or ttlMinutes");
+      }
+      if (rawAttention !== undefined && !isSessionAgentAttentionIconId(rawAttention)) {
+        return invalid("invalid attention icon");
+      }
+      const attention = rawAttention ?? current?.attention;
+      next.agentStatus = {
+        note,
+        expiresAt: sessionAgentStatusExpiresAt(now, ttlMinutes),
+        ...(attention ? { attention } : {}),
+      };
+    }
+  }
+
   if ("archived" in patch) {
     if (patch.archived === true) {
       // Archived sessions leave the active quick-access set in the same write.
@@ -439,6 +516,7 @@ export async function projectSessionsPatchEntry(params: {
     } else {
       next.lastReadAt = now;
       delete next.markedUnreadAt;
+      delete next.agentStatus;
     }
   }
 
@@ -453,7 +531,7 @@ export async function projectSessionsPatchEntry(params: {
         const hintProvider =
           normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
         const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = await loadModelCatalogForPatch();
+        const thinkingCatalog = await loadPreparedModelCatalogForPatch();
         const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
         return invalid(
           `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
@@ -627,41 +705,37 @@ export async function projectSessionsPatchEntry(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = await loadPreparedModelCatalogForPatch();
       if (!catalog) {
         return {
           ok: false,
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const { model: modelWithoutProfile, profile: trailingProfile } =
-        splitTrailingAuthProfile(trimmed);
-      const resolved = resolveAllowedModelRef({
+      const resolved = resolveSessionPatchModelSelection({
         cfg,
         catalog,
-        raw: modelWithoutProfile,
+        raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        defaultModel: subagentModelHint ?? resolvedDefault.model,
+        defaultModel: resolvedDefault.model,
+        subagentModelHint,
       });
-      if ("error" in resolved) {
+      if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      const isDefault =
-        resolved.ref.provider === resolvedDefault.provider &&
-        resolved.ref.model === resolvedDefault.model;
       applyModelOverrideToSessionEntry({
         entry: next,
         selection: {
-          provider: resolved.ref.provider,
-          model: resolved.ref.model,
-          isDefault,
+          provider: resolved.provider,
+          model: resolved.model,
+          isDefault: resolved.isDefault,
         },
-        profileOverride: trailingProfile || undefined,
+        profileOverride: resolved.profile,
         preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
           cfg,
           currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
           entry: next,
-          provider: resolved.ref.provider,
+          provider: resolved.provider,
         }),
         markLiveSwitchPending: true,
       });
@@ -675,7 +749,7 @@ export async function projectSessionsPatchEntry(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
+    const thinkingCatalog = await loadPreparedModelCatalogForPatch();
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {

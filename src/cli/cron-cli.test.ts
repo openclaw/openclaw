@@ -794,7 +794,7 @@ describe("cron cli", () => {
       value,
     ]);
     expectRuntimeErrorContaining(
-      "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery",
+      "--channel, --to, --account, and --thread-id require a non-main agentTurn, command, or script job with delivery",
     );
   });
 

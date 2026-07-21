@@ -428,10 +428,10 @@ describe("native app i18n inventory", () => {
           entry.source === "Open Settings",
       ),
     ).toBe(true);
-    expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(entries.some((entry) => entry.source === "No threads yet")).toBe(true);
     expect(
       entries.some(
-        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search sessions",
+        (entry) => entry.path.endsWith("/ChatSheets.swift") && entry.source === "Search threads",
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "Don't show this again")).toBe(true);
@@ -1163,6 +1163,16 @@ describe("native app i18n inventory", () => {
   });
 
   it("validates locale refresh arguments before write paths run", () => {
+    expect(parseNativeI18nCommand(["baseline", "--write"])).toEqual({
+      command: "baseline",
+      locale: undefined,
+      write: true,
+    });
+    expect(parseNativeI18nCommand(["verify"])).toEqual({
+      command: "verify",
+      locale: undefined,
+      write: false,
+    });
     expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv"])).toEqual({
       command: "sync",
       locale: "sv",
@@ -1179,6 +1189,10 @@ describe("native app i18n inventory", () => {
     );
     expect(() => parseNativeI18nCommand(["check", "--locale", "sv"])).toThrow(
       "requires `sync --write",
+    );
+    expect(() => parseNativeI18nCommand(["baseline"])).toThrow("requires `--write`");
+    expect(() => parseNativeI18nCommand(["verify", "--write"])).toThrow(
+      "does not accept `--write`",
     );
   });
 });

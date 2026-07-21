@@ -32,7 +32,7 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { InvalidApprovalIdError, type ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
@@ -195,7 +195,9 @@ export function createExecApprovalHandlers(
       const twoPhase = p.twoPhase === true;
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-      const explicitId = normalizeOptionalString(p.id) ?? null;
+      // IDs are opaque cross-surface handles. Preserve every supplied byte so
+      // the manager can reject unsafe values instead of silently normalizing them.
+      const explicitId = p.id ?? null;
       const host = normalizeOptionalString(p.host) ?? "";
       const nodeId = normalizeOptionalString(p.nodeId) ?? "";
       const approvalContext = resolveSystemRunApprovalRequestContext({
@@ -356,7 +358,22 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      const record = manager.create(request, timeoutMs, explicitId);
+      let record: ReturnType<typeof manager.create>;
+      try {
+        record = manager.create(request, timeoutMs, explicitId);
+      } catch (error) {
+        if (error instanceof InvalidApprovalIdError) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, error.message, {
+              details: { code: error.code, reason: error.reason },
+            }),
+          );
+          return;
+        }
+        throw error;
+      }
       bindApprovalRequesterMetadata({ record, client });
       if (client?.internal?.approvalRuntime === true) {
         // Reviewer ids widen approval visibility, so only the server-trusted

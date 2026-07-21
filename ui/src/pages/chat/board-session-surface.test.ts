@@ -22,10 +22,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  const marker = document.createElement("script");
-  marker.dataset.openclawControlUiMockGateway = "";
-  document.head.append(marker);
-  containers.push(marker);
+  window.history.replaceState({}, "", "/?mockBoard=1");
 });
 
 describe("board session shell", () => {
@@ -66,17 +63,21 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         snapshot: provider.snapshot$.value,
+        sessions: [],
         activeTabId: "main",
         dock,
         reopenDock: "right",
         dockSize: { height: 300, width: 420 },
         chat: html`<div data-test-chat>chat</div>`,
         divider: html`<div class="board-session-surface__divider" data-test-divider></div>`,
+        canMutate: true,
+        canGrant: true,
         callbacks: {
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
           selectTab: () => {},
         },
+        widgetFrameUrl: (name, revision) => provider.widgetFrameUrl(name, revision),
         onDockChange: () => {},
       }),
       container,
@@ -95,17 +96,21 @@ describe("board session shell", () => {
     render(
       renderBoardSessionSurface({
         snapshot: provider.snapshot$.value,
+        sessions: [],
         activeTabId: "main",
         dock: "hidden",
         reopenDock: "left",
         dockSize: { height: 300, width: 420 },
         chat: html`<div data-test-chat>chat</div>`,
         divider: html`<div class="board-session-surface__divider"></div>`,
+        canMutate: true,
+        canGrant: true,
         callbacks: {
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
           selectTab: () => {},
         },
+        widgetFrameUrl: (name, revision) => provider.widgetFrameUrl(name, revision),
         onDockChange,
       }),
       container,
@@ -123,16 +128,20 @@ describe("board session shell", () => {
     const provider = boardProviderForSession("agent:main:main");
     const props = {
       snapshot: provider.snapshot$.value,
+      sessions: [],
       activeTabId: "main",
       reopenDock: "left" as const,
       dockSize: { height: 300, width: 420 },
       chat: html`<div data-test-chat>chat</div>`,
       divider: html`<div class="board-session-surface__divider"></div>`,
+      canMutate: true,
+      canGrant: true,
       callbacks: {
         applyOps: (ops: Parameters<typeof provider.applyOps>[0]) => provider.applyOps(ops),
         grant: (...args: Parameters<typeof provider.grant>) => provider.grant(...args),
         selectTab: () => {},
       },
+      widgetFrameUrl: (name: string, revision: number) => provider.widgetFrameUrl(name, revision),
       onDockChange: () => {},
     };
 

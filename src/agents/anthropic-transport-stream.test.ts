@@ -15,6 +15,10 @@ const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
 
 vi.mock("./provider-transport-fetch.js", () => ({
   buildGuardedModelFetch: buildGuardedModelFetchMock,
+  parseRetryAfterSeconds: (headers: Headers) => {
+    const value = headers.get("retry-after");
+    return value && /^\d+$/.test(value) ? Number(value) : undefined;
+  },
 }));
 
 let createAnthropicMessagesTransportStreamFn: typeof import("./anthropic-transport-stream.js").createAnthropicMessagesTransportStreamFn;
@@ -876,6 +880,37 @@ describe("anthropic transport stream", () => {
     expect(headers.get("X-Provider")).toBe("foundry");
   });
 
+  it("preserves HTTP status and Retry-After in Anthropic error messages", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          type: "error",
+          error: {
+            type: "rate_limit_error",
+            message: "Number of request tokens exceeded the per-minute rate limit.",
+          },
+        }),
+        {
+          status: 429,
+          headers: { "retry-after": "30" },
+        },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "test-api-key" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      'HTTP 429: {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens exceeded the per-minute rate limit."}}; Retry-After: 30 seconds',
+    );
+  });
+
   it("bounds streamed Anthropic error responses without content-length", async () => {
     const encoder = new TextEncoder();
     let pullCount = 0;
@@ -908,7 +943,7 @@ describe("anthropic transport stream", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
+    expect(result.errorMessage).toBe(`HTTP 500: ${"x".repeat(400)}…`);
     expect(pullCount).toBeGreaterThanOrEqual(2);
     expect(cancelCount).toBe(1);
   });
@@ -945,10 +980,12 @@ describe("anthropic transport stream", () => {
 
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toBe(
-      "Anthropic Messages error response stalled: no data received for 10000ms",
+      "HTTP 500: Anthropic Messages error response stalled: no data received for 10000ms",
     );
     expect(cancelReason).toBeInstanceOf(Error);
-    expect((cancelReason as Error).message).toBe(result.errorMessage);
+    expect((cancelReason as Error).message).toBe(
+      "Anthropic Messages error response stalled: no data received for 10000ms",
+    );
   });
 
   it("rejects oversized Anthropic SSE frames before buffering without bound", async () => {

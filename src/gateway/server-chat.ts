@@ -219,19 +219,6 @@ const CHAT_ERROR_KINDS = new Set<ChatErrorKind>([
   "unknown",
 ]);
 
-function buildChatErrorMessage(error: unknown): Record<string, unknown> | undefined {
-  const raw = error ? formatForLog(error).trim() : "";
-  if (!raw) {
-    return undefined;
-  }
-  const text = raw.startsWith("⚠️") || raw.startsWith("Error:") ? raw : `Error: ${raw}`;
-  return {
-    role: "assistant",
-    content: [{ type: "text", text }],
-    timestamp: Date.now(),
-  };
-}
-
 function readChatErrorKind(value: unknown): ChatErrorKind | undefined {
   return typeof value === "string" && CHAT_ERROR_KINDS.has(value as ChatErrorKind)
     ? (value as ChatErrorKind)
@@ -503,6 +490,7 @@ export function createAgentEventHandler({
               ? {
                   updatedAt: row.updatedAt ?? undefined,
                   status: row.status,
+                  lastRunError: row.lastRunError,
                   startedAt: row.startedAt,
                   endedAt: row.endedAt,
                   runtimeMs: row.runtimeMs,
@@ -525,7 +513,18 @@ export function createAgentEventHandler({
     const activeRunFields = activeRunState
       ? { hasActiveRun: activeRunState.active, activeRunIds: activeRunState.runIds }
       : {};
-    const session = row ? { ...row, ...lifecyclePatch, ...activeRunFields } : undefined;
+    const clearsLastRunError =
+      Object.hasOwn(lifecyclePatch, "lastRunError") && lifecyclePatch.lastRunError === undefined;
+    const session = row
+      ? {
+          ...row,
+          ...lifecyclePatch,
+          ...activeRunFields,
+          // JSON drops undefined values, so a start/success must send null to
+          // evict a prior failure reason from the subscribed client row.
+          ...(clearsLastRunError ? { lastRunError: null } : {}),
+        }
+      : undefined;
     if (session && omitUnscopedGlobalGoal) {
       delete session.goal;
     }
@@ -580,6 +579,7 @@ export function createAgentEventHandler({
       model: row?.model,
       ...activeRunFields,
       status: snapshotSource.status,
+      lastRunError: snapshotSource.lastRunError ?? null,
       startedAt: snapshotSource.startedAt,
       endedAt: snapshotSource.endedAt,
       runtimeMs: snapshotSource.runtimeMs,
@@ -1107,7 +1107,6 @@ export function createAgentEventHandler({
       seq,
       state: "error" as const,
       errorMessage: error ? formatForLog(error) : undefined,
-      message: buildChatErrorMessage(error),
       ...(errorKind && { errorKind }),
       ...(stopReason && { stopReason }),
     };

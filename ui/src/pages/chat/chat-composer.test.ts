@@ -1,22 +1,25 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { icons } from "../../components/icons.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import * as realtimeTalkInput from "./realtime-talk-input.ts";
 
-vi.mock("../../components/icons.ts", async () => {
-  const { html: litHtml } = await import("lit");
-  return {
-    icons: {
-      camera: litHtml`<svg data-icon="camera"></svg>`,
-      cameraOff: litHtml`<svg data-icon="camera-off"></svg>`,
-    },
-  };
-});
+const discoverRealtimeTalkInputsMock = vi.fn();
+const openRealtimeTalkInputMock = vi.fn();
 
 type ComposerProps = Parameters<typeof renderChatComposer>[0];
+
+function iconMarkup(icon: unknown): string | undefined {
+  const container = document.createElement("div");
+  render(icon, container);
+  return container.querySelector("svg")?.innerHTML;
+}
 
 function props(overrides: Partial<ComposerProps> = {}): ComposerProps {
   return {
@@ -53,7 +56,7 @@ function questionPrompt(id: string, question: string): QuestionPrompt {
     id,
     questions: [
       {
-        id: "choice",
+        questionId: "choice",
         header: "Choice",
         question,
         options: [{ label: "Yes" }, { label: "No" }],
@@ -82,8 +85,59 @@ function button(container: Element, label: string): HTMLButtonElement {
   return result;
 }
 
+class DictationAudioContext {
+  readonly destination = {};
+  readonly sampleRate = 8000;
+  readonly close = vi.fn(async () => undefined);
+
+  createMediaStreamSource() {
+    return { connect: vi.fn(), disconnect: vi.fn() };
+  }
+
+  createScriptProcessor() {
+    return { connect: vi.fn(), disconnect: vi.fn(), onaudioprocess: null };
+  }
+
+  createGain() {
+    return { connect: vi.fn(), disconnect: vi.fn(), gain: { value: 1 } };
+  }
+
+  createAnalyser() {
+    return {
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
+    };
+  }
+}
+
+function dictationPointerDown(pointerId: number): PointerEvent {
+  const event = new MouseEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 });
+  Object.defineProperty(event, "pointerId", { value: pointerId });
+  return event as PointerEvent;
+}
+
+beforeEach(() => {
+  // ESM imports remain live when the composer was cached by another test file.
+  // Patch the shared dependencies instead of clearing isolate:false's registry.
+  vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
+    discoverRealtimeTalkInputsMock,
+  );
+  vi.spyOn(realtimeTalkInput, "openRealtimeTalkInput").mockImplementation(
+    openRealtimeTalkInputMock,
+  );
+});
+
 afterEach(async () => {
   resetChatComposerState();
+  discoverRealtimeTalkInputsMock.mockReset();
+  openRealtimeTalkInputMock.mockReset();
+  localStorage.clear();
+  document.body.replaceChildren();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   await i18n.setLocale("en");
   vi.restoreAllMocks();
 });
@@ -138,6 +192,15 @@ describe("renderChatComposer controls", () => {
     });
     expect(button(view.container, t("chat.runControls.queueMessage")).disabled).toBe(false);
 
+    const onToggleWithDraft = vi.fn();
+    view = renderComposer({
+      draft: "Keep this text",
+      onToggleRealtimeTalk: onToggleWithDraft,
+    });
+    button(view.container, t("chat.composer.startVoiceInput")).click();
+    expect(onToggleWithDraft).toHaveBeenCalledOnce();
+    expect(button(view.container, t("chat.runControls.sendMessage"))).toBeTruthy();
+
     view = renderComposer({
       canAbort: true,
       draft: "Replace the current run",
@@ -145,6 +208,110 @@ describe("renderChatComposer controls", () => {
       onAbort,
     });
     expect(button(view.container, t("chat.runControls.sendMessage")).disabled).toBe(false);
+  });
+
+  it("opens the microphone picker, marks the selected input, and persists a selection", async () => {
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [
+        { deviceId: "studio-mic", label: "Studio microphone" },
+        { deviceId: "headset", label: "USB headset" },
+      ],
+      warning: null,
+    });
+    patchSettings({ realtimeTalkInputDeviceId: "studio-mic" });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({ onToggleRealtimeTalk: vi.fn() });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    await dropdown?.updateComplete;
+
+    expect(dropdown?.open).toBe(true);
+    await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledWith(true));
+    await vi.waitFor(() =>
+      expect(container.querySelectorAll(".chat-talk-input-picker__item")).toHaveLength(3),
+    );
+    const items = [
+      ...container.querySelectorAll<HTMLElement & { value: string }>(
+        ".chat-talk-input-picker__item",
+      ),
+    ];
+    expect(items.map((item) => item.textContent?.trim())).toEqual([
+      t("chat.composer.systemDefaultMicrophone"),
+      "Studio microphone",
+      "USB headset",
+    ]);
+    expect(items.map((item) => item.getAttribute("role"))).toEqual([
+      "menuitemradio",
+      "menuitemradio",
+      "menuitemradio",
+    ]);
+    expect(items.find((item) => item.value === "studio-mic")?.getAttribute("aria-checked")).toBe(
+      "true",
+    );
+    expect(items.find((item) => item.value === "studio-mic")?.querySelector("svg")?.innerHTML).toBe(
+      iconMarkup(icons.check),
+    );
+
+    items.find((item) => item.value === "headset")?.click();
+    await dropdown?.updateComplete;
+    expect(loadSettings().realtimeTalkInputDeviceId).toBe("headset");
+    expect(dropdown?.open).toBe(false);
+
+    button(container, t("chat.composer.microphoneInput")).click();
+    await vi.waitFor(() => expect(discoverRealtimeTalkInputsMock).toHaveBeenCalledTimes(2));
+    expect(dropdown?.open).toBe(true);
+  });
+
+  it("shows discovery warnings and the next-session hint during active Talk", async () => {
+    discoverRealtimeTalkInputsMock.mockResolvedValue({
+      devices: [],
+      warning: "Microphone permission is blocked.",
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      onToggleRealtimeTalk: vi.fn(),
+      realtimeTalkActive: true,
+      realtimeTalkStatus: "listening",
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const dropdown = container.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<unknown> }
+    >("wa-dropdown.chat-talk-input-picker");
+    await dropdown?.updateComplete;
+    button(container, t("chat.composer.microphoneInput")).click();
+    await vi.waitFor(() =>
+      expect(container.querySelector(".chat-talk-input-picker__warning")?.textContent).toContain(
+        "Microphone permission is blocked.",
+      ),
+    );
+
+    expect(container.querySelector(".chat-talk-input-picker__warning")?.getAttribute("role")).toBe(
+      "alert",
+    );
+    expect(container.querySelector(".chat-talk-input-picker__note")?.textContent).toContain(
+      t("chat.composer.noMicrophones"),
+    );
+    expect(container.querySelector(".chat-talk-input-picker__hint")?.textContent).toContain(
+      t("chat.composer.microphoneAppliesNextSession"),
+    );
+
+    dropdown?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    await dropdown?.updateComplete;
+    expect(dropdown?.open).toBe(false);
   });
 
   it("offers camera only inside a video-capable active talk session", () => {
@@ -182,11 +349,62 @@ describe("renderChatComposer controls", () => {
     });
 
     const cameraToggle = button(container, t("chat.composer.turnCameraOff"));
-    expect(cameraToggle.querySelector('[data-icon="camera-off"]')).not.toBeNull();
-    expect(cameraToggle.querySelector('[data-icon="camera"]')).toBeNull();
+    expect(cameraToggle.querySelector("svg")?.innerHTML).toBe(iconMarkup(icons.cameraOff));
+    expect(cameraToggle.querySelector("svg")?.innerHTML).not.toBe(iconMarkup(icons.camera));
   });
 
-  it("sends attachment-only drafts instead of starting voice", () => {
+  it("offers camera switching only for a live preview with multiple cameras", () => {
+    const onSwitchRealtimeCamera = vi.fn();
+    const stream = {
+      getVideoTracks: () => [
+        {
+          getSettings: () => ({ facingMode: "user" }),
+        } as MediaStreamTrack,
+      ],
+    } as unknown as MediaStream;
+    const { container } = renderComposer({
+      realtimeTalkVideoStream: stream,
+      realtimeTalkCameraDevices: [
+        { deviceId: "front", label: "Front Camera" },
+        { deviceId: "back", label: "Back Camera" },
+      ],
+      onSwitchRealtimeCamera,
+    });
+
+    button(container, t("chat.composer.switchCamera")).click();
+    expect(onSwitchRealtimeCamera).toHaveBeenCalledOnce();
+    expect(container.querySelector("video")?.classList).toContain(
+      "agent-chat__video-preview-mirrored",
+    );
+
+    const singleCamera = renderComposer({
+      realtimeTalkVideoStream: stream,
+      realtimeTalkCameraDevices: [{ deviceId: "front", label: "Front Camera" }],
+      onSwitchRealtimeCamera,
+    });
+    expect(
+      singleCamera.container.querySelector(
+        `button[aria-label="${t("chat.composer.switchCamera")}"]`,
+      ),
+    ).toBeNull();
+  });
+
+  it("does not mirror an environment-facing camera preview", () => {
+    const stream = {
+      getVideoTracks: () => [
+        {
+          getSettings: () => ({ facingMode: "environment" }),
+        } as MediaStreamTrack,
+      ],
+    } as unknown as MediaStream;
+    const { container } = renderComposer({ realtimeTalkVideoStream: stream });
+
+    expect(container.querySelector("video")?.classList).not.toContain(
+      "agent-chat__video-preview-mirrored",
+    );
+  });
+
+  it("keeps send and dictation distinct for attachment-only drafts", () => {
     const onSend = vi.fn();
     const onToggleRealtimeTalk = vi.fn();
     const { container } = renderComposer({
@@ -200,7 +418,65 @@ describe("renderChatComposer controls", () => {
     expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
     expect(
       container.querySelector(`button[aria-label="${t("chat.composer.startVoiceInput")}"]`),
-    ).toBeNull();
+    ).not.toBeNull();
+  });
+
+  it("keeps the captured dictation button through the hold-start rerender", async () => {
+    vi.useFakeTimers();
+    openRealtimeTalkInputMock.mockResolvedValue({ getTracks: () => [{ stop: vi.fn() }] });
+    vi.stubGlobal("AudioContext", DictationAudioContext);
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.catalog") {
+        return { transcription: { ready: true } };
+      }
+      if (method === "talk.session.create") {
+        return {
+          sessionId: "dictation-1",
+          transcriptionSessionId: "dictation-1",
+          audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
+        };
+      }
+      return { ok: true };
+    });
+    const gatewayClient = {
+      addEventListener: vi.fn(() => () => undefined),
+      request,
+    } as unknown as GatewayBrowserClient;
+    const container = document.createElement("div");
+    document.body.append(container);
+    const composerProps = props({
+      draft: "Keep this text",
+      gatewayClient,
+      onToggleRealtimeTalk: vi.fn(),
+    });
+    const draw = () => render(renderChatComposer(composerProps), container);
+    composerProps.onRequestUpdate = draw;
+    draw();
+
+    const capturedButton = container.querySelector<HTMLButtonElement>(
+      ".chat-talk-control > openclaw-tooltip > button",
+    );
+    expect(capturedButton).not.toBeNull();
+    const captures = new Set<number>();
+    Object.defineProperties(capturedButton!, {
+      setPointerCapture: { value: (pointerId: number) => captures.add(pointerId) },
+      hasPointerCapture: { value: (pointerId: number) => captures.has(pointerId) },
+      releasePointerCapture: { value: (pointerId: number) => captures.delete(pointerId) },
+    });
+
+    capturedButton!.dispatchEvent(dictationPointerDown(9));
+    expect(capturedButton!.hasPointerCapture(9)).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rerenderedButton = container.querySelector<HTMLButtonElement>(
+      ".chat-talk-control > openclaw-tooltip > button",
+    );
+    expect(request).toHaveBeenCalledWith("talk.session.create", expect.anything());
+    expect(rerenderedButton).toBe(capturedButton);
+    expect(rerenderedButton?.hasPointerCapture(9)).toBe(true);
   });
 
   it("keeps voice and generation stop controls distinct when both are active", () => {
@@ -269,6 +545,48 @@ describe("renderChatComposer controls", () => {
     steer[0]?.click();
     steer[1]?.click();
     expect(onQueueSteer.mock.calls).toEqual([["queued-1"], ["waiting-idle-1"]]);
+  });
+
+  it("renders the queued author's avatar before the turn is submitted", async () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "waiting-idle-1",
+          text: "queued during the run",
+          createdAt: 4,
+          sendState: "waiting-idle",
+          sender: { id: "profile_123", name: "Alice Example" },
+        },
+      ],
+    });
+
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector(".chat-queue__item .chat-author-avatar__initials")?.textContent,
+      ).toContain("AE");
+    });
+  });
+
+  it("renders reconnect waits as quiet status without the raw transport error", () => {
+    const { container } = renderComposer({
+      queue: [
+        {
+          id: "reconnect-1",
+          text: "send me once the gateway is back",
+          createdAt: 1,
+          sendError: "chat.send unavailable during gateway restart",
+          sendState: "waiting-reconnect",
+        },
+      ],
+    });
+    const item = container.querySelector(".chat-queue__item");
+    expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
+    expect(item?.querySelector(".chat-queue__dot")).not.toBeNull();
+    expect(item?.querySelector(".chat-queue__icon")).toBeNull();
+    expect(item?.querySelector(".chat-queue__error")).toBeNull();
+    const badge = item?.querySelector(".chat-queue__badge");
+    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(badge?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
   });
 
   it("renders failed sends as retryable and running commands as inert", () => {

@@ -7,7 +7,6 @@ import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.QuestionAnswers
-import ai.openclaw.app.gateway.QuestionAnswersAnswersValue
 import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
@@ -603,6 +602,17 @@ class ChatController internal constructor(
 
   /** Purges cached transcripts and queued sends for one retired authentication scope. */
   internal suspend fun clearGatewayCache(gatewayId: String) {
+    clearGatewayCache(gatewayId) { gateway ->
+      transcriptCache?.clearGateway(gateway)
+      commandOutbox?.clearGateway(gateway)
+    }
+  }
+
+  /** Serializes an owner-provided cross-store purge with every chat cache/outbox mutation. */
+  internal suspend fun clearGatewayCache(
+    gatewayId: String,
+    clearStores: suspend (String) -> Unit,
+  ) {
     val gateway = gatewayId.trim().takeIf { it.isNotEmpty() } ?: return
     synchronized(defaultAgentPersistenceRevisions) {
       defaultAgentPersistenceRevisions[gateway] = (defaultAgentPersistenceRevisions[gateway] ?: 0L) + 1L
@@ -616,8 +626,7 @@ class ChatController internal constructor(
     // deleted here; queued old-owner saves then fail their revision check after this unlocks.
     defaultAgentPersistenceMutex.withLock {
       cacheMutationMutex.withLock {
-        transcriptCache?.clearGateway(gateway)
-        commandOutbox?.clearGateway(gateway)
+        clearStores(gateway)
       }
     }
   }
@@ -2144,7 +2153,7 @@ class ChatController internal constructor(
                     "answers",
                     buildJsonObject {
                       answers.orEmpty().forEach { (questionId, values) ->
-                        put(questionId, buildJsonObject { put("answers", JsonArray(values.map(::JsonPrimitive))) })
+                        put(questionId, JsonArray(values.map(::JsonPrimitive)))
                       }
                     },
                   )
@@ -2160,10 +2169,7 @@ class ChatController internal constructor(
                 record =
                   prompt.record.copy(
                     status = if (cancel) "cancelled" else "answered",
-                    answers =
-                      answers?.let { values ->
-                        QuestionAnswers(values.mapValues { QuestionAnswersAnswersValue(it.value) })
-                      },
+                    answers = answers?.let(::QuestionAnswers),
                   ),
                 submitting = false,
                 skipping = false,
@@ -2230,7 +2236,28 @@ class ChatController internal constructor(
     stateRevision: Long,
     gatewayScope: ChatCacheScope?,
   ): Boolean {
-    val response = requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+    val response =
+      try {
+        requestGatewayBound(gatewayScope?.gatewayId, "question.list", "{}")
+      } catch (err: GatewayRequestRejected) {
+        val unavailable =
+          err.gatewayError.missingScope() == "operator.questions" ||
+            (
+              err.gatewayError.code == "INVALID_REQUEST" &&
+                err.gatewayError.message == "unknown method: question.list"
+            )
+        if (!unavailable) throw err
+        if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
+        return synchronized(questionStateLock) {
+          if (!questionRefreshIsCurrentLocked(refreshGeneration, stateRevision)) return@synchronized false
+          if (_questions.value.isNotEmpty()) {
+            _questions.value = emptyList()
+            questionStateRevision += 1
+          }
+          syncQuestionEvictionsLocked()
+          true
+        }
+      }
     if (!questionRefreshIsCurrent(refreshGeneration, stateRevision, gatewayScope)) return false
     val listedRecords = json.decodeFromString<QuestionListResult>(response).questions
     val listedIds = listedRecords.mapTo(mutableSetOf()) { it.id }

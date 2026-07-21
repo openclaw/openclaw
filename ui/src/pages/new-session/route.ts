@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { resolveAgentId, resolveCreateTarget } from "./catalog-target.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
@@ -16,12 +17,17 @@ async function loadNewSessionData(
   // ensureList is fail-closed: offline and request-error paths return cached
   // data or null, allowing the unresolved catalog page to mount and retry.
   const agentsList = context.agents.state.agentsList ?? (await context.agents.ensureList());
-  const availableAgents =
-    agentsList?.agents ?? (requestedLocation.agentId ? [{ id: requestedLocation.agentId }] : []);
+  const availableAgents = agentsList
+    ? listSelectableAgents(agentsList.agents)
+    : requestedLocation.agentId
+      ? [{ id: requestedLocation.agentId }]
+      : [];
   const agentId = resolveAgentId(
     requestedLocation,
     availableAgents,
-    agentsList?.defaultId ?? agentsList?.agents[0]?.id ?? "main",
+    availableAgents.some((agent) => agent.id === agentsList?.defaultId)
+      ? (agentsList?.defaultId ?? "main")
+      : (availableAgents[0]?.id ?? "main"),
   );
   const location = { ...requestedLocation, agentId };
   const plain = { ...location, model: "", catalogLabel: "" };
