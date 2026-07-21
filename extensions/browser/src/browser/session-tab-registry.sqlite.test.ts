@@ -619,6 +619,38 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()).toEqual([]);
   });
 
+  it("keeps an old unreachable row when activity revokes its retirement claim", async () => {
+    const registry = await freshRegistry("unreachable-touch-race");
+    const tracked = 1_000;
+    const sweepNow = tracked + BROWSER_TAB_UNREACHABLE_RETIRE_MS;
+    registry.trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "gone",
+      profile: "remote",
+      ownership: ownership("NATIVE-gone"),
+      now: tracked,
+    });
+
+    await registry.sweepTrackedBrowserTabs({
+      now: sweepNow,
+      idleMs: 1,
+      closeDurableTab: async (_tab, options) => {
+        registry.touchSessionBrowserTab({
+          sessionKey: "agent:main:main",
+          targetId: "gone",
+          profile: "remote",
+          now: sweepNow,
+        });
+        expect(options.shouldClose()).toBe(false);
+        return { status: "unavailable", reason: "browser-identity-lookup-failed" };
+      },
+    });
+
+    expect(openStore().entries()).toHaveLength(1);
+    expect(openStore().entries()[0]?.value).toMatchObject({ lastUsedAt: sweepNow });
+    expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
+  });
+
   it("keeps a touched durable tab out of an idle sweep but lifecycle cleanup still closes it", async () => {
     const registry = await freshRegistry("touch");
     registry.trackSessionBrowserTab({
