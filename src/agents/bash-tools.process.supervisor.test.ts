@@ -54,6 +54,13 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 function expectSessionState(sessionId: string, expected: { exited?: boolean }) {
   const session = requireRecord(getSession(sessionId), sessionId);
   if ("exited" in expected) {
@@ -174,7 +181,10 @@ describe("process tool supervisor cancellation", () => {
       const processTool = createProcessTool();
 
       const result = await processTool.execute("toolcall", { action, sessionId });
-      const text = String(requireRecord(result.content[0], "tool content").text ?? "");
+      const text = requireString(
+        requireRecord(result.content[0], "tool content").text,
+        "tool content text",
+      );
 
       expect(text).toContain(EXEC_REDACTION_WARNING);
       expect(text).not.toContain(fakeFlagSecret);

@@ -38,10 +38,6 @@ export function redactProcessText(text: string, suffix = "") {
   return { text: redacted.text + suffix, redacted: redacted.redacted };
 }
 
-export function processSessionTextWasRedacted(text: string): boolean {
-  return redactProcessSessionText(text) !== text;
-}
-
 function processSessionNameWasRedacted(command: string): boolean {
   return deriveRedactedProcessSessionName(command) !== deriveSessionName(command);
 }
