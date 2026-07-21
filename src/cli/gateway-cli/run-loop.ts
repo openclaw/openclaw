@@ -21,6 +21,26 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatActiveTaskRestartBlocker } from "../../tasks/task-restart-blocker.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
+// Hard self-SIGKILL fallback after a launchd-supervised exitProcess(0). If the
+// graceful teardown hangs (e.g. a stuck async flush inside process.exit), the
+// process becomes a live-but-dead zombie: cleanupSignals() has already removed
+// our handlers and launchd KeepAlive only relaunches on a real EXIT, so nothing
+// recovers it. This timer guarantees a real EXIT within N ms so KeepAlive
+// relaunches. N=5000 sits well above the 1500ms handoff wait and an observed
+// ~118ms clean drain, so it is dead code on every healthy restart and never
+// truncates a legitimate flush, while capping the worst-case dark window at
+// ~6.5s instead of hours. MUST be .unref()'d so the fallback timer itself never
+// keeps the event loop alive and blocks the very clean exit it is guarding.
+const GATEWAY_TEARDOWN_SIGKILL_FALLBACK_MS = 5000;
+function armGatewayTeardownSigkillFallback(): void {
+  setTimeout(() => {
+    try {
+      process.kill(process.pid, "SIGKILL");
+    } catch {
+      // Best-effort: if the process is already gone this throws; nothing to do.
+    }
+  }, GATEWAY_TEARDOWN_SIGKILL_FALLBACK_MS).unref();
+}
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
@@ -283,6 +303,8 @@ export async function runGatewayLoop(params: {
           await new Promise((resolve) => {
             setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
           });
+          // Guard against a hung teardown becoming a launchd-invisible zombie.
+          armGatewayTeardownSigkillFallback();
         }
         exitProcess(0);
         return;
@@ -357,6 +379,8 @@ export async function runGatewayLoop(params: {
         await new Promise((resolve) => {
           setTimeout(resolve, LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS);
         });
+        // Guard against a hung teardown becoming a launchd-invisible zombie.
+        armGatewayTeardownSigkillFallback();
       }
       exitProcess(0);
       return;
