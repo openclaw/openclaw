@@ -946,6 +946,55 @@
       }
     },
     {
+      "name": "@openclaw/poolside-provider",
+      "description": "OpenClaw Poolside provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "poolside",
+          "label": "Poolside"
+        },
+        "providers": [
+          {
+            "id": "poolside",
+            "name": "Poolside",
+            "docs": "/providers/poolside",
+            "categories": [
+              "cloud",
+              "llm"
+            ],
+            "envVars": [
+              "POOLSIDE_API_KEY"
+            ],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "poolside-api-key",
+                "choiceLabel": "Poolside API key",
+                "groupId": "poolside",
+                "groupLabel": "Poolside",
+                "groupHint": "Laguna model family",
+                "optionKey": "poolsideApiKey",
+                "cliFlag": "--poolside-api-key",
+                "cliOption": "--poolside-api-key <key>",
+                "cliDescription": "Poolside API key",
+                "onboardingScopes": [
+                  "text-inference"
+                ]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/poolside-provider",
+          "npmSpec": "@openclaw/poolside-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.7.2"
+        }
+      }
+    },
+    {
       "name": "@openclaw/qianfan-provider",
       "description": "OpenClaw Qianfan provider plugin.",
       "source": "official",

@@ -1554,5 +1554,21 @@
   {
     "source": "Baseten (Inkling + Model APIs)",
     "target": "Baseten（Inkling + Model APIs）"
+  },
+  {
+    "source": "Poolside",
+    "target": "Poolside"
+  },
+  {
+    "source": "Poolside plugin",
+    "target": "Poolside 插件"
+  },
+  {
+    "source": "poolside",
+    "target": "poolside"
+  },
+  {
+    "source": "Poolside (Laguna models)",
+    "target": "Poolside（Laguna models）"
   }
 ]

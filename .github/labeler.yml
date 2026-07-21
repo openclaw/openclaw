@@ -678,6 +678,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/perplexity/**"
+"extensions: poolside":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/poolside/**"
+          - "docs/providers/poolside.md"
 "extensions: sglang":
   - changed-files:
       - any-glob-to-any-file:

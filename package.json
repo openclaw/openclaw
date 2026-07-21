@@ -138,6 +138,7 @@
     "!dist/extensions/nostr/**",
     "!dist/extensions/parallel/**",
     "!dist/extensions/perplexity/**",
+    "!dist/extensions/poolside/**",
     "!dist/extensions/qianfan/**",
     "!dist/extensions/qqbot/**",
     "!dist/extensions/raft/**",

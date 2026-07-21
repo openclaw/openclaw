@@ -1,0 +1,146 @@
+{
+  "id": "poolside",
+  "name": "Poolside",
+  "description": "OpenClaw Poolside provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["poolside"],
+  "providerRequest": {
+    "providers": {
+      "poolside": {
+        "family": "poolside",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "poolside": {
+        "baseUrl": "https://inference.poolside.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "laguna-s-2.1",
+            "name": "Laguna S 2.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "laguna-s-2.1:fast",
+            "name": "Laguna S 2.1 Fast",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "laguna-xs-2.1",
+            "name": "Laguna XS 2.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "laguna-xs-2.1:fast",
+            "name": "Laguna XS 2.1 Fast",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0.1,
+              "output": 0.2,
+              "cacheRead": 0.05,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "laguna-m.1",
+            "name": "Laguna M.1",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "laguna-m.1:fast",
+            "name": "Laguna M.1 Fast",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 32768,
+            "cost": {
+              "input": 0.2,
+              "output": 0.4,
+              "cacheRead": 0.1,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "poolside": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "poolside",
+        "envVars": ["POOLSIDE_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "poolside",
+      "method": "api-key",
+      "choiceId": "poolside-api-key",
+      "appGuidedSecret": true,
+      "choiceLabel": "Poolside API key",
+      "groupId": "poolside",
+      "groupLabel": "Poolside",
+      "groupHint": "Laguna model family",
+      "optionKey": "poolsideApiKey",
+      "cliFlag": "--poolside-api-key",
+      "cliOption": "--poolside-api-key <key>",
+      "cliDescription": "Poolside API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -6938,6 +6938,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Behavior
   - H2: Related docs
 
+## plugins/reference/poolside.md
+
+- Route: /plugins/reference/poolside
+- Headings:
+  - H1: Poolside plugin
+  - H2: Distribution
+  - H2: Surface
+  - H2: Related docs
+
 ## plugins/reference/qa-channel.md
 
 - Route: /plugins/reference/qa-channel
@@ -8290,6 +8299,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Provider options
   - H2: Configuration
   - H2: Advanced configuration
+  - H2: Related
+
+## providers/poolside.md
+
+- Route: /providers/poolside
+- Headings:
+  - H2: Install plugin
+  - H2: Getting started
+  - H2: Models
+  - H2: Sampling
+  - H2: Manual config
   - H2: Related
 
 ## providers/qianfan.md
