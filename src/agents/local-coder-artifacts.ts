@@ -9,10 +9,6 @@ export const LOCAL_CODER_COMPLETION_CONTRACT =
   "The parent must not persist or copy the child's artifact onto its own path. " +
   "Only host-visible artifacts under the allowed scratch directory may be reported.";
 
-export function resolveCanonicalPath(path: string): string {
-  return resolve(path);
-}
-
 export function isPathInsideRoot(path: string, root: string): boolean {
   const remainder = relative(resolve(root), resolve(path));
   return remainder === "" || (!remainder.startsWith("..") && !isAbsolute(remainder));
@@ -32,7 +28,7 @@ export function validateLocalCoderArtifactPath(
   return canonical;
 }
 
-export type LocalCoderScratchRoots = { hostScratchRoot: string; coderScratchRoot: string };
+type LocalCoderScratchRoots = { hostScratchRoot: string; coderScratchRoot: string };
 
 export function resolveLocalCoderScratchRoots(params: {
   hostScratchRoot: string;
@@ -59,7 +55,9 @@ export async function ensureSharedLocalCoderScratch(
       throw new Error(`local-coder scratch exists but is not a symlink: ${roots.coderScratchRoot}`);
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
     await symlink(roots.hostScratchRoot, roots.coderScratchRoot, "dir");
   }
   return roots;

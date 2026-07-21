@@ -1395,7 +1395,13 @@ export async function spawnAcpDirect(
         }
       }
       if (!initializedSession) {
-        throw lastModelError ?? new Error("ACP session initialization failed");
+        throw lastModelError instanceof Error
+          ? lastModelError
+          : new Error(
+              lastModelError != null
+                ? `ACP session initialization failed: ${String(lastModelError)}`
+                : "ACP session initialization failed",
+            );
       }
       initializedRuntime = initializedSession.runtimeCloseHandle;
       const binding = preparedBinding
