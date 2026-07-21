@@ -24,6 +24,7 @@ vi.mock("../infra/tailscale.js", () => ({
 }));
 
 import { configureGatewayForSetup } from "./setup.gateway-config.js";
+import { resolveQuickstartGatewayDefaults } from "./setup.shared.js";
 
 describe("configureGatewayForSetup", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
@@ -384,5 +385,79 @@ describe("configureGatewayForSetup", () => {
 
     expect(result.nextConfig.gateway?.auth?.token).toEqual(quickstartGateway.token);
     expect(result.settings.gatewayToken).toBe("token-from-exec");
+  });
+
+  it("persists an explicit classic quickstart env token ref", async () => {
+    const previous = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env-ref";
+    try {
+      const quickstartGateway = resolveQuickstartGatewayDefaults(
+        {},
+        { gatewayTokenRefEnv: "OPENCLAW_GATEWAY_TOKEN" },
+      );
+      const result = await configureGatewayForSetup({
+        flow: "quickstart",
+        baseConfig: {},
+        nextConfig: {},
+        localPort: 18789,
+        quickstartGateway,
+        prompter: createPrompter({ selectQueue: [], textQueue: [] }),
+        runtime: createRuntime(),
+      });
+
+      expect(result.nextConfig.gateway?.auth).toEqual({
+        mode: "token",
+        token: {
+          source: "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        },
+      });
+      expect(result.settings.gatewayToken).toBe("token-from-env-ref");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previous;
+      }
+    }
+  });
+
+  it("persists classic quickstart overrides through gateway safety normalization", async () => {
+    const password = ["classic", "gateway", "placeholder"].join("-");
+    mocks.getTailnetHostname.mockResolvedValue("test-tailnet.ts.net");
+    const note = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const quickstartGateway = resolveQuickstartGatewayDefaults(
+      {},
+      {
+        gatewayPort: 19001,
+        gatewayBind: "lan",
+        gatewayAuth: "token",
+        gatewayToken: "unused-token",
+        gatewayPassword: password,
+        tailscale: "funnel",
+        tailscaleResetOnExit: true,
+      },
+    );
+
+    const result = await configureGatewayForSetup({
+      flow: "quickstart",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway,
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(result.nextConfig.gateway).toMatchObject({
+      port: 19001,
+      bind: "loopback",
+      auth: { mode: "password", password },
+      tailscale: { mode: "funnel", resetOnExit: true },
+    });
+    expect(result.nextConfig.gateway?.auth?.token).toBeUndefined();
+    expect(JSON.stringify(note.mock.calls)).not.toContain(password);
   });
 });
