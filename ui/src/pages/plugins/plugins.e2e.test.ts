@@ -577,8 +577,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await workboardSidebarItem.getAttribute("href")).toBe("/workboard");
       if (updateScreenshots) {
         await mkdir(artifactDir, { recursive: true });
-        await sidebar.screenshot({
+        await page.screenshot({
           animations: "disabled",
+          fullPage: true,
           path: path.join(artifactDir, "07-workboard-sidebar.png"),
         });
       }
