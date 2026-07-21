@@ -189,10 +189,11 @@ internal fun WorkingClawIcon(
   runKey: String,
   color: Color,
   modifier: Modifier = Modifier,
+  parked: Boolean = false,
 ) {
-  val stance = remember(runKey) { pickWorkingClawStance(runKey) }
+  val stance = remember(runKey, parked) { if (parked) WorkingClawStance.Default else pickWorkingClawStance(runKey) }
   val density = LocalDensity.current
-  val animationsEnabled = rememberSystemAnimationsEnabled()
+  val animationsEnabled = rememberSystemAnimationsEnabled() && !parked
   val cycleMs =
     when (stance) {
       WorkingClawStance.Flurry -> FLURRY_CLAW_CYCLE_MS
@@ -214,7 +215,12 @@ internal fun WorkingClawIcon(
       }
     }
   }
-  val pose = if (animationsEnabled) workingClawPose(stance, phase) else WorkingClawPose()
+  val pose =
+    when {
+      parked -> WorkingClawPose(rotationZ = 8f, jawRotation = -4f)
+      animationsEnabled -> workingClawPose(stance, phase)
+      else -> WorkingClawPose()
+    }
   val iconWidth = if (stance == WorkingClawStance.Shadowbox) 30.dp else 18.dp
   Box(modifier = modifier.size(width = iconWidth, height = 20.dp), contentAlignment = Alignment.CenterStart) {
     Canvas(

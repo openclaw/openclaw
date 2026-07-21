@@ -1172,6 +1172,8 @@ private fun ChatMessageList(
   val indicatorVisible = pendingRunCount > 0
   val workingRunTracker = remember(sessionKey) { ChatWorkingRunTracker(sessionKey) }
   val workingRun = workingRunTracker.resolve(indicatorVisible, session, System.currentTimeMillis())
+  val turnRecapResolver = remember { TurnRecapResolver() }
+  val turnRecap = turnRecapResolver.resolve(sessionKey, indicatorVisible, session)
 
   Box(modifier = modifier.fillMaxWidth()) {
     LazyColumn(
@@ -1181,6 +1183,9 @@ private fun ChatMessageList(
       verticalArrangement = Arrangement.spacedBy(5.dp),
       contentPadding = PaddingValues(top = 6.dp, bottom = 3.dp),
     ) {
+      turnRecap?.let { recap ->
+        item(key = "turn-recap:$sessionKey") { ChatTurnRecapRow(recap) }
+      }
       itemsIndexed(items = timeline.items, key = { _, item -> chatTimelineItemKey(item) }) { _, item ->
         when (item) {
           is ChatTimelineItem.Message ->

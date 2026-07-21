@@ -23,6 +23,9 @@
     <string name="chat_progress_pearling">Pearling</string>
     <string name="chat_progress_snapping">Snapping</string>
     <string name="chat_progress_surfacing">Surfacing</string>
+    <string name="chat_turn_recap_done_in">Done in %1$s</string>
+    <string name="chat_turn_recap_tokens">%1$s tokens</string>
+    <string name="chat_turn_recap_tokens_one">1 token</string>
     <string name="gateway_trust_first_seen">Verify the certificate fingerprint before trusting this gateway.\n\n%1$s</string>
     <string name="gateway_trust_changed">The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s</string>
     <string name="about_build_unknown">Unknown</string>
