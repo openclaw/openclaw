@@ -9,6 +9,7 @@ import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store.js
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { applyConfigEnvVars } from "../config/config-env-vars.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -473,6 +474,12 @@ export async function runSetupInferenceTest(params: {
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
   let successfulAuth: AgentExecutionAuthBinding | undefined;
+  // Surface the candidate config's `env` section (e.g. GOOGLE_CLOUD_PROJECT /
+  // GOOGLE_CLOUD_LOCATION for Vertex ADC) to the in-process probe, matching how the
+  // gateway applies config env at startup. Snapshot and restore around the probe so
+  // later onboarding steps see the original environment.
+  const probeEnvSnapshot = { ...process.env };
+  applyConfigEnvVars(plan.config, process.env);
   try {
     if (plan.runner === "cli") {
       const unsupportedError = resolveToolFreeCliSetupError(plan);
@@ -611,5 +618,12 @@ export async function runSetupInferenceTest(params: {
       status: mapFailoverReasonToSetupStatus(described.reason),
       error: described.message,
     };
+  } finally {
+    for (const key of Object.keys(process.env)) {
+      if (!(key in probeEnvSnapshot)) {
+        delete process.env[key];
+      }
+    }
+    Object.assign(process.env, probeEnvSnapshot);
   }
 }
