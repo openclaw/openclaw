@@ -251,15 +251,29 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
 
     try {
       const response = await getUpdates(token, { timeout: pollTimeout }, fetcher);
+      // The Bot API consumes each polled update on response. When shutdown
+      // lands between getUpdates and journal, still accept the update so
+      // the ingress stop drains it before the DB handle closes.
       if (isStopped() || abortSignal.aborted) {
+        if (response.ok && response.result) {
+          await acceptUpdate(JSON.stringify(response.result)).catch((err: unknown) =>
+            runtime.error?.(
+              `[${account.accountId}] failed to journal consumed update before shutdown: ${formatZaloError(err)}`,
+            ),
+          );
+        }
         return undefined;
       }
       if (response.ok && response.result) {
         statusSink?.({ lastInboundAt: Date.now() });
-        // The Bot API consumes each polled update on response, so the durable
-        // journal is the only crash recovery. Non-message events are no-ops
-        // downstream, so they skip journaling.
-        if (response.result.message) {
+        // Bot API fetches consume each update on response, so journal is the
+        // only recovery. No-op message events (stickers, unsupported) carry a
+        // message field but produce no dispatch — skip them.
+        if (
+          response.result.message &&
+          response.result.event_name !== "message.sticker.received" &&
+          response.result.event_name !== "message.unsupported.received"
+        ) {
           await acceptUpdate(JSON.stringify(response.result));
         }
       }
@@ -270,6 +284,12 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
         // Abort-aware backoff; bottom poll reschedule already checks stopped/aborted.
         await sleepWithAbort(5000, abortSignal).catch(() => undefined);
+      } else {
+        // acceptUpdate or getUpdates failure during abort: log instead of
+        // silently dropping an error that may indicate a durable-store issue.
+        runtime.error?.(
+          `[${account.accountId}] Zalo ingress error during shutdown: ${formatZaloError(err)}`,
+        );
       }
     }
 
