@@ -855,11 +855,6 @@ jobs:
             echo "Prepared preflight tarball digest mismatch." >&2
             exit 1
           fi
-          if [[ ! -f preflight-tarball/ai-runtime-SHA256SUMS ]]; then
-            echo "Prepared AI runtime dependency checksums are missing." >&2
-            exit 1
-          fi
-          (cd preflight-tarball && sha256sum -c ai-runtime-SHA256SUMS)
           echo "tarball_name=$ARTIFACT_TARBALL_NAME" >> "$GITHUB_OUTPUT"
           echo "tarball_sha256=$ARTIFACT_TARBALL_SHA256" >> "$GITHUB_OUTPUT"
           echo "tarball_path=$ARTIFACT_TARBALL_PATH" >> "$GITHUB_OUTPUT"

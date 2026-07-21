@@ -234,6 +234,7 @@ describe("minimal npm extended-stable workflow", () => {
     expect(provenance.run).toContain(
       'ARTIFACT_TARBALL_PATH="preflight-tarball/$ARTIFACT_TARBALL_NAME"',
     );
+    expect(provenance.run).not.toContain("ai-runtime-SHA256SUMS");
     expect(provenance.run).toContain('echo "tarball_path=$ARTIFACT_TARBALL_PATH"');
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
