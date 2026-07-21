@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -239,6 +239,18 @@ describe("sandbox policy bounded reads", () => {
     const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
 
     expect(policy.process.timeoutSeconds).toBe(60);
+  });
+
+  test("loads a configured policy through a symlink", () => {
+    const dir = makeTestDir();
+    const targetPath = join(dir, "target-policy.json");
+    const policyPath = join(dir, "linked-policy.json");
+    writePolicy(targetPath, { process: { timeoutSeconds: 45 } });
+    symlinkSync(targetPath, policyPath, "file");
+
+    const policy = loadSandboxBaselinePolicy({ policyPaths: [policyPath] });
+
+    expect(policy.process.timeoutSeconds).toBe(45);
   });
 
   test("oversized policy file is rejected before JSON parsing", () => {
