@@ -17,6 +17,35 @@ struct ChatWorkingProgressTests {
         #expect(ChatWorkingClawStance.seeded("run-8", salt: salt) == .spin)
     }
 
+    @Test func `working identity survives run rekey but resets for turn and session`() throws {
+        let messageID = try #require(UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"))
+        let nextMessageID = try #require(UUID(uuidString: "11111111-2222-3333-4444-555555555555"))
+        let local = ChatWorkingIdentity.resolve(
+            sessionKey: self.session,
+            pendingRunIDs: ["local-run"],
+            localUserMessageIDsByRunID: ["local-run": messageID],
+            fallbackGeneration: 1)
+        let remote = ChatWorkingIdentity.resolve(
+            sessionKey: self.session,
+            pendingRunIDs: ["remote-run"],
+            localUserMessageIDsByRunID: ["remote-run": messageID],
+            fallbackGeneration: 3)
+        let nextTurn = ChatWorkingIdentity.resolve(
+            sessionKey: self.session,
+            pendingRunIDs: ["next-run"],
+            localUserMessageIDsByRunID: ["next-run": nextMessageID],
+            fallbackGeneration: 4)
+        let nextSession = ChatWorkingIdentity.resolve(
+            sessionKey: "agent:other:main",
+            pendingRunIDs: ["remote-run"],
+            localUserMessageIDsByRunID: ["remote-run": messageID],
+            fallbackGeneration: 3)
+
+        #expect(local == remote)
+        #expect(local != nextTurn)
+        #expect(local != nextSession)
+    }
+
     @Test func `phrase rotation keeps adjacent buckets distinct and visits the full list`() {
         let indices = (0..<ChatWorkingPhrase.resources.count).map {
             ChatWorkingPhrase.index(seed: "run-phrase-seed", bucket: $0)
@@ -36,6 +65,15 @@ struct ChatWorkingProgressTests {
         #expect(ChatWorkingDurationFormatter.compact(milliseconds: 90000) == "1m 30s")
         #expect(ChatWorkingDurationFormatter.compact(milliseconds: 3_601_000) == "1h 1s")
         #expect(!ChatWorkingDurationFormatter.compact(milliseconds: 1e30).isEmpty)
+    }
+
+    @Test func `recap token text distinguishes unknown zero one and many`() {
+        let locale = Locale(identifier: "en_US")
+        #expect(ChatTurnRecapText.tokens(nil, locale: locale) == nil)
+        #expect(ChatTurnRecapText.tokens(0, locale: locale) == "0 tokens")
+        #expect(ChatTurnRecapText.tokens(1, locale: locale) == "1 token")
+        #expect(ChatTurnRecapText.tokens(485, locale: locale) == "485 tokens")
+        #expect(ChatTurnRecapText.done(runtimeMs: 51000, locale: locale) == "Done in 51s")
     }
 
     @Test func `recap resolves on a fresh terminal then sticks`() {

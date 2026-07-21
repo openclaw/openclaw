@@ -35,25 +35,25 @@ enum ChatWorkingPhrase {
     static let rotateEveryMilliseconds = 45000
 
     static let resources: [LocalizedStringResource] = [
-        "Shelling",
-        "Scuttling",
-        "Clawing",
-        "Pinching",
-        "Molting",
-        "Bubbling",
-        "Tiding",
-        "Reefing",
-        "Cracking",
-        "Sifting",
-        "Brining",
-        "Nautiling",
-        "Krilling",
-        "Barnacling",
-        "Lobstering",
-        "Tidepooling",
-        "Pearling",
-        "Snapping",
-        "Surfacing",
+        LocalizedStringResource("Shelling"),
+        LocalizedStringResource("Scuttling"),
+        LocalizedStringResource("Clawing"),
+        LocalizedStringResource("Pinching"),
+        LocalizedStringResource("Molting"),
+        LocalizedStringResource("Bubbling"),
+        LocalizedStringResource("Tiding"),
+        LocalizedStringResource("Reefing"),
+        LocalizedStringResource("Cracking"),
+        LocalizedStringResource("Sifting"),
+        LocalizedStringResource("Brining"),
+        LocalizedStringResource("Nautiling"),
+        LocalizedStringResource("Krilling"),
+        LocalizedStringResource("Barnacling"),
+        LocalizedStringResource("Lobstering"),
+        LocalizedStringResource("Tidepooling"),
+        LocalizedStringResource("Pearling"),
+        LocalizedStringResource("Snapping"),
+        LocalizedStringResource("Surfacing"),
     ]
 
     /// A constant-time stride walk keeps adjacent phrases distinct. The prime
@@ -99,9 +99,48 @@ enum ChatWorkingDurationFormatter {
     }
 }
 
+enum ChatWorkingIdentity {
+    static func resolve(
+        sessionKey: String,
+        pendingRunIDs: Set<String>,
+        localUserMessageIDsByRunID: [String: UUID],
+        fallbackGeneration: UInt64) -> String
+    {
+        if let messageID = pendingRunIDs.compactMap({ localUserMessageIDsByRunID[$0]?.uuidString }).min() {
+            return "\(sessionKey):user:\(messageID)"
+        }
+        if let runID = pendingRunIDs.min() {
+            return "\(sessionKey):run:\(runID)"
+        }
+        return "\(sessionKey):generation:\(fallbackGeneration)"
+    }
+}
+
 struct ChatTurnRecap: Equatable, Sendable {
     let runtimeMs: Double
     let outputTokens: Int?
+}
+
+enum ChatTurnRecapText {
+    static func done(runtimeMs: Double, locale: Locale = .current) -> String {
+        String(
+            format: String(localized: "Done in %@", locale: locale),
+            locale: locale,
+            ChatWorkingDurationFormatter.compact(milliseconds: runtimeMs))
+    }
+
+    static func tokens(_ outputTokens: Int?, locale: Locale = .current) -> String? {
+        guard let outputTokens else { return nil }
+        // Mirrors the web and American-English source contract: exactly one
+        // uses the singular key; zero and every other count use the generic key.
+        if outputTokens == 1 {
+            return String(localized: "1 token", locale: locale)
+        }
+        return String(
+            format: String(localized: "%@ tokens", locale: locale),
+            locale: locale,
+            outputTokens.formatted(.number.locale(locale)))
+    }
 }
 
 struct ChatTurnRecapSessionRow: Equatable, Sendable {
