@@ -1,7 +1,7 @@
 // Session group tests cover grouping and lookup of related sessions.
 import { describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { buildGroupDisplayTitle, resolveGroupSessionKey } from "./group.js";
+import { buildGroupDisplayTitle, resolveGroupSessionKey, shortenGroupId } from "./group.js";
 
 describe("resolveGroupSessionKey", () => {
   it("preserves Signal group ids from the originating target", () => {
@@ -77,5 +77,47 @@ describe("buildGroupDisplayTitle", () => {
     expect(buildGroupDisplayTitle({ space: "Acme" })).toBe("Acme");
     expect(buildGroupDisplayTitle({})).toBeUndefined();
     expect(buildGroupDisplayTitle({ subject: "  " })).toBeUndefined();
+  });
+});
+
+function hasLoneSurrogate(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      // High surrogate must be followed by a low surrogate.
+      if (i + 1 >= s.length || s.charCodeAt(i + 1) < 0xdc00 || s.charCodeAt(i + 1) > 0xdfff) {
+        return true;
+      }
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      // Low surrogate must be preceded by a high surrogate.
+      if (i === 0 || s.charCodeAt(i - 1) < 0xd800 || s.charCodeAt(i - 1) > 0xdbff) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+describe("shortenGroupId", () => {
+  it("returns short ids unchanged", () => {
+    expect(shortenGroupId("short-id")).toBe("short-id");
+  });
+
+  it("does not split a surrogate pair at the head cut", () => {
+    // 5 ASCII code units, then an emoji surrogate pair, then ASCII padding.
+    // The old fixed slice(0, 6) cut kept the high surrogate only.
+    const id = "a".repeat(5) + "🎉" + "b".repeat(10);
+    const shortened = shortenGroupId(id);
+    expect(shortened).toContain("...");
+    expect(hasLoneSurrogate(shortened)).toBe(false);
+  });
+
+  it("does not split a surrogate pair at the tail cut", () => {
+    // 12 ASCII code units, then an emoji surrogate pair, then 3 ASCII code units.
+    // The old fixed slice(-4) cut kept the low surrogate only.
+    const id = "a".repeat(12) + "🎉" + "b".repeat(3);
+    const shortened = shortenGroupId(id);
+    expect(shortened).toContain("...");
+    expect(hasLoneSurrogate(shortened)).toBe(false);
   });
 });
