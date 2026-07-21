@@ -70,6 +70,18 @@ describe("fetchPluralKitMessageInfo", () => {
     expect(tracked.wasCanceled()).toBe(true);
   });
 
+  it("cancels the 404 response body before returning null", async () => {
+    const tracked = cancelTrackedResponse("not found", { status: 404 });
+    const fetcher = vi.fn(async () => tracked.response);
+    const result = await fetchPluralKitMessageInfo({
+      messageId: "missing",
+      config: { enabled: true },
+      fetcher: fetcher as unknown as typeof fetch,
+    });
+    expect(result).toBeNull();
+    expect(tracked.wasCanceled()).toBe(true);
+  });
+
   it("returns payload and sends token when configured", async () => {
     let receivedHeaders: Record<string, string> | undefined;
     const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
