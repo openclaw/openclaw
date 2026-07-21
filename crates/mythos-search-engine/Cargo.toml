@@ -1,0 +1,26 @@
+[package]
+name = "mythos-search-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tantivy-based BM25 full-text search engine for OpenClaw"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { workspace = true }
+napi-derive = { workspace = true }
+tantivy = { workspace = true }
+tokenizers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+rayon = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }

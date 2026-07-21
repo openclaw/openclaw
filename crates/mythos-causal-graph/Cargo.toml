@@ -1,0 +1,26 @@
+[package]
+name = "mythos-causal-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Causal knowledge graph for OpenClaw L7 memory"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { workspace = true }
+napi-derive = { workspace = true }
+petgraph = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }

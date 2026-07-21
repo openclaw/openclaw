@@ -1,0 +1,28 @@
+[package]
+name = "mythos-execution-sandbox"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OS-level sandbox execution for OpenClaw agents"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { workspace = true }
+napi-derive = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+nix = { workspace = true }
+tokio = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+seccompiler = { workspace = true }
+caps = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }

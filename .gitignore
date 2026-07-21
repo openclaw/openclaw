@@ -228,3 +228,9 @@ extensions/**/.openclaw-runtime-deps-stamp.json
 /.opengrep-out/
 /.crabbox-artifacts
 .comux*
+
+# Rust build artifacts (Mythos native engines)
+crates/target/
+crates/Cargo.lock
+*.node
+!node_modules/**/*.node

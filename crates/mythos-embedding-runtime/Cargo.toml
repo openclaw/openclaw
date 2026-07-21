@@ -1,0 +1,28 @@
+[package]
+name = "mythos-embedding-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GPU-accelerated embedding generation for OpenClaw"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { workspace = true }
+napi-derive = { workspace = true }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+hf-hub = { workspace = true }
+tokenizers = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+rayon = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }

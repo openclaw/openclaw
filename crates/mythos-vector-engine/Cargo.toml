@@ -1,0 +1,25 @@
+[package]
+name = "mythos-vector-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "HNSW-based vector search engine for OpenClaw memory system"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+napi = { workspace = true }
+napi-derive = { workspace = true }
+usearch = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+rayon = { workspace = true }
+
+[build-dependencies]
+napi-build = { workspace = true }

@@ -1,0 +1,80 @@
+[workspace]
+resolver = "2"
+members = [
+    "mythos-vector-engine",
+    "mythos-search-engine",
+    "mythos-embedding-runtime",
+    "mythos-execution-sandbox",
+    "mythos-protocol-codec",
+    "mythos-causal-graph",
+]
+
+[workspace.package]
+version = "2026.5.10"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/openclaw/openclaw"
+authors = ["OpenClaw Contributors"]
+
+[workspace.dependencies]
+# NAPI-RS for Node.js bindings
+napi = { version = "2.16", features = ["async", "serde-json", "tokio_rt", "napi8", "chrono-date"] }
+napi-derive = "2.16"
+napi-build = "2.1"
+
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Vector search
+usearch = "2.17"
+
+# Full-text search
+tantivy = "0.22"
+tokenizers = "0.20"
+
+# ML/Embedding
+candle-core = "0.7"
+candle-nn = "0.7"
+candle-transformers = "0.7"
+hf-hub = "0.3"
+
+# Graph processing
+petgraph = "0.6"
+
+# Security/sandbox
+seccompiler = "0.4"
+caps = "0.5"
+nix = { version = "0.29", features = ["process", "signal", "mount", "sched"] }
+
+# Protocol
+simd-json = "0.14"
+
+# Utilities
+uuid = { version = "1.10", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rayon = "1.10"
+parking_lot = "0.12"
+dashmap = "6.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3
+strip = true
+
+[profile.dev]
+opt-level = 0
+debug = true
