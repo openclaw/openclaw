@@ -109,7 +109,10 @@ function listRuntimeJavaScriptFiles(rootDir) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-/** List host SDK imports emitted by a built plugin runtime but absent from package exports. */
+/**
+ * List host SDK imports emitted by a built plugin runtime but absent from package exports.
+ * @param {{ repoRoot: string; outDir: string }} plan
+ */
 export function listMissingPluginNpmRuntimeHostExports(plan) {
   const hostImports = new Set();
   for (const runtimePath of listRuntimeJavaScriptFiles(plan.outDir)) {
