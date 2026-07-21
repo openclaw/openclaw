@@ -92,6 +92,29 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(self.app?.state, .runningForeground)
     }
 
+    func testSidebarMoreAgentsMenuShowsAvatarsAndKeepsFooterVisible() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "sidebar-more-agents"))
+
+        let showSidebar = try XCTUnwrap(self.app?.buttons["RootTabs.Sidebar.Show"])
+        XCTAssertTrue(showSidebar.waitForExistence(timeout: 8))
+        showSidebar.tap()
+
+        let moreAgents = try XCTUnwrap(self.app?.buttons["More Agents"])
+        XCTAssertTrue(moreAgents.waitForExistence(timeout: 5))
+        let gatewayFooter = try XCTUnwrap(self.app?.buttons.matching(
+            NSPredicate(format: "label CONTAINS %@", "OpenClaw Gateway")).firstMatch)
+        XCTAssertTrue(gatewayFooter.exists)
+        moreAgents.tap()
+
+        XCTAssertTrue(self.app?.buttons["Research"].waitForExistence(timeout: 5) == true)
+        XCTAssertTrue(self.app?.buttons["Automation"].exists == true)
+        self.attachScreenshot(named: "sidebar-more-agents")
+    }
+
     func testSidebarSlowEdgeDragOpensFromEveryRootDestination() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone sidebar only")
         let destinations = [

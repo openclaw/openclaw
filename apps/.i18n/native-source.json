@@ -25755,7 +25755,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 76,
+      "line": 77,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "OpenClaw",
       "surface": "apple",
@@ -25763,7 +25763,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 101,
+      "line": 102,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Settings",
       "surface": "apple",
@@ -25771,7 +25771,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 115,
+      "line": 116,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Hide Sidebar",
       "surface": "apple",
@@ -25779,7 +25779,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 213,
+      "line": 207,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Selected",
       "surface": "apple",
@@ -25795,7 +25795,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 318,
+      "line": 334,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Search sessions",
       "surface": "apple",
@@ -25803,7 +25803,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 329,
+      "line": 345,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Clear session search",
       "surface": "apple",
@@ -25811,7 +25811,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 357,
+      "line": 373,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Loading sessions",
       "surface": "apple",
@@ -25819,7 +25819,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 365,
+      "line": 381,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "No recent sessions",
       "surface": "apple",
@@ -25827,7 +25827,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 375,
+      "line": 391,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Recent",
       "surface": "apple",
@@ -25835,7 +25835,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 391,
+      "line": 407,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "All Sessions…",
       "surface": "apple",
@@ -25843,7 +25843,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 421,
+      "line": 437,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Edit Pages",
       "surface": "apple",
@@ -25851,7 +25851,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 445,
+      "line": 461,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Home",
       "surface": "apple",
@@ -25859,7 +25859,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 653,
+      "line": 670,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Unread",
       "surface": "apple",
@@ -25867,7 +25867,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 679,
+      "line": 696,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Attention",
       "surface": "apple",
@@ -25875,7 +25875,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 719,
+      "line": 736,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "New Chat",
       "surface": "apple",
@@ -25883,7 +25883,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 748,
+      "line": 765,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Connection",
       "surface": "apple",
@@ -25891,7 +25891,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 753,
+      "line": 770,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Online",
       "surface": "apple",
@@ -25899,7 +25899,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 754,
+      "line": 771,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -25907,7 +25907,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 755,
+      "line": 772,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Needs attention",
       "surface": "apple",
@@ -25915,7 +25915,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 756,
+      "line": 773,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Offline",
       "surface": "apple",
@@ -25923,7 +25923,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 855,
+      "line": 872,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pinned pages stay in the sidebar. Home is always shown.",
       "surface": "apple",
@@ -25931,7 +25931,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 859,
+      "line": 876,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pages",
       "surface": "apple",
@@ -25939,7 +25939,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 866,
+      "line": 883,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Done",
       "surface": "apple",
@@ -25947,7 +25947,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 905,
+      "line": 922,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Pinned",
       "surface": "apple",
@@ -25955,7 +25955,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 906,
+      "line": 923,
       "path": "apps/ios/Sources/RootSidebar.swift",
       "source": "Not pinned",
       "surface": "apple",

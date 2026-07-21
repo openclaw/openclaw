@@ -2890,8 +2890,16 @@ describe("chat composer sizing", () => {
     expect(textarea.style.overflowY).toBe("auto");
   });
 
-  it("rechecks overflow when responsive layout changes the textarea height", () => {
+  it("resizes the draft when responsive layout changes the textarea width", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
+    let animationFrameCallback: FrameRequestCallback | undefined;
+    let nextAnimationFrameId = 0;
+    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
+      animationFrameCallback = callback;
+      nextAnimationFrameId += 1;
+      return nextAnimationFrameId;
+    });
+    const cancelAnimationFrameMock = vi.fn();
     class TestResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         resizeCallback = callback;
@@ -2904,26 +2912,59 @@ describe("chat composer sizing", () => {
       }
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
+
+    let width = 320;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: clientHeight,
+      height: clientHeight,
+      left: 0,
+      right: width,
+      top: 0,
+      width,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+
     const container = renderChatView({});
     const textarea = requireElement(
       container,
       ".agent-chat__composer-combobox > textarea",
       "composer textarea",
     ) as HTMLTextAreaElement;
-    let scrollHeight = 42;
-    let clientHeight = 42;
     Object.defineProperties(textarea, {
       scrollHeight: { configurable: true, get: () => scrollHeight },
       clientHeight: { configurable: true, get: () => clientHeight },
     });
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(textarea.style.height).toBe("42px");
     expect(textarea.style.overflowY).toBe("hidden");
 
-    scrollHeight = 120;
-    clientHeight = 56;
+    scrollHeight = 180;
+    clientHeight = 150;
     resizeCallback?.([], {} as ResizeObserver);
-
     expect(textarea.style.overflowY).toBe("auto");
+    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+
+    width = 180;
+    scrollHeight = 120;
+    clientHeight = 120;
+    resizeCallback?.([], {} as ResizeObserver);
+    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
+    expect(textarea.style.height).toBe("42px");
+
+    animationFrameCallback?.(0);
+    expect(textarea.style.height).toBe("120px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    width = 160;
+    resizeCallback?.([], {} as ResizeObserver);
+    render(html``, container);
+    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
   });
 });
 
