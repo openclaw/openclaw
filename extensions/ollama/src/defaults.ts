@@ -7,7 +7,7 @@ export const OLLAMA_GLM52_CLOUD_MODEL_ID = "glm-5.2:cloud";
 export const OLLAMA_GLM52_CONTEXT_WINDOW = 1_000_000;
 export const OLLAMA_CLOUD_DEFAULT_MODELS = [
   "kimi-k2.5:cloud",
-  "minimax-m2.7:cloud",
+  "minimax-m3:cloud",
   "glm-5.1:cloud",
   OLLAMA_GLM52_CLOUD_MODEL_ID,
 ] as const;

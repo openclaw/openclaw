@@ -99,8 +99,8 @@
             }
           },
           {
-            "id": "minimax-m2.7:cloud",
-            "name": "minimax-m2.7:cloud",
+            "id": "minimax-m3:cloud",
+            "name": "minimax-m3:cloud",
             "reasoning": true,
             "input": ["text"],
             "cost": {

@@ -244,7 +244,7 @@ describe("ollama setup", () => {
     expect(modelIds).toEqual([
       "gemma4",
       "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
+      "minimax-m3:cloud",
       "glm-5.1:cloud",
       "glm-5.2:cloud",
       "llama3:8b",
@@ -430,7 +430,7 @@ describe("ollama setup", () => {
 
     expect(modelIds).toEqual([
       "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
+      "minimax-m3:cloud",
       "glm-5.1:cloud",
       "glm-5.2:cloud",
     ]);
@@ -459,7 +459,7 @@ describe("ollama setup", () => {
 
     expect(modelIds).toEqual([
       "kimi-k2.5:cloud",
-      "minimax-m2.7:cloud",
+      "minimax-m3:cloud",
       "glm-5.1:cloud",
       "glm-5.2:cloud",
       "qwen3-coder:480b-cloud",
