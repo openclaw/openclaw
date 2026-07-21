@@ -591,7 +591,10 @@ export function renderLobsterPetScene(args: {
   const showShell = args.shellVisible && args.visitsEnabled && !args.dismissed;
   const showPasser = args.passer !== null && args.visitsEnabled;
   // The bottle washes ashore whether or not the pet is around; it belongs to
-  // the ledge, not the visit.
+  // the ledge, not the visit. Like every sprite here it is intentionally
+  // aria-hidden and pointer-only, with fortunes on the native-tooltip channel
+  // (no i18n surface); it must not join the tab order, where a surprise
+  // easter-egg button would degrade keyboard flow.
   const showBottle = args.bottle !== null && args.visitsEnabled && !args.dismissed;
   if (!showSprites && !showShell && !showPasser && !showBottle) {
     return nothing;

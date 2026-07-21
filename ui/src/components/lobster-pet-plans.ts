@@ -245,18 +245,15 @@ export function planLobsterPasser(seed: number): LobsterPasserPlan | null {
 // A very rare load hosts the Elder: a huge, barnacled, unhurried lobster.
 // Lobsters famously never really stop growing; this one simply started
 // earlier than everyone else.
-export function isLobsterElderLoad(seed: number): boolean {
+function isLobsterElderLoad(seed: number): boolean {
   return mulberry32((seed ^ 0xe1d3) >>> 0)() < 0.015;
 }
 
 // Sometimes the visitor is not a stranger at all: a palette the Lobsterdex
 // already remembers comes back wearing its recorded name. Returns the chosen
-// palette id, or null for an ordinary load. Candidates must be passed in
+// palette id, or null for an ordinary load. Candidates are passed in
 // (sorted) so this stays a pure plan.
-export function planLobsterOldFriend(
-  seed: number,
-  knownPaletteIds: readonly string[],
-): string | null {
+function planLobsterOldFriend(seed: number, knownPaletteIds: readonly string[]): string | null {
   if (knownPaletteIds.length === 0) {
     return null;
   }

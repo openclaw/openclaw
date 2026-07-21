@@ -16,7 +16,7 @@ import {
 
 // Facing, reactions, and the act loop stay owned by the pet element; the
 // controller only reports crossing milestones.
-export type LobsterTrafficHooks = {
+type LobsterTrafficHooks = {
   visitsEnabled: () => boolean;
   // Fired at crossing start (toward the entry side) and mid-cross (travel
   // direction) so the resident can watch the traffic go by.
@@ -25,7 +25,7 @@ export type LobsterTrafficHooks = {
   onPasserDone: () => void;
 };
 
-export type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
+type LobsterBottleScene = { spotPct: number; opened: boolean; fortune: string };
 
 export class LobsterLedgeTraffic implements ReactiveController {
   passer: LobsterPasserPlan | null = null;

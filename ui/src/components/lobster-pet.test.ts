@@ -6,11 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getLobsterdex, getLobsterdexEntries } from "./lobster-dex.ts";
 import {
   LOBSTER_BOTTLE_FORTUNES,
-  isLobsterElderLoad,
   pickLobsterEntrance,
   planLobsterBottle,
-  planLobsterOldFriend,
   planLobsterPasser,
+  resolveLobsterLoadIdentity,
 } from "./lobster-pet-plans.ts";
 import {
   LOBSTER_LOGO_VISIT_EVENT,
@@ -962,22 +961,44 @@ describe("lobster plans", () => {
     expect(pickLobsterEntrance(0.9)).toBe("walk");
   });
 
-  it("plans rare elder loads deterministically", () => {
+  it("resolves rare elder identities deterministically", () => {
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const identityOf = (seed: number) =>
+      resolveLobsterLoadIdentity(seed, createLobsterPetLook(seed, neutralDate));
+    const elder = identityOf(644);
+    expect(elder.elder).toBe(true);
+    expect(elder.look.scale).toBe(3);
+    expect(elder.look.accessory).toBe("barnacle");
     let elders = 0;
-    for (let seed = 0; seed < 10_000; seed++) {
-      if (isLobsterElderLoad(seed)) {
+    for (let seed = 0; seed < 3_000; seed++) {
+      if (identityOf(seed).elder) {
         elders++;
       }
     }
     expect(elders).toBeGreaterThan(0);
-    expect(elders).toBeLessThan(10_000 * 0.03);
-    expect(isLobsterElderLoad(644)).toBe(true);
+    expect(elders).toBeLessThan(3_000 * 0.035);
   });
 
-  it("returns old friends only from known palettes", () => {
-    expect(planLobsterOldFriend(191, [])).toBeNull();
-    expect(planLobsterOldFriend(191, ["gold", "teal"])).toBe("gold");
-    expect(planLobsterOldFriend(42, ["gold", "teal"])).toBeNull();
+  it("returns old friends only from palettes the dex knows", () => {
+    vi.stubGlobal("localStorage", window.localStorage);
+    const neutralDate = new Date("2026-07-15T12:00:00");
+    const identityOf = (seed: number) =>
+      resolveLobsterLoadIdentity(seed, createLobsterPetLook(seed, neutralDate));
+    // An empty dex has no friends to bring back, whatever the roll says.
+    expect(identityOf(191).oldFriend).toBe(false);
+    localStorage.setItem(
+      "openclaw.control.lobsterdex.v1",
+      JSON.stringify({
+        gold: { firstSeenAt: 1, name: "Goldenrod" },
+        teal: { firstSeenAt: 2, name: "Minty" },
+      }),
+    );
+    const friend = identityOf(191);
+    expect(friend.oldFriend).toBe(true);
+    expect(friend.look.palette.id).toBe("gold");
+    expect(friend.friendName).toBe("Goldenrod");
+    // A seed whose friend roll misses stays a fresh stranger.
+    expect(identityOf(42).oldFriend).toBe(false);
   });
 
   it("beaches bottles rarely, with fortunes and spots in range", () => {
