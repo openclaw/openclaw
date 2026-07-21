@@ -371,7 +371,6 @@ const config = {
     // the surrounding runtime helpers rather than importing the exports.
     "extensions/signal/src/setup-core.ts": ["exports"],
     "src/infra/heartbeat-wake.ts": ["exports"],
-    "src/process/command-queue.ts": ["exports"],
   },
   workspaces: {
     ".": {
