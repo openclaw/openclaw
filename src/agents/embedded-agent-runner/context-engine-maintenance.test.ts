@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { enqueueCommandInLane, markGatewayDraining } from "../../process/command-queue.js";
@@ -177,12 +178,18 @@ describe("runContextEngineMaintenance", () => {
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
+    const storePath = "/tmp/state/current/agents/main/sessions/sessions.json";
     const sessionTarget = {
       agentId: "main",
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
-      storePath: "/tmp/state/openclaw.sqlite",
+      storePath,
     };
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId: "session-1",
+      storePath: "/tmp/state/old/agents/main/sessions/sessions.json",
+    });
     const maintain = vi.fn(async (_params?: unknown) => ({
       changed: false,
       bytesFreed: 0,
@@ -200,7 +207,7 @@ describe("runContextEngineMaintenance", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionTarget,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile,
       reason: "turn",
       runtimeContext: { workspaceDir: "/tmp/workspace" },
     });
@@ -215,7 +222,7 @@ describe("runContextEngineMaintenance", () => {
       sessionId: "session-1",
       sessionKey: "agent:main:session-1",
       sessionTarget,
-      sessionFile: "/tmp/session.jsonl",
+      sessionFile,
     });
     const maintainRuntimeContext = requireRecord(
       maintainParams.runtimeContext,
@@ -239,9 +246,33 @@ describe("runContextEngineMaintenance", () => {
       bytesFreed: 123,
       rewrittenEntries: 2,
     });
+    expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
+      scope: {
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId: "session-1",
+          storePath,
+        }),
+      },
+      request: {
+        replacements: [
+          { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
+        ],
+      },
+      config: undefined,
+    });
   });
 
   it("forces background maintenance rewrites through the session file even when a session manager exists", async () => {
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "session-background-file-rewrite",
+      sessionKey: "agent:main:session-background-file-rewrite",
+      storePath: "/tmp/state/current/agents/main/sessions/sessions.json",
+    };
     const maintain = vi.fn(async (params?: unknown) => {
       await (
         params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
@@ -277,6 +308,7 @@ describe("runContextEngineMaintenance", () => {
       },
       sessionId: "session-background-file-rewrite",
       sessionKey: "agent:main:session-background-file-rewrite",
+      sessionTarget,
       sessionFile: "/tmp/session-background-file-rewrite.jsonl",
       reason: "turn",
       executionMode: "background",
@@ -287,6 +319,7 @@ describe("runContextEngineMaintenance", () => {
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInRuntimeTranscriptMock).toHaveBeenCalledWith({
       scope: {
+        agentId: "main",
         sessionId: "session-background-file-rewrite",
         sessionKey: "agent:main:session-background-file-rewrite",
         sessionFile: "/tmp/session-background-file-rewrite.jsonl",

@@ -3,6 +3,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import * as sqliteMarker from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveContextEngineOwnerPluginId } from "../../context-engine/registry.js";
 import type {
@@ -323,13 +324,23 @@ function buildContextEngineMaintenanceRuntimeContext(params: {
           ? await params.withSessionManagerRewriteLock(rewriteSessionManagerEntries)
           : rewriteSessionManagerEntries();
       }
+      const sessionId = params.sessionTarget?.sessionId ?? params.sessionId;
+      const sessionKey = params.sessionTarget?.sessionKey ?? params.sessionKey ?? sessionId;
+      const agentId = params.sessionTarget?.agentId ?? params.agentId;
+      const storePath = params.sessionTarget?.storePath;
+      // Rebuild only SQLite markers from the canonical target after relocation. Omit
+      // storePath so explicit markers/files win over stale persisted metadata.
+      const sessionFile =
+        sqliteMarker.parseSqliteSessionFileMarker(params.sessionFile) && agentId && storePath
+          ? sqliteMarker.formatSqliteSessionFileMarker({ agentId, sessionId, storePath })
+          : params.sessionFile;
       const rewriteRuntimeTranscriptEntries = async () =>
         await rewriteTranscriptEntriesInRuntimeTranscript({
           scope: {
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey ?? params.sessionId,
-            sessionFile: params.sessionFile,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
+            sessionId,
+            sessionKey,
+            sessionFile,
+            ...(agentId ? { agentId } : {}),
           },
           request,
           config: params.config,

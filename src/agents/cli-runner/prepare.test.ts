@@ -4102,6 +4102,71 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("does not duplicate a persisted retry turn in raw-transcript reseed history", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-prior",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "user",
+        content: "prior claude-cli ask",
+        timestamp: 1,
+        idempotencyKey: "cli-user:prior",
+      },
+    });
+    const persistedMessage = {
+      role: "user" as const,
+      content: "latest ask",
+      timestamp: 2,
+      idempotencyKey: "cli-user:current-turn",
+    };
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-current",
+      parentId: "msg-prior",
+      timestamp: new Date(2).toISOString(),
+      message: persistedMessage,
+    });
+    const userTurnTranscriptRecorder = {
+      message: persistedMessage,
+      getPersistedMessage: () => persistedMessage,
+      hasPersisted: () => true,
+      isBlocked: () => false,
+    } as RunCliAgentParams["userTurnTranscriptRecorder"];
+
+    try {
+      setCliBackendForPrepareTest({
+        reseedFromRawTranscriptWhenUncompacted: true,
+      });
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: vi.fn(async () => false),
+        claudeCliSessionTranscriptHasOrphanedToolUse: vi.fn(async () => false),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:direct:peer",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-persisted-turn-reseed",
+        cliSessionBinding: { sessionId: "stale-claude-sid" },
+        cliSessionId: "stale-claude-sid",
+        config: createCliBackendConfig(),
+        userTurnTranscriptRecorder,
+        suppressNextUserMessagePersistence: true,
+      });
+
+      expect(context.openClawHistoryPrompt).toContain("prior claude-cli ask");
+      expect(context.openClawHistoryPrompt?.match(/latest ask/g)).toHaveLength(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("prepares node-placed Claude resumes without Gateway MCP, skills, or transcript checks", async () => {
     const { dir, sessionFile } = createSessionFile();
     appendTranscriptEntry(sessionFile, {

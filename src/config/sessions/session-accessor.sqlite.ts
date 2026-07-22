@@ -62,10 +62,12 @@ export { publishSqliteTranscriptUpdate } from "./session-accessor.sqlite-events.
 export { readSqliteTranscriptRawDelta } from "./session-accessor.sqlite-delta.js";
 export {
   findSqliteTranscriptEvent,
+  hasSqliteTranscriptEventsSync,
   loadLatestSqliteAssistantText,
   loadSqliteTranscriptEventRowsAfterSeqSync,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  loadSqliteTranscriptTailEventsByJsonlBytesSync,
   readSqliteTranscriptEventAtSeqSync,
   readSqliteTranscriptStatsSync,
 } from "./session-accessor.sqlite-read.js";
