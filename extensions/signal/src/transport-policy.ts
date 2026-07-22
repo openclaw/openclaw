@@ -97,8 +97,12 @@ export function isSignalManagedNativeConnectionUrlForBind(
   if (bindHost === "::") {
     return connectionHost === "localhost" || connectionHost === "::1";
   }
+  // Only the ambiguous "localhost" name bridges address families. An exact
+  // cross-family pair (127.0.0.1 bind vs ::1 URL) is a different socket — e.g.
+  // an IPv6 proxy — and its URL must not be rewritten on bind-port changes.
   return (
-    SIGNAL_LOOPBACK_HOST_ALIASES.has(bindHost) && SIGNAL_LOOPBACK_HOST_ALIASES.has(connectionHost)
+    (bindHost === "localhost" && SIGNAL_LOOPBACK_HOST_ALIASES.has(connectionHost)) ||
+    (connectionHost === "localhost" && SIGNAL_LOOPBACK_HOST_ALIASES.has(bindHost))
   );
 }
 
