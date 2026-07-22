@@ -310,10 +310,10 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `Claude catalog worker propagates caller cancellation`() async {
-        let started = DispatchSemaphore(value: 0)
+        let started = AsyncStream<Void>.makeStream()
         let worker = MacNodeClaudeSessionCatalogWorker(
             listOperation: { _ in
-                started.signal()
+                started.continuation.yield()
                 while !Task.isCancelled {
                     Thread.sleep(forTimeInterval: 0.001)
                 }
@@ -321,10 +321,14 @@ struct MacNodeRuntimeTests {
             },
             readOperation: { _ in "unused" })
         let task = Task { try await worker.list(paramsJSON: nil) }
-        let operationStarted = await Task.detached {
-            started.wait(timeout: .now() + 5) == .success
-        }.value
-        #expect(operationStarted)
+        let watchdog = Task {
+            try? await Task.sleep(for: .seconds(5))
+            started.continuation.finish()
+        }
+        var iterator = started.stream.makeAsyncIterator()
+        #expect(await iterator.next() != nil)
+        watchdog.cancel()
+        started.continuation.finish()
 
         task.cancel()
         await #expect(throws: CancellationError.self) {
