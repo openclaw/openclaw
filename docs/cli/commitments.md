@@ -29,6 +29,8 @@ openclaw commitments dismiss <id...> [--json]
 - `--agent <id>`: filter to one agent id.
 - `--status <status>`: filter by status. Values: `pending`, `sent`,
   `dismissed`, `snoozed`, or `expired`. Unknown values exit with an error.
+  The `snoozed` status is reserved: no built-in flow currently snoozes a
+  commitment; snoozed records can appear only when imported from legacy state.
 - `--json`: output machine-readable JSON.
 
 `dismiss` marks the given commitment ids as `dismissed` so heartbeat will not
@@ -54,10 +56,10 @@ Filter to one agent:
 openclaw commitments --agent main
 ```
 
-Find snoozed commitments:
+Filter by status:
 
 ```bash
-openclaw commitments --status snoozed
+openclaw commitments --status dismissed
 ```
 
 Dismiss one or more commitments:

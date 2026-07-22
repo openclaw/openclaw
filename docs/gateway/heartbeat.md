@@ -71,10 +71,12 @@ Example config:
 
 ## What the heartbeat prompt is for
 
-The default prompt is intentionally broad:
+The default prompt is intentionally narrow: read `HEARTBEAT.md` when it exists, follow it strictly, and reply `HEARTBEAT_OK` when nothing needs attention. It explicitly tells the agent **not** to infer or repeat old tasks from prior chats, so a default install stays quiet instead of rehashing stale conversation context.
 
-- **Background tasks**: "Consider outstanding tasks" nudges the agent to review follow-ups (inbox, calendar, reminders, queued work) and surface anything urgent.
-- **Human check-in**: "Checkup sometimes on your human during day time" nudges an occasional lightweight "anything you need?" message, but avoids night-time spam by using your configured local timezone (see [Timezone](/concepts/timezone)).
+Proactive heartbeat behavior is opt-in:
+
+- **Recurring checks**: add instructions or `tasks:` entries to `HEARTBEAT.md` (see the HEARTBEAT.md section below) — for example inbox review, calendar sweeps, or queued follow-ups. With `tasks:` blocks, only due tasks are included in a run, and the run is skipped entirely (no model call) when nothing is due.
+- **Human check-in**: add an explicit `HEARTBEAT.md` instruction if you want an occasional lightweight "anything you need?" message, and use active hours to avoid night-time pings in your configured local timezone (see [Timezone](/concepts/timezone)).
 
 Heartbeat can react to completed [background tasks](/automation/tasks), but a heartbeat run itself does not create a task record.
 
