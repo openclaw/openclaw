@@ -3,6 +3,7 @@ import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createMeetingSession,
   MeetingSessionRuntime,
   type MeetingSessionLeaveResult,
   type MeetingSessionRuntimeHandles,
@@ -22,7 +23,6 @@ import {
   testGoogleMeetSpeech,
   type GoogleMeetRuntimeProbeContext,
 } from "./runtime-probes.js";
-import { createGoogleMeetSession } from "./runtime-session.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
 import {
   launchChromeMeet,
@@ -172,8 +172,13 @@ export class GoogleMeetRuntime {
           request.agentId ?? params.config.realtime.agentId ?? this.#agentId,
         ),
       }),
-      createSession: ({ request: _request, resolved, createdAt }) =>
-        createGoogleMeetSession({ config: params.config, resolved, createdAt }),
+      createSession: ({ request: _request, resolved, createdAt }): GoogleMeetSession =>
+        createMeetingSession({
+          platform: GOOGLE_MEET_PLATFORM_ADAPTER,
+          config: params.config,
+          resolved,
+          createdAt,
+        }),
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport,

@@ -267,6 +267,27 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingPlatformAdapter<
   displayName: "Microsoft Teams meetings",
   browserLabel: "Teams meeting",
   logScope: "[teams-meetings]",
+  agentConsult: {
+    surface: "a private Microsoft Teams meeting",
+    userLabel: "Participant",
+    assistantLabel: "Agent",
+    questionSourceLabel: "participant",
+    workingResponseLabel: "participant",
+    extraSystemPrompt: [
+      "You are a behind-the-scenes consultant for a live meeting voice agent.",
+      "Prioritize a fast, speakable answer over exhaustive investigation.",
+      "Use only bounded, task-relevant tool calls.",
+      "Never print secrets or dump environment variables.",
+      "Be accurate, brief, and speakable.",
+    ].join(" "),
+  },
+  session: {
+    idPrefix: "teams_meeting",
+    participantIdentity: (transport) =>
+      transport === "chrome-node"
+        ? "Microsoft Teams guest in Chrome on a paired node"
+        : "Microsoft Teams guest in the OpenClaw Chrome profile",
+  },
   nodeCommandName: TEAMS_MEETINGS_NODE_COMMAND,
   nodeConfigPath: "plugins.entries.teams-meetings.config.chromeNode.node",
   urls: {
