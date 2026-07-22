@@ -99,6 +99,32 @@ export type SidebarRecentSession = {
   failedChildCount: number;
 };
 
+export const enum RowVisibilityReason {
+  Any,
+  ActiveRun,
+  Attention,
+}
+
+export function rowDemandsVisibility(
+  row: SidebarRecentSession,
+  reason: RowVisibilityReason = RowVisibilityReason.Any,
+): boolean {
+  if (reason === RowVisibilityReason.ActiveRun) {
+    return row.hasActiveRun;
+  }
+  if (reason === RowVisibilityReason.Attention) {
+    return row.attention.kind !== "none";
+  }
+  return (
+    row.visuallyActive ||
+    row.containsActiveDescendant ||
+    row.hasActiveRun ||
+    row.status === "running" ||
+    row.runningChildCount > 0 ||
+    row.attention.kind !== "none"
+  );
+}
+
 export type SidebarSessionMenuState = {
   session: SidebarRecentSession;
   x: number;
