@@ -3961,7 +3961,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
-    public let archived: Bool?
+    public let archived: AnyCodable?
 
     public init(
         limit: Int? = nil,
@@ -3978,7 +3978,7 @@ public struct SessionsListParams: Codable, Sendable {
         spawnedby: String? = nil,
         agentid: String? = nil,
         search: String? = nil,
-        archived: Bool? = nil)
+        archived: AnyCodable? = nil)
     {
         self.limit = limit
         self.offset = offset
