@@ -429,23 +429,31 @@ function rememberGoodExecApprovals(file: ExecApprovalsFile): ExecApprovalsFile {
   return file;
 }
 
+function isTransientExecApprovalsReadError(cause: unknown): boolean {
+  // Only a lost lock race is provably transient: the store was readable a
+  // moment ago and a bounded wait simply expired. Everything else that lands
+  // in the read catch (symlinked/non-file paths, permission errors, malformed
+  // content, stale owners) keeps the fail-closed contract.
+  return (cause as { code?: unknown } | null)?.code === "file_lock_timeout";
+}
+
 /**
- * Serves the last successfully-read approvals policy when a read fails at the
- * IO/lock layer (contended lock, transient fs error). Concurrent execs race on
- * the approvals file lock with a bounded wait; treating a lost race as a policy
- * failure turns into sporadic fail-closed denials while the store is valid.
- * Content-level failures never reach here — malformed stores still fail closed
- * via createFailClosedExecApprovalsFallback.
+ * Serves the last successfully-read approvals policy when a read lost the
+ * bounded wait for the approvals file lock. Concurrent execs race on that
+ * lock; treating a lost race as a policy failure turns into sporadic
+ * fail-closed denials while the store is valid the whole time. All other
+ * failures — and any failure before the first successful read — still fail
+ * closed via createFailClosedExecApprovalsFallback.
  */
 function resolveTransientExecApprovalsFallback(cause: unknown): ExecApprovalsFile {
-  if (lastGoodExecApprovals) {
+  if (lastGoodExecApprovals && isTransientExecApprovalsReadError(cause)) {
     const nowMs = Date.now();
     if (nowMs - execApprovalsTransientWarnedAtMs >= 60_000) {
       execApprovalsTransientWarnedAtMs = nowMs;
       const reason = cause instanceof Error ? cause.message : "unknown cause";
       try {
         console.error(
-          `[exec-approvals] transient approvals read failure; serving last-known-good policy (likely lock contention): ${reason}`,
+          `[exec-approvals] approvals lock wait expired; serving last-known-good policy: ${reason}`,
         );
       } catch {
         // Console failures must not affect policy resolution.
