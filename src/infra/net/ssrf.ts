@@ -2,6 +2,7 @@
 // and create dispatcher policies for guarded network fetches.
 import { lookup as dnsLookupCb, type LookupAddress } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
+import { domainToASCII } from "node:url";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -342,7 +343,7 @@ export function isBlockedHostname(hostname: string): boolean {
   if (!normalized) {
     return false;
   }
-  return isBlockedHostnameNormalized(normalized);
+  return withIdnaRecheck(normalized, isBlockedHostnameNormalized);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {
@@ -356,12 +357,38 @@ function isBlockedHostnameNormalized(normalized: string): boolean {
   );
 }
 
+function normalizeIdnaHostnameForBlockedComparison(normalized: string): string | undefined {
+  // UTS46 ToASCII folds compatibility codepoints (full-width Latin, script
+  // letters) to the ASCII form new URL()/DNS resolve, while leaving genuine
+  // xn-- A-labels intact. Recheck reserved host/IP on that mapped form.
+  const mapped = domainToASCII(normalized);
+  if (!mapped || mapped === normalized) {
+    return undefined;
+  }
+  const mappedNormalized = normalizeHostname(mapped);
+  if (!mappedNormalized || mappedNormalized === normalized) {
+    return undefined;
+  }
+  return mappedNormalized;
+}
+
+function withIdnaRecheck(normalized: string, check: (host: string) => boolean): boolean {
+  if (check(normalized)) {
+    return true;
+  }
+  const mapped = normalizeIdnaHostnameForBlockedComparison(normalized);
+  return mapped ? check(mapped) : false;
+}
+
 export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): boolean {
   const normalized = normalizeHostname(hostname);
   if (!normalized) {
     return false;
   }
-  return isBlockedHostnameNormalized(normalized) || isPrivateIpAddress(normalized, policy);
+  return withIdnaRecheck(
+    normalized,
+    (host) => isBlockedHostnameNormalized(host) || isPrivateIpAddress(host, policy),
+  );
 }
 
 const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
