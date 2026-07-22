@@ -23,7 +23,8 @@ import { readPresenceEntries, resolveSelfPresenceUser } from "./user-profile.ts"
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
-export const OFFLINE_INDICATOR_DELAY_MS = 2_000;
+// Grace window before offline presentation appears; reconnects never wait.
+const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 function sameSelfUser(
   left: ApplicationGatewaySnapshot["selfUser"],
