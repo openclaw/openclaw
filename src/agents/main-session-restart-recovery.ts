@@ -1865,7 +1865,11 @@ async function recoverStore(params: {
     // Completion reports are delivery turns, not human work. Same-process
     // rotation retains their announce run ids; a full restart can recover the
     // same fact from the already-persisted user-message provenance.
-    if (hasOnlyAnnounceRecoveryRuns(entry) || hasCompletionReportUserTail(messages)) {
+    const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
+    if (
+      hasOnlyAnnounceRecoveryRuns(entry) ||
+      (!hasRecoveryRuns && hasCompletionReportUserTail(messages))
+    ) {
       if (
         await reconcileInterruptedCompletionReport({
           entry,

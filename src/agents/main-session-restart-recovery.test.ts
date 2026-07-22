@@ -991,6 +991,40 @@ describe("main-session-restart-recovery", () => {
     expect(firstGatewayParams().sessionKey).toBe(sessionKey);
   });
 
+  it("prefers an explicit human recovery run over stale completion provenance", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:telegram:group:-100:topic:41818";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-41818-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "human-run-2", lifecycleGeneration: "generation-old" }],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41818-session", [
+      {
+        role: "user",
+        content: "A background task finished.",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams().sessionKey).toBe(sessionKey);
+  });
+
   it("delivers resumed marked sessions through the current run recovery context", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {
