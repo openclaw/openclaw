@@ -1,7 +1,8 @@
 # Extended-Stable Backport Preparation
 
-Prepare the next npm and Docker patch for the active `extended-stable` line.
-Discover the complete candidate set, obtain approval, and prepare one
+Prepare the next Gateway patch for the active `extended-stable` line: the
+`openclaw` npm package, official npm plugins, and matching Docker Gateway
+images. Discover the complete candidate set, obtain approval, and prepare one
 coordinated PR. Commits are canonical; PRs, issues, ClawSweeper reports, and
 advisories provide context.
 
@@ -20,10 +21,11 @@ extended-stable package and publication constraints.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
-- Carry the current-main Docker release workflow and policy helper in the
-  tagged tree; tag-push workflows use that copy.
-- Exclude ClawHub publication, GitHub Releases, native apps, mobile artifacts,
-  website downloads, and private-repository dist-tags.
+- Carry the complete current-main Docker release-channel change in the tagged
+  tree, including its workflow, promoter, policy, shared release-version
+  classifier, tests, and workflow validation changes.
+- Exclude ClawHub publication, GitHub Releases, the macOS app, Windows Hub,
+  mobile apps, website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
@@ -159,8 +161,8 @@ path alone.
   at the same intended version and can verify its exact package and selector.
 - Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
   out of scope.
-- Treat native-only, mobile-only, website-only, and GitHub Release-only fixes
-  as `skip` for this extended-stable line.
+- Treat macOS-app-only, Windows-Hub-only, mobile-only, website-only, and GitHub
+  Release-only fixes as `skip` for this Gateway extended-stable line.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 
@@ -282,5 +284,5 @@ exact package and `extended-stable` selector; and preserve the generated
 core `openclaw` selector-repair command. Repair missing or stale official-
 plugin selectors on already-published versions with the approved credential-
 isolated release tooling for manual tag repair; the OIDC source workflow cannot
-mutate those tags. Never republish an immutable version when only a selector
+mutate those tags. Never republish the same version when only a selector
 needs repair.

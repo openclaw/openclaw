@@ -227,9 +227,11 @@ reconciliation, candidate decisions, maintainer approval, coordinated staging
 PR, and proof handoff. After that PR lands, use the dedicated extended-stable sequence
 below. Never route `.33+` through the regular beta/stable release sequence.
 
-## Publish extended-stable releases
+## Publish Gateway extended-stable releases
 
-Use this path only for the trailing completed month's `.33+` line. Treat
+Use this path only for the trailing completed month's `.33+` Gateway
+distribution: the `openclaw` npm package, official npm plugins, and matching
+Docker Gateway images. Treat
 `docs/reference/RELEASING.md`,
 `scripts/openclaw-npm-extended-stable-release.mjs`, and the release workflows
 on pinned current `main` as the exact command and validation contract.
@@ -237,11 +239,11 @@ on pinned current `main` as the exact command and validation contract.
 1. Check out the canonical `extended-stable/YYYY.M.33` branch after the
    approved backport PR lands. Freeze its full 40-character SHA after verifying
    the root and every publishable official plugin have the intended version.
-   Copy the current-main
-   `.github/workflows/docker-release.yml` and
-   `scripts/lib/docker-release-policy.mjs` into that tree and run focused checks.
-   Do not tag yet; tag-push workflows use that copy, which must not route `.33+`
-   to regular stable aliases.
+   Backport the complete current-main Docker release-channel change, including
+   its workflow, promoter, policy, shared release-version classifier, tests,
+   and workflow validation changes. Do not tag yet; tag-push workflows use
+   that code, which must not route `.33+` to regular stable aliases or fail
+   from a partial copy.
 2. Dispatch `openclaw-npm-release.yml` from that canonical branch with the
    frozen SHA as `tag`, `preflight_only=true`, and
    `npm_dist_tag=extended-stable`. A full SHA is a validation-only candidate
@@ -257,7 +259,7 @@ on pinned current `main` as the exact command and validation contract.
    not create, delete, or move a final `vYYYY.M.P` tag for candidate validation.
 5. Only after the candidate gates are green, re-resolve the canonical branch
    tip and require it still equals the validated SHA. Create and push the
-   immutable final `vYYYY.M.P` tag at that SHA. Never move or delete a final
+   signed final `vYYYY.M.P` tag at that SHA. Never move or delete a final
    extended-stable tag: a post-tag code change needs a new patch version and a
    new candidate.
 6. Dispatch `plugin-npm-release.yml` from the same branch with
@@ -275,15 +277,16 @@ on pinned current `main` as the exact command and validation contract.
    an official-plugin selector is missing or stale for an already-published
    version, use the approved credential-isolated release tooling for manual
    plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
-   republish an immutable version.
+   republish the same version.
 9. Require `Docker Release` to publish and verify the exact default, slim,
    browser, and architecture images in both registries before its final step
    promotes the three extended-stable aliases through the shared promotion
    script. For alias repair, dispatch
    `docker-channel-promote.yml` from current `main` with the exact tag; never
-   rebuild or move the immutable release tag.
-10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
-    ClawHub, or private dist-tag artifacts from this path.
+   rebuild or move the release tag.
+10. Do not create a GitHub Release or publish the macOS app, Windows Hub,
+    mobile apps, website downloads, ClawHub packages, or private dist-tag
+    artifacts from this path.
 
 ## Keep release channel naming aligned
 
