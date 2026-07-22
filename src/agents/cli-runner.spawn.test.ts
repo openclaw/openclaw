@@ -5877,6 +5877,34 @@ ${JSON.stringify({
     expect(input.env?.SAFE_OVERRIDE).toBe("from-override");
   });
 
+  it("keeps selected Claude auth authoritative over ambient and configured credentials", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV", '["ANTHROPIC_API_KEY"]');
+    vi.stubEnv("ANTHROPIC_API_KEY", "ambient-api-key");
+    mockSuccessfulClaudeJsonlRun();
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        runId: "run-claude-selected-auth-authority",
+        preparedEnv: {
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-oauth-token",
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+        },
+        backend: {
+          env: { ANTHROPIC_API_KEY: "configured-api-key" },
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        },
+      }),
+    );
+
+    const input = mockCallArg(supervisorSpawnMock) as {
+      env?: Record<string, string | undefined>;
+    };
+    expect(input.env?.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(input.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("selected-oauth-token");
+  });
+
   it("clears claude-cli provider-routing, auth, telemetry, compaction, and host-managed env", async () => {
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example.com/v1");
     vi.stubEnv("ANTHROPIC_API_TOKEN", "env-api-token");

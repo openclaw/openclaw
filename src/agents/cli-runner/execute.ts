@@ -935,7 +935,7 @@ export async function executePreparedCliRun(
           });
           const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
           for (const key of backend.clearEnv ?? []) {
-            if (preservedEnv.has(key)) {
+            if (preservedEnv.has(key) && !selectedClaudeClearEnv?.has(key)) {
               continue;
             }
             delete next[key];
