@@ -105,12 +105,15 @@ unattested production translation.
 
 1. Add the canonical BCP 47 identifier, aliases, fallback, and direction to
    `packages/localization-core/src/locale-registry.ts`.
-2. Add resolution tests for canonical IDs, aliases, unsupported inputs, and
-   fallback behavior.
-3. Add the locale only to owner catalogs and generators that support it.
-4. Add representative shaping, segmentation, expansion, and bidirectional
+2. Recompute `OPENCLAW_LOCALE_REGISTRY_REVISION` as `sha256:` plus the SHA-256
+   digest of `JSON.stringify(OPENCLAW_LOCALE_REGISTRY)`.
+3. Add resolution tests for canonical IDs, aliases, unsupported inputs, and
+   fallback behavior, then run
+   `node scripts/run-vitest.mjs packages/localization-core/src/locale-registry.test.ts`.
+4. Add the locale only to owner catalogs and generators that support it.
+5. Add representative shaping, segmentation, expansion, and bidirectional
    fixtures when the script requires them.
-5. Prove fallback on every adopted surface before claiming support.
+6. Prove fallback on every adopted surface before claiming support.
 
 Locale registration means OpenClaw recognizes the locale. It does not claim
 that every product surface is translated.
