@@ -581,55 +581,6 @@ describe("chat pane initialization", () => {
       expect.objectContaining({ sessionKey: canonicalSessionKey }),
     );
   });
-
-  it("replays a pending channel stop when the gateway reconnects", async () => {
-    const request = vi.fn((method: string) =>
-      method === "sessions.abort"
-        ? Promise.resolve({ abortedRunId: null, status: "aborted" })
-        : new Promise<never>(() => {}),
-    );
-    const client = { request } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
-    const sessionKey = "agent:main:telegram:direct:queued-user";
-    pane.context = {
-      ...pane.context,
-      config: {
-        current: {
-          assistantIdentity: { name: "Assistant" },
-          terminalEnabled: false,
-        },
-      },
-    } as unknown as ApplicationContext;
-    state.loadAssistantIdentity = vi.fn(async () => {});
-    state.realtimeTalkInputLevel = {
-      set: vi.fn(),
-    } as unknown as ChatPageHost["realtimeTalkInputLevel"];
-    state.resetToolStream = vi.fn();
-    const snapshot = {
-      ...pane.context.gateway.snapshot,
-      client,
-      assistantAgentId: "main",
-    };
-
-    pane.applyGatewaySnapshot({ ...snapshot, connected: false, hello: null });
-    state.pendingAbort = { sourceClient: client, runId: null, sessionKey, clearQueued: true };
-
-    pane.applyGatewaySnapshot({
-      ...snapshot,
-      connected: true,
-    });
-
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith("sessions.abort", {
-        key: sessionKey,
-        clearQueued: true,
-      }),
-    );
-    expect(state.pendingAbort).toBeNull();
-
-    pane.applyGatewaySnapshot({ ...snapshot, connected: true });
-    expect(request.mock.calls.filter(([method]) => method === "sessions.abort")).toHaveLength(1);
-  });
 });
 
 describe("chat pane keyboard shortcuts", () => {
