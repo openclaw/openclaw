@@ -406,43 +406,28 @@ describe("buildTelegramPresentationButtons", () => {
     ]);
   });
 
-  it("renders typed and legacy URL and Web App actions natively", () => {
+  it("renders URL actions natively while skipping generic Web App actions", () => {
     expect(
-      buildTelegramPresentationButtons(
-        {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
-                {
-                  label: "Typed App",
-                  action: { type: "web-app", url: "https://example.com/app" },
-                },
-                { label: "Legacy URL", url: "https://example.com/legacy" },
-                { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
-              ],
-            },
-          ],
-        },
-        { allowWebAppButtons: true },
-      ),
+      buildTelegramPresentationButtons({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              { label: "Typed URL", action: { type: "url", url: "https://example.com/typed" } },
+              {
+                label: "Typed App",
+                action: { type: "web-app", url: "https://example.com/app" },
+              },
+              { label: "Legacy URL", url: "https://example.com/legacy" },
+              { label: "Legacy App", webApp: { url: "https://example.com/legacy-app" } },
+            ],
+          },
+        ],
+      }),
     ).toEqual([
       [
         { text: "Typed URL", url: "https://example.com/typed", style: undefined },
-        {
-          text: "Typed App",
-          web_app: { url: "https://example.com/app" },
-          style: undefined,
-        },
         { text: "Legacy URL", url: "https://example.com/legacy", style: undefined },
-      ],
-      [
-        {
-          text: "Legacy App",
-          web_app: { url: "https://example.com/legacy-app" },
-          style: undefined,
-        },
       ],
     ]);
   });

@@ -475,7 +475,7 @@ describe("telegramOutbound", () => {
     });
   });
 
-  it("renders presentation web app buttons for payload sends", async () => {
+  it("falls back generic presentation web app buttons for payload sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-web-app", chatId: "12345" });
     const presentation = {
       blocks: [
@@ -510,17 +510,13 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Open app:");
-    expect(options.buttons).toEqual([
-      [
-        {
-          text: "Launch",
-          web_app: {
-            url: "https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
-          },
-        },
-      ],
-    ]);
+    const options = callOptionsAt(
+      sendMessageTelegramMock,
+      0,
+      "12345",
+      "Open app:\n\n- Launch: https://node.tailnet.ts.net/__openclaw__/mcp-app#opaque-ticket",
+    );
+    expect(options.buttons).toBeUndefined();
   });
 
   it("preserves explicit Telegram buttons when rendering presentation payloads", async () => {

@@ -125,7 +125,7 @@ describe("canonicalizeTelegramPresentationPayload", () => {
     });
   });
 
-  it("uses native web_app only for a confirmed direct target", () => {
+  it("falls back generic web_app actions", () => {
     const payload = {
       text: "Open app:",
       presentation: {
@@ -143,21 +143,37 @@ describe("canonicalizeTelegramPresentationPayload", () => {
       },
     };
 
-    expect(
-      canonicalizeTelegramPresentationPayload(payload, { allowWebAppButtons: true }),
-    ).toMatchObject({
-      text: "Open app:",
-      channelData: {
-        telegram: {
-          buttons: [[{ text: "Launch", web_app: { url: "https://example.com/app" } }]],
-        },
+    expect(canonicalizeTelegramPresentationPayload(payload)).toEqual({
+      text: "Open app:\n\n- Launch: https://example.com/app",
+    });
+  });
+
+  it("preserves question option indexes around fallback-only actions", () => {
+    const questionId = "ask_0123456789abcdef0123456789abcdef";
+    const result = canonicalizeTelegramPresentationPayload({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Launch",
+                action: { type: "web-app", url: "https://example.com/app" },
+              },
+              {
+                label: "Continue",
+                action: { type: "question", questionId, optionValue: "continue" },
+              },
+            ],
+          },
+        ],
       },
     });
-    expect(canonicalizeTelegramPresentationPayload(payload, { allowWebAppButtons: false })).toEqual(
-      {
-        text: "Open app:\n\n- Launch: https://example.com/app",
-      },
-    );
+
+    expect(result.text).toBe("- Launch: https://example.com/app");
+    expect(result.channelData?.telegram).toEqual({
+      buttons: [[{ text: "Continue", callback_data: `tgq1:${questionId}:1`, style: undefined }]],
+    });
   });
 
   it("falls back presentation controls when explicit Telegram buttons take precedence", () => {

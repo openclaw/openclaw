@@ -6,6 +6,7 @@ import type {
   OpenClawPluginCommandDefinition,
   PluginCommandContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { issueTelegramMiniAppLaunchTicket } from "./launch-ticket.js";
 import { isTelegramMiniAppOwner } from "./owner.js";
 import { resolveTelegramMiniAppUrls, TELEGRAM_MINIAPP_URL_ERROR } from "./url.js";
 
@@ -39,15 +40,15 @@ function createTelegramMiniAppDashboardCommand(
         return { text: TELEGRAM_MINIAPP_URL_ERROR };
       }
       pageUrl.searchParams.set("accountId", accountId);
+      pageUrl.hash = new URLSearchParams({
+        launchTicket: issueTelegramMiniAppLaunchTicket({ accountId, userId }),
+      }).toString();
       return {
         text: "Open OpenClaw dashboard.",
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Open dashboard", webApp: { url: pageUrl.toString() } }],
-            },
-          ],
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Open dashboard", web_app: { url: pageUrl.toString() } }]],
+          },
         },
       };
     },

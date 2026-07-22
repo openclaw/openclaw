@@ -272,9 +272,7 @@ export async function sendTelegramPayloadMessages(params: {
   payload: ReplyPayload;
   baseOpts: Omit<NonNullable<TelegramSendOpts>, "buttons" | "mediaUrl" | "quoteText">;
 }): Promise<Awaited<ReturnType<TelegramSendFn>>> {
-  const payload = canonicalizeTelegramPresentationPayload(params.payload, {
-    allowWebAppButtons: parseTelegramTarget(params.to).chatType === "direct",
-  });
+  const payload = canonicalizeTelegramPresentationPayload(params.payload);
   const telegramData = payload.channelData?.telegram as
     | {
         buttons?: TelegramInlineButtons;
@@ -446,11 +444,8 @@ export function createTelegramOutboundAdapter(
         batch: true,
       },
     },
-    renderPresentation: ({ payload, presentation, ctx }) =>
-      canonicalizeTelegramPresentationPayload(
-        { ...payload, presentation },
-        { allowWebAppButtons: parseTelegramTarget(ctx.to ?? "").chatType === "direct" },
-      ),
+    renderPresentation: ({ payload, presentation }) =>
+      canonicalizeTelegramPresentationPayload({ ...payload, presentation }),
     afterDeliverPayload: ({ cfg, target, payload, results }) => {
       const questionId = questionGatewayRuntime.readAskUserQuestionId(payload);
       const telegramResults = results.filter(

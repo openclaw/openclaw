@@ -40,26 +40,27 @@ export const TELEGRAM_PRESENTATION_CAPABILITIES = {
   },
 };
 
-function canEncodeTelegramPresentationControl(
-  block: MessagePresentationInteractiveBlock,
-  options?: { allowWebAppButtons?: boolean },
-): boolean {
-  return Boolean(buildTelegramPresentationButtons({ blocks: [block] }, options)?.length);
+function canEncodeTelegramPresentationControl(block: MessagePresentationInteractiveBlock): boolean {
+  return Boolean(buildTelegramPresentationButtons({ blocks: [block] })?.length);
 }
 
 function partitionTelegramPresentationBlocks(params: {
   presentation: MessagePresentation;
   presentationControlsSelected: boolean;
-  allowWebAppButtons: boolean;
+  includePortableContent?: boolean;
 }): {
   fallbackBlocks: MessagePresentation["blocks"];
-  nativeControlBlocks: MessagePresentationInteractiveBlock[];
 } {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
-  const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
   for (const block of params.presentation.blocks) {
     if (!isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
+      if (
+        params.includePortableContent !== false ||
+        block.type === "chart" ||
+        block.type === "table"
+      ) {
+        fallbackBlocks.push(block);
+      }
       continue;
     }
     if (!params.presentationControlsSelected) {
@@ -67,19 +68,11 @@ function partitionTelegramPresentationBlocks(params: {
       continue;
     }
     if (block.type === "buttons") {
-      const nativeButtons: typeof block.buttons = [];
       const fallbackButtons: typeof block.buttons = [];
       for (const button of block.buttons) {
-        const target = canEncodeTelegramPresentationControl(
-          { type: "buttons", buttons: [button] },
-          { allowWebAppButtons: params.allowWebAppButtons },
-        )
-          ? nativeButtons
-          : fallbackButtons;
-        target.push(button);
-      }
-      if (nativeButtons.length > 0) {
-        nativeControlBlocks.push({ type: "buttons", buttons: nativeButtons });
+        if (!canEncodeTelegramPresentationControl({ type: "buttons", buttons: [button] })) {
+          fallbackButtons.push(button);
+        }
       }
       if (fallbackButtons.length > 0) {
         fallbackBlocks.push({ type: "buttons", buttons: fallbackButtons });
@@ -87,16 +80,11 @@ function partitionTelegramPresentationBlocks(params: {
       continue;
     }
 
-    const nativeOptions: typeof block.options = [];
     const fallbackOptions: typeof block.options = [];
     for (const option of block.options) {
-      const target = canEncodeTelegramPresentationControl({ type: "select", options: [option] })
-        ? nativeOptions
-        : fallbackOptions;
-      target.push(option);
-    }
-    if (nativeOptions.length > 0) {
-      nativeControlBlocks.push({ ...block, options: nativeOptions });
+      if (!canEncodeTelegramPresentationControl({ type: "select", options: [option] })) {
+        fallbackOptions.push(option);
+      }
     }
     if (fallbackOptions.length > 0) {
       fallbackBlocks.push({ ...block, options: fallbackOptions });
@@ -105,14 +93,21 @@ function partitionTelegramPresentationBlocks(params: {
       fallbackBlocks.push({ type: "text", text: block.placeholder });
     }
   }
-  return { fallbackBlocks, nativeControlBlocks };
+  return { fallbackBlocks };
+}
+
+export function resolveTelegramPresentationFallbackBlocks(
+  presentation: MessagePresentation,
+): MessagePresentation["blocks"] {
+  return partitionTelegramPresentationBlocks({
+    presentation,
+    presentationControlsSelected: true,
+    includePortableContent: false,
+  }).fallbackBlocks;
 }
 
 /** Convert portable presentation into the one Telegram payload shape used by every send funnel. */
-export function canonicalizeTelegramPresentationPayload(
-  payload: ReplyPayload,
-  options?: { allowWebAppButtons?: boolean },
-): ReplyPayload {
+export function canonicalizeTelegramPresentationPayload(payload: ReplyPayload): ReplyPayload {
   const normalizedPresentation = normalizeMessagePresentation(payload.presentation);
   const telegramData = payload.channelData?.telegram as
     | (Record<string, unknown> & {
@@ -138,17 +133,13 @@ export function canonicalizeTelegramPresentationPayload(
     interactive,
   });
   const presentationControlsSelected = existingButtons === undefined;
-  const { fallbackBlocks, nativeControlBlocks } = partitionTelegramPresentationBlocks({
+  const { fallbackBlocks } = partitionTelegramPresentationBlocks({
     presentation,
     presentationControlsSelected,
-    allowWebAppButtons: options?.allowWebAppButtons === true,
   });
-  const presentationButtons = buildTelegramPresentationButtons(
-    {
-      blocks: nativeControlBlocks,
-    },
-    options,
-  );
+  const presentationButtons = presentationControlsSelected
+    ? buildTelegramPresentationButtons(presentation)
+    : undefined;
   const buttons = existingButtons ?? presentationButtons;
 
   const fallbackText = renderMessagePresentationFallbackText({
