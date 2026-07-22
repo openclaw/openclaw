@@ -21,6 +21,8 @@ export interface FetchMediaOptions {
   timeoutMs?: number;
   /** Abort if final response headers have not arrived after this many milliseconds. */
   responseHeaderTimeoutMs?: number;
+  /** Abort if the response body stops yielding data for this many milliseconds. */
+  readIdleTimeoutMs?: number;
   /** SSRF policy configuration. */
   ssrfPolicy?: SsrfPolicyConfig;
   /** Extra fetch() RequestInit options. */
