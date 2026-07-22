@@ -29,6 +29,25 @@ function renderBadges(placementState?: SessionPlacementState, workspaceConflictC
 }
 
 describe("session row placement badges", () => {
+  it("renders the durable outbox count and stays quiet when empty", () => {
+    render(
+      renderSessionRowBadges({
+        hasAutomation: false,
+        outboxCount: 3,
+      }),
+      container,
+    );
+
+    const badge = container.querySelector<HTMLElement>(".session-row-badge--queued");
+    expect(badge?.getAttribute("aria-label")).toBe("3 messages queued to send");
+    expect(badge?.getAttribute("title")).toBe("3 messages queued to send");
+    expect(badge?.textContent).toContain("3");
+    expect(badge?.querySelector("svg")).not.toBeNull();
+
+    render(renderSessionRowBadges({ hasAutomation: false, outboxCount: 0 }), container);
+    expect(container.querySelector(".session-row-badges")).toBeNull();
+  });
+
   it.each(["local", "reclaimed"] satisfies SessionPlacementState[])(
     "keeps %s placement visually quiet",
     (placementState) => {

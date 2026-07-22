@@ -336,12 +336,13 @@ describe("settings sidebar search", () => {
 
   it("shows the offline retry action without an online status", () => {
     const onRetryConnect = vi.fn();
-    const renderSidebar = (offline: boolean, lastError: string | null) =>
+    const renderSidebar = (offline: boolean, lastError: string | null, queuedOutboxCount = 0) =>
       render(
         renderSettingsSidebar({
           basePath: "",
           activeRouteId: "config",
           offline,
+          queuedOutboxCount,
           lastError,
           version: "1.0.0",
           updateAvailable: null,
@@ -357,13 +358,14 @@ describe("settings sidebar search", () => {
         container,
       );
 
-    renderSidebar(false, null);
+    renderSidebar(false, null, 3);
     expect(container.querySelector(".sidebar-footer-bar__status")).toBeNull();
 
-    renderSidebar(true, "connection refused?token=settings-secret");
+    renderSidebar(true, "connection refused?token=settings-secret", 3);
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.title).toBe("connection refused?[redacted-credential]");
-    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now");
+    expect(button?.textContent).toContain("3 queued");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     button?.click();
     expect(onRetryConnect).toHaveBeenCalledOnce();
   });
