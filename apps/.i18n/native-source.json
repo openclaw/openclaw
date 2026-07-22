@@ -39291,7 +39291,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 289,
+      "line": 292,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
       "source": "List item",
       "surface": "apple",
@@ -39299,7 +39299,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 292,
+      "line": 295,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownBlockViews.swift",
       "source": "Item",
       "surface": "apple",
