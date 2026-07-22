@@ -12,51 +12,13 @@ import {
   readQaScenarioPack,
   validateQaScenarioExecutionConfig,
 } from "./scenario-catalog.js";
+import {
+  flowContainsCall,
+  isFlowScenario,
+  listScenarioMarkdownPaths,
+  requireFlowScenario,
+} from "./scenario-catalog.test-utils.js";
 import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
-
-type CatalogScenario = ReturnType<typeof readQaScenarioPack>["scenarios"][number];
-type FlowCatalogScenario = CatalogScenario & {
-  execution: Extract<CatalogScenario["execution"], { kind: "flow" }>;
-};
-
-function listScenarioMarkdownPaths(dir = "qa/scenarios"): string[] {
-  return fs
-    .readdirSync(dir, { withFileTypes: true })
-    .flatMap((entry) => {
-      const entryPath = `${dir}/${entry.name}`;
-      if (entry.isDirectory()) {
-        return listScenarioMarkdownPaths(entryPath);
-      }
-      return entry.isFile() && entry.name.endsWith(".md") ? [entryPath] : [];
-    })
-    .toSorted();
-}
-
-function isFlowScenario(scenario: CatalogScenario): scenario is FlowCatalogScenario {
-  return scenario.execution.kind === "flow";
-}
-
-function requireFlowScenario(scenario: CatalogScenario): FlowCatalogScenario {
-  expect(scenario.execution.kind).toBe("flow");
-  if (!isFlowScenario(scenario)) {
-    throw new Error(`expected ${scenario.id} to be a flow scenario`);
-  }
-  return scenario;
-}
-
-function flowContainsCall(value: unknown, callName: string): boolean {
-  if (Array.isArray(value)) {
-    return value.some((entry) => flowContainsCall(entry, callName));
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return (
-    record.call === callName ||
-    Object.values(record).some((entry) => flowContainsCall(entry, callName))
-  );
-}
 
 describe("qa scenario catalog", () => {
   const dottedCoverageIdPattern = /^[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$/;

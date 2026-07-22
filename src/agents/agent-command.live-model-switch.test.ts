@@ -172,6 +172,7 @@ vi.mock("./command/run-context.js", () => ({
 
 vi.mock("./command/session-store.runtime.js", () => ({
   loadSessionEntry: (...args: unknown[]) => state.loadSessionEntryMock(...args),
+  loadSessionEntryReadOnly: (...args: unknown[]) => state.loadSessionEntryMock(...args),
   updateSessionStoreAfterAgentRun: (...args: unknown[]) =>
     state.updateSessionStoreAfterAgentRunMock(...args),
 }));
