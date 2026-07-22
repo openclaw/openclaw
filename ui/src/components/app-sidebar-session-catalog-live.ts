@@ -383,9 +383,12 @@ export class SessionCatalogLiveState {
     if (!params.visible || !params.connected) {
       return;
     }
-    this.cancelTimer();
     if (this.requestGeneration === params.generation) {
       this.refreshPending = true;
+      return;
+    }
+    if (this.timer !== null) {
+      this.schedule(SESSION_CATALOG_CHANGED_REFRESH_MS, params.connected, params.refresh);
       return;
     }
     params.refresh();
@@ -482,7 +485,7 @@ export async function refreshSessionCatalogsLive(params: {
       live.refreshPending = false;
       live.schedule(
         pending
-          ? 0
+          ? SESSION_CATALOG_CHANGED_REFRESH_MS
           : live.sawChange
             ? SESSION_CATALOG_CHANGED_REFRESH_MS
             : SESSION_CATALOG_STABLE_REFRESH_MS,

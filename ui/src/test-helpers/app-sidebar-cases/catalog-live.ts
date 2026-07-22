@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { SESSION_CATALOG_CHANGED_REFRESH_MS } from "../../components/app-sidebar-session-catalog-live.ts";
 import {
   catalogPage,
   createContext,
@@ -668,7 +669,7 @@ describe("AppSidebar session catalog pagination", () => {
     }
   });
 
-  it("refreshes immediately when paired-node presence changes", async () => {
+  it("refreshes soon but not immediately when paired-node presence changes", async () => {
     vi.useFakeTimers();
     try {
       const request = vi.fn().mockResolvedValue(catalogPage([]));
@@ -689,12 +690,17 @@ describe("AppSidebar session catalog pagination", () => {
       gateway.publishEvent("presence", {
         presence: [{ deviceId: "node-1", mode: "node", reason: "connect" }],
       });
+      await vi.advanceTimersByTimeAsync(SESSION_CATALOG_CHANGED_REFRESH_MS - 1);
+      expect(request).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(2);
 
       gateway.publishEvent("presence", {
         presence: [{ deviceId: "node-1", mode: "node", reason: "disconnect" }],
       });
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(SESSION_CATALOG_CHANGED_REFRESH_MS - 1);
+      expect(request).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
       expect(request).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
