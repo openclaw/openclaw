@@ -4052,6 +4052,7 @@ describe("runGlobalPackageUpdateSteps", () => {
               "-g",
               "--global-dir",
               globalDir,
+              "--allow-build=openclaw",
               "openclaw@2.0.0",
             ]);
             await writePackageRoot(packageRoot, "2.0.0");
@@ -4137,6 +4138,7 @@ describe("runGlobalPackageUpdateSteps", () => {
               "-g",
               "--global-dir",
               globalDir,
+              "--allow-build=openclaw",
               "openclaw@2.0.0",
             ]);
             await writePackageRoot(packageRoot, "2.0.0");
