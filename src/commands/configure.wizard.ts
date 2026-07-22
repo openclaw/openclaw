@@ -46,6 +46,7 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
+import { resolveOnboardingAgentTarget } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
@@ -540,10 +541,8 @@ export async function runConfigureWizard(
       };
       didSetGatewayMode = true;
     }
-    let workspaceDir =
-      nextConfig.agents?.defaults?.workspace ??
-      baseConfig.agents?.defaults?.workspace ??
-      DEFAULT_WORKSPACE;
+    const resolveSetupTarget = () => resolveOnboardingAgentTarget(nextConfig);
+    let workspaceDir = resolveSetupTarget().workspaceDir;
     let gatewayPort = resolveGatewayPort(baseConfig);
 
     const persistConfig = async () => {
@@ -630,17 +629,34 @@ export async function runConfigureWizard(
           );
         }
       }
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      const target = resolveSetupTarget();
+      const targetEntry = nextConfig.agents?.entries?.[target.agentId];
+      nextConfig =
+        targetEntry?.workspace !== undefined
+          ? {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                entries: {
+                  ...nextConfig.agents?.entries,
+                  [target.agentId]: { ...targetEntry, workspace: workspaceDir },
+                },
+              },
+            }
+          : {
+              ...nextConfig,
+              agents: {
+                ...nextConfig.agents,
+                defaults: {
+                  ...nextConfig.agents?.defaults,
+                  workspace: workspaceDir,
+                },
+              },
+            };
+    };
+
+    const provisionWorkspace = async () => {
+      await ensureWorkspaceAndSessions(resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });
@@ -684,6 +700,7 @@ export async function runConfigureWizard(
 
       if (selected.includes("workspace")) {
         await configureWorkspace();
+        await provisionWorkspace();
       }
 
       if (selected.includes("model")) {
@@ -709,13 +726,17 @@ export async function runConfigureWizard(
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
-          workspaceDir: resolveUserPath(workspaceDir),
+          workspaceDir: resolveSetupTarget().workspaceDir,
         });
       }
 
       if (selected.includes("skills")) {
-        const wsDir = resolveUserPath(workspaceDir);
-        nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+        nextConfig = await setupSkills(
+          nextConfig,
+          resolveSetupTarget().workspaceDir,
+          runtime,
+          prompter,
+        );
       }
 
       await persistConfig();
@@ -744,6 +765,7 @@ export async function runConfigureWizard(
 
         if (choice === "workspace") {
           await configureWorkspace();
+          await provisionWorkspace();
           await persistConfig();
         }
 
@@ -775,14 +797,18 @@ export async function runConfigureWizard(
           nextConfig = await configurePluginConfig({
             config: nextConfig,
             prompter,
-            workspaceDir: resolveUserPath(workspaceDir),
+            workspaceDir: resolveSetupTarget().workspaceDir,
           });
           await persistConfig();
         }
 
         if (choice === "skills") {
-          const wsDir = resolveUserPath(workspaceDir);
-          nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+          nextConfig = await setupSkills(
+            nextConfig,
+            resolveSetupTarget().workspaceDir,
+            runtime,
+            prompter,
+          );
           await persistConfig();
         }
 

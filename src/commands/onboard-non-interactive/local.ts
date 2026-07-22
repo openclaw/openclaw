@@ -12,6 +12,7 @@ import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js"
 import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
+import { resolveOnboardingAgentTarget } from "../onboard-agent-target.js";
 import {
   applyLocalSetupWorkspaceConfig,
   applySkipBootstrapConfig,
@@ -177,7 +178,6 @@ export async function runNonInteractiveLocalSetup(params: {
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
   const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
-  const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
   if (workspaceConflict) {
     runtime.error(
       [
@@ -196,12 +196,13 @@ export async function runNonInteractiveLocalSetup(params: {
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
+  const authTarget = resolveOnboardingAgentTarget(nextConfig);
 
   const inferredAuthChoice = opts.authChoice
     ? undefined
     : (await import("./local/auth-choice-inference.js")).inferAuthChoiceFromFlags(opts, {
         config: nextConfig,
-        workspaceDir,
+        workspaceDir: authTarget.workspaceDir,
         env: process.env,
       });
   if (!opts.authChoice && inferredAuthChoice && inferredAuthChoice.matches.length > 1) {
@@ -228,7 +229,7 @@ export async function runNonInteractiveLocalSetup(params: {
       opts,
       runtime,
       baseConfig,
-      workspaceDir,
+      target: authTarget,
     });
     if (!nextConfigAfterAuth) {
       return;
@@ -262,7 +263,8 @@ export async function runNonInteractiveLocalSetup(params: {
   });
   logConfigUpdated(runtime);
 
-  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  const finalTarget = resolveOnboardingAgentTarget(nextConfig);
+  await ensureWorkspaceAndSessions(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
@@ -403,7 +405,7 @@ export async function runNonInteractiveLocalSetup(params: {
     opts,
     runtime,
     mode,
-    workspaceDir,
+    workspaceDir: finalTarget.workspaceDir,
     authChoice,
     gateway: {
       port: gatewayResult.port,

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
 import { resolveGatewayPort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -53,7 +54,6 @@ async function offerLiveModelVerification(params: {
   opts: OnboardOptions;
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
-  workspaceDir: string;
   writeConfig: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   required?: boolean;
 }): Promise<{ config: OpenClawConfig; verified: boolean }> {
@@ -130,7 +130,6 @@ async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
-      workspaceDir: params.workspaceDir,
     });
     shouldPersistCandidate = true;
   }
@@ -566,7 +565,7 @@ async function runSetupWizardOnce(
 
   const { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } =
     await loadOnboardConfigModule();
-  const { workspaceDir, allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
+  const { allowWorkspaceChange } = await resolveSetupWorkspaceSelection({
     baseConfig,
     requestedWorkspaceDir,
     prompter,
@@ -586,7 +585,6 @@ async function runSetupWizardOnce(
       opts,
       prompter,
       runtime,
-      workspaceDir,
     });
     await modelAuth.persistAuthProfiles();
     nextConfig = modelAuth.config;
@@ -612,6 +610,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
 
   let liveModelVerified = false;
   // keepExistingModelConfig is latched before auth setup, so this distinguishes
@@ -626,12 +625,12 @@ async function runSetupWizardOnce(
       opts,
       prompter,
       runtime,
-      workspaceDir,
       writeConfig: async (config) =>
         await writeSetupConfigFile(config, { allowConfigSizeDrop: false }),
       required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
+    onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
     liveModelVerified = verification.verified;
   }
 
@@ -662,9 +661,10 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+  await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });
@@ -688,7 +688,7 @@ async function runSetupWizardOnce(
     await prompter.note(t("wizard.setup.skipSkills"), t("wizard.setup.skillsTitle"));
   } else {
     const { setupSkills } = await import("../commands/onboard-skills.js");
-    nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter, {
+    nextConfig = await setupSkills(nextConfig, onboardingTarget.workspaceDir, runtime, prompter, {
       nodeManager: opts.nodeManager,
     });
   }
@@ -700,14 +700,14 @@ async function runSetupWizardOnce(
       config: nextConfig,
       prompter,
       runtime,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
     });
     const { setupAppRecommendations } = await import("./setup.app-recommendations.js");
     const recommendationOutcome = await setupAppRecommendations({
       config: nextConfig,
       prompter,
       runtime,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
       modelRouteVerified: liveModelVerified,
     });
     nextConfig = recommendationOutcome.config;
@@ -716,7 +716,7 @@ async function runSetupWizardOnce(
     nextConfig = await setupPluginConfig({
       config: nextConfig,
       prompter,
-      workspaceDir,
+      workspaceDir: onboardingTarget.workspaceDir,
     });
   }
 
@@ -729,6 +729,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
+  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   commitAppRecommendationResult?.();
 
   const { finalizeSetupWizard } = await import("./setup.finalize.js");
@@ -738,7 +739,7 @@ async function runSetupWizardOnce(
     baseConfig,
     hadExistingConfig: snapshot.exists,
     nextConfig,
-    workspaceDir,
+    workspaceDir: onboardingTarget.workspaceDir,
     settings,
     prompter,
     runtime,
