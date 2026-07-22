@@ -2,6 +2,60 @@
 
 Docs: https://docs.openclaw.ai
 
+## 2026.6.34
+
+### Highlights
+
+- **Safer browser and network boundaries:** sandboxed browser routes, trusted DNS targets, custom browser origins, and loopback provider endpoints now reject unsafe access paths. (#97958, #38290, #103075, #110693) Thanks @eleqtrizit, @brunowowk, @mosidevv, @pgondhi987, and @lsr911.
+- **More resilient agent and provider runs:** retained session writes, provider fallbacks, stream progress handling, and stdio failures now recover without silently ending active work. (#96100, #97128, #90908, #99803, #100521) Thanks @xialonglee, @sallyom, @richwilson-bloom, @LiuwqGit, @vincentkoc, @yetval, @shengting, and @cxbAsDev.
+- **Stronger channel recovery:** pending channel work resumes after recovery, acknowledgements are idempotent, and sustained Discord gateway bursts stay bounded. (#79811, #97041, #104919, #109108, #110954, #103793, #94016) Thanks @indulgeback, @cuiyuxin-gif, @Pick-cat, @Glucksberg, @evan-YM, @zhangguiping-xydt, @yetval, @sheyanmin, and @thomasthelen-kibeauftragter.
+- **Safer operator diagnostics:** command and status surfaces keep owner-only actions protected and prevent credentials from appearing in account URLs or summaries. (#98260, #107754, #105017) Thanks @eleqtrizit, @joshavant, @ooiuuii, @aniruddhaadak80, and @tzy-17.
+- **More robust local runtime state:** SQLite checkpoints, workspace reads, gateway process signalling, plugin HTTP responses, and dependency handling no longer turn transient host conditions into failed runs. (#99067, #100910, #102125, #109590, #112406) Thanks @ooiuuii, @masatohoshino, @vincentkoc, @mushuiyu886, and @krissding.
+
+### Changes
+
+- **Extended-stable hardening:** this maintenance release carries targeted security and reliability repairs without adding new release-line features.
+
+### Fixes
+
+- **Execution and transport safety:** browser, sandbox, exec, MCP, and secret-resolution paths reject unsafe inputs and handle stream failures without crashing the host process.
+- **Delivery and channel stability:** outbound receipts, delivery evidence, channel lifecycle, health monitoring, and gateway queues recover cleanly under retries, restarts, and overload.
+- **Gateway and storage reliability:** plugin responses, process probes, workspace bootstrap reads, and SQLite writes tolerate expected transient failures while preserving correct state.
+
+### Upcoming deprecations
+
+- **Plugin SDK migration:** `before_agent_start`, root `openclaw/plugin-sdk` imports, `providerAuthEnvVars`, and `channelEnvVars` are scheduled for removal after July 24. Migrate to the modern hook stages, focused SDK subpath imports, and manifest setup descriptors. See [Plugin SDK migration](/plugins/sdk-migration) and [plugin manifests](/plugins/manifest).
+
+### Complete contribution record
+
+This audited record covers the complete v2026.6.33..496c84bf6159bd09ce2c2a261c354ea641757b19 history: 24 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+
+#### Pull requests
+
+- **PR #96100** Related #95915. Thanks @xialonglee, @sallyom, and @richwilson-bloom.
+- **PR #79811** Related #79753. Thanks @indulgeback and @cuiyuxin-gif.
+- **PR #97041** Thanks @Pick-cat and @vincentkoc.
+- **PR #97128** Related #96518. Thanks @LiuwqGit, @vincentkoc, and @yetval.
+- **PR #90908** Thanks @shengting.
+- **PR #97958** Thanks @eleqtrizit.
+- **PR #98260** Thanks @eleqtrizit.
+- **PR #99803** Thanks @cxbAsDev and @vincentkoc.
+- **PR #99067** Related #99066. Thanks @ooiuuii.
+- **PR #100521** Thanks @cxbAsDev.
+- **PR #100910** Thanks @masatohoshino and @vincentkoc.
+- **PR #102125** Thanks @mushuiyu886.
+- **PR #38290** Related #46520. Thanks @brunowowk and @mosidevv.
+- **PR #103075** Thanks @pgondhi987.
+- **PR #104919** Related #104903. Thanks @Glucksberg and @evan-YM.
+- **PR #107754** Related #98633, #102932, #105427. Thanks @joshavant, @ooiuuii, and @aniruddhaadak80.
+- **PR #109108** Thanks @zhangguiping-xydt.
+- **PR #105017** Thanks @tzy-17.
+- **PR #109590** Thanks @krissding.
+- **PR #110693** Thanks @lsr911.
+- **PR #110954** Thanks @zhangguiping-xydt.
+- **PR #103793** Thanks @yetval.
+- **PR #94016** Related #94008. Thanks @sheyanmin and @thomasthelen-kibeauftragter.
+- **PR #112406** Thanks @vincentkoc.
 ## 2026.6.33
 
 ### Highlights
