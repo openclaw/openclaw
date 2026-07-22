@@ -1,18 +1,8 @@
-import {
-  access,
-  mkdir,
-  mkdtemp,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  symlink,
-  writeFile,
-} from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { access, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -28,6 +18,7 @@ import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 
 afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function snapshotMcpServers(config: OpenClawConfig): Record<string, Record<string, unknown>> {
   return structuredClone(config.mcp?.servers ?? {}) as Record<string, Record<string, unknown>>;
@@ -36,7 +27,7 @@ function snapshotMcpServers(config: OpenClawConfig): Record<string, Record<strin
 async function fixture(
   params: { withFile?: boolean; withMcp?: boolean; withCron?: boolean; cron?: string } = {},
 ) {
-  const root = await mkdtemp(join(tmpdir(), "openclaw-claw-doctor-"));
+  const root = tempDirs.make("openclaw-claw-doctor-");
   if (params.withFile) {
     await writeFile(join(root, "SOUL.md"), "managed\n", "utf8");
   }
