@@ -142,7 +142,10 @@ export type {
   WorkerSshIdentity,
 } from "./capability-provider.types.js";
 export type {
+  MigrationApplyPhase,
   MigrationApplyResult,
+  MigrationDeferredApplyContract,
+  MigrationConfigRuntime,
   MigrationDetection,
   MigrationItem,
   MigrationPlan,

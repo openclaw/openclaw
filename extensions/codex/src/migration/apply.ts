@@ -6,6 +6,7 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
   MIGRATION_REASON_TARGET_EXISTS,
+  resolveMigrationConfigRuntime,
   summarizeMigrationItems,
   writeMigrationConfigPath,
 } from "openclaw/plugin-sdk/migration";
@@ -428,7 +429,7 @@ async function applyCodexPluginConfigItem(
     return markMigrationItemSkipped(item, "no selected Codex plugins");
   }
   const returnPatch = shouldReturnCodexPluginConfigPatch(ctx);
-  const configApi = ctx.runtime?.config;
+  const configApi = resolveMigrationConfigRuntime(ctx);
   const currentConfig = returnPatch
     ? ctx.config
     : (configApi?.current?.() as MigrationProviderContext["config"] | undefined);

@@ -1,10 +1,14 @@
+import path from "node:path";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import {
   ensureOnboardingPluginInstalled,
   type OnboardingPluginInstallEntry,
 } from "../commands/onboarding-plugin-install.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { writeMigrationReport } from "../plugin-sdk/migration-runtime.js";
+import { summarizeMigrationItems } from "../plugin-sdk/migration.js";
 import {
   listAvailableManifestContractPlugins,
   loadManifestContractSnapshot,
@@ -17,6 +21,8 @@ import {
   resolveOfficialExternalPluginLabel,
 } from "../plugins/official-external-plugin-catalog.js";
 import type {
+  MigrationApplyResult,
+  MigrationConfigRuntime,
   MigrationPlan,
   MigrationProviderContext,
   MigrationProviderPlugin,
@@ -26,14 +32,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-import {
-  createSetupMigrationAttempt,
-  prepareSetupMigrationRetryPlan,
-  resolveSetupMigrationRecovery,
-  runSetupMigrationAttempt,
-  setupMigrationAttemptMatchesSource,
-  setupMigrationProviderSupportsRecovery,
-} from "./setup.migration-recovery.js";
+import { offerLiveModelVerification } from "./setup.inference-verification.js";
 import {
   assertFreshSetupMigrationTarget,
   buildSetupMigrationPlanSourceSnapshot,
@@ -43,8 +42,31 @@ import {
   prepareSetupMigrationAttemptBoundary,
   withSetupMigrationTargetLock,
 } from "./setup.migration-snapshot.js";
+import {
+  buildSetupMigrationPhasePlan,
+  createSetupMigrationStage,
+  mergeSetupMigrationPhaseResults,
+  recoverSetupMigrationPromotion,
+  type SetupMigrationPromotionOutcome,
+  type SetupMigrationPromotionResume,
+} from "./setup.migration-stage.js";
 
-// Onboarding migration import: detect, preview, back up, and apply into a fresh setup.
+// Onboarding migration import: detect, preview, stage, verify, and promote into a fresh setup.
+export type SetupMigrationImportOutcome =
+  | (SetupMigrationPromotionOutcome & { acknowledgePromotion?: () => Promise<void> })
+  | { kind: "resumed-promotion"; acknowledgePromotion?: () => Promise<void> };
+
+function withPromotionAcknowledgement(
+  outcome: SetupMigrationImportOutcome,
+  acknowledgePromotion: () => Promise<void>,
+): SetupMigrationImportOutcome {
+  Object.defineProperty(outcome, "acknowledgePromotion", {
+    value: acknowledgePromotion,
+    enumerable: false,
+  });
+  return outcome;
+}
+
 type SetupMigrationDetection = {
   providerId: string;
   label: string;
@@ -359,6 +381,234 @@ async function createSetupMigrationPlan(params: {
   return { ctx, plan };
 }
 
+function hasDeferredMigrationItems(plan: MigrationPlan): boolean {
+  return plan.items.some(
+    (item) => item.applyPhase === "after-promotion" && item.status === "planned",
+  );
+}
+
+function assertDeferredMigrationApplyContract(
+  provider: MigrationProviderPlugin,
+  plan: MigrationPlan,
+): void {
+  if (hasDeferredMigrationItems(plan) && provider.deferredApply?.retrySafe !== true) {
+    throw new Error(
+      `Migration provider "${provider.id}" cannot defer activation during onboarding because it does not declare retry-safe deferred apply.`,
+    );
+  }
+}
+
+function deferredRetryInstruction(providerId: string): string {
+  return `Some post-promotion migration activation steps are still pending. Retry only those steps with openclaw onboard --flow import --import-from ${providerId}.`;
+}
+
+function deferredMigrationFailure(plan: MigrationPlan, error: unknown): MigrationApplyResult {
+  const reason = formatErrorMessage(error);
+  const retry = deferredRetryInstruction(plan.providerId);
+  const items = plan.items.map((item) =>
+    item.applyPhase === "after-promotion" && (item.status === "planned" || item.status === "error")
+      ? { ...item, status: "warning" as const, reason }
+      : item,
+  );
+  return {
+    ...plan,
+    items,
+    summary: summarizeMigrationItems(items),
+    warnings: [...new Set([...(plan.warnings ?? []), retry])],
+    nextSteps: [...new Set([retry, ...(plan.nextSteps ?? [])])],
+  };
+}
+
+const COMPLETED_AFTER_PROMOTION_REASON = "completed after promotion";
+
+function isCompletedDeferredMigrationItem(item: MigrationPlan["items"][number]): boolean {
+  return item.status === "migrated" || item.deferredCompletion === true;
+}
+
+function buildPendingDeferredMigrationPlan(
+  plan: MigrationPlan,
+  result: MigrationApplyResult | undefined,
+): MigrationPlan {
+  const completedItemIds = new Set(
+    result?.items
+      .filter(
+        (item) => item.applyPhase === "after-promotion" && isCompletedDeferredMigrationItem(item),
+      )
+      .map((item) => item.id),
+  );
+  const deferredPlan = buildSetupMigrationPhasePlan(plan, "after-promotion");
+  const items = deferredPlan.items.map((item) =>
+    completedItemIds.has(item.id)
+      ? { ...item, status: "skipped" as const, reason: COMPLETED_AFTER_PROMOTION_REASON }
+      : item,
+  );
+  return { ...deferredPlan, items, summary: summarizeMigrationItems(items) };
+}
+
+function mergeDeferredMigrationResults(params: {
+  previous: MigrationApplyResult | undefined;
+  next: MigrationApplyResult;
+}): MigrationApplyResult {
+  if (!params.previous) {
+    return params.next;
+  }
+  const previousById = new Map(params.previous.items.map((item) => [item.id, item]));
+  const items = params.next.items.map((item) =>
+    item.status === "skipped" && item.reason === COMPLETED_AFTER_PROMOTION_REASON
+      ? (previousById.get(item.id) ?? item)
+      : item,
+  );
+  const retry = deferredRetryInstruction(params.next.providerId);
+  return {
+    ...params.next,
+    items,
+    summary: summarizeMigrationItems(items),
+    warnings: [
+      ...new Set([
+        ...(params.previous.warnings ?? []).filter((warning) => warning !== retry),
+        ...(params.next.warnings ?? []),
+      ]),
+    ],
+    nextSteps: [
+      ...new Set([
+        ...(params.previous.nextSteps ?? []).filter((nextStep) => nextStep !== retry),
+        ...(params.next.nextSteps ?? []),
+      ]),
+    ],
+  };
+}
+
+function hasPendingDeferredMigrationItems(
+  plan: MigrationPlan,
+  result: MigrationApplyResult | undefined,
+): boolean {
+  const resultById = new Map(result?.items.map((item) => [item.id, item]));
+  return plan.items.some(
+    (item) =>
+      item.applyPhase === "after-promotion" &&
+      item.status === "planned" &&
+      !isCompletedDeferredMigrationItem(resultById.get(item.id) ?? item),
+  );
+}
+
+async function createPromotionConfigRuntime(
+  config: OpenClawConfig,
+): Promise<MigrationConfigRuntime> {
+  const { createRuntimeConfig } = await import("../plugins/runtime/runtime-config.js");
+  const canonicalRuntime = createRuntimeConfig();
+  let currentConfig = structuredClone(config);
+  return {
+    current: () => currentConfig,
+    async mutateConfigFile(mutation) {
+      const result = await canonicalRuntime.mutateConfigFile(mutation);
+      currentConfig = structuredClone(result.nextConfig);
+      return result;
+    },
+  };
+}
+
+async function finalizeSetupMigrationPromotion(params: {
+  provider: MigrationProviderPlugin;
+  resume: SetupMigrationPromotionResume;
+  config: OpenClawConfig;
+  stateDir: string;
+  logger: MigrationProviderContext["logger"];
+  prompter: WizardPrompter;
+  formatMigrationResult: (result: MigrationApplyResult) => string[];
+  resumed?: boolean;
+}): Promise<SetupMigrationImportOutcome> {
+  const { continuation } = params.resume;
+  const reportDir = path.dirname(params.resume.journalPath);
+  await params.resume.copyReportArtifacts();
+
+  const committedConfig = params.config;
+  const configRuntime = await createPromotionConfigRuntime(committedConfig);
+  let deferredResult = continuation.deferredResult;
+  if (
+    hasDeferredMigrationItems(continuation.plan) &&
+    hasPendingDeferredMigrationItems(continuation.plan, deferredResult)
+  ) {
+    const previousDeferredResult = deferredResult;
+    const deferredPlan = buildPendingDeferredMigrationPlan(
+      continuation.plan,
+      previousDeferredResult,
+    );
+    let preparation:
+      | Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>>
+      | undefined;
+    let retryResult: MigrationApplyResult;
+    try {
+      const deferredContext: MigrationProviderContext = {
+        config: committedConfig,
+        configRuntime,
+        stateDir: params.stateDir,
+        logger: params.logger,
+        reportDir,
+        ...(continuation.source ? { source: continuation.source } : {}),
+        ...(continuation.includeSecrets !== undefined
+          ? { includeSecrets: continuation.includeSecrets }
+          : {}),
+        ...(continuation.providerOptions ? { providerOptions: continuation.providerOptions } : {}),
+        overwrite: false,
+      };
+      preparation = await params.provider.prepareApply?.(deferredContext);
+      retryResult = mergeDeferredMigrationResults({
+        previous: previousDeferredResult,
+        next: await params.provider.apply(deferredContext, deferredPlan),
+      });
+      if (hasPendingDeferredMigrationItems(continuation.plan, retryResult)) {
+        retryResult = deferredMigrationFailure(
+          retryResult,
+          "activation did not complete every deferred item",
+        );
+      }
+    } catch (error) {
+      retryResult = mergeDeferredMigrationResults({
+        previous: previousDeferredResult,
+        next: deferredMigrationFailure(deferredPlan, error),
+      });
+    } finally {
+      await preparation?.dispose?.();
+    }
+    deferredResult = retryResult;
+    await params.resume.saveDeferredResult(deferredResult);
+  }
+
+  const finalResult = mergeSetupMigrationPhaseResults({
+    plan: continuation.plan,
+    staged: continuation.stagedResult,
+    ...(deferredResult ? { deferred: deferredResult } : {}),
+  });
+  finalResult.reportDir = reportDir;
+  await writeMigrationReport(finalResult, {
+    title: `${continuation.providerLabel} Migration Report`,
+  });
+
+  const hasPendingActivation = hasPendingDeferredMigrationItems(continuation.plan, deferredResult);
+  if (!hasPendingActivation) {
+    await params.resume.complete();
+  }
+  await params.resume.cleanup();
+  await params.prompter.note(
+    params.formatMigrationResult(finalResult).join("\n"),
+    t("wizard.migration.appliedTitle"),
+  );
+  if (params.resumed || !continuation.continueOnboarding) {
+    await params.prompter.outro(t("wizard.migration.complete"));
+  } else {
+    await params.prompter.note(
+      t("wizard.migration.continuing"),
+      t("wizard.migration.appliedTitle"),
+    );
+  }
+  const outcome: SetupMigrationImportOutcome = params.resumed
+    ? { kind: "resumed-promotion" }
+    : continuation.outcome;
+  return hasPendingActivation
+    ? outcome
+    : withPromotionAcknowledgement(outcome, params.resume.acknowledge);
+}
+
 export async function runSetupMigrationImport(params: {
   opts: OnboardOptions;
   baseConfig: OpenClawConfig;
@@ -368,18 +618,16 @@ export async function runSetupMigrationImport(params: {
   readConfigFile: () => Promise<OpenClawConfig>;
   commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
   continueOnboarding?: boolean;
-}): Promise<void> {
+}): Promise<SetupMigrationImportOutcome> {
   const [
     { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig },
     { createMigrationLogger, buildMigrationReportDir },
-    { createPreMigrationBackup },
     { assertApplySucceeded, assertConflictFreePlan, formatMigrationPreview, formatMigrationResult },
     { resolveStateDir },
     onboardHelpers,
   ] = await Promise.all([
     import("../commands/onboard-config.js"),
     loadMigrationContextModule(),
-    import("../commands/migrate/apply.js"),
     import("../commands/migrate/output.js"),
     loadConfigPathsModule(),
     import("../commands/onboard-helpers.js"),
@@ -401,34 +649,46 @@ export async function runSetupMigrationImport(params: {
         }));
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
   const stateDir = resolveStateDir();
-  await withSetupMigrationTargetLock(stateDir, async () => {
+  return await withSetupMigrationTargetLock(stateDir, async () => {
+    const promotionResume = await recoverSetupMigrationPromotion({
+      stateDir,
+      providerId,
+      readConfigFile: params.readConfigFile,
+    });
+    if (promotionResume) {
+      const committedConfig = await params.readConfigFile();
+      const resolvedProvider = await resolveSetupMigrationProvider({
+        providerId,
+        baseConfig: committedConfig,
+        prompter: params.prompter,
+        runtime: params.runtime,
+        workspaceDir: promotionResume.continuation.workspaceDir,
+      });
+      assertDeferredMigrationApplyContract(
+        resolvedProvider.provider,
+        promotionResume.continuation.plan,
+      );
+      return await finalizeSetupMigrationPromotion({
+        provider: resolvedProvider.provider,
+        resume: promotionResume,
+        config: committedConfig,
+        stateDir,
+        logger: createMigrationLogger(params.runtime),
+        prompter: params.prompter,
+        formatMigrationResult,
+        resumed: true,
+      });
+    }
     const lockedBaseConfig = preserveSetupMigrationSecurityAcknowledgement(
       await params.readConfigFile(),
       params.baseConfig,
     );
-    const initialTargetSnapshotHash = await buildSetupMigrationTargetSnapshot({
-      config: lockedBaseConfig,
-      stateDir,
-      workspaceDir,
-    });
     const freshness = await inspectSetupMigrationFreshness({
       baseConfig: lockedBaseConfig,
       stateDir,
       workspaceDir,
     });
-    const recoveryState = !setupMigrationProviderSupportsRecovery(providerId)
-      ? ({ kind: "none" } as const)
-      : await resolveSetupMigrationRecovery({
-          stateDir,
-          providerId,
-          workspaceDir,
-          targetSnapshotHash: initialTargetSnapshotHash,
-        });
-    const recoveryAttempt =
-      !freshness.fresh && recoveryState.kind === "recoverable" ? recoveryState.attempt : undefined;
-    if (!recoveryAttempt) {
-      assertFreshSetupMigrationTarget(freshness);
-    }
+    assertFreshSetupMigrationTarget(freshness);
     const resolvedProvider = await resolveSetupMigrationProvider({
       providerId,
       baseConfig: lockedBaseConfig,
@@ -483,19 +743,11 @@ export async function runSetupMigrationImport(params: {
             message: t("wizard.migration.sourceAgentHome"),
             initialValue: providerId === "hermes" ? "~/.hermes" : undefined,
           }));
-    const retryingFailedAttempt =
-      recoveryAttempt !== undefined &&
-      setupMigrationAttemptMatchesSource(recoveryAttempt, sourceDir);
-    if (!retryingFailedAttempt) {
-      assertFreshSetupMigrationTarget(freshness);
-    } else if (planningTargetSnapshotHash !== initialTargetSnapshotHash) {
-      throw new Error("Migration target changed while preparing the retry. Review it and retry.");
-    }
     let targetConfig = applyLocalSetupWorkspaceConfig(resolvedProvider.baseConfig, workspaceDir);
     if (params.opts.skipBootstrap) {
       targetConfig = applySkipBootstrapConfig(targetConfig);
     }
-    const initialCtx = {
+    const initialCtx: MigrationProviderContext = {
       config: targetConfig,
       stateDir,
       source: sourceDir,
@@ -511,10 +763,8 @@ export async function runSetupMigrationImport(params: {
     });
     const plannedSourceSnapshotHash = await buildSetupMigrationPlanSourceSnapshot(planned.plan);
     const ctx = planned.ctx;
-    const plan =
-      retryingFailedAttempt && recoveryAttempt
-        ? prepareSetupMigrationRetryPlan(planned.plan, recoveryAttempt, plannedSourceSnapshotHash)
-        : planned.plan;
+    const plan = planned.plan;
+    assertDeferredMigrationApplyContract(resolvedProvider.provider, plan);
     await params.prompter.note(
       formatMigrationPreview(plan).join("\n"),
       t("wizard.migration.previewTitle"),
@@ -532,74 +782,122 @@ export async function runSetupMigrationImport(params: {
       throw new WizardCancelledError(t("wizard.migration.cancelled"));
     }
 
-    const reportDir = buildMigrationReportDir(providerId, stateDir);
-    const backupPath = await createPreMigrationBackup({});
     targetConfig = onboardHelpers.applyWizardMetadata(targetConfig, {
       command: "onboard",
       mode: "local",
     });
-    const boundary = await prepareSetupMigrationAttemptBoundary({
+    await prepareSetupMigrationAttemptBoundary({
       currentConfig: await params.readConfigFile(),
       targetConfig,
       stateDir,
       workspaceDir,
-      plan: planned.plan,
+      plan,
       expectedTargetSnapshotHash: planningTargetSnapshotHash,
       expectedSourceSnapshotHash: plannedSourceSnapshotHash,
     });
-    const attempt = createSetupMigrationAttempt({
+    const reportDir = buildMigrationReportDir(providerId, stateDir);
+    const stage = await createSetupMigrationStage({
       providerId,
-      source: sourceDir,
+      stateDir,
       workspaceDir,
-      plan,
-      sourceSnapshotHash: boundary.sourceSnapshotHash,
-      preparedTargetSnapshotHash: boundary.preparedTargetSnapshotHash,
-      targetSnapshotHash: boundary.targetSnapshotHash,
-      ...(recoveryAttempt ? { previousAttempt: recoveryAttempt } : {}),
-    });
-    const withReport = await runSetupMigrationAttempt({
       reportDir,
-      attempt,
-      assertSucceeded: assertApplySucceeded,
-      async readTargetSnapshot() {
-        return await buildSetupMigrationTargetSnapshot({
+      targetConfig,
+    });
+    try {
+      const stagedPlan = stage.projectPlanToStage(
+        buildSetupMigrationPhasePlan(plan, "before-promotion"),
+      );
+      const stagedRuntime = ctx.runtime
+        ? {
+            ...ctx.runtime,
+            config: {
+              ...ctx.runtime.config,
+              current: stage.configRuntime.current,
+              mutateConfigFile: stage.configRuntime.mutateConfigFile,
+              replaceConfigFile: async () => {
+                throw new Error("Full config replacement is unavailable during staged migration.");
+              },
+            },
+          }
+        : undefined;
+      const stagedResult = await resolvedProvider.provider.apply(
+        {
+          ...ctx,
+          ...(stagedRuntime ? { runtime: stagedRuntime } : {}),
+          config: stage.getStagedConfig(),
+          configRuntime: stage.configRuntime,
+          stateDir: stage.staged.stateDir,
+          reportDir: stage.staged.reportDir,
+        },
+        stagedPlan,
+      );
+      assertApplySucceeded(stagedResult);
+      const projectedStagedResult = stage.projectResultToFinal(stagedResult);
+
+      let outcome: SetupMigrationImportOutcome = { kind: "no-imported-inference" };
+      if (resolveAgentModelPrimaryValue(stage.getStagedConfig().agents?.defaults?.model)) {
+        const verification = await offerLiveModelVerification({
+          config: stage.getStagedConfig(),
+          opts: params.opts,
+          prompter: params.prompter,
+          runtime: params.runtime,
+          workspaceDir: stage.staged.workspaceDir,
+          agentDir: stage.staged.agentDir,
+          stateDir: stage.staged.stateDir,
+          writeConfig: async (config) => {
+            stage.replaceStagedConfig(config);
+            return stage.getStagedConfig();
+          },
+          required: true,
+        });
+        if (!verification.verified || !verification.modelRef) {
+          throw new Error("Imported inference was not verified.");
+        }
+        stage.replaceStagedConfig(verification.config);
+        outcome = { kind: "verified-inference", modelRef: verification.modelRef };
+      }
+
+      const [currentTargetSnapshotHash, currentSourceSnapshotHash] = await Promise.all([
+        buildSetupMigrationTargetSnapshot({
           config: await params.readConfigFile(),
           stateDir,
           workspaceDir,
-        });
-      },
-      async apply() {
-        targetConfig = await params.commitConfigFile(targetConfig);
-        // Provider config mutations persist; recommitting targetConfig would overwrite them.
-        const result = await resolvedProvider.provider.apply(
-          {
-            ...ctx,
-            config: targetConfig,
-            ...(backupPath ? { backupPath } : {}),
-            reportDir,
-          },
+        }),
+        buildSetupMigrationPlanSourceSnapshot(plan),
+      ]);
+      if (currentTargetSnapshotHash !== planningTargetSnapshotHash) {
+        throw new Error("Migration target changed before promotion. Review it and retry.");
+      }
+      if (currentSourceSnapshotHash !== plannedSourceSnapshotHash) {
+        throw new Error("Migration source changed before promotion. Review it and retry.");
+      }
+
+      const promoted = await stage.promote({
+        expectedConfig: planningBaseConfig,
+        continuation: {
+          providerLabel: resolvedProvider.provider.label,
+          ...(ctx.source ? { source: ctx.source } : {}),
+          ...(ctx.includeSecrets !== undefined ? { includeSecrets: ctx.includeSecrets } : {}),
+          ...(ctx.providerOptions ? { providerOptions: ctx.providerOptions } : {}),
           plan,
-        );
-        return {
-          ...result,
-          ...((result.backupPath ?? backupPath)
-            ? { backupPath: result.backupPath ?? backupPath }
-            : {}),
-          reportDir: result.reportDir ?? reportDir,
-        };
-      },
-    });
-    await params.prompter.note(
-      formatMigrationResult(withReport).join("\n"),
-      t("wizard.migration.appliedTitle"),
-    );
-    if (params.continueOnboarding) {
-      await params.prompter.note(
-        t("wizard.migration.continuing"),
-        t("wizard.migration.appliedTitle"),
-      );
-    } else {
-      await params.prompter.outro(t("wizard.migration.complete"));
+          stagedResult: projectedStagedResult,
+          outcome,
+          continueOnboarding: params.continueOnboarding === true,
+        },
+        readConfigFile: params.readConfigFile,
+        commitConfigFile: params.commitConfigFile,
+      });
+      return await finalizeSetupMigrationPromotion({
+        provider: resolvedProvider.provider,
+        resume: promoted.resume,
+        config: promoted.config,
+        stateDir,
+        logger: migrationLogger,
+        prompter: params.prompter,
+        formatMigrationResult,
+      });
+    } finally {
+      await stage.cleanup();
     }
   });
 }
