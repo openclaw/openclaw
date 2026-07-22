@@ -14301,9 +14301,9 @@
       "kind": "resource-string",
       "line": 18,
       "path": "apps/android/wear/src/main/res/values/strings.xml",
-      "source": "Double tap",
+      "source": "Open",
       "surface": "android",
-      "id": "native.android.9f7fe0147a0b571a"
+      "id": "native.android.e39fc9f871dd36ad"
     },
     {
       "kind": "resource-string",
@@ -14856,6 +14856,46 @@
       "source": "PHONE PROXY",
       "surface": "android",
       "id": "native.android.709aff840be1f167"
+    },
+    {
+      "kind": "resource-string",
+      "line": 88,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Live voice",
+      "surface": "android",
+      "id": "native.android.c9fe41eac66ab1b6"
+    },
+    {
+      "kind": "resource-string",
+      "line": 89,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Start live voice",
+      "surface": "android",
+      "id": "native.android.46cc8cac41f65635"
+    },
+    {
+      "kind": "resource-string",
+      "line": 90,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Stop live voice",
+      "surface": "android",
+      "id": "native.android.c34658c27d51fac3"
+    },
+    {
+      "kind": "resource-string",
+      "line": 91,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Open thread",
+      "surface": "android",
+      "id": "native.android.fc73a8c21e6a7b16"
+    },
+    {
+      "kind": "resource-string",
+      "line": 92,
+      "path": "apps/android/wear/src/main/res/values/strings.xml",
+      "source": "Show new messages",
+      "surface": "android",
+      "id": "native.android.75a41b3ed302ff41"
     },
     {
       "kind": "plist-string",

@@ -20,6 +20,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -31,6 +32,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -54,6 +56,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -62,6 +65,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.foundation.lazy.TransformingLazyColumn
@@ -87,6 +91,36 @@ internal enum class WearHomePage {
 private const val VOICE_MODE_COUNT = 2
 private const val VOICE_HOME_MODE = 0
 private const val VOICE_THREAD_MODE = 1
+private val minimumTouchTarget = 48.dp
+
+internal data class WearVoiceLayout(
+  val horizontalPadding: Dp,
+  val orbSize: Dp,
+  val contentHeight: Dp,
+)
+
+internal fun wearVoiceLayout(
+  maxWidth: Dp,
+  fontScale: Float,
+): WearVoiceLayout {
+  val compact = maxWidth <= 192.dp
+  val compactLargeText = compact && fontScale > 1.1f
+  return WearVoiceLayout(
+    horizontalPadding = if (fontScale > 1.1f) 4.dp else 6.dp,
+    orbSize =
+      when {
+        compactLargeText -> 68.dp
+        compact -> 80.dp
+        else -> 92.dp
+      },
+    contentHeight =
+      when {
+        compactLargeText -> 132.dp
+        compact -> 144.dp
+        else -> 156.dp
+      },
+  )
+}
 
 @Composable
 internal fun OpenClawWearScreens(
@@ -456,7 +490,7 @@ private fun VoicePage(
       Text(
         text = stringResource(R.string.swipe_between_voice_modes),
         color = colors.textMuted,
-        fontSize = 9.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.SemiBold,
         textAlign = TextAlign.Center,
         modifier =
@@ -545,17 +579,26 @@ private fun VoiceHomeMode(
       else -> colors.voiceAccent
     }
   val avatarState = if (dictatePreview) RealtimeVoiceButtonState.LISTENING else state
-  Box(
-    modifier =
-      Modifier
-        .fillMaxSize()
-        .padding(horizontal = 14.dp),
+  val liveVoiceDescription = stringResource(R.string.live_voice)
+  val liveClickLabel =
+    when {
+      ttsOnly -> stringResource(R.string.stop_speaking)
+      realtimeActive -> stringResource(R.string.stop_live_voice)
+      else -> stringResource(R.string.start_live_voice)
+    }
+  val dictateClickLabel = stringResource(R.string.dictate)
+  val fontScale = LocalDensity.current.fontScale
+  BoxWithConstraints(
+    modifier = Modifier.fillMaxSize(),
   ) {
+    val layout = wearVoiceLayout(maxWidth = maxWidth, fontScale = fontScale)
+    val voiceControlOffset = 16.dp
     Row(
       modifier =
         Modifier
           .align(Alignment.Center)
-          .fillMaxWidth(),
+          .fillMaxWidth()
+          .padding(horizontal = layout.horizontalPadding),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.Center,
     ) {
@@ -564,39 +607,48 @@ private fun VoiceHomeMode(
         detail = stringResource(R.string.dictate),
         accent = colors.voiceAccent,
         onClick = if (dictateEnabled) startDictate else null,
+        onClickLabel = dictateClickLabel,
         modifier =
           Modifier
+            .offset(y = voiceControlOffset)
             .weight(1f),
       )
       Box(
         modifier =
           Modifier
-            .width(92.dp)
-            .height(134.dp),
+            .width(layout.orbSize)
+            .height(layout.contentHeight),
       ) {
         VoiceGestureLabel(
-          title = stringResource(R.string.double_tap),
+          title = stringResource(R.string.open),
           detail = stringResource(R.string.thread),
           accent = colors.voiceAccent,
+          onClick = onOpenThread,
+          onClickLabel = stringResource(R.string.open_thread),
           verticalPadding = 0.dp,
           modifier =
             Modifier
               .align(Alignment.TopCenter)
-              .offset(y = (-4).dp)
+              .height(minimumTouchTarget)
               .fillMaxWidth(),
         )
         Box(
           modifier =
             Modifier
               .align(Alignment.Center)
-              .size(92.dp)
+              .size(layout.orbSize)
+              .offset(y = voiceControlOffset)
               .combinedClickable(
-                enabled = !dictatePreview,
+                enabled = liveEnabled,
+                onClickLabel = liveClickLabel,
                 role = Role.Button,
                 onClick = toggleLive,
                 onDoubleClick = onOpenThread,
-                onLongClick = startDictate,
-              ),
+                onLongClickLabel = dictateClickLabel.takeIf { dictateEnabled },
+                onLongClick = startDictate.takeIf { dictateEnabled },
+              ).semantics {
+                contentDescription = liveVoiceDescription
+              },
           contentAlignment = Alignment.Center,
         ) {
           WearTalkAvatar(
@@ -612,8 +664,8 @@ private fun VoiceHomeMode(
           Text(
             text = status,
             color = colors.textMuted,
-            fontSize = 9.sp,
-            lineHeight = 10.sp,
+            fontSize = 12.sp,
+            lineHeight = 12.sp,
             textAlign = TextAlign.Center,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
@@ -630,9 +682,10 @@ private fun VoiceHomeMode(
         detail = stringResource(R.string.live),
         accent = colors.voiceAccent,
         onClick = if (liveEnabled) toggleLive else null,
+        onClickLabel = liveClickLabel,
         modifier =
           Modifier
-            .offset(x = (-6).dp)
+            .offset(y = voiceControlOffset)
             .weight(1f),
       )
     }
@@ -647,15 +700,15 @@ private fun VoiceGestureLabel(
   accent: Color,
   modifier: Modifier = Modifier,
   onClick: (() -> Unit)? = null,
-  onDoubleClick: (() -> Unit)? = null,
+  onClickLabel: String? = null,
   verticalPadding: androidx.compose.ui.unit.Dp = 10.dp,
 ) {
   val interactionModifier =
-    if (onClick != null || onDoubleClick != null) {
-      Modifier.combinedClickable(
+    if (onClick != null) {
+      Modifier.clickable(
         role = Role.Button,
-        onClick = { onClick?.invoke() },
-        onDoubleClick = onDoubleClick,
+        onClickLabel = onClickLabel,
+        onClick = onClick,
       )
     } else {
       Modifier
@@ -664,22 +717,29 @@ private fun VoiceGestureLabel(
     modifier =
       modifier
         .then(interactionModifier)
-        .padding(vertical = verticalPadding),
+        .then(
+          if (onClick != null) {
+            Modifier.sizeIn(minWidth = minimumTouchTarget, minHeight = minimumTouchTarget)
+          } else {
+            Modifier
+          },
+        ).padding(vertical = verticalPadding),
     horizontalAlignment = Alignment.CenterHorizontally,
+    verticalArrangement = Arrangement.Center,
   ) {
     Text(
       text = title,
       color = accent,
-      fontSize = 10.sp,
-      lineHeight = 10.sp,
+      fontSize = 12.sp,
+      lineHeight = 14.sp,
       fontWeight = FontWeight.SemiBold,
       textAlign = TextAlign.Center,
     )
     Text(
       text = detail,
       color = OpenClawWearTheme.colors.textMuted,
-      fontSize = 9.sp,
-      lineHeight = 9.sp,
+      fontSize = 12.sp,
+      lineHeight = 14.sp,
       textAlign = TextAlign.Center,
       maxLines = 1,
     )
@@ -698,6 +758,13 @@ private fun ThreadVoiceMode(
 ) {
   val colors = OpenClawWearTheme.colors
   val listState = rememberTransformingLazyColumnState()
+  val liveVoiceDescription = stringResource(R.string.live_voice)
+  val liveClickLabel =
+    if (realtimeActive) {
+      stringResource(R.string.stop_live_voice)
+    } else {
+      stringResource(R.string.start_live_voice)
+    }
   val coroutineScope = rememberCoroutineScope()
   val visibleConversation = conversation.takeLast(VISIBLE_REALTIME_ENTRY_COUNT)
   val contentRevision = wearThreadContentRevision(visibleConversation, thinking)
@@ -748,8 +815,8 @@ private fun ThreadVoiceMode(
           Text(
             text = stringResource(R.string.no_live_conversation),
             color = colors.textMuted,
-            fontSize = 11.sp,
-            lineHeight = 14.sp,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(horizontal = 30.dp, vertical = 20.dp),
           )
@@ -777,9 +844,13 @@ private fun ThreadVoiceMode(
           Modifier
             .align(Alignment.BottomCenter)
             .padding(bottom = 44.dp)
+            .sizeIn(minHeight = minimumTouchTarget)
             .background(colors.voiceAccentSoft, RoundedCornerShape(14.dp))
             .border(1.dp, colors.voiceAccent, RoundedCornerShape(14.dp))
-            .clickable(role = Role.Button) {
+            .clickable(
+              role = Role.Button,
+              onClickLabel = stringResource(R.string.show_new_messages),
+            ) {
               followState = wearThreadFollowLatest(followState)
               if (latestAnchorIndex >= 0) {
                 coroutineScope.launch {
@@ -792,7 +863,7 @@ private fun ThreadVoiceMode(
         Text(
           text = stringResource(R.string.new_messages) + " ↓",
           color = colors.voiceAccent,
-          fontSize = 9.sp,
+          fontSize = 10.sp,
           fontWeight = FontWeight.Bold,
         )
       }
@@ -809,11 +880,12 @@ private fun ThreadVoiceMode(
         modifier =
           Modifier
             .width(70.dp)
-            .height(34.dp)
-            .background(colors.surfaceRaised, RoundedCornerShape(17.dp))
-            .border(1.dp, colors.borderStrong, RoundedCornerShape(17.dp))
+            .height(minimumTouchTarget)
+            .background(colors.surfaceRaised, RoundedCornerShape(24.dp))
+            .border(1.dp, colors.borderStrong, RoundedCornerShape(24.dp))
             .clickable(
               enabled = inputEnabled && !actionBusy && !realtimeActive,
+              onClickLabel = stringResource(R.string.type),
               role = Role.Button,
               onClick = onType,
             ),
@@ -834,7 +906,7 @@ private fun ThreadVoiceMode(
       Box(
         modifier =
           Modifier
-            .size(36.dp)
+            .size(minimumTouchTarget)
             .background(
               color = if (realtimeActive) colors.voiceAccent else colors.surfaceRaised,
               shape = CircleShape,
@@ -844,9 +916,12 @@ private fun ThreadVoiceMode(
               shape = CircleShape,
             ).clickable(
               enabled = realtimeActive || (inputEnabled && !actionBusy),
+              onClickLabel = liveClickLabel,
               role = Role.Button,
               onClick = onRealtimeTalk,
-            ),
+            ).semantics {
+              contentDescription = liveVoiceDescription
+            },
         contentAlignment = Alignment.Center,
       ) {
         MicrophoneGlyph(
@@ -1075,7 +1150,7 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
           stringResource(R.string.agent)
         }.uppercase(),
       color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
-      fontSize = 9.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
@@ -1091,7 +1166,7 @@ private fun RealtimeTalkBubble(entry: WearRealtimeTalkEntry) {
       Text(
         text = stringResource(R.string.live).uppercase(),
         color = colors.warning,
-        fontSize = 9.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
       )
     }
@@ -1385,7 +1460,7 @@ private fun ContextPickerRow(
       Text(
         text = label.uppercase(),
         color = OpenClawWearTheme.colors.textMuted,
-        fontSize = 8.sp,
+        fontSize = 10.sp,
         fontWeight = FontWeight.Bold,
         letterSpacing = 0.8.sp,
         maxLines = 1,
@@ -1419,6 +1494,8 @@ private fun PickerChevron(
   Box(
     modifier =
       Modifier
+        // Foundation clickable expands hit testing to the system minimum touch target.
+        // Compact visual bounds keep picker values readable on 192dp round screens.
         .width(32.dp)
         .height(30.dp)
         .semantics { this.contentDescription = contentDescription }
@@ -1524,7 +1601,7 @@ private fun MessageBubble(message: WearChatMessage) {
           WearChatRole.SYSTEM -> stringResource(R.string.system)
         }.uppercase(),
       color = if (isUser) foreground.copy(alpha = 0.72f) else colors.textMuted,
-      fontSize = 9.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
@@ -1554,7 +1631,7 @@ private fun StreamingBubble(text: String) {
     Text(
       text = stringResource(R.string.agent_working).uppercase(),
       color = colors.warning,
-      fontSize = 9.sp,
+      fontSize = 10.sp,
       fontWeight = FontWeight.Bold,
       letterSpacing = 0.8.sp,
     )
@@ -1705,7 +1782,7 @@ private fun ThemeModeOption(
   Box(
     modifier =
       modifier
-        .height(40.dp)
+        .height(minimumTouchTarget)
         .background(
           color = if (selected) colors.primary else Color.Transparent,
           shape = RoundedCornerShape(9.dp),
@@ -1917,8 +1994,8 @@ private fun InlineError(text: String) {
   Text(
     text = text,
     color = colors.danger,
-    fontSize = 11.sp,
-    lineHeight = 14.sp,
+    fontSize = 12.sp,
+    lineHeight = 16.sp,
     textAlign = TextAlign.Center,
     modifier =
       Modifier
