@@ -1750,6 +1750,33 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("keeps signal-qualified endpoints unchanged when query follows trailing slash", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      logs: true,
+    });
+    ctx.config.diagnostics!.otel!.tracesEndpoint =
+      "https://trace.example.com/v1/traces/?timeout=30s";
+    ctx.config.diagnostics!.otel!.metricsEndpoint =
+      "https://metric.example.com/v1/metrics/?timeout=30s";
+    ctx.config.diagnostics!.otel!.logsEndpoint = "https://log.example.com/v1/logs/?timeout=30s";
+
+    await service.start(ctx);
+
+    expect(firstExporterOptions(traceExporterCtor).url).toBe(
+      "https://trace.example.com/v1/traces/?timeout=30s",
+    );
+    expect(firstExporterOptions(metricExporterCtor).url).toBe(
+      "https://metric.example.com/v1/metrics/?timeout=30s",
+    );
+    expect(firstExporterOptions(logExporterCtor).url).toBe(
+      "https://log.example.com/v1/logs/?timeout=30s",
+    );
+    await service.stop?.(ctx);
+  });
+
   test("inserts signal path before shared endpoint query params", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createTraceOnlyContext("https://collector.example.com/otlp?timeout=30s");
