@@ -1,6 +1,13 @@
 // Tests queue drain restart behavior when follow-up runs chain together.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import {
+  followupQueueEntryContainsPrompt,
+  hasFollowupQueueEntries,
+} from "../../infra/followup-queue-sqlite.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -21,8 +28,14 @@ import {
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import {
+  clearFollowupQueuesRestoredFlagForTest,
+  clearRestoredPendingDrainKeysForTest,
+  restoreFollowupQueues,
+} from "./queue/persist.js";
+import { clearFollowupQueue, FOLLOWUP_QUEUES, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -557,5 +570,322 @@ describe("followup queue drain restart after idle window", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toBe("before-idle");
+  });
+
+  it("drains restored queue items when a followup callback is registered after restart", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-restore-drain-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restored-drain-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drained = createDeferred<void>();
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "survived restart" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      rememberFollowupDrainCallback(key, async (run) => {
+        expect(run.prompt).toBe("survived restart");
+        drained.resolve();
+      });
+      // Drain restored items only via the idle-aware path. Registering the
+      // callback alone (the previous trigger point) would have raced with any
+      // active turn for this route; the sweep now lives in kickFollowupDrainIfIdle,
+      // which enqueue only calls when restartIfIdle && !queue.draining holds.
+      kickFollowupDrainIfIdle(key);
+
+      await drained.promise;
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drains restored items via production enqueue idle-kick after restart", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-prod-kick-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restored-prod-kick-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainCalls: FollowupRun[] = [];
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "survived restart" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      const runFollowup = async (run: FollowupRun) => {
+        drainCalls.push(run);
+      };
+      // Mirrors agent-runner after the active turn finishes: enqueue registers
+      // the callback and restartIfIdle=true kicks the restored queue.
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "next inbound turn" }),
+        settings,
+        "message-id",
+        runFollowup,
+        true,
+      );
+
+      for (let i = 0; i < 10 && drainCalls.length === 0; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      expect(drainCalls.length).toBeGreaterThanOrEqual(1);
+      expect(drainCalls[0]?.prompt).toBe("survived restart");
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not drain restored items just because a callback is registered (active-turn race)", async () => {
+    // Models the race the bot's [P1] flagged: when enqueueFollowupRun is called
+    // mid-turn with restartIfIdle=false, it still calls rememberFollowupDrainCallback.
+    // That registration must not, on its own, schedule a drain for a restored
+    // queue, or the restored items would be dispatched concurrently with the
+    // active turn they should wait behind.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-race-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restored-race-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainCalls: FollowupRun[] = [];
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "survived restart" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      // Plain registration — simulates an enqueue mid-turn with restartIfIdle=false.
+      rememberFollowupDrainCallback(key, async (run) => {
+        drainCalls.push(run);
+      });
+
+      // Yield a few microtasks; nothing should have drained because the
+      // idle-aware kick was never invoked.
+      for (let i = 0; i < 5; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      expect(drainCalls).toHaveLength(0);
+
+      // Now the active turn would have finished and enqueue's idle-kick fires.
+      kickFollowupDrainIfIdle(key);
+      // Spin a few microtasks to let the scheduled drain complete.
+      for (let i = 0; i < 10 && drainCalls.length === 0; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      expect(drainCalls).toHaveLength(1);
+      expect(drainCalls[0]?.prompt).toBe("survived restart");
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not drain another route's restored items when one route goes idle (per-key isolation)", async () => {
+    // Race the previous P1 was trying to fix had a subtler relative: even with
+    // the sweep moved to kickFollowupDrainIfIdle, a global sweep would drain
+    // route B's restored items when route A's idle-kick fires, because the
+    // caller only confirmed idle for A. Locks per-key isolation: A's idle-kick
+    // does NOT touch B's pending-restore entry or B's callback.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-isolation-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const keyA = `test-restored-iso-A-${Date.now()}`;
+    const keyB = `test-restored-iso-B-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainsA: FollowupRun[] = [];
+    const drainsB: FollowupRun[] = [];
+
+    try {
+      // Seed two restored queues on disk, one per route.
+      enqueueFollowupRun(
+        keyA,
+        createRun({ prompt: "restored A" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      enqueueFollowupRun(
+        keyB,
+        createRun({ prompt: "restored B" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(keyA);
+      FOLLOWUP_QUEUES.delete(keyB);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      // Register callbacks for BOTH routes. Route B's callback would normally
+      // be registered during B's active turn (restartIfIdle=false).
+      rememberFollowupDrainCallback(keyA, async (run) => {
+        drainsA.push(run);
+      });
+      rememberFollowupDrainCallback(keyB, async (run) => {
+        drainsB.push(run);
+      });
+
+      // Only route A goes idle and kicks. Per-key isolation: B must not drain.
+      kickFollowupDrainIfIdle(keyA);
+      for (let i = 0; i < 10 && drainsA.length === 0; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      expect(drainsA).toHaveLength(1);
+      expect(drainsA[0]?.prompt).toBe("restored A");
+      expect(drainsB).toHaveLength(0);
+
+      // Now B's own idle-kick fires; B drains.
+      kickFollowupDrainIfIdle(keyB);
+      for (let i = 0; i < 10 && drainsB.length === 0; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      expect(drainsB).toHaveLength(1);
+      expect(drainsB[0]?.prompt).toBe("restored B");
+    } finally {
+      FOLLOWUP_QUEUES.delete(keyA);
+      FOLLOWUP_QUEUES.delete(keyB);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("persists the queue after dropAbortedFollowups removes an aborted item", async () => {
+    // Bot P2 (drain.ts:336-344): the abort-drop path splices items out of the
+    // queue without immediately persisting. A gateway crash between the splice
+    // and the next persist would leave the aborted item on disk — and because
+    // abortSignal is not serialized, restore would replay an item the source
+    // already canceled.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-abort-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-abort-drop-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainCalls: FollowupRun[] = [];
+    const drained = createDeferred<void>();
+
+    try {
+      // Enqueue first with a non-aborted signal — enqueueFollowupRun rejects
+      // already-aborted runs upfront. Then abort the signal so dropAbortedFollowups
+      // catches it on the next drain iteration.
+      const aborter = new AbortController();
+      enqueueFollowupRun(
+        key,
+        { ...createRun({ prompt: "aborted item" }), abortSignal: aborter.signal },
+        settings,
+      );
+
+      // Shared SQLite should contain the queued item right now.
+      expect(hasFollowupQueueEntries()).toBe(true);
+      expect(followupQueueEntryContainsPrompt(key, "aborted item")).toBe(true);
+
+      // Abort after enqueue so dropAbortedFollowups will splice it out.
+      aborter.abort();
+
+      const runFollowup = async (run: FollowupRun) => {
+        drainCalls.push(run);
+        drained.resolve();
+      };
+      scheduleFollowupDrain(key, runFollowup);
+      await drained.promise;
+      // Spin a few microtasks so the drain loop's finally + cleanup run.
+      for (let i = 0; i < 10; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+
+      // After the drain, the queue is empty and shared SQLite should not
+      // contain the aborted item anymore.
+      expect(followupQueueEntryContainsPrompt(key, "aborted item")).toBe(false);
+      // Confirm the abort path actually ran (the callback was invoked with
+      // the aborted run before splice).
+      expect(drainCalls.some((r) => r.prompt === "aborted item")).toBe(true);
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

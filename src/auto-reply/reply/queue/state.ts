@@ -8,6 +8,7 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../thinking.js";
+import { persistFollowupQueues, restoreFollowupQueues } from "./persist.js";
 import {
   completeFollowupRunLifecycle,
   type FollowupRun,
@@ -16,7 +17,13 @@ import {
   type QueueSettings,
 } from "./types.js";
 
-type FollowupQueueState = {
+/**
+ * Exported so persistence (persist.ts) and cross-cutting readers can reference
+ * the canonical runtime shape without duplicating it. Runtime-only fields
+ * (abortController, inFlight, activeSummarySources) are never persisted —
+ * persist.ts reconstructs them fresh when restoring from disk.
+ */
+export type FollowupQueueState = {
   abortController: AbortController;
   items: FollowupRun[];
   draining: boolean;
@@ -61,7 +68,18 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   if (!cleaned) {
     return undefined;
   }
-  return FOLLOWUP_QUEUES.get(cleaned);
+  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  if (!queue) {
+    return undefined;
+  }
+  ensureFollowupQueueSummaryState(queue);
+  return queue;
+}
+
+function ensureFollowupQueueSummaryState(queue: FollowupQueueState): void {
+  queue.summarySources ??= [];
+  queue.summaryElisions ??= [];
+  queue.evictedSummaryCount ??= 0;
 }
 
 type SummaryElisionCapState = Pick<
@@ -107,6 +125,7 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
+    ensureFollowupQueueSummaryState(existing);
     applyQueueRuntimeSettings({
       target: existing,
       settings,
@@ -175,6 +194,7 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
+  persistFollowupQueues();
   return cleared;
 }
 
@@ -282,4 +302,7 @@ export function refreshQueuedFollowupSession(params: {
       rewriteRun(source.run);
     }
   }
+  persistFollowupQueues();
 }
+
+restoreFollowupQueues();

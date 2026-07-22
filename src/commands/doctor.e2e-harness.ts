@@ -341,6 +341,10 @@ function createLegacyStateMigrationDetectionResult(params?: {
       accountIds: {},
       hasLegacy: false,
     },
+    followupQueueSidecar: {
+      sourcePath: "/tmp/state/live-chat-followup-queues.json",
+      hasLegacy: false,
+    },
     channelPlans: {
       hasLegacy: false,
       plans: [],

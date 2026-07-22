@@ -15,6 +15,7 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
+import { persistFollowupQueues } from "./persist.js";
 import { getExistingFollowupQueue, getFollowupQueue, trimSummaryElisionsToCap } from "./state.js";
 import {
   completeFollowupRunLifecycle,
@@ -199,6 +200,7 @@ export function enqueueFollowupRun(
   } else {
     queue.items.push(run);
   }
+  persistFollowupQueues();
   if (recentMessageIdKey) {
     RECENT_QUEUE_MESSAGE_IDS.check(recentMessageIdKey);
   }

@@ -57,6 +57,10 @@ import {
   migrateLegacyDeviceIdentity,
 } from "./state-migrations.device-identity.js";
 import {
+  detectLegacyFollowupQueueSidecar,
+  migrateLegacyFollowupQueueSidecar,
+} from "./state-migrations.followup-queue.js";
+import {
   existsDir,
   fileExists,
   readSessionStoreJson5,
@@ -480,6 +484,7 @@ export async function detectLegacyStateMigrations(params: {
     stateDir,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
   });
+  const followupQueueSidecar = detectLegacyFollowupQueueSidecar({ stateDir });
   const configuredChannels = Object.entries(params.cfg.channels ?? {});
   const configuredAccountIds = Object.fromEntries(
     configuredChannels.map(([channelId, value]) => {
@@ -670,6 +675,11 @@ export async function detectLegacyStateMigrations(params: {
   if (channelPairing.hasLegacy) {
     preview.push("- Channel pairing state: legacy JSON files → shared SQLite state");
   }
+  if (followupQueueSidecar.hasLegacy) {
+    preview.push(
+      `- Followup queue sidecar: ${followupQueueSidecar.sourcePath} → shared SQLite state`,
+    );
+  }
   if (channelPlans.length > 0) {
     preview.push(...channelPlans.map(buildLegacyMigrationPreview));
   }
@@ -765,6 +775,7 @@ export async function detectLegacyStateMigrations(params: {
     subagentRegistry,
     rescuePending,
     channelPairing,
+    followupQueueSidecar,
     warnings: pluginPlanWarnings,
     notices: [],
     preview,
@@ -1065,6 +1076,10 @@ export async function runLegacyStateMigrations(params: {
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
   });
+  const followupQueueSidecar = await migrateLegacyFollowupQueueSidecar({
+    detected: detected.followupQueueSidecar,
+    stateDir: detected.stateDir,
+  });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -1133,6 +1148,7 @@ export async function runLegacyStateMigrations(params: {
       ...subagentRegistry.changes,
       ...rescuePending.changes,
       ...channelPairing.changes,
+      ...followupQueueSidecar.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
       ...sessions.changes,
@@ -1168,6 +1184,7 @@ export async function runLegacyStateMigrations(params: {
       ...subagentRegistry.warnings,
       ...rescuePending.warnings,
       ...channelPairing.warnings,
+      ...followupQueueSidecar.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
       ...sessions.warnings,
@@ -1350,6 +1367,10 @@ export async function autoMigrateLegacyState(params: {
       detected: detected.channelPairing,
       env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
     });
+    const followupQueueSidecar = await migrateLegacyFollowupQueueSidecar({
+      detected: detected.followupQueueSidecar,
+      stateDir: detected.stateDir,
+    });
     const preSessionChannelPlans = await runLegacyMigrationPlans(
       detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
     );
@@ -1377,6 +1398,7 @@ export async function autoMigrateLegacyState(params: {
       ...deviceIdentity.changes,
       ...restartSentinel.changes,
       ...channelPairing.changes,
+      ...followupQueueSidecar.changes,
       ...preSessionChannelPlans.changes,
       ...pluginPlans.changes,
     ];
@@ -1400,6 +1422,7 @@ export async function autoMigrateLegacyState(params: {
       ...deviceIdentity.warnings,
       ...restartSentinel.warnings,
       ...channelPairing.warnings,
+      ...followupQueueSidecar.warnings,
       ...preSessionChannelPlans.warnings,
       ...pluginPlans.warnings,
     ];
@@ -1434,6 +1457,7 @@ export async function autoMigrateLegacyState(params: {
         deviceIdentity.changes.length > 0 ||
         restartSentinel.changes.length > 0 ||
         channelPairing.changes.length > 0 ||
+        followupQueueSidecar.changes.length > 0 ||
         preSessionChannelPlans.changes.length > 0 ||
         pluginPlans.changes.length > 0,
       skipped: true,
@@ -1460,7 +1484,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.currentConversationBindings.hasLegacy &&
     !detected.restartSentinel?.hasLegacy &&
     !detected.workspace.hasLegacy &&
-    !detected.channelPairing.hasLegacy
+    !detected.channelPairing.hasLegacy &&
+    !detected.followupQueueSidecar.hasLegacy
   ) {
     const changes = [
       ...stateDirResult.changes,
@@ -1546,6 +1571,10 @@ export async function autoMigrateLegacyState(params: {
     detected: detected.channelPairing,
     env: { ...env, OPENCLAW_STATE_DIR: detected.stateDir },
   });
+  const followupQueueSidecar = await migrateLegacyFollowupQueueSidecar({
+    detected: detected.followupQueueSidecar,
+    stateDir: detected.stateDir,
+  });
   const preSessionChannelPlans = await runLegacyMigrationPlans(
     detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
   );
@@ -1586,6 +1615,7 @@ export async function autoMigrateLegacyState(params: {
     ...deviceIdentity.changes,
     ...restartSentinel.changes,
     ...channelPairing.changes,
+    ...followupQueueSidecar.changes,
     ...preSessionChannelPlans.changes,
     ...pluginPlans.changes,
     ...sessions.changes,
@@ -1613,6 +1643,7 @@ export async function autoMigrateLegacyState(params: {
     ...deviceIdentity.warnings,
     ...restartSentinel.warnings,
     ...channelPairing.warnings,
+    ...followupQueueSidecar.warnings,
     ...preSessionChannelPlans.warnings,
     ...pluginPlans.warnings,
     ...sessions.warnings,
