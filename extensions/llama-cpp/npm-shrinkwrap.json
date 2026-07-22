@@ -1613,9 +1613,9 @@
       }
     },
     "node_modules/string-width": {
-      "version": "8.2.1",
-      "resolved": "https://registry.npmjs.org/string-width/-/string-width-8.2.1.tgz",
-      "integrity": "sha512-IIaP0g3iy9Cyy18w3M9YcaDudujEAVHKt3a3QJg1+sr/oX96TbaGUubG0hJyCjCBThFH+tFpcIyoUHUn1ogaLA==",
+      "version": "8.2.2",
+      "resolved": "https://registry.npmjs.org/string-width/-/string-width-8.2.2.tgz",
+      "integrity": "sha512-GaPUh5gfdrYzqeVNZvUfT23vYYxXzKYidUcnMtJg/3rxRV63EFZy3k6xfKlmfeJD0176lnUV/Usr3XcwSvFzpg==",
       "license": "MIT",
       "optional": true,
       "dependencies": {
