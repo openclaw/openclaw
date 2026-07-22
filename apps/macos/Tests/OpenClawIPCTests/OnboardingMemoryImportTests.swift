@@ -1,7 +1,7 @@
 import Foundation
-import OpenClawKit
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 private struct MemoryImportWireRequest: Sendable {
     let id: String
