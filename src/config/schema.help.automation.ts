@@ -167,6 +167,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Optional thinking-effort override for mapping-triggered runs to tune latency versus reasoning depth. Keep low or minimal for high-volume hooks unless deeper reasoning is clearly required.",
   "hooks.mappings[].timeoutSeconds":
     "Maximum runtime allowed for mapping action execution before timeout handling applies. Use tighter limits for high-volume webhook sources to prevent queue pileups.",
+  "hooks.mappings[].lane":
+    "Optional global command-queue lane for mapping-triggered isolated agent runs. Use a dedicated lane such as `jira-pickup` for latency-sensitive automation that must not wait behind generic hook/cron traffic; omit to use the shared `cron` lane. Each distinct configured lane runs with its own `maxConcurrent: 1` slot, adding independent per-lane capacity alongside the `cron` lane rather than partitioning it.",
   "hooks.mappings[].transform":
     "Transform configuration block defining module/export preprocessing before mapping action handling. Use transforms only from reviewed code paths and keep behavior deterministic for repeatable automation.",
   "hooks.mappings[].transform.module":

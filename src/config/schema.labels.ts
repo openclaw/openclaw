@@ -873,6 +873,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "hooks.mappings[].model": "Hook Mapping Model Override",
   "hooks.mappings[].thinking": "Hook Mapping Thinking Override",
   "hooks.mappings[].timeoutSeconds": "Hook Mapping Timeout (sec)",
+  "hooks.mappings[].lane": "Hook Mapping Queue Lane",
   "hooks.mappings[].transform": "Hook Mapping Transform",
   "hooks.mappings[].transform.module": "Hook Transform Module",
   "hooks.mappings[].transform.export": "Hook Transform Export",

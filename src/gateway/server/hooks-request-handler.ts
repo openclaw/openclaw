@@ -409,6 +409,7 @@ export function createHooksRequestHandler(
               model: mapped.action.model ?? null,
               thinking: mapped.action.thinking ?? null,
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
+              lane: mapped.action.lane ?? null,
             },
           });
           const cachedRunId = resolveCachedHookRunId(replayKey, now);
@@ -430,6 +431,7 @@ export function createHooksRequestHandler(
             model: mapped.action.model,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,
+            lane: mapped.action.lane,
             allowUnsafeExternalContent: mapped.action.allowUnsafeExternalContent,
             externalContentSource: resolveMappedHookExternalContentSource({
               subPath,

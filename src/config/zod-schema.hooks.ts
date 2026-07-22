@@ -58,6 +58,7 @@ export const HookMappingSchema = z
     model: z.string().optional(),
     thinking: z.string().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
+    lane: z.string().trim().min(1).optional(),
     transform: z
       .object({
         module: SafeRelativeModulePathSchema,

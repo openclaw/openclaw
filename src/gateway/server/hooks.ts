@@ -233,7 +233,7 @@ export function createGatewayHooksRequestHandler(params: {
             // Isolated runs derive their lifecycle key from random jobId (or an
             // already-stable cron: key), so accepted agentId closes reload drift.
             agentId,
-            lane: "cron",
+            lane: value.lane ?? "cron",
           });
           const summary = resolveHookRunSummary(result);
           const prefix =
