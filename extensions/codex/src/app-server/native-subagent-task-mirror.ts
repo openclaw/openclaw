@@ -125,7 +125,9 @@ export class CodexNativeSubagentTaskMirror {
               : `Codex tool item completed: ${itemType}.`,
             detail: { itemType },
           });
-          this.recordStructuredArtifactReceipts(runId, item, failed);
+          if (item) {
+            this.recordStructuredArtifactReceipts(runId, item, failed);
+          }
         }
       }
     }
