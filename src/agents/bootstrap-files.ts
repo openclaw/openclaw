@@ -10,7 +10,7 @@ import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds, resolveAgentDir } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -307,9 +307,45 @@ export async function resolveBootstrapFilesForRun(params: {
         sessionKey: params.sessionKey,
       })
     : await loadWorkspaceBootstrapFiles(params.workspaceDir);
+
+  // Load per-agent agentDir bootstrap files only when agentDir is explicitly
+  // configured in the agent config, so default state directories do not
+  // silently override workspace safety rules (issue #29387).
+  let mergedRawFiles = rawFiles;
+  const resolvedAgentId =
+    params.agentId ??
+    (params.sessionKey && params.config
+      ? resolveSessionAgentIds({ sessionKey: params.sessionKey, config: params.config })
+          .sessionAgentId
+      : undefined);
+  if (params.config && resolvedAgentId) {
+    const explicitAgentDir = resolveAgentConfig(params.config, resolvedAgentId)?.agentDir?.trim();
+    if (explicitAgentDir) {
+      const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+      const agentDir = resolveAgentDir(params.config, resolvedAgentId);
+      const resolvedAgentDir = resolveUserPath(agentDir);
+      if (resolvedAgentDir !== resolvedWorkspaceDir) {
+        const agentDirFiles = await loadWorkspaceBootstrapFiles(agentDir);
+        let presentAgentDirFiles = agentDirFiles.filter((f) => !f.missing);
+        if (workspaceSetupCompleted) {
+          presentAgentDirFiles = presentAgentDirFiles.filter(
+            (f) => f.name !== DEFAULT_BOOTSTRAP_FILENAME,
+          );
+        }
+        if (presentAgentDirFiles.length > 0) {
+          const agentDirNames = new Set(presentAgentDirFiles.map((f) => f.name));
+          // agentDir files override workspace files with the same name, enabling
+          // per-agent customization of SOUL.md, AGENTS.md, etc.
+          const workspaceOnly = rawFiles.filter((f) => !agentDirNames.has(f.name));
+          mergedRawFiles = [...workspaceOnly, ...presentAgentDirFiles];
+        }
+      }
+    }
+  }
+
   const bootstrapFiles = applyContextModeFilter({
     files: filterCompletedWorkspaceBootstrapFile(
-      filterBootstrapFilesForSession(rawFiles, sessionKey),
+      filterBootstrapFilesForSession(mergedRawFiles, sessionKey),
       workspaceSetupCompleted,
       params.workspaceDir,
     ),
