@@ -41,8 +41,7 @@ import {
 } from "./session-message-cache.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
-type RequestHandler = unknown | ((params?: unknown) => unknown);
-type RequestHandlers = Record<string, RequestHandler>;
+type RequestHandlers = Record<string, unknown>;
 
 function makeRequestMock(handlers: RequestHandlers = {}) {
   return vi.fn((method: string, params?: unknown) => {
@@ -55,7 +54,7 @@ function makeRequestMock(handlers: RequestHandlers = {}) {
       const response = typeof handler === "function" ? handler(params) : handler;
       return Promise.resolve(response);
     } catch (error) {
-      return Promise.reject(error);
+      return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
 }
@@ -676,9 +675,13 @@ describe("refreshChat", () => {
     admitHostQueueItems(host);
 
     await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
-    if (preservesSessionsResult) expect(host.sessionsResult).toBe(previousSessionsResult);
+    if (preservesSessionsResult) {
+      expect(host.sessionsResult).toBe(previousSessionsResult);
+    }
     expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
     expect(host.chatQueue).toEqual([]);
   });
@@ -732,11 +735,15 @@ describe("refreshChat", () => {
     admitHostQueueItems(host);
 
     await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     expect(host.chatQueue).toEqual([expect.objectContaining(restoredQueue[0])]);
-    if (expectedSession) expect(host.sessionsResult?.sessions[0]).toMatchObject(expectedSession);
+    if (expectedSession) {
+      expect(host.sessionsResult?.sessions[0]).toMatchObject(expectedSession);
+    }
   });
 });
 
@@ -1705,8 +1712,12 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "sessions.patch": (params: unknown) => {
           const patch = requireRecord(params, "session settings patch");
-          if (Object.hasOwn(patch, "thinkingLevel")) return thinkingUpdate.promise;
-          if (Object.hasOwn(patch, "fastMode")) return fastModeUpdate.promise;
+          if (Object.hasOwn(patch, "thinkingLevel")) {
+            return thinkingUpdate.promise;
+          }
+          if (Object.hasOwn(patch, "fastMode")) {
+            return fastModeUpdate.promise;
+          }
           throw new Error("Unexpected sessions.patch payload");
         },
         "sessions.list": () => Promise.resolve(sessionsResult),
@@ -3323,7 +3334,9 @@ describe("handleSendChat", () => {
       requestHandlers: {
         "chat.history": (params: unknown) => {
           const payload = requireRecord(params, "chat.history payload");
-          if (payload.sessionKey === "agent:main:slow") return slowHistory.promise;
+          if (payload.sessionKey === "agent:main:slow") {
+            return slowHistory.promise;
+          }
           return Promise.resolve({
             messages: [],
             sessionInfo: row(String(payload.sessionKey), {
