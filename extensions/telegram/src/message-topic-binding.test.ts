@@ -102,10 +102,63 @@ describe("Telegram message topic binding", () => {
     ).resolves.toBe("-1001");
   });
 
-  it("rejects a delegated base-chat spelling during a trusted topic turn", async () => {
+  it("binds a delegated base-chat spelling to the trusted current topic", async () => {
     await expect(
       resolveTelegramMessageMutationChatId({
         chatId: "-1001",
+        messageId: 901,
+        cfg,
+        accountId: "default",
+        context: delegatedContext(),
+      }),
+    ).resolves.toBe("-1001");
+  });
+
+  it("binds General-topic mutations using trusted thread context", async () => {
+    await recordMessage({ messageId: 900, threadId: 1, providerObserved: true });
+    await recordMessage({ messageId: 899, threadId: 2, providerObserved: true });
+    const context = delegatedContext({
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001",
+        currentMessageId: "901",
+        currentThreadTs: "1",
+      },
+    });
+
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId: "-1001",
+        messageId: 901,
+        cfg,
+        accountId: "default",
+        context,
+      }),
+    ).resolves.toBe("-1001");
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId: "-1001",
+        messageId: 900,
+        cfg,
+        accountId: "default",
+        context,
+      }),
+    ).resolves.toBe("-1001");
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId: "-1001",
+        messageId: 899,
+        cfg,
+        accountId: "default",
+        context,
+      }),
+    ).rejects.toThrow("provider-observed binding");
+  });
+
+  it("rejects a topicless different-chat target during a trusted topic turn", async () => {
+    await expect(
+      resolveTelegramMessageMutationChatId({
+        chatId: "-1002",
         messageId: 901,
         cfg,
         accountId: "default",
@@ -215,6 +268,15 @@ describe("Telegram message topic binding", () => {
         toolContext: {
           ...delegatedContext().toolContext,
           currentChannelId: "telegram:-1001:topic:88",
+        },
+      }),
+    },
+    {
+      name: "conflicting trusted thread context",
+      context: delegatedContext({
+        toolContext: {
+          ...delegatedContext().toolContext,
+          currentThreadTs: "88",
         },
       }),
     },

@@ -32,34 +32,37 @@ function rejectUnboundTopicMutation(): never {
   throw new Error(TOPIC_BINDING_ERROR);
 }
 
-function matchesCurrentTopic(
+type CurrentTelegramConversation = {
+  hasThreadContext: boolean;
+  matchesChat: boolean;
+  threadId?: number;
+};
+
+function resolveCurrentTelegramConversation(
   toolContext: ChannelThreadingToolContext | undefined,
   chatId: string,
-  threadId: number,
-): boolean {
+): CurrentTelegramConversation {
   if (toolContext?.currentChannelProvider?.trim().toLowerCase() !== "telegram") {
-    return false;
+    return { hasThreadContext: false, matchesChat: false };
   }
   const targets = [toolContext.currentChannelId, toolContext.currentMessagingTarget].filter(
     (value): value is string => typeof value === "string" && Boolean(value.trim()),
   );
-  return (
+  const parsedTargets = targets.map((value) => parseTelegramTarget(value));
+  const threadIds = [
+    ...parsedTargets.map((target) => target.messageThreadId),
+    parseStrictPositiveInteger(toolContext.currentThreadTs),
+  ].filter((value): value is number => value !== undefined);
+  const threadId = threadIds[0];
+  const matchesChat =
     targets.length > 0 &&
-    targets.every((value) => {
-      const current = parseTelegramTarget(value);
-      return current.chatId === chatId && current.messageThreadId === threadId;
-    })
-  );
-}
-
-function hasCurrentTelegramTopic(toolContext: ChannelThreadingToolContext | undefined): boolean {
-  if (toolContext?.currentChannelProvider?.trim().toLowerCase() !== "telegram") {
-    return false;
-  }
-  return [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
-    (value) =>
-      typeof value === "string" && parseTelegramTarget(value).messageThreadId !== undefined,
-  );
+    parsedTargets.every((target) => target.chatId === chatId) &&
+    (threadId === undefined || threadIds.every((value) => value === threadId));
+  return {
+    hasThreadContext: threadIds.length > 0,
+    matchesChat,
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
 }
 
 export async function resolveTelegramMessageMutationChatId(params: {
@@ -70,19 +73,20 @@ export async function resolveTelegramMessageMutationChatId(params: {
   context?: TelegramMessageMutationContext;
 }): Promise<string | number> {
   const target = parseTelegramTarget(String(params.chatId));
-  if (target.messageThreadId === undefined) {
-    // A topicless spelling must not bypass the provider check if this operation
-    // escaped shared normalization while still carrying trusted topic context.
-    if (
-      params.context?.conversationReadOrigin !== "direct-operator" &&
-      hasCurrentTelegramTopic(params.context?.toolContext)
-    ) {
-      return rejectUnboundTopicMutation();
-    }
+  if (params.context?.conversationReadOrigin === "direct-operator") {
+    return target.messageThreadId === undefined ? params.chatId : target.chatId;
+  }
+
+  const currentConversation = resolveCurrentTelegramConversation(
+    params.context?.toolContext,
+    target.chatId,
+  );
+  const threadId = target.messageThreadId ?? currentConversation.threadId;
+  if (threadId === undefined && !currentConversation.hasThreadContext) {
     return params.chatId;
   }
-  if (params.context?.conversationReadOrigin === "direct-operator") {
-    return target.chatId;
+  if (threadId === undefined) {
+    return rejectUnboundTopicMutation();
   }
 
   const selectedAccountId = normalizeOptionalAccountId(
@@ -93,7 +97,8 @@ export async function resolveTelegramMessageMutationChatId(params: {
     !selectedAccountId ||
     !requesterAccountId ||
     normalizeAccountId(selectedAccountId) !== normalizeAccountId(requesterAccountId) ||
-    !matchesCurrentTopic(params.context?.toolContext, target.chatId, target.messageThreadId)
+    !currentConversation.matchesChat ||
+    currentConversation.threadId !== threadId
   ) {
     return rejectUnboundTopicMutation();
   }
@@ -115,7 +120,7 @@ export async function resolveTelegramMessageMutationChatId(params: {
     chatId: target.chatId,
     messageId: String(params.messageId),
   });
-  if (!hasProviderObservedTelegramThreadBinding(cached, target.messageThreadId)) {
+  if (!hasProviderObservedTelegramThreadBinding(cached, threadId)) {
     return rejectUnboundTopicMutation();
   }
   return target.chatId;

@@ -404,7 +404,7 @@ describe("handleTelegramAction", () => {
     expect(reactMessageTelegram).not.toHaveBeenCalled();
   });
 
-  it("soft-fails a topicless delegated reaction during a trusted topic turn", async () => {
+  it("binds a topicless delegated reaction to the trusted current topic", async () => {
     const result = await handleTelegramAction(
       {
         action: "react",
@@ -420,6 +420,57 @@ describe("handleTelegramAction", () => {
           currentChannelProvider: "telegram",
           currentChannelId: "telegram:-1001:topic:77",
           currentMessageId: "456",
+          currentThreadTs: "77",
+        },
+      },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: true });
+    expect(mockCall(reactMessageTelegram, 0, "topicless reaction")[0]).toBe("-1001");
+  });
+
+  it("binds a General-topic reaction using trusted thread context", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1001",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001",
+          currentMessageId: "456",
+          currentThreadTs: "1",
+        },
+      },
+    );
+
+    expect(resultDetails(result)).toMatchObject({ ok: true });
+    expect(mockCall(reactMessageTelegram, 0, "General-topic reaction")[0]).toBe("-1001");
+  });
+
+  it("soft-fails a topicless different-chat reaction during a trusted topic turn", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "-1002",
+        messageId: 456,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+      {
+        conversationReadOrigin: "delegated",
+        requesterAccountId: "default",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "telegram:-1001:topic:77",
+          currentMessageId: "456",
+          currentThreadTs: "77",
         },
       },
     );

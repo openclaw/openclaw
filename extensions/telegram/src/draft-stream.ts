@@ -456,13 +456,15 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     retainReplyTarget(sendGeneration, normalizedMessageId);
-    try {
-      await params.onProviderMessage?.(sent.message);
-    } catch (err) {
-      // Observation runs after Telegram accepted the send. Never turn a cache
-      // failure into a transport retry that could duplicate the message.
-      params.warn?.(`telegram stream preview observation failed: ${formatErrorMessage(err)}`);
-    }
+    const observeProviderMessage = async () => {
+      try {
+        await params.onProviderMessage?.(sent.message);
+      } catch (err) {
+        // Observation runs after Telegram accepted the send. Never turn a cache
+        // failure into a transport retry that could duplicate the message.
+        params.warn?.(`telegram stream preview observation failed: ${formatErrorMessage(err)}`);
+      }
+    };
     if (sendGeneration !== generation) {
       const visibleSinceMs = Date.now();
       if (repositionedSendGenerations.delete(sendGeneration)) {
@@ -476,12 +478,14 @@ export function createTelegramDraftStream(params: {
         textSnapshot: sent.snapshot.text,
         visibleSinceMs,
       });
+      await observeProviderMessage();
       return true;
     }
     const visibleSinceMs = Date.now();
     streamMessageId = normalizedMessageId;
     streamMessageSnapshot = sent.snapshot;
     streamVisibleSinceMs = visibleSinceMs;
+    await observeProviderMessage();
     return true;
   };
   const sendOrEditPlannedPage = async (page: PlannedTelegramDraftPage): Promise<boolean> => {

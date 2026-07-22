@@ -582,8 +582,10 @@ describe("createTelegramDraftStream", () => {
         const api = createMockDraftApi();
         api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
         const onSupersededPreview = vi.fn();
+        const onProviderMessage = vi.fn();
         const stream = createDraftStream(api, {
           onRetainedPage: onSupersededPreview,
+          onProviderMessage,
           replyToMessageId: 411,
           replyToMode,
           thread: { id: 42, scope: "dm" },
@@ -610,6 +612,8 @@ describe("createTelegramDraftStream", () => {
 
         // The raced first send is NOT retained as a durable chunk...
         expect(onSupersededPreview).not.toHaveBeenCalled();
+        expect(onProviderMessage).toHaveBeenCalledTimes(1);
+        expect(onProviderMessage).toHaveBeenCalledWith(expect.objectContaining({ message_id: 42 }));
         expect(api.deleteMessage).not.toHaveBeenCalled();
         // ...it is deleted deferred, so no orphaned stale bubble is left behind.
         await vi.advanceTimersByTimeAsync(4_000);
