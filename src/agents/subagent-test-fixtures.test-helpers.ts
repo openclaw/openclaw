@@ -11,7 +11,7 @@ type GatewayResponse<TRequest, TResult> =
   | Error
   | ((request: TRequest) => TResult | Promise<TResult>);
 
-export function createGatewayMethodMock<
+function createGatewayMethodMock<
   TRequest extends GatewayRequest,
   TResult = Record<string, unknown>,
 >(
