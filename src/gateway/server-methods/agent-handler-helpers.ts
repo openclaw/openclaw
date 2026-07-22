@@ -38,6 +38,7 @@ export type RestoredCronContinuation = {
   thinking?: string;
   toolsAllow?: string[];
   toolsAllowIsDefault?: boolean;
+  ownerSessionKey?: string;
   cliSessionBindingFacts?: {
     extraSystemPromptStatic?: string;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";

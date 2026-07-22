@@ -2,6 +2,7 @@
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import type { ExecElevatedDefaults } from "../agents/bash-tools.exec-types.js";
 import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-defaults.js";
+import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type {
   SourceReplyDeliveryMode,
@@ -56,6 +57,7 @@ type McpLoopbackScopeParams = {
   requireExplicitMessageTarget?: boolean;
   /** Per-run grant allowlist of gateway tool names; unset keeps full scope. */
   toolsAllow?: string[];
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   senderIsOwner: boolean | undefined;
   nodeExecAllowed?: boolean;
   execSession?: ExecSessionDefaults;
@@ -155,6 +157,7 @@ export class McpLoopbackToolCache {
       // Unset (full scope) must never share a cache row with an empty
       // allowlist (deny-all), so the marker distinguishes presence.
       params.toolsAllow ? `allow:${[...new Set(params.toolsAllow)].toSorted().join(",")}` : "",
+      params.scheduledToolPolicy?.ownerSessionKey ?? "",
       params.nodeExecAllowed === true ? "node-exec" : "",
       params.execSession?.execHost ?? "",
       params.execSession?.execSecurity ?? "",

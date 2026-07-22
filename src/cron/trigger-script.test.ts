@@ -305,6 +305,28 @@ describe("cron trigger script evaluator", () => {
     ]);
   });
 
+  it("forwards the owner session and invalidates cached authority when it changes", async () => {
+    const config = {} as OpenClawConfig;
+    const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
+    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
+    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
+
+    for (const ownerSessionKey of ["agent:main:discord:group:a", "agent:main:discord:group:b"]) {
+      await evaluate({
+        jobId: "job-owner-session",
+        script: "return result",
+        state: null,
+        toolsAllow: ["write"],
+        ownerSessionKey,
+      });
+    }
+
+    expect(prepareRuntime.mock.calls.map(([params]) => params.ownerSessionKey)).toEqual([
+      "agent:main:discord:group:a",
+      "agent:main:discord:group:b",
+    ]);
+  });
+
   it.each([
     completed({ value: null }),
     completed({ value: { fire: "yes" } }),

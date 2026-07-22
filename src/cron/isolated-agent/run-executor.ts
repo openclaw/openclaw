@@ -8,6 +8,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
+import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnAdmission } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -273,6 +274,10 @@ function createCronPromptExecutor(params: {
     params.cronSession.sessionEntry.systemPromptReport,
   );
   const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
+  const scheduledToolPolicy = resolveScheduledToolPolicyContext({
+    toolsAllow: params.agentPayload?.toolsAllow,
+    ownerSessionKey: params.job.owner?.sessionKey,
+  });
   if (!params.sourceDelivery) {
     logWarn(
       `[cron:${params.job.id}] sourceDelivery is undefined; using fallback — possible build artifact mismatch`,
@@ -463,6 +468,7 @@ function createCronPromptExecutor(params: {
                   params.agentPayload?.toolsAllow,
                   params.agentPayload?.toolsAllowIsDefault,
                 ),
+                scheduledToolPolicy,
                 abortSignal: params.abortSignal,
                 onExecutionStarted: params.onExecutionStarted,
                 onExecutionPhase: params.onExecutionPhase,
@@ -557,6 +563,7 @@ function createCronPromptExecutor(params: {
           bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
+          scheduledToolPolicy,
           execOverrides: params.suppressExecNotifyOnExit
             ? {
                 notifyOnExit: false,

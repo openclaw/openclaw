@@ -464,6 +464,7 @@ export function resolveGroupToolPolicy(params: {
   groupChannel?: string | null;
   groupSpace?: string | null;
   accountId?: string | null;
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;
@@ -507,6 +508,7 @@ export function resolveGroupToolPolicy(params: {
       groupChannel: trustedGroup.dropped ? null : params.groupChannel,
       groupSpace: trustedGroup.dropped ? null : params.groupSpace,
       accountId: params.accountId,
+      senderPolicyMode: params.senderPolicyMode,
       senderId: params.senderId,
       senderName: params.senderName,
       senderUsername: params.senderUsername,
@@ -524,6 +526,7 @@ export function resolveGroupToolPolicy(params: {
     groupId: groupIds[0],
     groupIdCandidates: groupIds.slice(1),
     accountId: params.accountId,
+    senderPolicyMode: params.senderPolicyMode,
     senderId: params.senderId,
     senderName: params.senderName,
     senderUsername: params.senderUsername,

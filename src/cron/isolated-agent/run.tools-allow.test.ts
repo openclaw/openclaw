@@ -34,6 +34,7 @@ function makeParams() {
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "check allowed tools" },
       delivery: { mode: "none" },
+      owner: { agentId: "main", sessionKey: "agent:main:whatsapp:group:team" },
     } as never,
     message: "check allowed tools",
     sessionKey: "cron:tools-allow",
@@ -76,11 +77,13 @@ function makeParamsWithDefaultToolsAllow(toolsAllow: string[]) {
 function requireEmbeddedAgentCall(): {
   jobId?: string;
   toolsAllow?: string[];
+  scheduledToolPolicy?: { ownerSessionKey: string };
 } {
   const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
     | {
         jobId?: string;
         toolsAllow?: string[];
+        scheduledToolPolicy?: { ownerSessionKey: string };
       }
     | undefined;
   if (!call) {
@@ -120,6 +123,18 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
   });
 
   it(
+    "keeps capless legacy runs on the ordinary policy path",
+    { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
+    async () => {
+      await runCronIsolatedAgentTurn(makeParams());
+
+      const call = requireEmbeddedAgentCall();
+      expect(call.toolsAllow).toBeUndefined();
+      expect(call.scheduledToolPolicy).toBeUndefined();
+    },
+  );
+
+  it(
     "passes through isolated cron toolsAllow=cron self-removal path",
     { timeout: RUN_TOOLS_ALLOW_TIMEOUT_MS },
     async () => {
@@ -129,6 +144,9 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
       const call = requireEmbeddedAgentCall();
       expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual(["cron"]);
+      expect(call.scheduledToolPolicy).toEqual({
+        ownerSessionKey: "agent:main:whatsapp:group:team",
+      });
     },
   );
 

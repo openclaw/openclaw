@@ -38,6 +38,7 @@ import type {
 } from "../embedded-agent-runner/run/params.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
 import type { FastModeAutoProgressState } from "../fast-mode.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 /** Input contract for one CLI-backed agent run. */
@@ -185,6 +186,8 @@ export type RunCliAgentParams = {
   approvalReviewerDeviceId?: string;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
   /** Exact native surface plus host-isolated MCP permissions for a selectable CLI backend. */
   cliToolAvailability?: {
     native: string[];

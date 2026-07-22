@@ -2875,6 +2875,7 @@ describe("prepareCliRunContext", () => {
         sessionKey: "agent:main:main",
         provider: "claude-cli",
         toolsAllow: ["group:fs", "exec", "browser", "image"],
+        scheduledToolPolicy: { ownerSessionKey: "agent:main:discord:group:ops" },
       });
       cleanup = context.preparedBackend.cleanup;
 
@@ -2903,6 +2904,9 @@ describe("prepareCliRunContext", () => {
         "browser",
         "image",
       ]);
+      expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.scheduledToolPolicy).toEqual({
+        ownerSessionKey: "agent:main:discord:group:ops",
+      });
     } finally {
       await cleanup?.();
     }

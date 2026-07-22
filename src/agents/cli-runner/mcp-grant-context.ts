@@ -123,6 +123,9 @@ export function buildCliMcpGrantContext(params: {
     // Restricted runs get their allowlist stamped into the grant; the
     // loopback server enforces it on tools/list and tools/call.
     ...(params.toolsAllow ? { toolsAllow: params.toolsAllow } : {}),
+    ...(params.run.scheduledToolPolicy
+      ? { scheduledToolPolicy: { ...params.run.scheduledToolPolicy } }
+      : {}),
     modelProvider: params.modelProvider,
     modelId: params.modelId,
     messageProvider: resolveCliMcpMessageProvider(params.run),

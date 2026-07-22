@@ -60,6 +60,8 @@ type RequesterToolPolicyParams = {
   inputProvenance?: InputProvenance;
   trustedInternalHandoff?: boolean;
   senderPolicyMode?: SenderPolicyMode;
+  /** Group session selected by a trusted scheduled authority envelope. */
+  groupPolicySessionKey?: string;
 };
 
 function policyFromEnvelope(
@@ -185,7 +187,7 @@ export function resolveRequesterToolPolicies(
     requesterPolicySource: "current-request",
     groupPolicy: resolveGroupToolPolicy({
       config: params.config,
-      sessionKey: params.sessionKey,
+      sessionKey: params.groupPolicySessionKey ?? params.sessionKey,
       spawnedBy: params.spawnedBy,
       messageProvider: params.messageProvider ?? undefined,
       groupId: params.groupId,
@@ -196,6 +198,7 @@ export function resolveRequesterToolPolicies(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
+      senderPolicyMode: senderPolicyMode === "never" ? "never" : "always",
     }),
     senderPolicy: shouldResolveSenderPolicy
       ? resolveSenderToolPolicy({

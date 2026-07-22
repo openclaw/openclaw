@@ -45,9 +45,9 @@ export function resolveLoopbackToolsAllowFromMcpPermissions(
 /** Keeps only explicit runtime caps for backend-owned exact translation. */
 export function resolveCliRuntimeToolsAllow(
   toolsAllow?: string[],
-  toolsAllowIsDefault?: boolean,
+  _toolsAllowIsDefault?: boolean,
 ): string[] | undefined {
-  if (toolsAllow === undefined || toolsAllowIsDefault) {
+  if (toolsAllow === undefined) {
     return undefined;
   }
   return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")

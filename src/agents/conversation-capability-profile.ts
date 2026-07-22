@@ -22,6 +22,7 @@ import {
   type RequesterToolPolicySource,
 } from "./requester-tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
+import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { PromptMode } from "./system-prompt.types.js";
 import {
   collectExplicitAllowlist,
@@ -83,6 +84,8 @@ export type ConversationCapabilityProfileParams = {
   inputProvenance?: InputProvenance;
   /** Trusted in-process completion handoff; public callers cannot set this fact. */
   trustedInternalHandoff?: boolean;
+  /** Trusted server-stamped authority for an explicitly capped scheduled run. */
+  scheduledToolPolicy?: ScheduledToolPolicyContext;
 };
 
 export type ResolvedConversationCapabilityProfile = {
@@ -226,7 +229,8 @@ export function resolveConversationCapabilityProfile(
     senderE164: params.senderE164,
     inputProvenance: params.inputProvenance,
     trustedInternalHandoff: params.trustedInternalHandoff,
-    senderPolicyMode: isOwnerInternalSession ? "never" : "always",
+    senderPolicyMode: params.scheduledToolPolicy || isOwnerInternalSession ? "never" : "always",
+    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
   const profilePolicy = resolveToolProfilePolicy(effective.profile);
