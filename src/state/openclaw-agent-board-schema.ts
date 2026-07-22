@@ -67,8 +67,8 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
   if (!db.isTransaction) {
     throw new Error("board schema ensure requires an active transaction");
   }
-  db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL);
-  const row = db
+  db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL); // sqlite-allow-raw -- Canonical DDL bootstrap for the lazy board schema.
+  const row = db // sqlite-allow-raw -- Inspect the table DDL before the bounded same-version migration.
     .prepare("SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'board_widgets'")
     .get() as { sql?: unknown } | undefined;
   if (typeof row?.sql !== "string") {
@@ -83,7 +83,7 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
       "OpenClaw agent board widget schema has an unsupported content-kind constraint.",
     );
   }
-  const existingMigrationTable = db
+  const existingMigrationTable = db // sqlite-allow-raw -- Fail closed if an abandoned migration table exists.
     .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
     .get(BOARD_WIDGETS_MIGRATION_TABLE);
   if (existingMigrationTable) {
@@ -95,7 +95,7 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
     BOARD_WIDGETS_SCHEMA_START,
     `CREATE TABLE ${BOARD_WIDGETS_MIGRATION_TABLE} (`,
   );
-  db.exec(`
+  db.exec(/* sqlite-allow-raw -- Rebuild one unreleased table constraint inside the caller's transaction. */ `
     ${migrationCreateSql}
     INSERT INTO ${BOARD_WIDGETS_MIGRATION_TABLE} (
       session_key, name, tab_id, title, content_kind, html, descriptor_json, sha256,
@@ -110,5 +110,5 @@ export function ensureOpenClawAgentBoardSchemaInTransaction(db: DatabaseSync): v
     DROP TABLE board_widgets;
     ALTER TABLE ${BOARD_WIDGETS_MIGRATION_TABLE} RENAME TO board_widgets;
   `);
-  db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL);
+  db.exec(OPENCLAW_AGENT_BOARD_SCHEMA_SQL); // sqlite-allow-raw -- Restore the canonical board index after the rebuild.
 }
