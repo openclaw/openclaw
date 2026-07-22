@@ -89,7 +89,7 @@ const SessionStatusToolSchema = Type.Object({
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
-export function createSessionsStatusToolSchema() {
+function createSessionsStatusToolSchema() {
   return Type.Object({
     session_key: Type.String(),
   });

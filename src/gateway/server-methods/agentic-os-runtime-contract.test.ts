@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetAgenticOsRuntimeContractForTests } from "../agentic-os-runtime-contract.js";
-import { agenticOsRuntimeContractHandlers } from "./agentic-os-runtime-contract.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -16,6 +15,8 @@ vi.mock("../../agents/subagent-spawn.js", () => ({
 }));
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
+
+let agenticOsRuntimeContractHandlers: GatewayRequestHandlers;
 
 const acquireParams = {
   client_lease_id: "lease-a",
@@ -76,8 +77,9 @@ async function acquireLease(params: Record<string, unknown> = acquireParams) {
 }
 
 describe("Agentic OS runtime contract v1", () => {
-  beforeEach(() => {
-    __resetAgenticOsRuntimeContractForTests();
+  beforeEach(async () => {
+    vi.resetModules();
+    ({ agenticOsRuntimeContractHandlers } = await import("./agentic-os-runtime-contract.js"));
     spawnSubagentDirectMock.mockClear();
     spawnSubagentDirectMock.mockResolvedValue({
       status: "accepted",

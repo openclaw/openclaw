@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { listCoreGatewayMethodMetadata } from "./core-descriptors.js";
+import { listCoreGatewayMethodMetadata, listCoreGatewayMethodNames } from "./core-descriptors.js";
 
 const CURRENT_TRAIN_METHODS = [
   "question.request",
@@ -57,6 +57,28 @@ const CURRENT_TRAIN_METHODS = [
 ] as const;
 
 describe("core gateway method release trains", () => {
+  it("keeps external orchestrator aliases out of generated native protocol enums", () => {
+    const coreMethods = listCoreGatewayMethodNames();
+    const nativeMethods = listCoreGatewayMethodMetadata()
+      .filter((method) => method.nativeProtocol !== false)
+      .map((method) => method.name);
+    const externalAliases = [
+      "subagents.allowLease.acquire",
+      "subagents.allowLease.status",
+      "subagents.allowLease.release",
+      "sessions_spawn",
+      "sessions_list",
+      "sessions_status",
+      "sessions_history",
+    ];
+
+    for (const method of externalAliases) {
+      expect(coreMethods).toContain(method);
+      expect(nativeMethods).not.toContain(method);
+    }
+    expect(nativeMethods).toContain("sessions.list");
+  });
+
   it("records a valid train for every method and dates the 2026.7 families", () => {
     const methods = listCoreGatewayMethodMetadata();
 

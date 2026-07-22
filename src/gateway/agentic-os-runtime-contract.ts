@@ -113,7 +113,7 @@ function stableJson(value: unknown): string {
   }
   if (isRecord(value)) {
     return `{${Object.keys(value)
-      .sort()
+      .toSorted()
       .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
       .join(",")}}`;
   }
@@ -310,8 +310,8 @@ function readSessionMetadata(params: Record<string, unknown>): Record<string, un
   if (!isRecord(metadata)) {
     throw new ContractInputError("missing required object: metadata");
   }
-  const keys = Object.keys(metadata).sort();
-  const expected = [...SESSION_METADATA_FIELDS].sort();
+  const keys = Object.keys(metadata).toSorted();
+  const expected = [...SESSION_METADATA_FIELDS].toSorted();
   if (stableJson(keys) !== stableJson(expected)) {
     throw new ContractInputError("metadata must contain exactly the Agentic OS session v1 fields");
   }
@@ -366,7 +366,7 @@ function requireLeaseAuthorizesSpawn(params: {
   };
   for (const field of ALLOW_LEASE_OWNER_FIELDS) {
     if (lease.spawnOwner[field] !== expected[field]) {
-      return rejectConflict(`gateway_lease_id owner does not authorize spawn: ${field}`);
+      rejectConflict(`gateway_lease_id owner does not authorize spawn: ${field}`);
     }
   }
 }
@@ -549,16 +549,6 @@ export function historyAgenticOsSession(params: Record<string, unknown>): Record
       },
     ],
   };
-}
-
-export function __resetAgenticOsRuntimeContractForTests() {
-  leasesByGatewayId.clear();
-  acquireByIdempotencyKey.clear();
-  acquireByClientLeaseId.clear();
-  releaseByIdempotencyKey.clear();
-  sessionsByKey.clear();
-  spawnByIdempotencyKey.clear();
-  spawnByClientRequestId.clear();
 }
 
 export { ContractInputError };
