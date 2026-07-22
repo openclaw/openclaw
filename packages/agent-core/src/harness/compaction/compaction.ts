@@ -146,14 +146,91 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   keepRecentTokens: 20000,
 };
 
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readTokenCount(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.min(Math.trunc(value), Number.MAX_SAFE_INTEGER);
+}
+
+function firstTokenCount(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    const count = readTokenCount(value);
+    if (count !== undefined) {
+      return count;
+    }
+  }
+  return undefined;
+}
+
+function isTranscriptOnlyOpenClawAssistantMessage(msg: AgentMessage): boolean {
+  if (msg.role !== "assistant") {
+    return false;
+  }
+  const candidate = msg as {
+    provider?: unknown;
+    model?: unknown;
+    openclawDeliveryMirror?: unknown;
+  };
+  if (
+    candidate.provider === "openclaw" &&
+    (candidate.model === "delivery-mirror" || candidate.model === "gateway-injected")
+  ) {
+    return true;
+  }
+  const marker = readRecord(candidate.openclawDeliveryMirror);
+  return (
+    typeof marker?.kind === "string" &&
+    (marker.kind === "channel-final" ||
+      marker.kind === "channel-final-suppressed" ||
+      marker.kind === "message-tool-source-reply")
+  );
+}
+
 /** Calculate total context tokens from provider usage. */
 export function calculateContextTokens(usage: Usage): number {
   if (usage.contextUsage?.state === "available") {
-    return usage.contextUsage.totalTokens;
+    return readTokenCount(usage.contextUsage.totalTokens) ?? 0;
   }
-  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+  const record = usage as unknown as Record<string, unknown>;
+  const cache = readRecord(record.cache);
+  const aggregateTotal = firstTokenCount(record.totalTokens, record.total_tokens, record.total);
+  const input =
+    firstTokenCount(
+      record.input,
+      record.inputTokens,
+      record.input_tokens,
+      record.promptTokens,
+      record.prompt_tokens,
+    ) ?? 0;
+  const output =
+    firstTokenCount(
+      record.output,
+      record.outputTokens,
+      record.output_tokens,
+      record.completionTokens,
+      record.completion_tokens,
+    ) ?? 0;
+  const cacheRead =
+    firstTokenCount(record.cacheRead, record.cache_read, cache?.read, cache?.cacheRead) ?? 0;
+  const cacheWrite =
+    firstTokenCount(record.cacheWrite, record.cache_write, cache?.write, cache?.cacheWrite) ?? 0;
+  const componentTotal = input + output + cacheRead + cacheWrite;
+  if (aggregateTotal !== undefined && aggregateTotal > 0) {
+    return aggregateTotal;
+  }
+  return componentTotal > 0 ? componentTotal : (aggregateTotal ?? 0);
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
+  if (isTranscriptOnlyOpenClawAssistantMessage(msg)) {
+    return undefined;
+  }
   if (msg.role === "assistant" && "usage" in msg) {
     const assistantMsg = msg;
     if (
@@ -195,7 +272,7 @@ export interface ContextUsageEstimate {
 
 function getLastAssistantUsageInfo(
   messages: AgentMessage[],
-): { usage: Usage; index: number } | undefined {
+): { usage: Usage; index: number; usageTokens: number } | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages.at(i);
     if (!message) {
@@ -203,7 +280,10 @@ function getLastAssistantUsageInfo(
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {
-      return { usage, index: i };
+      const usageTokens = calculateContextTokens(usage);
+      if (Number.isFinite(usageTokens) && usageTokens > 0) {
+        return { usage, index: i, usageTokens };
+      }
     }
   }
   return undefined;
@@ -226,7 +306,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
     };
   }
 
-  const usageTokens = calculateContextTokens(usageInfo.usage);
+  const usageTokens = usageInfo.usageTokens;
   let trailingTokens = 0;
   for (const message of messages.slice(usageInfo.index + 1)) {
     trailingTokens += estimateTokens(message);

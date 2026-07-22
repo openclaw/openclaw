@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readTranscriptFileState } from "../agents/embedded-agent-runner/transcript-file-state.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -50,6 +51,7 @@ async function repairBrokenSessionTranscriptFile(params: {
       originalEntries: 0,
       activeEntries: 0,
       legacyOpenAICodexEntries: 0,
+      legacyNullCompactionTokensBeforeEntries: 0,
     };
   }
   if (!params.shouldRepair) {
@@ -656,6 +658,101 @@ describe("doctor session transcript repair", () => {
     const assistant = JSON.parse(expectDefined(lines[1], "lines[1] test invariant"));
     expect(assistant.message.provider).toBe("openai");
     expect(assistant.message.api).toBe("openai-chatgpt-responses");
+  });
+
+  it("rewrites null compaction tokensBefore only during doctor repair", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-07-06T00:00:00Z" },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-07-06T00:00:01Z",
+        message: { role: "user", content: "old prompt" },
+      },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "user-1",
+        timestamp: "2026-07-06T00:00:02Z",
+        message: { role: "user", content: "kept suffix" },
+      },
+      {
+        type: "compaction",
+        id: "compact-1",
+        parentId: "user-2",
+        timestamp: "2026-07-06T00:00:03Z",
+        summary: "summary",
+        firstKeptEntryId: "user-2",
+        tokensBefore: null,
+      },
+    ]);
+
+    const preview = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: false });
+
+    expect(preview.broken).toBe(true);
+    expect(preview.repaired).toBe(false);
+    expect(preview.legacyNullCompactionTokensBeforeEntries).toBe(1);
+    expect(await fs.readFile(filePath, "utf-8")).toContain('"tokensBefore":null');
+
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+
+    expect(result.broken).toBe(true);
+    expect(result.repaired).toBe(true);
+    expect(result.legacyNullCompactionTokensBeforeEntries).toBe(1);
+    if (!("backupPath" in result) || result.backupPath === undefined) {
+      throw new Error("expected transcript backup path");
+    }
+    await expect(fs.access(result.backupPath)).resolves.toBeUndefined();
+    const lines = (await fs.readFile(filePath, "utf-8")).trim().split(/\r?\n/);
+    const compaction = JSON.parse(expectDefined(lines[3], "lines[3] test invariant"));
+    expect(compaction).toMatchObject({ id: "compact-1", tokensBefore: 0 });
+
+    const reopened = await readTranscriptFileState(filePath);
+    expect(reopened.buildSessionContext().messages).toMatchObject([
+      { role: "compactionSummary", summary: "summary", tokensBefore: 0 },
+      { role: "user", content: "kept suffix" },
+    ]);
+  });
+
+  it("does not repair compaction rows whose tokensBefore field is omitted", async () => {
+    const filePath = await writeTranscript([
+      { type: "session", version: 3, id: "session-1", timestamp: "2026-07-06T00:00:00Z" },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-07-06T00:00:01Z",
+        message: { role: "user", content: "old prompt" },
+      },
+      {
+        type: "message",
+        id: "user-2",
+        parentId: "user-1",
+        timestamp: "2026-07-06T00:00:02Z",
+        message: { role: "user", content: "kept suffix" },
+      },
+      {
+        type: "compaction",
+        id: "compact-1",
+        parentId: "user-2",
+        timestamp: "2026-07-06T00:00:03Z",
+        summary: "summary",
+        firstKeptEntryId: "user-2",
+      },
+    ]);
+
+    const result = await repairBrokenSessionTranscriptFile({ filePath, shouldRepair: true });
+
+    expect(result.broken).toBe(false);
+    expect(result.legacyNullCompactionTokensBeforeEntries).toBe(0);
+    expect(await fs.readFile(filePath, "utf-8")).not.toContain('"tokensBefore"');
+    const reopened = await readTranscriptFileState(filePath);
+    expect(reopened.getEntries().some((entry) => entry.type === "compaction")).toBe(false);
+    expect(reopened.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "old prompt" },
+      { role: "user", content: "kept suffix" },
+    ]);
   });
 
   it("rewrites shipped codex transcript provider metadata", async () => {
