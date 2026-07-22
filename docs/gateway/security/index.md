@@ -670,7 +670,7 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
   <Accordion title="Flags tracked by the audit today">
     - `gateway.controlUi.allowInsecureAuth=true`
     - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
-    - retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true` input still present
+    - pending Control UI device-auth migration imported from retired `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
     - `security.audit.suppressions configured (<count>)`
     - `hooks.gmail.allowUnsafeExternalContent=true`
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
