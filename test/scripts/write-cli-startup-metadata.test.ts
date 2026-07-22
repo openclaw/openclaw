@@ -1,7 +1,7 @@
 // Write Cli Startup Metadata tests cover write cli startup metadata script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { pathToFileURL } from "node:url";
@@ -478,6 +478,71 @@ describe("write-cli-startup-metadata", () => {
     expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
     expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
     expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
+  });
+
+  it.each([
+    { label: "successful", renderError: undefined },
+    { label: "failed", renderError: new Error("browser help failed") },
+  ])("removes temporary render state after a $label render", async ({ renderError }) => {
+    const tempRoot = createTempDir("openclaw-startup-metadata-state-");
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    let renderStateDir = "";
+
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+
+    const writeMetadata = writeCliStartupMetadata({
+      distDir,
+      outputPath,
+      extensionsDir,
+      sourceRootDir: tempRoot,
+      renderBundledRootHelpText: async () => "Usage: openclaw\n",
+      renderSourceBrowserHelpText: async (renderContext) => {
+        renderStateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
+        writeFixtureFile(renderStateDir, "state/openclaw.sqlite", "probe");
+        if (renderError) {
+          throw renderError;
+        }
+        return "Usage: openclaw browser\n";
+      },
+      renderSourceSecretsHelpText: async (renderContext) => {
+        if (renderError) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          writeFixtureFile(
+            renderContext.env?.OPENCLAW_STATE_DIR ?? "",
+            "state/late-render",
+            "probe",
+          );
+        }
+        return "Usage: openclaw secrets\n";
+      },
+      renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+      renderSourceSubcommandHelpTextRecord: () => ({
+        doctor: "Usage: openclaw doctor\n",
+        gateway: "Usage: openclaw gateway\n",
+        models: "Usage: openclaw models\n",
+        plugins: "Usage: openclaw plugins\n",
+        sessions: "Usage: openclaw sessions\n",
+        tasks: "Usage: openclaw tasks\n",
+      }),
+    });
+
+    try {
+      if (renderError) {
+        await expect(writeMetadata).rejects.toThrow(renderError.message);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } else {
+        await expect(writeMetadata).resolves.toBeUndefined();
+      }
+      expect(renderStateDir).not.toBe("");
+      expect(existsSync(renderStateDir)).toBe(false);
+    } finally {
+      if (renderStateDir) {
+        rmSync(renderStateDir, { force: true, recursive: true });
+      }
+    }
   });
 
   it("renders independent startup help snapshots concurrently", async () => {
