@@ -1,62 +1,54 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  INTERNAL_RUNTIME_CONTEXT_BEGIN,
-  INTERNAL_RUNTIME_CONTEXT_END,
-  stripInternalRuntimeContext,
-} from "../agents/internal-runtime-context.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../auto-reply/heartbeat.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeAgentPlanSteps } from "../channels/streaming.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { buildAgentRunTerminalOutcome } from "./agent-run-terminal-outcome.js";
 import {
-  readFiniteNumber,
-  readString,
-  terminalHealthFor,
-  type SessionObserverState,
-} from "./session-observer-model.js";
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
+} from "./internal-runtime-context.js";
+
+export type SessionActivityNoteState = {
+  noteSequence: number;
+  notes: Array<{ sequence: number; text: string; bytes: number }>;
+  noteBytes: number;
+  itemStatuses: Map<string, string>;
+  assistantBuffer: string;
+  lastAssistantNote?: string;
+  planProgress?: { completed: number; total: number };
+};
 
 const MAX_NOTES = 40;
 const MAX_NOTE_BYTES = 8 * 1024;
+const DEFAULT_NOTE_MAX_CHARS = 360;
 const ASSISTANT_NOTE_MAX_CHARS = 240;
-const SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS = 4096;
+const ASSISTANT_BUFFER_MAX_CHARS = 4096;
+const MAX_ITEM_STATUSES = 160;
 
-/**
- * Assemble streamed assistant prose: strip complete runtime-context blocks,
- * then truncate without ever discarding an unmatched context BEGIN marker so
- * the eventual END still closes and strips the whole block. Accepted tradeoff:
- * a truncation boundary landing inside a split marker while the model echoes
- * >4 KB of context is treated as ordinary prose (flush stays redacted).
- */
-function assembleSessionObserverAssistantBuffer(value: string): string {
-  // Detect a still-open block on the RAW text: the stripper drops an
-  // unterminated marker together with its tail, which would leave the block
-  // body arriving in later deltas indistinguishable from ordinary prose.
+export function createSessionActivityNoteState(): SessionActivityNoteState {
+  return { noteSequence: 0, notes: [], noteBytes: 0, itemStatuses: new Map(), assistantBuffer: "" };
+}
+
+// Preserve an unmatched BEGIN while truncating so a later END can still strip the private block.
+function assembleAssistantBuffer(value: string, maxChars: number): string {
+  // Detect on raw text: stripping an open block would make later body deltas
+  // indistinguishable from ordinary prose.
   const openIndex = value.lastIndexOf(INTERNAL_RUNTIME_CONTEXT_BEGIN);
   const isOpen = openIndex !== -1 && !value.includes(INTERNAL_RUNTIME_CONTEXT_END, openIndex);
   if (!isOpen) {
-    return keepUtf16SafeTail(
-      stripInternalRuntimeContext(value),
-      SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-    );
+    return keepUtf16SafeTail(stripInternalRuntimeContext(value), maxChars);
   }
-  const head = keepUtf16SafeTail(
-    stripInternalRuntimeContext(value.slice(0, openIndex)),
-    SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-  );
+  const head = keepUtf16SafeTail(stripInternalRuntimeContext(value.slice(0, openIndex)), maxChars);
   const body = keepUtf16SafeTail(
     value.slice(openIndex + INTERNAL_RUNTIME_CONTEXT_BEGIN.length),
-    SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
+    maxChars,
   );
   return `${head}${INTERNAL_RUNTIME_CONTEXT_BEGIN}${body}`;
 }
 
-/** True while the buffer holds a still-streaming runtime-context block. */
-function assistantBufferHasOpenContext(value: string): boolean {
-  return value.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN);
-}
-
-/** Keep the newest chars without starting on the low half of a surrogate pair. */
 function keepUtf16SafeTail(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
@@ -69,14 +61,14 @@ function keepUtf16SafeTail(value: string, maxChars: number): string {
   return value.slice(start);
 }
 
-function sanitizeSessionObserverActivityText(value: string, maxChars: number): string {
+function sanitizeActivityText(value: string, maxChars: number): string {
   const normalized = redactToolPayloadText(stripInternalRuntimeContext(value))
     .replace(/\s+/gu, " ")
     .trim();
   return truncateUtf16Safe(normalized, maxChars);
 }
 
-function summarizeSessionObserverToolArgs(args: unknown): string {
+function summarizeToolArgs(args: unknown): string {
   if (!args || typeof args !== "object") {
     return "";
   }
@@ -106,9 +98,9 @@ function summarizeSessionObserverToolArgs(args: unknown): string {
   }
   try {
     if (Object.keys(summary).length > 0) {
-      return sanitizeSessionObserverActivityText(JSON.stringify(summary), 220);
+      return sanitizeActivityText(JSON.stringify(summary), 220);
     }
-    return sanitizeSessionObserverActivityText(
+    return sanitizeActivityText(
       `args: ${Object.keys(record).toSorted().slice(0, 8).join(", ")}`,
       220,
     );
@@ -117,8 +109,8 @@ function summarizeSessionObserverToolArgs(args: unknown): string {
   }
 }
 
-function addSessionObserverNote(state: SessionObserverState, raw: string): void {
-  const text = sanitizeSessionObserverActivityText(raw, 360);
+function addActivityNote(state: SessionActivityNoteState, raw: string, maxChars: number): void {
+  const text = sanitizeActivityText(raw, maxChars);
   if (!text) {
     return;
   }
@@ -136,17 +128,36 @@ function addSessionObserverNote(state: SessionObserverState, raw: string): void 
   }
 }
 
-export function flushSessionObserverAssistantNote(state: SessionObserverState): void {
-  // Assistant prose is redacted only as assembled text: per-fragment sanitizing
-  // cannot match secrets split across stream chunks, and raw fragments must not
-  // count toward the digest note threshold.
-  if (!state.assistantBuffer || assistantBufferHasOpenContext(state.assistantBuffer)) {
+function rememberItemStatus(
+  state: SessionActivityNoteState,
+  itemId: string,
+  status: string,
+  limit: number,
+): boolean {
+  if (state.itemStatuses.get(itemId) === status) {
+    return false;
+  }
+  state.itemStatuses.delete(itemId);
+  state.itemStatuses.set(itemId, status);
+  while (state.itemStatuses.size > limit) {
+    const oldest = state.itemStatuses.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    state.itemStatuses.delete(oldest);
+  }
+  return true;
+}
+
+export function flushSessionActivityAssistantNote(
+  state: SessionActivityNoteState,
+  noteMaxChars: number = DEFAULT_NOTE_MAX_CHARS,
+): void {
+  // Redact assembled prose so split secrets match and raw fragments do not count as notes.
+  if (!state.assistantBuffer || state.assistantBuffer.includes(INTERNAL_RUNTIME_CONTEXT_BEGIN)) {
     return;
   }
-  const sanitized = sanitizeSessionObserverActivityText(
-    state.assistantBuffer,
-    SESSION_OBSERVER_ASSISTANT_BUFFER_MAX_CHARS,
-  );
+  const sanitized = sanitizeActivityText(state.assistantBuffer, ASSISTANT_BUFFER_MAX_CHARS);
   const visible = keepUtf16SafeTail(sanitized, ASSISTANT_NOTE_MAX_CHARS).trim();
   if (!visible || visible === HEARTBEAT_TOKEN || visible === HEARTBEAT_TRANSCRIPT_PROMPT) {
     return;
@@ -155,26 +166,26 @@ export function flushSessionObserverAssistantNote(state: SessionObserverState): 
     return;
   }
   state.lastAssistantNote = visible;
-  addSessionObserverNote(state, `Assistant: ${visible}`);
+  addActivityNote(state, `Assistant: ${visible}`, noteMaxChars);
 }
 
-export function noteSessionObserverEvent(
-  state: SessionObserverState,
+export function noteSessionActivityEvent(
+  state: SessionActivityNoteState,
   event: AgentEventPayload,
-  rememberItemStatus: (state: SessionObserverState, itemId: string, status: string) => boolean,
+  noteMaxChars: number = DEFAULT_NOTE_MAX_CHARS,
 ): void {
   const data = event.data;
   switch (event.stream) {
     case "lifecycle": {
       const phase = data.phase;
       if (phase === "start") {
-        addSessionObserverNote(state, "Run started");
+        addActivityNote(state, "Run started", noteMaxChars);
       } else if (phase === "finishing") {
-        addSessionObserverNote(state, "Run is wrapping up");
+        addActivityNote(state, "Run is wrapping up", noteMaxChars);
       } else if (phase === "end" || phase === "error") {
         const health = terminalHealthFor(event);
         const error = readString(data.error);
-        addSessionObserverNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`);
+        addActivityNote(state, error ? `Run ${health}: ${error}` : `Run ${health}`, noteMaxChars);
       }
       return;
     }
@@ -185,8 +196,8 @@ export function noteSessionObserverEvent(
         return;
       }
       const name = readString(data.name) ?? "tool";
-      const args = summarizeSessionObserverToolArgs(data.args);
-      addSessionObserverNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`);
+      const args = summarizeToolArgs(data.args);
+      addActivityNote(state, args ? `Tool ${name}: ${args}` : `Tool ${name}`, noteMaxChars);
       return;
     }
     case "command_output": {
@@ -196,9 +207,10 @@ export function noteSessionObserverEvent(
       const title = readString(data.title) ?? readString(data.name) ?? "command";
       const exitCode = readFiniteNumber(data.exitCode);
       const status = readString(data.status) ?? (exitCode === 0 ? "completed" : "failed");
-      addSessionObserverNote(
+      addActivityNote(
         state,
         `${title}: ${status}${exitCode === undefined ? "" : ` (exit ${exitCode})`}`,
+        noteMaxChars,
       );
       return;
     }
@@ -212,10 +224,10 @@ export function noteSessionObserverEvent(
       if (!["running", "completed", "failed", "blocked"].includes(status)) {
         return;
       }
-      if (!rememberItemStatus(state, itemId, status)) {
+      if (!rememberItemStatus(state, itemId, status, MAX_ITEM_STATUSES)) {
         return;
       }
-      addSessionObserverNote(state, `${title}: ${status}`);
+      addActivityNote(state, `${title}: ${status}`, noteMaxChars);
       return;
     }
     case "plan": {
@@ -229,11 +241,11 @@ export function noteSessionObserverEvent(
       };
       for (const [index, step] of steps.entries()) {
         const itemId = `plan:${index}:${step.step}`;
-        if (!rememberItemStatus(state, itemId, step.status)) {
+        if (!rememberItemStatus(state, itemId, step.status, MAX_ITEM_STATUSES)) {
           continue;
         }
         const status = step.status === "in_progress" ? "running" : step.status;
-        addSessionObserverNote(state, `Plan: ${step.step}: ${status}`);
+        addActivityNote(state, `Plan: ${step.step}: ${status}`, noteMaxChars);
       }
       return;
     }
@@ -241,10 +253,11 @@ export function noteSessionObserverEvent(
       const full = readString(data.text);
       const delta = readString(data.delta);
       if (full) {
-        state.assistantBuffer = assembleSessionObserverAssistantBuffer(full);
+        state.assistantBuffer = assembleAssistantBuffer(full, ASSISTANT_BUFFER_MAX_CHARS);
       } else if (delta) {
-        state.assistantBuffer = assembleSessionObserverAssistantBuffer(
+        state.assistantBuffer = assembleAssistantBuffer(
           state.assistantBuffer + delta,
+          ASSISTANT_BUFFER_MAX_CHARS,
         );
       }
       return;
@@ -253,13 +266,37 @@ export function noteSessionObserverEvent(
       if (data.status !== "pending" && data.phase !== "requested") {
         return;
       }
-      addSessionObserverNote(
+      addActivityNote(
         state,
         `Waiting for approval: ${readString(data.title) ?? "user action"}`,
+        noteMaxChars,
       );
       break;
     }
     default:
       break;
   }
+}
+
+export function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+export function readFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+export function terminalHealthFor(event: AgentEventPayload): "done" | "failed" {
+  const phase = event.data.phase;
+  const outcome = buildAgentRunTerminalOutcome({
+    status: phase === "end" ? "ok" : "error",
+    error: event.data.error,
+    stopReason: event.data.stopReason,
+    livenessState: event.data.livenessState,
+    timeoutPhase: event.data.timeoutPhase,
+    providerStarted: event.data.providerStarted,
+    startedAt: event.data.startedAt,
+    endedAt: event.data.endedAt,
+  });
+  return outcome.reason === "completed" ? "done" : "failed";
 }

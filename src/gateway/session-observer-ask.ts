@@ -1,5 +1,6 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { flushSessionActivityAssistantNote } from "../agents/session-activity-notes.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   SessionObserverAskError,
@@ -10,7 +11,6 @@ import {
   type SessionObserverDeps,
   type SessionObserverState,
 } from "./session-observer-model.js";
-import { flushSessionObserverAssistantNote } from "./session-observer-notes.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
@@ -68,7 +68,7 @@ export function createSessionObserverAskRuntime(params: SessionObserverAskRuntim
   const getSnapshot = (sessionKey: string): SessionObserverSnapshot => {
     const state = params.states.get(sessionKey);
     if (state) {
-      flushSessionObserverAssistantNote(state);
+      flushSessionActivityAssistantNote(state);
       return {
         agentId: state.agentId,
         runId: state.runId,
