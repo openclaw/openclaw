@@ -1439,6 +1439,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "environment variable count ratchet",
       "max-lines suppression ratchet",
       "changelog attributions",
       "guarded extension wildcard re-exports",
@@ -1715,6 +1716,7 @@ describe("scripts/changed-lanes", () => {
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "docs/.generated/config-baseline.counts.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
     ]);
@@ -2092,6 +2094,27 @@ describe("scripts/changed-lanes", () => {
     }
   });
 
+  it("runs the native state schema guard for either contract owner", () => {
+    for (const changedPath of [
+      "apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
+      "src/state/openclaw-state-db-contract.ts",
+    ]) {
+      const plan = createChangedCheckPlan(detectChangedLanes([changedPath]), {
+        env: { PATH: "/usr/bin" },
+        platform: "linux",
+        swiftlintAvailable: false,
+      });
+
+      expect(plan.commands).toContainEqual(
+        expect.objectContaining({
+          name: "native state schema version guard",
+          bin: "node",
+          args: ["scripts/check-native-state-schema-version.mjs"],
+        }),
+      );
+    }
+  });
+
   it("runs macOS app CI tests for macOS packaging scripts and owner tests", () => {
     for (const changedPath of [
       "scripts/codesign-mac-app.sh",
@@ -2290,6 +2313,21 @@ describe("scripts/changed-lanes", () => {
     expect(
       stagedPlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
     ).toMatchObject({ args: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"] });
+  });
+
+  it("adds the environment variable count ratchet for production source", () => {
+    const result = detectChangedLanes(["src/runtime.ts"]);
+    const worktreePlan = createChangedCheckPlan(result, { base: "main" });
+    const stagedPlan = createChangedCheckPlan(result, { staged: true });
+
+    expect(
+      worktreePlan.commands.find(
+        (command) => command.name === "environment variable count ratchet",
+      ),
+    ).toMatchObject({ args: ["check:env-var-count", "--base", "main"] });
+    expect(
+      stagedPlan.commands.find((command) => command.name === "environment variable count ratchet"),
+    ).toMatchObject({ args: ["check:env-var-count", "--staged", "--base", "HEAD"] });
   });
 
   it("keeps the temp creation report out of non-test changed paths", () => {

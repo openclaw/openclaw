@@ -24,6 +24,7 @@ import type {
   DurableFinalDeliveryRequirements,
   OutboundDeliveryQueuePolicy,
 } from "../../infra/outbound/deliver.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import type { MessageReceipt } from "../message/types.js";
@@ -134,14 +135,7 @@ export type CommandFacts = {
 };
 
 /** Inbound media facts supplied to the agent context. */
-export type InboundMediaFacts = {
-  path?: string;
-  url?: string;
-  contentType?: string;
-  kind?: "image" | "video" | "audio" | "document" | "unknown";
-  transcribed?: boolean;
-  messageId?: string;
-};
+export type InboundMediaFacts = Omit<MediaFact, "workspaceDir">;
 
 type MaybePromise<T> = T | Promise<T>;
 
@@ -282,13 +276,15 @@ export type AssembledChannelTurn = {
   history?: ChannelTurnHistoryFinalizeOptions;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
   /** Canonical adoption lifecycle threaded into replyOptions. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
 };
 
-type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly";
+type PreparedChannelTurnDispatchSkipReason = "botLoopProtection" | "observeOnly" | "outboundEcho";
 
 /** Lifecycle ownership declared alongside an already-prepared dispatch runner. */
 type PreparedChannelTurnDispatchLifecycle = {
@@ -316,6 +312,8 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
+  /** Transport-defined outbound source identity, such as a webhook id. */
+  outboundEchoSourceId?: string;
   log?: (event: ChannelTurnLogEvent) => void;
   messageId?: string;
 };

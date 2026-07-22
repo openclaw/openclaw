@@ -87,8 +87,7 @@ function resolveWebMonitorConfigSnapshot(params: {
       ...params.cfg.channels,
       whatsapp: {
         ...params.cfg.channels?.whatsapp,
-        ackReaction: account.ackReaction,
-        messagePrefix: account.messagePrefix,
+        responsePrefix: account.messagePrefix,
         allowFrom: account.allowFrom,
         groupAllowFrom: account.groupAllowFrom,
         groupPolicy: account.groupPolicy,
@@ -181,7 +180,7 @@ export async function monitorWebChannel(
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
-  const socketTiming = resolveWhatsAppSocketTiming(cfg, tuning.socketTiming);
+  const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
   const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit =
     account.historyLimit ??

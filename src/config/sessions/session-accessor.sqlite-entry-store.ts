@@ -25,6 +25,7 @@ import {
 import {
   normalizeSqliteStatus,
   parseSqliteSessionEntryJson as parseSessionEntryRow,
+  serializeSqliteSessionCreatorIdentity,
 } from "./session-accessor.sqlite-status.js";
 import {
   readTranscriptMutationStateInTransaction,
@@ -227,6 +228,15 @@ export function readSqliteSessionEntryCount(database: OpenClawAgentDatabase): nu
   );
   const count = row?.entry_count;
   return count === undefined || count === null ? 0 : normalizeSqliteNumber(count);
+}
+
+/** Lists persisted session keys without materializing their entry payloads. */
+export function readSqliteSessionEntryKeys(database: OpenClawAgentDatabaseReader): string[] {
+  const db = getSessionKysely(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select("session_key").orderBy("session_key", "asc"),
+  ).rows.map((row) => row.session_key);
 }
 
 export function resolveSqliteLifecyclePrimaryEntry(
@@ -478,6 +488,7 @@ export function writeSessionEntry(
         entry_json: JSON.stringify(normalizedEntry),
         updated_at: updatedAt,
         status: normalizeSqliteStatus(normalizedEntry.status),
+        created_by_json: serializeSqliteSessionCreatorIdentity(normalizedEntry.createdBy),
       })
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
@@ -485,6 +496,7 @@ export function writeSessionEntry(
           entry_json: JSON.stringify(normalizedEntry),
           updated_at: updatedAt,
           status: normalizeSqliteStatus(normalizedEntry.status),
+          created_by_json: serializeSqliteSessionCreatorIdentity(normalizedEntry.createdBy),
         }),
       ),
   );

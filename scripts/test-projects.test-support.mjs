@@ -24,7 +24,10 @@ import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-path
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
-import { isMatrixExtensionRoot } from "../test/vitest/vitest.extension-matrix-paths.mjs";
+import {
+  isMatrixExtensionRoot,
+  matrixExtensionTestRoots,
+} from "../test/vitest/vitest.extension-matrix-paths.mjs";
 import { isMattermostExtensionRoot } from "../test/vitest/vitest.extension-mattermost-paths.mjs";
 import { isMediaExtensionRoot } from "../test/vitest/vitest.extension-media-paths.mjs";
 import { isMemoryExtensionRoot } from "../test/vitest/vitest.extension-memory-paths.mjs";
@@ -67,6 +70,7 @@ import {
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
 import { getChangedPathFacts } from "./lib/changed-path-facts.mjs";
+import { createExtensionTestProcessTargetChunks } from "./lib/extension-test-plan.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
 import {
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
@@ -427,7 +431,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
 ]);
 const PLUGIN_SDK_ENTRY_METADATA_TEST_TARGETS = [
   "src/plugins/contracts/plugin-sdk-index.bundle.test.ts",
-  "src/plugins/contracts/plugin-sdk-index.test.ts",
   "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
   "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
   "src/plugins/contracts/extension-package-project-boundaries.test.ts",
@@ -471,15 +474,19 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   [
     ".github/workflows/ci-build-artifacts-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-arm-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-testbox.yml",
-    ["test/scripts/changed-lanes.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/changed-lanes.test.ts",
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/ci.yml",
@@ -520,14 +527,26 @@ const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
     ".github/workflows/ios-periphery-comment.yml",
     ["test/scripts/ios-periphery-comment-workflow.test.ts"],
   ],
-  [".github/workflows/ios-periphery.yml", ["test/scripts/ios-periphery-comment-workflow.test.ts"]],
+  [
+    ".github/workflows/ios-periphery.yml",
+    [
+      "test/scripts/ios-periphery-comment-workflow.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
+  ],
   [
     ".github/workflows/macos-periphery.yml",
-    ["test/scripts/ios-periphery-comment-workflow.test.ts"],
+    [
+      "test/scripts/ios-periphery-comment-workflow.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
   ],
   [
     ".github/workflows/shared-openclawkit-periphery.yml",
-    ["test/scripts/periphery-intersection.test.ts"],
+    [
+      "test/scripts/periphery-intersection.test.ts",
+      "test/scripts/periphery-scope-workflows.test.ts",
+    ],
   ],
   [
     ".github/workflows/live-media-runner-image.yml",
@@ -698,7 +717,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".github/actions/ensure-base-commit/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+    [
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",
@@ -706,6 +729,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     ".github/actions/setup-node-env/sticky-importers.sh",
+    ["test/scripts/ci-workflow-guards.test.ts"],
+  ],
+  [
+    ".github/actions/setup-node-env/verify-importers.mjs",
     ["test/scripts/ci-workflow-guards.test.ts"],
   ],
   [
@@ -769,7 +796,14 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/ci-changed-node-test-plan.mjs", ["test/scripts/ci-changed-node-test-plan.test.ts"]],
   ["scripts/check.mjs", ["test/scripts/check.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
+  ["scripts/check-env-var-count.mjs", ["test/scripts/check-env-var-count.test.ts"]],
+  ["scripts/check-env-var-count.d.mts", ["test/scripts/check-env-var-count.test.ts"]],
+  ["config/env-var-count-budget.txt", ["test/scripts/check-env-var-count.test.ts"]],
   ["scripts/check-max-lines-ratchet.mjs", ["test/scripts/check-max-lines-ratchet.test.ts"]],
+  [
+    "scripts/check-native-state-schema-version.mjs",
+    ["test/scripts/check-native-state-schema-version.test.ts"],
+  ],
   ["config/max-lines-baseline.txt", ["test/scripts/check-max-lines-ratchet.test.ts"]],
   [".oxlintrc.json", ["test/scripts/oxlint-config.test.ts"]],
   [
@@ -1079,6 +1113,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/github/resolve-openclaw-ref.sh", ["test/scripts/resolve-openclaw-ref.test.ts"]],
   ["scripts/ci-hydrate-testbox-env.sh", ["test/scripts/ci-hydrate-testbox-env.test.ts"]],
+  ["scripts/install-trufflehog.sh", ["test/scripts/install-trufflehog.test.ts"]],
   [
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
@@ -1271,6 +1306,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/lib/format-generated-module.mjs", ["test/scripts/format-generated-module.test.ts"]],
   ["scripts/lib/ios-version.ts", ["test/scripts/ios-version.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
+  ["scripts/live-docker-stage-private-sdk-exports.mjs", ["test/scripts/live-docker-stage.test.ts"]],
+  [
+    "scripts/lib/local-heavy-check-runtime.d.mts",
+    ["test/scripts/local-heavy-check-runtime.test.ts"],
+  ],
   ["scripts/lib/local-heavy-check-runtime.mjs", ["test/scripts/local-heavy-check-runtime.test.ts"]],
   ["scripts/lib/kova-report-gate.mjs", ["test/scripts/kova-report-gate.test.ts"]],
   ["scripts/lib/kova-report-publish-files.mjs", ["test/scripts/kova-report-publish-files.test.ts"]],
@@ -1511,6 +1551,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-oxlint-shards.mjs", ["test/scripts/run-oxlint.test.ts"]],
+  ["scripts/run-lint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-with-env.mjs", ["test/scripts/run-with-env.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   [
@@ -2175,6 +2216,10 @@ for (const sourcePath of CROSS_OS_RELEASE_CHECK_SOURCE_PATHS) {
 const TOOLING_DECLARATION_SOURCE_MIRRORS = [
   ["scripts/build-stamp.d.mts", "scripts/build-stamp.mjs"],
   ["scripts/ci-changed-scope.d.mts", "scripts/ci-changed-scope.mjs"],
+  [
+    "scripts/check-native-state-schema-version.d.mts",
+    "scripts/check-native-state-schema-version.mjs",
+  ],
   ["scripts/copy-bundled-plugin-metadata.d.mts", "scripts/copy-bundled-plugin-metadata.mjs"],
   ["scripts/docs-link-audit.d.mts", "scripts/docs-link-audit.mjs"],
   ["scripts/openclaw-npm-resume-run.d.mts", "scripts/openclaw-npm-resume-run.mjs"],
@@ -2690,6 +2735,22 @@ function createBroadToolingScriptPlans({ config, forwardedArgs, includePatterns,
         watchMode,
       }))
     : null;
+}
+
+function createBoundedExtensionPlans({ config, forwardedArgs, roots, watchMode }) {
+  if (watchMode) {
+    return null;
+  }
+  const chunks = createExtensionTestProcessTargetChunks(config, roots, forwardedArgs);
+  if (chunks.length <= 1) {
+    return null;
+  }
+  return chunks.map((includePatterns) => ({
+    config,
+    forwardedArgs,
+    includePatterns,
+    watchMode,
+  }));
 }
 
 function expandBroadToolingScriptTargets(targetArgs, cwd, watchMode) {
@@ -4391,12 +4452,19 @@ export function buildVitestRunPlans(
         ? [FULL_EXTENSIONS_VITEST_CONFIG]
         : listFullExtensionVitestProjectConfigs();
       for (const config of configs) {
-        plans.push({
+        const plan = {
           config,
           forwardedArgs: nonTargetArgs,
           includePatterns: null,
           watchMode,
+        };
+        const boundedPlans = createBoundedExtensionPlans({
+          config,
+          forwardedArgs: nonTargetArgs,
+          roots: matrixExtensionTestRoots,
+          watchMode,
         });
+        plans.push(...(boundedPlans ?? [plan]));
       }
       continue;
     }
@@ -4429,6 +4497,29 @@ export function buildVitestRunPlans(
     });
     if (broadToolingScriptPlans) {
       plans.push(...broadToolingScriptPlans);
+      continue;
+    }
+    const boundedExtensionRoots = grouped.flatMap((targetArg) => {
+      const root = toRepoRelativeTarget(targetArg, cwd);
+      return isMatrixExtensionRoot(root) && isExistingDirectoryTarget(targetArg, cwd) ? [root] : [];
+    });
+    const boundedRootsCoverGroupedTargets = grouped.every((targetArg) => {
+      const relativeTarget = toRepoRelativeTarget(targetArg, cwd);
+      return boundedExtensionRoots.some(
+        (root) => relativeTarget === root || relativeTarget.startsWith(`${root}/`),
+      );
+    });
+    const boundedExtensionPlans =
+      boundedExtensionRoots.length > 0 && boundedRootsCoverGroupedTargets
+        ? createBoundedExtensionPlans({
+            config,
+            forwardedArgs: forwardedPlanArgs,
+            roots: boundedExtensionRoots,
+            watchMode,
+          })
+        : null;
+    if (boundedExtensionPlans) {
+      plans.push(...boundedExtensionPlans);
       continue;
     }
     plans.push({
@@ -4497,6 +4588,12 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
             resolveGatewayServerFullSuiteTargets(cwd),
             GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT,
           );
+        } else if (config === EXTENSION_MATRIX_VITEST_CONFIG) {
+          chunks = createExtensionTestProcessTargetChunks(
+            config,
+            matrixExtensionTestRoots,
+            forwardedArgs,
+          );
         }
         if (chunks.length > 0) {
           return chunks.map((targets) => ({
@@ -4523,13 +4620,11 @@ function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   if (hasConservativeVitestWorkerBudget(env)) {
     return false;
   }
-  return (
-    env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && env.CI !== "true" && env.GITHUB_ACTIONS !== "true"
-  );
+  return env.OPENCLAW_TEST_PROJECTS_SERIAL !== "1" && !isCiLikeEnv(env);
 }
 
 function shouldExpandLocalFullSuiteShardsByDefault(env = process.env) {
-  return env.CI !== "true" && env.GITHUB_ACTIONS !== "true";
+  return !isCiLikeEnv(env);
 }
 
 function parsePositiveInt(value, label) {
@@ -4596,12 +4691,15 @@ function sanitizeVitestCachePathSegment(value) {
 
 export function applyParallelVitestCachePaths(specs, params = {}) {
   const baseEnv = params.env ?? process.env;
-  if (baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
-    return specs;
-  }
   const cwd = params.cwd ?? process.cwd();
+  const configuredCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim() || undefined;
+  // CI publishes a persistent cache root, not a writer-safe leaf. Every
+  // concurrent Vitest process still needs its own live directory below it.
+  const cacheRoot =
+    configuredCacheRoot ?? path.join(cwd, "node_modules", ".experimental-vitest-cache");
   return specs.map((spec, index) => {
-    if (spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim()) {
+    const specCachePath = spec.env?.[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
+    if (specCachePath && specCachePath !== configuredCacheRoot) {
       return spec;
     }
     const cacheSegment = sanitizeVitestCachePathSegment(`${index}-${spec.config}`);
@@ -4609,12 +4707,7 @@ export function applyParallelVitestCachePaths(specs, params = {}) {
       ...spec,
       env: {
         ...spec.env,
-        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(
-          cwd,
-          "node_modules",
-          ".experimental-vitest-cache",
-          cacheSegment,
-        ),
+        [FS_MODULE_CACHE_PATH_ENV_KEY]: path.join(cacheRoot, cacheSegment),
       },
     };
   });

@@ -3,8 +3,9 @@ import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
-import type { ConfigUiHints } from "../../api/types.ts";
+import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import {
   normalizeChatFollowUpMode,
@@ -35,6 +36,7 @@ import {
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
 import {
   LOBSTER_PET_PALETTES,
   canonicalLobsterLook,
@@ -53,6 +55,10 @@ import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import { renderNotificationsSection, type WebPushUiState } from "./notifications-section.ts";
+import {
+  renderSessionObserverSettings,
+  type SessionObserverModelSelection,
+} from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
@@ -68,8 +74,9 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "configView.textSizes.xxl",
 };
 
-type SettingsMicrophoneState = {
+type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -97,6 +104,7 @@ export type ConfigViewState = {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  expandedAdvancedSections: Set<string>;
   lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
   schemaAnalysisCache?: SchemaAnalysisCache;
@@ -111,6 +119,7 @@ export function createConfigViewState(): ConfigViewState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    expandedAdvancedSections: new Set(),
     lastCustomThemeImportFocusToken: null,
     lastConfigContextKey: null,
     lastFormModeForScroll: null,
@@ -175,6 +184,19 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  sidebarLiveActivity: boolean;
+  setSidebarLiveActivity: (enabled: boolean) => void;
+  showAdvancedSettings: boolean;
+  setShowAdvancedSettings: (enabled: boolean) => void;
+  forceAdvancedSection?: string | null;
+  sessionObserverEnabled?: boolean;
+  sessionObserverUtilityModel?: string;
+  sessionObserverResolvedModel?: SystemInfoResult["defaultAgentUtilityModel"];
+  sessionObserverModels?: readonly ModelCatalogEntry[];
+  sessionObserverModelsUnavailable?: boolean;
+  sessionObserverDisabled?: boolean;
+  setSessionObserverEnabled?: (enabled: boolean) => void;
+  setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
   lobsterPetVisits?: boolean;
   setLobsterPetVisits?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
@@ -186,9 +208,14 @@ export type ConfigProps = {
   setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
   catalogOpenTarget: CatalogOpenTarget;
   setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
-  microphone?: SettingsMicrophoneState;
+  microphone?: SettingsMediaDeviceState;
   onMicrophoneRefresh?: () => void;
   onMicrophoneSelect?: (deviceId: string) => void;
+  camera?: SettingsMediaDeviceState;
+  onCameraRefresh?: () => void;
+  onCameraSelect?: (deviceId: string) => void;
+  composerHoldToRecord?: boolean;
+  setComposerHoldToRecord?: (enabled: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -909,50 +936,76 @@ function focusCustomThemeImportInput() {
   });
 }
 
-function renderSettingsMicrophoneField(props: ConfigProps) {
-  const microphone = props.microphone;
-  if (!microphone || !props.onMicrophoneSelect) {
+function renderSettingsMediaDeviceField(options: {
+  state: SettingsMediaDeviceState | undefined;
+  title: string;
+  systemDefaultLabel: string;
+  emptyLabel: string;
+  fallbackLabel: (number: number) => string;
+  dataAttribute: "microphone" | "camera";
+  onRefresh: (() => void) | undefined;
+  onSelect: ((deviceId: string) => void) | undefined;
+}) {
+  const state = options.state;
+  if (!state || !options.onSelect) {
     return nothing;
   }
-  const selectedDeviceId = microphone.selectedDeviceId.trim();
-  const selectedDeviceKnown = microphone.devices.some(
-    (device) => device.deviceId === selectedDeviceId,
-  );
-  const options = [
-    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
-    ...microphone.devices.map((device) => ({ label: device.label, value: device.deviceId })),
+  const selectedDeviceId = state.selectedDeviceId.trim();
+  const selectedDeviceKnown = state.devices.some((device) => device.deviceId === selectedDeviceId);
+  const selectOptions = [
+    { label: options.systemDefaultLabel, value: "" },
+    ...state.devices.map((device) => ({ label: device.label, value: device.deviceId })),
     // A remembered device that is unplugged right now stays selectable so the
     // choice survives until the user picks something else.
     ...(selectedDeviceId && !selectedDeviceKnown
       ? [
           {
-            label: t("chat.composer.microphoneFallback", {
-              number: String(microphone.devices.length + 1),
-            }),
+            label: options.fallbackLabel(state.devices.length + 1),
             value: selectedDeviceId,
           },
         ]
       : []),
   ];
-  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
-  const note = microphone.error
-    ? html`<span role="alert">${microphone.error}</span>`
-    : !microphone.loading && microphone.devices.length === 0
-      ? t("chat.composer.noMicrophones")
+  const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
+  const note = state.error
+    ? html`<span role="alert">${state.error}</span>`
+    : !state.loading && state.devices.length === 0
+      ? options.emptyLabel
       : undefined;
   return renderSettingsRow({
-    title: t("chat.composer.microphoneInput"),
+    title: options.title,
     description: note,
     control: html`
       <select
-        class="settings-select"
-        data-settings-microphone
-        aria-label=${t("chat.composer.microphoneInput")}
+        class="settings-select settings-select--media-device"
+        data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
+        data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
+        aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
-          props.onMicrophoneSelect?.((event.currentTarget as HTMLSelectElement).value)}
+          options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
-        ${options.map(
+        ${selectOptions.map(
           (option) => html`
             <option value=${option.value} ?selected=${option.value === selectedDeviceId}>
               ${option.label}
@@ -964,12 +1017,38 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
         type="button"
         class="btn btn--sm btn--icon"
         aria-label=${refreshLabel}
-        ?disabled=${microphone.loading}
-        @click=${() => props.onMicrophoneRefresh?.()}
+        ?disabled=${state.loading}
+        @click=${() => options.onRefresh?.()}
       >
-        ${microphone.loading ? icons.loader : icons.refresh}
+        ${state.loading ? icons.loader : icons.refresh}
       </button>
     `,
+  });
+}
+
+function renderSettingsMicrophoneField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.microphone,
+    title: t("chat.composer.microphoneInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultMicrophone"),
+    emptyLabel: t("chat.composer.noMicrophones"),
+    fallbackLabel: (number) => t("chat.composer.microphoneFallback", { number: String(number) }),
+    dataAttribute: "microphone",
+    onRefresh: props.onMicrophoneRefresh,
+    onSelect: props.onMicrophoneSelect,
+  });
+}
+
+function renderSettingsCameraField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.camera,
+    title: t("chat.composer.cameraInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultCamera"),
+    emptyLabel: t("chat.composer.noCameras"),
+    fallbackLabel: (number) => t("chat.composer.cameraFallback", { number: String(number) }),
+    dataAttribute: "camera",
+    onRefresh: props.onCameraRefresh,
+    onSelect: props.onCameraSelect,
   });
 }
 
@@ -1047,7 +1126,15 @@ function renderChatPreferencesSection(props: ConfigProps) {
           ],
           onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
         })}
-        ${renderSettingsMicrophoneField(props)}
+        ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
+        ${props.setComposerHoldToRecord
+          ? renderSettingsToggleRow({
+              title: t("chat.composer.holdToRecordSetting"),
+              description: t("chat.composer.holdToRecordSettingDescription"),
+              checked: props.composerHoldToRecord !== false,
+              onChange: props.setComposerHoldToRecord,
+            })
+          : nothing}
       </div>
     </section>
   `;
@@ -1083,6 +1170,11 @@ function renderLobsterPetSection(props: ConfigProps) {
             : t("quickSettings.appearance.lobsterSoundsOff"),
           checked: lobsterPetSounds,
           onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onAct: (enabled) => {
+            if (enabled) {
+              previewLobsterChirp();
+            }
+          },
         })}
         ${renderSettingsRow({
           title: t("quickSettings.appearance.lobsterdex"),
@@ -1096,6 +1188,7 @@ function renderLobsterPetSection(props: ConfigProps) {
               ${LOBSTER_PET_PALETTES.map((palette) => {
                 const entry = getLobsterdexEntries().get(palette.id);
                 const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
                 const title = !seen
                   ? "?"
                   : entry.firstSeenAt !== null
@@ -1110,9 +1203,12 @@ function renderLobsterPetSection(props: ConfigProps) {
                       ? ""
                       : "lobsterdex__mini--unseen"}"
                     style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                    title=${title}
+                    title=${shinySeen ? `${title} ✦` : title}
                   >
                     ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
                   </span>
                 `;
               })}
@@ -1120,6 +1216,41 @@ function renderLobsterPetSection(props: ConfigProps) {
           `,
         })}
       </div>
+    </section>
+  `;
+}
+
+function renderSidebarPreferencesSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
+      </div>
+      <p class="settings-section__desc">
+        ${t("configView.sidebarPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.liveActivity"),
+          description: t("configView.sidebarPrefs.liveActivityHint"),
+          checked: props.sidebarLiveActivity,
+          onChange: props.setSidebarLiveActivity,
+        })}
+      </div>
+      <div class="settings-section__header settings-section__header--subsection">
+        <h3 class="settings-section__heading">${t("configView.sessionObserver.title")}</h3>
+      </div>
+      <p class="settings-section__desc">${t("configView.sessionObserver.hint")}</p>
+      ${renderSessionObserverSettings({
+        enabled: props.sessionObserverEnabled !== false,
+        utilityModel: props.sessionObserverUtilityModel,
+        resolvedUtilityModel: props.sessionObserverResolvedModel,
+        models: props.sessionObserverModels ?? [],
+        modelsUnavailable: props.sessionObserverModelsUnavailable === true,
+        disabled: props.sessionObserverDisabled === true,
+        onEnabledChange: (enabled) => props.setSessionObserverEnabled?.(enabled),
+        onUtilityModelChange: (selection) => props.setSessionObserverUtilityModel?.(selection),
+      })}
     </section>
   `;
 }
@@ -1318,7 +1449,8 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
-      ${renderLobsterPetSection(props)} ${renderChatPreferencesSection(props)}
+      ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
+      ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
         <div class="settings-section__header">
@@ -1425,6 +1557,7 @@ function resetConfigEphemeralState(viewState: ConfigViewState) {
   viewState.envRevealed = false;
   viewState.validityDismissed = false;
   viewState.revealedSensitivePaths.clear();
+  viewState.expandedAdvancedSections.clear();
   viewState.lastCustomThemeImportFocusToken = null;
   viewState.rawDiffCache = undefined;
 }
@@ -1760,7 +1893,9 @@ export function renderConfig(props: ConfigProps) {
       })
     : nothing;
 
-  const showToolbar = showModeToggle || showSectionTabs || autoSaveStatus !== nothing;
+  const showAdvancedToggle = formMode === "form";
+  const showToolbar =
+    showModeToggle || showSectionTabs || showAdvancedToggle || autoSaveStatus !== nothing;
   const applyBanner = renderConfigApplyBanner({
     needsApply: props.needsApply,
     applying: props.applying,
@@ -1815,6 +1950,19 @@ export function renderConfig(props: ConfigProps) {
                   `
                 : nothing}
               ${sectionTabs}
+              ${showAdvancedToggle
+                ? html`
+                    <button
+                      class="btn btn--sm config-show-advanced ${props.showAdvancedSettings
+                        ? "active"
+                        : ""}"
+                      aria-pressed=${props.showAdvancedSettings ? "true" : "false"}
+                      @click=${() => props.setShowAdvancedSettings(!props.showAdvancedSettings)}
+                    >
+                      ${t("configForm.showAdvanced")}
+                    </button>
+                  `
+                : nothing}
               <div class="config-toolbar__status" role="status" aria-live="polite">
                 ${autoSaveStatus}
               </div>
@@ -1899,6 +2047,17 @@ export function renderConfig(props: ConfigProps) {
                       onPatch: props.onFormPatch,
                       activeSection: props.activeSection,
                       activeSubsection: effectiveSubsection,
+                      showAdvanced: props.showAdvancedSettings,
+                      expandedAdvancedSections: viewState.expandedAdvancedSections,
+                      forceAdvancedSection: props.forceAdvancedSection,
+                      onAdvancedSectionToggle: (section, expanded) => {
+                        if (expanded) {
+                          viewState.expandedAdvancedSections.add(section);
+                        } else {
+                          viewState.expandedAdvancedSections.delete(section);
+                        }
+                        requestUpdate();
+                      },
                       sectionActions:
                         props.activeSection === "env"
                           ? html`

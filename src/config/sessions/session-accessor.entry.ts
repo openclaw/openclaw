@@ -11,6 +11,7 @@ import { resolveStorePath } from "./paths.js";
 import { clearPluginOwnedSessionState } from "./plugin-host-cleanup.js";
 import {
   listSqliteSessionEntries,
+  listSqliteSessionEntriesReadOnly,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
   loadSqliteSessionEntryReadOnly,
@@ -162,10 +163,9 @@ export function resolveSessionEntryCandidateTarget(
     env: scope.env,
   });
   const store = Object.fromEntries(
-    listSessionEntries({ agentId: scope.agentId, storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesReadOnly({ agentId: scope.agentId, storePath }).map(
+      ({ sessionKey, entry }) => [sessionKey, entry],
+    ),
   );
   for (const candidateKey of uniqueStrings(scope.candidateKeys.map((key) => key.trim()))) {
     if (!candidateKey) {
@@ -317,6 +317,16 @@ export function listSessionEntries(scope: SessionEntryListScope = {}): SessionEn
     return openSessionEntryReadView(scope).entries();
   }
   return listSqliteSessionEntries(scope);
+}
+
+/**
+ * Health/status introspection must not join the writable lifecycle or register databases;
+ * doing so churns fleet-wide agent handles on every health tick.
+ */
+export function listSessionEntriesReadOnly(
+  scope: SessionEntryListScope = {},
+): SessionEntrySummary[] {
+  return listSqliteSessionEntriesReadOnly(scope);
 }
 
 /**

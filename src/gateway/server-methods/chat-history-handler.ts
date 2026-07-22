@@ -1,5 +1,9 @@
 // Read-side chat handlers own history projection, startup metadata, and message lookup.
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -33,7 +37,7 @@ import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   listAgentsForGateway,
   resolveSessionModelRef,
   resolveSessionStoreKey,
@@ -164,7 +168,10 @@ async function buildChatStartupMetadataResult(params: {
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
-      preloadedCatalog: params.modelCatalog,
+      preloadedCatalog: {
+        agentId: params.agentId,
+        snapshot: params.modelCatalog,
+      },
       ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
   } catch (err) {
@@ -179,7 +186,7 @@ async function buildChatStartupModelCatalogProjection(params: {
   cfg: OpenClawConfig;
   snapshot: ModelCatalogSnapshot;
   sessionAgentId: string;
-  sessionEntry: ReturnType<typeof loadSessionEntry>["entry"];
+  sessionEntry: ReturnType<typeof loadSessionEntryReadOnly>["entry"];
   defaultAgentId: string;
   includeAgentsList: boolean;
 }) {
@@ -286,6 +293,7 @@ async function handleChatHistoryRequest({
   params,
   respond,
   context,
+  client,
   method,
   includeAgentsList,
   includeMetadata,
@@ -344,7 +352,7 @@ async function handleChatHistoryRequest({
     agentId: agentIdOverride,
   });
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(
     sessionKey,
     sessionLoadOptions,
   );
@@ -587,13 +595,15 @@ async function handleChatHistoryRequest({
     ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
     ...(includeAgentsList
       ? {
-          agentsList: listAgentsForGateway(
-            cfg,
-            modelCatalog,
-            startupCatalogProjection
+          agentsList: listAgentsForGateway(cfg, modelCatalog, {
+            ...(startupCatalogProjection
               ? { modelCatalogByAgentId: startupCatalogProjection.modelCatalogByAgentId }
-              : undefined,
-          ),
+              : {}),
+            includeSystem: hasGatewayClientCap(
+              client?.connect.caps,
+              GATEWAY_CLIENT_CAPS.AGENT_KIND,
+            ),
+          }),
         }
       : {}),
     ...(startupMetadata ? { metadata: startupMetadata } : {}),

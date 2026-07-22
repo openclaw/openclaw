@@ -77,7 +77,7 @@ const CRON_ACTIONS = [
 
 const CRON_SCHEDULE_KINDS = ["at", "every", "cron"] as const;
 const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
-const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn"] as const;
+const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
 const CRON_RUN_MODES = ["due", "force"] as const;
 
@@ -128,9 +128,11 @@ function cronPayloadObjectSchema(params: {
       kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
       text: Type.Optional(Type.String({ description: "systemEvent text" })),
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
+      script: Type.Optional(Type.String({ description: "Headless code-mode script" })),
       model: params.model,
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
       timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
+      toolBudget: optionalPositiveIntegerSchema({ description: "Maximum script tool calls" }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       fallbacks: params.fallbacks,
@@ -163,6 +165,17 @@ function createCronScheduleSchema(): TSchema {
           }),
         ),
         staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
+        command: Type.Optional(
+          Type.Array(Type.String({ minLength: 1 }), {
+            minItems: 1,
+            description: "Supervised source argv (kind=stream; requires cron.triggers.enabled)",
+          }),
+        ),
+        cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
+        mode: optionalStringEnum(["line", "match"] as const),
+        match: Type.Optional(Type.String({ description: "Regex source (stream match mode)" })),
+        batchMs: optionalNonNegativeIntegerSchema(),
+        maxBatchBytes: optionalNonNegativeIntegerSchema(),
       },
       { additionalProperties: true },
     ),
@@ -737,8 +750,9 @@ ADD JOB:
 Required: schedule,payload. enabled default true. trigger only every/cron.
 
 TARGET/PAYLOAD:
-- main => systemEvent {kind:"systemEvent",text:"..."}; systemEvent defaults main.
+- main => systemEvent {kind:"systemEvent",text:"..."} or script; systemEvent defaults main.
 - isolated/current/session:<id> => agentTurn {kind:"agentTurn",message:"...",model?,thinking?,timeoutSeconds?}; agentTurn defaults isolated. timeoutSeconds=0 means none.
+- script {kind:"script",script:"...",timeoutSeconds?,toolBudget?} supports main or isolated only and requires cron.triggers.enabled.
 - current binds caller session at creation. session:<id> is persistent. Prefer isolated unless user explicitly wants current binding.
 
 SCHEDULE:

@@ -54,6 +54,7 @@ import {
   type ToolCall,
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -126,7 +127,7 @@ function resolveAdaptiveBedrockMaxTokens(
 }
 
 /** Stream a Bedrock Converse request using Bedrock-specific options. */
-export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
+const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
   context: Context,
   options: BedrockOptions = {},
@@ -400,7 +401,11 @@ function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
   options?: SimpleStreamOptions,
 ): BedrockOptions {
-  const base = buildBaseOptions(model, options, undefined);
+  const bedrockOptions = options as BedrockOptions | undefined;
+  const base = {
+    ...bedrockOptions,
+    ...buildBaseOptions(model, options, undefined),
+  };
   if (requiresMandatoryAdaptiveThinking(model)) {
     return {
       ...base,
@@ -1188,7 +1193,12 @@ function createImageBlock(mimeType: string, data: string) {
       throw new Error(`Unknown image type: ${mimeType}`);
   }
 
-  const binaryString = atob(data);
+  // Validate before portable decoding so browser runtimes keep working without leaking atob errors.
+  const canonicalBase64 = canonicalizeBase64(data);
+  if (!canonicalBase64) {
+    throw new Error("Amazon Bedrock image content has malformed base64");
+  }
+  const binaryString = atob(canonicalBase64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);

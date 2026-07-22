@@ -9,7 +9,7 @@ import {
 } from "../../agents/context-cache.js";
 import {
   loadManifestModelCatalog,
-  loadModelCatalog as loadModelCatalogLocal,
+  loadPreparedModelCatalog as loadModelCatalogLocal,
 } from "../../agents/model-catalog.runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -44,8 +44,8 @@ const catalogRuntimeMocks = vi.hoisted(() => {
 
 vi.mock("../../agents/model-catalog.runtime.js", () => ({
   loadManifestModelCatalog: vi.fn(() => []),
-  loadModelCatalog: catalogRuntimeMocks.loadModelCatalog,
-  loadModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
+  loadPreparedModelCatalog: catalogRuntimeMocks.loadModelCatalog,
+  loadPreparedModelCatalogSnapshot: catalogRuntimeMocks.loadModelCatalogSnapshot,
 }));
 
 vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
@@ -404,7 +404,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("keeps configured compat when runtime thinking catalog is already loaded", async () => {
+  it("uses only configured compat for a custom route when the catalog is loaded", async () => {
     vi.mocked(loadModelCatalogLocal).mockClear();
     vi.mocked(loadModelCatalogLocal).mockResolvedValueOnce([
       {
@@ -454,10 +454,7 @@ describe("createModelSelectionState catalog loading", () => {
         provider: "vllm",
         id: "Qwen/Qwen3-8B",
         reasoning: true,
-        compat: {
-          supportedReasoningEfforts: ["xhigh"],
-          thinkingFormat: "qwen-chat-template",
-        },
+        compat: { thinkingFormat: "qwen-chat-template" },
       }),
     ]);
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
@@ -521,6 +518,7 @@ describe("createModelSelectionState catalog loading", () => {
     });
 
     expect(loadModelCatalogLocal).toHaveBeenCalledOnce();
+    expect(vi.mocked(loadModelCatalogLocal).mock.calls[0]?.[0]).not.toHaveProperty("readOnly");
   });
 
   it("carries catalog context limits into cold model selection", async () => {
@@ -2055,7 +2053,7 @@ describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
   });
 
   it("returns on when catalog model has reasoning true", async () => {
-    const { loadModelCatalog: loadModelCatalogForCase } =
+    const { loadPreparedModelCatalog: loadModelCatalogForCase } =
       await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalogForCase).mockResolvedValueOnce([
       { provider: "openrouter", id: "x-ai/grok-4.1-fast", name: "Grok", reasoning: true },

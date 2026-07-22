@@ -307,6 +307,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       const entries = registryParams.runtime.agent.session.listSessionEntries({
         ...(agentId ? { agentId } : {}),
         ...(storePath ? { storePath } : {}),
+        readOnly: true,
       });
       for (const { sessionKey, entry } of entries) {
         if (
@@ -792,8 +793,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             withPluginRuntimePluginIdScope(pluginId, () => subagent.waitForRun(params)),
           getSessionMessages: (params) =>
             withPluginRuntimePluginIdScope(pluginId, () => subagent.getSessionMessages(params)),
-          getSession: (params) =>
-            withPluginRuntimePluginIdScope(pluginId, () => subagent.getSession(params)),
           deleteSession: async (params) =>
             await withPluginRuntimePluginIdScope(pluginId, async () => {
               assertStoredSessionEntryOwned({ action: "delete", sessionKey: params.sessionKey });

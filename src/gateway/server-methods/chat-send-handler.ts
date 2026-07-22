@@ -62,6 +62,7 @@ import {
 } from "./chat-server-timing.js";
 import { normalizeOptionalChatText as normalizeOptionalText } from "./chat-text-normalization.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
+import { gatewayClientSenderFields } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -191,6 +192,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       ...(systemInputProvenance ? { provenance: systemInputProvenance } : {}),
       rawMessage,
       ...(restartSafeAdmission ? { restartAdmission: restartSafeAdmission } : {}),
+      ...gatewayClientSenderFields(client),
       senderIsOwner: hasGatewayAdminScope(client),
       sessionKey,
       ...(sessionLoadOptions ? { sessionLoadOptions } : {}),
@@ -303,6 +305,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
       pluginBoundMediaFieldsPromise,
       queuedFollowupOwnerKey,
       replyOptionImages,
+      replyOptionMedia,
     } = prepareChatSendUserTurn({
       request: normalizedRequest.value,
       session: preparedSession.value,
@@ -471,6 +474,7 @@ export const handleChatSend: GatewayRequestHandlers["chat.send"] = async ({
                 },
                 images: replyOptionImages,
                 imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+                media: replyOptionMedia,
                 thinkingLevelOverride: p.thinking,
                 fastModeOverride: p.fastMode,
                 queueModeOverride: p.queueMode,

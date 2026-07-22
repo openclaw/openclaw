@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/index.js";
+import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
@@ -19,6 +20,7 @@ import {
   getAgentEventLifecycleGeneration,
   registerAgentRunContext,
   resetAgentEventsForTest,
+  rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -32,6 +34,14 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferred } from "../test-utils/deferred.js";
+import { setActiveEmbeddedRunLifecycleGeneration } from "./embedded-agent-runner/run-state.js";
+import {
+  clearActiveEmbeddedRun,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
+  resolveActiveEmbeddedRunHandleSessionId,
+  setActiveEmbeddedRun,
+  type EmbeddedAgentQueueHandle,
+} from "./embedded-agent-runner/runs.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -882,6 +892,161 @@ describe("main-session-restart-recovery", () => {
     expect(resumeParams.lane).toBe("main");
     const store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
+  });
+
+  it.each([
+    {
+      label: "same-process lifecycle rotation",
+      sessionKey: "agent:main:telegram:group:-100:topic:2",
+      sessionId: "topic-2-session",
+      restartRecoveryRuns: [
+        {
+          runId: "announce:v1:agent:main:subagent:child:run-1",
+          lifecycleGeneration: "generation-old",
+        },
+      ],
+      userMessage: { role: "user", content: "earlier human request" },
+    },
+    {
+      label: "full restart",
+      sessionKey: "agent:main:telegram:group:-100:topic:8893",
+      sessionId: "topic-8893-session",
+      restartRecoveryRuns: undefined,
+      userMessage: {
+        role: "user",
+        content: "A background task finished.",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      },
+    },
+  ])("reconciles an interrupted completion after $label", async (fixture) => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await writeStore(sessionsDir, {
+      [fixture.sessionKey]: {
+        sessionId: fixture.sessionId,
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: fixture.restartRecoveryRuns,
+      },
+    });
+    await writeTranscript(sessionsDir, fixture.sessionId, [
+      fixture.userMessage,
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 0,
+      failed: 0,
+      skipped: 1,
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey: fixture.sessionKey, storePath })).toMatchObject({
+      status: "killed",
+      abortedLastRun: false,
+    });
+    expect(readStore(storePath)[fixture.sessionKey]).not.toHaveProperty("restartRecoveryRuns");
+  });
+
+  it("resumes an explicit human run despite stale completion provenance", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const sessionKey = "agent:main:telegram:group:-100:topic:41818";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-41818-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "human-run-2", lifecycleGeneration: "generation-old" }],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41818-session", [
+      {
+        role: "user",
+        content: "A background task finished.",
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+      },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(firstGatewayParams().sessionKey).toBe(sessionKey);
+  });
+
+  it("retries when a human recovery run appears during announce reconciliation", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100:topic:41819";
+    const announceRun = {
+      runId: "announce:v1:agent:main:subagent:child:run-race",
+      lifecycleGeneration: "generation-old",
+    };
+    const humanRun = { runId: "human-run-race", lifecycleGeneration: "generation-old" };
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "topic-41819-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [announceRun],
+      },
+    });
+    await writeTranscript(sessionsDir, "topic-41819-session", [
+      { role: "user", content: "earlier human request" },
+      { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "exec" }] },
+      { role: "toolResult", content: "done" },
+    ]);
+    const updateSessionEntry = sessionAccessor.updateSessionEntry;
+    let injectedHumanRun = false;
+    const updateSpy = vi
+      .spyOn(sessionAccessor, "updateSessionEntry")
+      .mockImplementation(async (scope, update, options) => {
+        if (!injectedHumanRun) {
+          injectedHumanRun = true;
+          await updateSessionEntry(scope, (entry) => ({
+            restartRecoveryRuns: [...(entry.restartRecoveryRuns ?? []), humanRun],
+          }));
+        }
+        return await updateSessionEntry(scope, update, options);
+      });
+
+    try {
+      await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+        recovered: 0,
+        failed: 1,
+        skipped: 0,
+      });
+    } finally {
+      updateSpy.mockRestore();
+    }
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryRuns: [announceRun, humanRun],
+    });
+    await expect(recoverRestartAbortedMainSessions({ stateDir: tmpDir })).resolves.toEqual({
+      recovered: 1,
+      failed: 0,
+      skipped: 0,
+    });
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("delivers resumed marked sessions through the current run recovery context", async () => {
@@ -2033,6 +2198,179 @@ describe("main-session-restart-recovery", () => {
     store = readStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
     expect(store["agent:main:already-marked"]?.abortedLastRun).toBe(false);
+  });
+
+  it.each([
+    ["current owner before delayed stale registration", "current-first"],
+    ["stale owner before current registration", "stale-first"],
+  ] as const)("keeps a live session running with %s", async (_label, registrationOrder) => {
+    const sessionsDir = await makeSessionsDir();
+    const cutoff = Date.now();
+    const sessionKey = "agent:main:generation-race";
+    const sessionId = "generation-race-session";
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId,
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
+    });
+
+    const createHandle = (runId: string): EmbeddedAgentQueueHandle => ({
+      kind: "embedded",
+      runId,
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    });
+    const priorLifecycleGeneration = getAgentEventLifecycleGeneration();
+    const staleHandle = createHandle("stale-generation-run");
+    setActiveEmbeddedRunLifecycleGeneration(staleHandle, priorLifecycleGeneration);
+    if (registrationOrder === "stale-first") {
+      setActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
+    }
+
+    rotateAgentEventLifecycleGeneration();
+    const currentHandle = createHandle("current-generation-run");
+    setActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
+    if (registrationOrder === "current-first") {
+      setActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
+    }
+
+    try {
+      await expect(
+        recoverStartupOrphanedMainSessions({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
+      ).resolves.toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({
+          sessionKey,
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({ status: "running" });
+    } finally {
+      clearActiveEmbeddedRun(sessionId, currentHandle, sessionKey);
+      clearActiveEmbeddedRun(sessionId, staleHandle, sessionKey);
+    }
+  });
+
+  it("reconciles only prior-lifecycle running sessions after an in-process restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const cutoff = Date.now();
+    const abandonedKey = "agent:main:abandoned-client";
+    const liveKey = "agent:main:live-client";
+    await writeStore(sessionsDir, {
+      [abandonedKey]: {
+        sessionId: "abandoned-session",
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
+      [liveKey]: {
+        sessionId: "live-session",
+        updatedAt: cutoff - 10_000,
+        status: "running",
+      },
+    });
+    await writeTranscript(sessionsDir, "abandoned-session", [
+      { role: "system", content: "the client disappeared before the turn became resumable" },
+    ]);
+
+    const createHandle = (
+      runId: string,
+      queueMessage: EmbeddedAgentQueueHandle["queueMessage"] = async () => {},
+      abort: EmbeddedAgentQueueHandle["abort"] = () => {},
+    ): EmbeddedAgentQueueHandle => ({
+      kind: "embedded",
+      runId,
+      queueMessage,
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort,
+    });
+    const abandonedReply = createReplyOperation({
+      sessionKey: abandonedKey,
+      sessionId: "abandoned-session",
+      resetTriggered: false,
+    });
+    const abandonedReplyQueue = vi.fn(async () => {});
+    const abandonedReplyCancel = vi.fn();
+    abandonedReply.setPhase("running");
+    abandonedReply.attachBackend({
+      kind: "embedded",
+      cancel: abandonedReplyCancel,
+      isStreaming: () => true,
+      queueMessage: abandonedReplyQueue,
+    });
+    const abandonedEmbeddedQueue = vi.fn(async () => {});
+    const abandonedEmbeddedAbort = vi.fn();
+    const abandonedHandle = createHandle(
+      "abandoned-run",
+      abandonedEmbeddedQueue,
+      abandonedEmbeddedAbort,
+    );
+    setActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
+
+    const firstRecovery = recoverStartupOrphanedMainSessions({
+      stateDir: tmpDir,
+      updatedBeforeMs: cutoff,
+    });
+    // Advance ownership while the async store discovery above is pending. The
+    // older scan must drop the stale owner without overlooking this new live one.
+    rotateAgentEventLifecycleGeneration();
+    setActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
+
+    await expect(
+      queueEmbeddedAgentMessageWithOutcomeAsync("abandoned-session", "do not route stale"),
+    ).resolves.toMatchObject({ queued: false, reason: "no_active_run" });
+    expect(abandonedEmbeddedQueue).not.toHaveBeenCalled();
+    expect(abandonedEmbeddedAbort).toHaveBeenCalledWith("restart");
+    expect(abandonedReplyQueue).not.toHaveBeenCalled();
+    expect(abandonedReplyCancel).toHaveBeenCalledWith("restart");
+    expect(resolveActiveEmbeddedRunHandleSessionId(abandonedKey)).toBeUndefined();
+
+    const liveReply = createReplyOperation({
+      sessionKey: liveKey,
+      sessionId: "live-session",
+      resetTriggered: false,
+    });
+    const liveAbort = vi.fn();
+    const liveHandle = createHandle("live-run", undefined, liveAbort);
+    setActiveEmbeddedRun("live-session", liveHandle, liveKey);
+    try {
+      const first = await firstRecovery;
+
+      expect(first).toEqual({ marked: 1, recovered: 0, failed: 1, skipped: 0 });
+      expect(callGateway).not.toHaveBeenCalled();
+      expect(
+        loadSessionEntry({
+          sessionKey: abandonedKey,
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({
+        status: "failed",
+        abortedLastRun: true,
+      });
+      expect(
+        loadSessionEntry({
+          sessionKey: liveKey,
+          storePath: path.join(sessionsDir, "sessions.json"),
+        }),
+      ).toMatchObject({
+        status: "running",
+      });
+      expect(liveAbort).not.toHaveBeenCalled();
+      expect(liveReply.abortSignal.aborted).toBe(false);
+
+      await expect(
+        recoverStartupOrphanedMainSessions({ stateDir: tmpDir, updatedBeforeMs: cutoff }),
+      ).resolves.toEqual({ marked: 0, recovered: 0, failed: 0, skipped: 0 });
+    } finally {
+      clearActiveEmbeddedRun("abandoned-session", abandonedHandle, abandonedKey);
+      clearActiveEmbeddedRun("live-session", liveHandle, liveKey);
+      abandonedReply.complete();
+      liveReply.complete();
+    }
   });
 
   it("recovers only the configured store for duplicate startup-orphaned session keys", async () => {
@@ -4380,14 +4718,6 @@ describe("main-session-restart-recovery", () => {
       },
     ],
     [
-      "completed tool call",
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
-        stopReason: "toolUse",
-      },
-    ],
-    [
       "aborted tool call",
       {
         role: "assistant",
@@ -5141,8 +5471,8 @@ describe("main-session-restart-recovery", () => {
     {
       label: "provider abort artifact with partial output",
       content: [{ type: "text", text: "partial answer" }],
-      expected: { recovered: 0, failed: 1, skipped: 0 },
-      gatewayCalls: 0,
+      expected: { recovered: 1, failed: 0, skipped: 0 },
+      gatewayCalls: 1,
     },
   ])(
     "handles $label without discarding assistant output",
@@ -5196,8 +5526,150 @@ describe("main-session-restart-recovery", () => {
 
       expect(result).toEqual(expected);
       expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+      expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
     },
   );
+
+  it("resumes a partial streamed answer interrupted by a restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the first half of the answer" }],
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes an abort artifact persisted with the gateway restart reason", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorMessage: "agent run aborted for restart",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes a side-effecting tool call restricted to restart-safe tools", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Running the check now." },
+          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Kicking that off." },
+          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+        ],
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes an interrupted replay-safe tool call without restricting tools", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me look that up." },
+          { type: "toolCall", id: "call-read-1", name: "read", arguments: { path: "README.md" } },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+  });
 
   it("resumes through the shutdown error persisted for an interrupted Code Mode wait", async () => {
     const sessionsDir = await makeSessionsDir();

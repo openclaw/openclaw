@@ -3,6 +3,7 @@
 import path from "node:path";
 import { detectMime, kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { resolveAgentDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
@@ -148,9 +149,9 @@ export async function runMediaUnderstandingFile(
     params.timeoutMs > 0
       ? Math.ceil(params.timeoutMs / 1000)
       : undefined;
-  const cfg =
+  const cfg: OpenClawConfig =
     requestPrompt || requestTimeoutSeconds !== undefined
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -170,7 +171,7 @@ export async function runMediaUnderstandingFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const ctx = buildFileContext({
     ...params,
@@ -196,6 +197,8 @@ export async function runMediaUnderstandingFile(
   }
 
   const providerRegistry = buildProviderRegistry(undefined, cfg);
+  const agentDir =
+    params.agentDir ?? (params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined);
   const cache = createMediaAttachmentCache(attachments, {
     localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
@@ -208,7 +211,8 @@ export async function runMediaUnderstandingFile(
       ctx,
       attachments: cache,
       media: attachments,
-      agentDir: params.agentDir,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(agentDir ? { agentDir } : {}),
       ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
@@ -275,6 +279,11 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
   const describeImage = provider?.describeImage ?? describeImageWithModel;
+  const agentDir =
+    params.agentDir ??
+    (params.agentId
+      ? resolveAgentDir(params.cfg, params.agentId)
+      : resolveDefaultAgentDir(params.cfg));
   return await describeImage({
     buffer: params.image.buffer,
     fileName: params.image.fileName,
@@ -285,7 +294,8 @@ export async function describePreparedImageWithModel(params: DescribePreparedIma
     maxTokens: params.maxTokens,
     timeoutMs,
     cfg: params.cfg,
-    agentDir: params.agentDir ?? "",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 }
@@ -386,9 +396,9 @@ export async function describeVideoFile(
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
-  const cfg =
+  const cfg: OpenClawConfig =
     params.language || params.prompt
-      ? {
+      ? ({
           ...params.cfg,
           tools: {
             ...params.cfg.tools,
@@ -403,7 +413,7 @@ export async function transcribeAudioFile(
               },
             },
           },
-        }
+        } as OpenClawConfig)
       : params.cfg;
   const result = await runMediaUnderstandingFile({ ...params, cfg, capability: "audio" });
   return result;

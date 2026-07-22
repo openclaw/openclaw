@@ -6,6 +6,9 @@ import type {
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionCreatorIdentity } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -249,6 +252,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Operator identity captured once for this session generation. */
+    createdBy?: SessionCreatorIdentity;
     updatedAt: number;
     /** Opaque owner revision used to reject stale lifecycle mutations. */
     lifecycleRevision?: string;
@@ -265,6 +270,10 @@ export type SessionEntry = SessionRestartRecoveryState &
     icon?: string;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
+    /** Agent-declared sidebar presence; projection drops it after expiresAt. */
+    agentStatus?: SessionAgentStatus;
+    /** Latest utility-model status judgment for idle session status surfaces. */
+    observerDigest?: SessionObserverDigest;
     /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
@@ -272,6 +281,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     sessionFile?: string;
     /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
     spawnedBy?: string;
+    /** Immutable session key authorized to receive this child's completion handoff. */
+    completionOwnerSessionKey?: string;
     /** Workspace inherited by spawned sessions and reused on later turns for the same child session. */
     spawnedWorkspaceDir?: string;
     /** Task working directory inherited by spawned sessions and reused on later turns. */
@@ -291,6 +302,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     subagentRole?: "orchestrator" | "leaf";
     /** Explicit control scope assigned at spawn time for subagent control decisions. */
     subagentControlScope?: "children" | "none";
+    /** Version of the requester tool-policy snapshot captured when this child was spawned. */
+    inheritedToolPolicyVersion?: 1;
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
@@ -327,6 +340,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     runtimeMs?: number;
     /** Final persisted subagent run status, used after in-memory run archival. */
     status?: "running" | "done" | "failed" | "killed" | "timeout";
+    /** Compact user-facing reason for the latest failed or timed-out run. */
+    lastRunError?: string;
     /**
      * Session-level stop cutoff captured when /stop is received.
      * Messages at/before this boundary are skipped to avoid replaying
@@ -360,6 +375,12 @@ export type SessionEntry = SessionRestartRecoveryState &
       };
     };
     fastMode?: FastMode;
+    /** Swarm group for collector-mode child sessions. */
+    swarmGroupId?: string;
+    /** Marks non-interactive collector-mode child sessions. */
+    swarmCollector?: boolean;
+    /** JSON Schema exposed through the synthetic structured_output tool. */
+    swarmOutputSchema?: Record<string, unknown>;
     verboseLevel?: string;
     traceLevel?: string;
     reasoningLevel?: string;

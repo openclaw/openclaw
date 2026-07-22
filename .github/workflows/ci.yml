@@ -104,6 +104,7 @@ jobs:
       strict_control_ui_i18n: ${{ steps.changed_scope.outputs.strict_control_ui_i18n }}
       run_ui_tests: ${{ steps.manifest.outputs.run_ui_tests }}
       run_native_i18n: ${{ steps.manifest.outputs.run_native_i18n }}
+      strict_native_i18n: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.strict_native_i18n }}
       run_checks_windows: ${{ steps.manifest.outputs.run_checks_windows }}
       checks_windows_matrix: ${{ steps.manifest.outputs.checks_windows_matrix }}
       run_macos_node: ${{ steps.manifest.outputs.run_macos_node }}
@@ -877,6 +878,33 @@ jobs:
           base-sha: ${{ steps.diff_base.outputs.sha }}
           fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
 
+      - name: Fetch pull request scan history
+        if: github.event_name == 'pull_request'
+        env:
+          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+          PR_MERGE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$PR_COMMIT_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid pull request commit count: $PR_COMMIT_COUNT"
+            exit 2
+          fi
+          # Include the synthetic merge, every pull request commit, and one
+          # ancestor so TruffleHog can clone and resolve the bounded range.
+          fetch_depth=$((PR_COMMIT_COUNT + 2))
+          timeout --signal=TERM --kill-after=10s 120s git \
+            -c protocol.version=2 \
+            fetch --no-tags --no-recurse-submodules --depth="$fetch_depth" origin "$PR_MERGE_SHA"
+
+      - name: Scan pull request for leaked credentials
+        if: github.event_name == 'pull_request'
+        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55 # v3.95.9
+        with:
+          base: ${{ steps.diff_base.outputs.sha }}
+          head: ${{ github.sha }}
+          version: "3.95.9@sha256:59b244249d1a1aef4baa24fe73d3c931616264482580d806d77f6c74d26b3e42"
+          extra_args: --results=verified,unknown --fail-on-scan-errors
+
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
         env:
@@ -1080,6 +1108,12 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
+      # Reruns the (warm, seconds-cheap) asset hooks and fails on drift so
+      # packages/-only PRs cannot land stale committed plugin bundles; the
+      # extension byte-equality suites do not run for those diffs.
+      - name: Check bundled plugin generated assets
+        run: pnpm plugins:assets:check
+
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
 
@@ -1275,14 +1309,25 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
-      - name: Check native app i18n inventory
-        run: pnpm native:i18n:check
+      - name: Verify native app i18n source
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["native:i18n:verify"] ? 0 : 1)'; then
+            pnpm native:i18n:verify
+          else
+            # Historical release targets predate the source/generated split.
+            pnpm native:i18n:check
+            pnpm android:i18n:check
+            pnpm apple:i18n:check
+          fi
 
-      - name: Check Android app i18n resources
-        run: pnpm android:i18n:check
-
-      - name: Check Apple app i18n catalogs
-        run: pnpm apple:i18n:check
+      - name: Check native app generated locale parity
+        if: ${{ needs.preflight.outputs.strict_native_i18n == 'true' }}
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["native:i18n:verify"] ? 0 : 1)'; then
+            pnpm native:i18n:check
+          else
+            echo "Historical target was validated by the legacy native checks."
+          fi
 
   checks-ui:
     permissions:
@@ -1329,7 +1374,9 @@ jobs:
             # Do not retry whole files: several rely on one-shot mocked browser globals.
             pnpm --dir ui test --testTimeout=30000 --isolate
           else
-            pnpm --dir ui test
+            # Three workers deliberately exercise stable non-default file packing so
+            # isolate:false mock-registry leaks fail close to the introducing change.
+            pnpm --dir ui test --maxWorkers 3
           fi
 
   control-ui-i18n:
@@ -1429,10 +1476,38 @@ jobs:
           sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
 
+      - name: Resolve manual protocol base
+        id: protocol_manual_base
+        if: matrix.task == 'bundled-protocol' && github.event_name == 'workflow_dispatch' && !inputs.release_gate
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.preflight.outputs.checkout_revision }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          default_sha="$(git ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
+          if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the default branch head for the manual protocol target." >&2
+            exit 1
+          fi
+          merge_base_sha="$(
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${TARGET_SHA}" \
+              --jq '.merge_base_commit.sha'
+          )"
+          if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the manual protocol target merge base." >&2
+            exit 1
+          fi
+          echo "sha=${merge_base_sha}" >> "$GITHUB_OUTPUT"
+
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           GH_TOKEN: ${{ matrix.task == 'max-lines-ratchet' && github.token || '' }}
           OPENCLAW_TEST_PROJECTS_PARALLEL: 3
+          PROTOCOL_MANUAL_BASE_SHA: ${{ steps.protocol_manual_base.outputs.sha }}
+          PROTOCOL_SINCE_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
           RATCHET_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           RATCHET_EVENT_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
           RATCHET_MANUAL_TARGET_SHA: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.checkout_revision || '' }}
@@ -1447,9 +1522,41 @@ jobs:
               process.exit(Object.hasOwn(scripts, process.argv[1]) ? 0 : 1);
             ' "$1"
           }
+          resolve_manual_merge_base() {
+            local default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
+            local default_sha
+            local merge_base_sha
+            default_sha="$(git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }')"
+            if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve the default branch head for the manual target." >&2
+              return 1
+            fi
+            merge_base_sha="$(
+              gh api --method GET \
+                "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
+                --jq '.merge_base_commit.sha'
+            )"
+            if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Could not resolve the manual target merge base." >&2
+              return 1
+            fi
+            printf '%s\n' "$merge_base_sha"
+          }
           case "$TASK" in
             bundled-protocol)
               pnpm test:bundled
+              if [[ -n "${PROTOCOL_SINCE_BASE_SHA:-}" ]]; then
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
+              elif [[ -n "${PROTOCOL_MANUAL_BASE_SHA:-}" ]]; then
+                PROTOCOL_SINCE_BASE_SHA="$PROTOCOL_MANUAL_BASE_SHA"
+                export PROTOCOL_SINCE_BASE_SHA
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+${PROTOCOL_SINCE_BASE_SHA}:refs/remotes/origin/protocol-since-base"
+              else
+                git fetch --no-tags --no-recurse-submodules --depth=1 origin \
+                  "+refs/heads/main:refs/remotes/origin/main"
+              fi
               pnpm protocol:check
               ;;
             contracts-plugins-ci-routing)
@@ -1484,23 +1591,7 @@ jobs:
                   "+${base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
               elif [[ -n "${RATCHET_MANUAL_TARGET_SHA:-}" ]]; then
-                default_branch="${RATCHET_DEFAULT_BRANCH:-main}"
-                default_sha="$(
-                  git ls-remote origin "refs/heads/${default_branch}" | awk 'NR == 1 { print $1 }'
-                )"
-                if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                  echo "Could not resolve the default branch head for the max-lines ratchet." >&2
-                  exit 1
-                fi
-                merge_base_sha="$(
-                  gh api --method GET \
-                    "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${RATCHET_MANUAL_TARGET_SHA}" \
-                    --jq '.merge_base_commit.sha'
-                )"
-                if [[ ! "$merge_base_sha" =~ ^[0-9a-f]{40}$ ]]; then
-                  echo "Could not resolve the manual target merge base for the max-lines ratchet." >&2
-                  exit 1
-                fi
+                merge_base_sha="$(resolve_manual_merge_base)"
                 timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags --depth=1 origin \
                   "+${merge_base_sha}:refs/remotes/origin/ci-max-lines-base"
                 base_ref="refs/remotes/origin/ci-max-lines-base"
@@ -2220,6 +2311,9 @@ jobs:
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
             runner: blacksmith-4vcpu-ubuntu-2404
+          - check_name: check-plugin-sdk-api-baseline
+            group: plugin-sdk-api-baseline
+            runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-flip-proof
             group: sqlite-session-flip-proof
             runner: blacksmith-8vcpu-ubuntu-2404
@@ -2438,6 +2532,9 @@ jobs:
               else
                 run_check "sqlite:sessions-schema:check" pnpm run sqlite:sessions-schema:check
               fi
+              ;;
+            plugin-sdk-api-baseline)
+              run_check "plugin-sdk:api:check" pnpm run plugin-sdk:api:check
               ;;
             sqlite-session-flip-proof)
               if [ ! -f test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts ]; then
@@ -2922,6 +3019,17 @@ jobs:
           sw_vers
           xcodebuild -version
           swift --version
+
+      - name: Native state schema version contract
+        run: |
+          if [[ -f scripts/check-native-state-schema-version.mjs ]]; then
+            node scripts/check-native-state-schema-version.mjs
+          elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
+            echo "[skip] native state schema version guard is not present in this historical target"
+          else
+            echo "Current CI targets must provide scripts/check-native-state-schema-version.mjs." >&2
+            exit 1
+          fi
 
       - name: Swift lint
         run: |

@@ -110,9 +110,23 @@ describe("createCronToolSchema", () => {
     ).toEqual(["max", "min"]);
   });
 
-  it("job.schedule exposes kind, at, everyMs, anchorMs, expr, tz, staggerMs", () => {
+  it("job.schedule exposes interval, cron, and stream source fields", () => {
     expect(keysAt(schemaRecord, "job.schedule")).toEqual(
-      ["anchorMs", "at", "everyMs", "expr", "kind", "staggerMs", "tz"].toSorted(),
+      [
+        "anchorMs",
+        "at",
+        "batchMs",
+        "command",
+        "cwd",
+        "everyMs",
+        "expr",
+        "kind",
+        "match",
+        "maxBatchBytes",
+        "mode",
+        "staggerMs",
+        "tz",
+      ].toSorted(),
     );
   });
 
@@ -182,7 +196,7 @@ describe("createCronToolSchema", () => {
     );
   });
 
-  it("job.payload exposes kind, text, message, model, thinking and extras", () => {
+  it("job.payload exposes conversational and script payload fields", () => {
     expect(keysAt(schemaRecord, "job.payload")).toEqual(
       [
         "allowUnsafeExternalContent",
@@ -191,8 +205,10 @@ describe("createCronToolSchema", () => {
         "lightContext",
         "message",
         "model",
+        "script",
         "text",
         "thinking",
+        "toolBudget",
         "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
@@ -212,12 +228,41 @@ describe("createCronToolSchema", () => {
         "lightContext",
         "message",
         "model",
+        "script",
         "text",
         "thinking",
+        "toolBudget",
         "toolsAllow",
         "timeoutSeconds",
       ].toSorted(),
     );
+  });
+
+  it("accepts script payloads in create and patch schemas", () => {
+    expect(
+      Value.Check(schema, {
+        action: "add",
+        job: {
+          name: "script job",
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: {
+            kind: "script",
+            script: "return { notify: 'done' }",
+            timeoutSeconds: 300,
+            toolBudget: 50,
+          },
+        },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(schema, {
+        action: "update",
+        id: "job-1",
+        patch: { payload: { kind: "script", toolBudget: 75 } },
+      }),
+    ).toBe(true);
   });
 
   it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {

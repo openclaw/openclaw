@@ -308,6 +308,23 @@ describe("registerChatAbortController", () => {
 });
 
 describe("abortChatRunById", () => {
+  it("notifies the run-bound approval owner only after an active run abort wins", () => {
+    const { runId, sessionKey, ops } = createAbortRunFixture({});
+    const onRunAborted = vi.fn();
+    ops.onRunAborted = onRunAborted;
+
+    expect(abortChatRunById(ops, { runId: "other-run", sessionKey })).toEqual({
+      aborted: false,
+    });
+    expect(onRunAborted).not.toHaveBeenCalled();
+
+    expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
+      aborted: true,
+    });
+    expect(onRunAborted).toHaveBeenCalledOnce();
+    expect(onRunAborted).toHaveBeenCalledWith(runId);
+  });
+
   it("retains terminal persistence ownership observed during abort", () => {
     const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
     let terminalEvents = 0;
@@ -548,6 +565,7 @@ describe("abortChatRunsForProvider", () => {
       authProviderId: "openrouter",
     });
     const result = abortChatRunsForProvider(ops, {
+      cfg: {},
       providerId: "openrouter",
       stopReason: "auth-revoked",
     });
@@ -564,6 +582,26 @@ describe("abortChatRunsForProvider", () => {
       }),
       { sessionKeys: [sessionKey] },
     );
+  });
+
+  it("derives missing entry agent ids from canonical session keys", () => {
+    const writerEntry = createActiveEntry("agent:writer:main");
+    writerEntry.providerId = "openrouter";
+    const mainEntry = createActiveEntry("agent:main:main");
+    mainEntry.providerId = "openrouter";
+    const ops = createOps({ runId: "run-writer", entry: writerEntry });
+    ops.chatAbortControllers.set("run-main", mainEntry);
+
+    const result = abortChatRunsForProvider(ops, {
+      cfg: { agents: { list: [{ id: "main", default: true }, { id: "writer" }] } },
+      providerId: "openrouter",
+      agentId: "writer",
+      stopReason: "auth-revoked",
+    });
+
+    expect(result.runIds).toEqual(["run-writer"]);
+    expect(writerEntry.controller.signal.aborted).toBe(true);
+    expect(mainEntry.controller.signal.aborted).toBe(false);
   });
 });
 

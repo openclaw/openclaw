@@ -147,10 +147,6 @@ function expectHookRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
   expect(hookHandler(on, hookName)).toBeTypeOf("function");
 }
 
-function expectHookNotRegistered(on: ReturnType<typeof vi.fn>, hookName: string) {
-  expect(on.mock.calls.map(([name]) => name)).not.toContain(hookName);
-}
-
 function expectToolExecute(tool: unknown, name?: string) {
   const record = tool as { execute?: unknown; name?: unknown };
   if (name) {
@@ -409,7 +405,6 @@ describe("memory plugin e2e", () => {
     registerTestPlugin(memoryPlugin, mockApi);
 
     expectHookRegistered(on, "before_prompt_build");
-    expectHookNotRegistered(on, "before_agent_start");
   });
 
   test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
@@ -1676,11 +1671,13 @@ describe("memory plugin e2e", () => {
     }));
     const pluginEntryConfig = parseConfig({ autoCapture: true, autoRecall: true });
     let configFile: Record<string, unknown> = {
+      memory: { search: { enabled: true } },
+
       agents: {
-        defaults: { memorySearch: { enabled: true } },
+        defaults: {},
         list: [
-          { id: "main", memorySearch: { enabled: true } },
-          { id: "xiaohuo", memorySearch: { enabled: false } },
+          { id: "main", memory: { search: { enabled: true } } },
+          { id: "xiaohuo", memory: { search: { enabled: false } } },
         ],
       },
       plugins: {
@@ -1809,7 +1806,9 @@ describe("memory plugin e2e", () => {
       embeddingsCreate.mockClear();
       configFile = {
         ...configFile,
-        agents: { defaults: { memorySearch: { enabled: false } } },
+        memory: { search: { enabled: false } },
+
+        agents: { defaults: {} },
       };
       const recallDefaultDisabled = await beforePromptBuild?.(recallEvent, {
         agentId: "unlisted",

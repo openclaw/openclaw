@@ -54,6 +54,12 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  controlUiWidgetKinds?: Array<{
+    kind: string;
+    label: string;
+    pluginId: string;
+  }>;
+  featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
@@ -65,6 +71,22 @@ export type ControlUiMockGatewayScenario = {
   methodResponses?: Record<string, unknown>;
   /** Replayed in-flight run snapshot served by chat.history and chat.startup. */
   inFlightRun?: { runId: string; text?: string; plan?: unknown } | null;
+  /** Online users included in the connect snapshot's presence list. The entry
+   * flagged `self` adopts the connecting client's instanceId so presence
+   * surfaces (footer facepile, who's-online roster) resolve "you". */
+  presenceUsers?: Array<{
+    self?: boolean;
+    id: string;
+    name?: string;
+    email?: string;
+    avatarUrl?: string;
+    watchedSessions?: string[];
+  }>;
+  /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
+  repeatingSessionEvents?: {
+    events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
+    intervalMs?: number;
+  };
   /** Session run state served alongside history (hasActiveRun/activeRunIds). */
   sessionInfo?: Record<string, unknown> | null;
   /** Partition sessions.list fixtures by archived state after applying patches. */
@@ -79,6 +101,7 @@ export type ControlUiMockGatewayScenario = {
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
+  workspace?: string;
   workspaceGit?: boolean;
 };
 
@@ -152,6 +175,7 @@ export async function startControlUiE2eServer(
   buildInfo: ControlUiBuildInfo = {
     version: "2026.7.10",
     commit: "0123456789abcdef0123456789abcdef01234567",
+    commitAt: "2026-07-10T11:22:33.000Z",
     builtAt: "2026-07-10T12:34:56.000Z",
     branch: null,
     dirty: false,
@@ -252,6 +276,8 @@ function normalizeScenario(
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
+    controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
+    featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     devGitBranch: scenario.devGitBranch?.trim() || "",
@@ -260,12 +286,15 @@ function normalizeScenario(
     historyMessages: scenario.historyMessages ?? [],
     methodResponses: scenario.methodResponses ?? {},
     inFlightRun: scenario.inFlightRun ?? null,
+    presenceUsers: scenario.presenceUsers ?? [],
     models: scenario.models ?? [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    repeatingSessionEvents: scenario.repeatingSessionEvents ?? { events: [] },
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
+    workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
   };
 }
@@ -367,7 +396,10 @@ function installControlUiMockGateway(input: {
   const requests: BrowserRequest[] = [];
   const methodResponseSequenceIndexes = new Map<string, number>();
   const sessionPatches = new Map<string, Record<string, unknown>>();
+  const sessionMessageSubscriptions = new Set<string>();
   const sockets: Array<{ readonly url: string }> = [];
+  let sessionMessageEventIndex = 0;
+  let sessionMessageEventTimer: number | null = null;
   const offlineStateKey = "openclaw.control-ui-e2e.gatewayOffline";
   // Gateway-owned custom group catalog (sessions.groups.*). Persisted in
   // sessionStorage so a page reload keeps the catalog the way the real
@@ -571,6 +603,33 @@ function installControlUiMockGateway(input: {
     return { found: true, value: matchingCase.response };
   }
 
+  /** Presence slice of the connect snapshot. The self-flagged entry adopts the
+   * connecting client's instanceId so presence surfaces resolve "you". */
+  function presenceSnapshot(connectParams: unknown): { presence?: unknown[] } {
+    if (scenario.presenceUsers.length === 0) {
+      return {};
+    }
+    const client = isRecord(connectParams) ? connectParams.client : undefined;
+    const selfInstanceId =
+      isRecord(client) && typeof client.instanceId === "string"
+        ? client.instanceId
+        : "e2e-self-instance";
+    return {
+      presence: scenario.presenceUsers.map((user, index) => ({
+        instanceId: user.self ? selfInstanceId : `e2e-presence-${index}`,
+        mode: "webchat",
+        reason: "connect",
+        user: {
+          id: user.id,
+          name: user.name ?? null,
+          email: user.email ?? null,
+          avatarUrl: user.avatarUrl ?? null,
+        },
+        watchedSessions: user.watchedSessions ?? [],
+      })),
+    };
+  }
+
   function recordSessionPatch(params: unknown): void {
     if (!isRecord(params) || typeof params.key !== "string") {
       return;
@@ -591,7 +650,12 @@ function installControlUiMockGateway(input: {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
     }
-    const showArchived = isRecord(params) && params.archived === true;
+    const archivedFilter =
+      isRecord(params) && params.archived === "all"
+        ? "all"
+        : isRecord(params) && params.archived === true
+          ? "archived"
+          : "active";
     const sessions = response.sessions.map((row) => {
       if (!isRecord(row) || typeof row.key !== "string") {
         return row;
@@ -617,13 +681,70 @@ function installControlUiMockGateway(input: {
       return { ...response, sessions };
     }
     const filteredSessions = sessions.filter(
-      (row) => isRecord(row) && (row.archived === true) === showArchived,
+      (row) =>
+        isRecord(row) &&
+        (archivedFilter === "all" || (row.archived === true) === (archivedFilter === "archived")),
     );
     return {
       ...response,
       count: filteredSessions.length,
       sessions: filteredSessions,
     };
+  }
+
+  function stopRepeatingSessionEvents(): void {
+    if (sessionMessageEventTimer !== null) {
+      window.clearInterval(sessionMessageEventTimer);
+      sessionMessageEventTimer = null;
+    }
+  }
+
+  function emitRepeatingSessionEvent(): void {
+    const events = scenario.repeatingSessionEvents.events;
+    if (events.length === 0) {
+      return;
+    }
+    const event = events[sessionMessageEventIndex % events.length];
+    sessionMessageEventIndex += 1;
+    if (!event || !isRecord(event.payload) || typeof event.payload.sessionKey !== "string") {
+      return;
+    }
+    if (!sessionMessageSubscriptions.has(event.payload.sessionKey)) {
+      return;
+    }
+    MockWebSocket.latest?.deliver({
+      event: event.event,
+      payload: event.payload,
+      seq: ++seq,
+      type: "event",
+    });
+  }
+
+  function startRepeatingSessionEvents(): void {
+    if (sessionMessageEventTimer !== null || scenario.repeatingSessionEvents.events.length === 0) {
+      return;
+    }
+    emitRepeatingSessionEvent();
+    const intervalMs = Math.max(250, scenario.repeatingSessionEvents.intervalMs ?? 3_000);
+    sessionMessageEventTimer = window.setInterval(emitRepeatingSessionEvent, intervalMs);
+  }
+
+  function updateSessionMessageSubscription(method: string, params: unknown): void {
+    const sessionKey = isRecord(params) && typeof params.key === "string" ? params.key : "";
+    if (!sessionKey) {
+      return;
+    }
+    if (method === "sessions.messages.subscribe") {
+      sessionMessageSubscriptions.add(sessionKey);
+      startRepeatingSessionEvents();
+      return;
+    }
+    if (method === "sessions.messages.unsubscribe") {
+      sessionMessageSubscriptions.delete(sessionKey);
+      if (sessionMessageSubscriptions.size === 0) {
+        stopRepeatingSessionEvents();
+      }
+    }
   }
 
   function sessionRow() {
@@ -733,11 +854,17 @@ function installControlUiMockGateway(input: {
               "operator.pairing",
             ],
           },
-          features: { events: [], methods: scenario.featureMethods },
+          features: {
+            capabilities: scenario.featureCapabilities,
+            events: [],
+            methods: scenario.featureMethods,
+          },
           controlUiTabs: scenario.controlUiTabs,
+          controlUiWidgetKinds: scenario.controlUiWidgetKinds,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
+            ...presenceSnapshot(params),
             sessionDefaults: {
               defaultAgentId: scenario.defaultAgentId,
               mainKey: "main",
@@ -761,6 +888,7 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
               workspaceGit: scenario.workspaceGit,
             },
           ],
@@ -812,6 +940,7 @@ function installControlUiMockGateway(input: {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
                 name: scenario.assistantName,
+                ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
                 workspaceGit: scenario.workspaceGit,
               },
             ],
@@ -906,6 +1035,12 @@ function installControlUiMockGateway(input: {
       }
       case "sessions.subscribe":
         return { ok: true };
+      case "sessions.messages.subscribe":
+        return {
+          key: isRecord(params) && typeof params.key === "string" ? params.key : "",
+        };
+      case "sessions.messages.unsubscribe":
+        return { ok: true };
       default:
         return {};
     }
@@ -992,6 +1127,8 @@ function installControlUiMockGateway(input: {
         return;
       }
       this.readyState = MockWebSocket.CLOSED;
+      sessionMessageSubscriptions.clear();
+      stopRepeatingSessionEvents();
       this.dispatchEvent(new CloseEvent("close", { code, reason }));
     }
 
@@ -1019,6 +1156,9 @@ function installControlUiMockGateway(input: {
             ? { id, ok: false, error: mockError, type: "res" }
             : { id, ok: true, payload, type: "res" },
         );
+        if (!mockError) {
+          updateSessionMessageSubscription(method, frame.params);
+        }
         if (
           method === "chat.abort" &&
           isRecord(frame.params) &&
@@ -1153,6 +1293,10 @@ function installControlUiMockGateway(input: {
 
   (window as unknown as WindowWithGateway).openclawControlUiE2eGateway = exposed;
   window.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  window.addEventListener("pagehide", () => {
+    sessionMessageSubscriptions.clear();
+    stopRepeatingSessionEvents();
+  });
 }
 
 export async function installMockGateway(

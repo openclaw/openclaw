@@ -163,6 +163,7 @@ export function buildWhatsAppQaConfig(
     authDir: string;
     dmPolicy: "allowlist" | "disabled" | "open" | "pairing";
     groupJid?: string;
+    ownerAllowFrom: string[];
     overrides?: WhatsAppQaConfigOverrides;
     sutAccountId: string;
   },
@@ -174,10 +175,6 @@ export function buildWhatsAppQaConfig(
     ? buildNonMatchingWhatsAppQaAllowFrom(params.allowFrom)
     : undefined;
   const groupHistoryLimit = params.overrides?.groupHistoryLimit;
-  const statusReactionOverride =
-    typeof params.overrides?.statusReactions === "object"
-      ? params.overrides.statusReactions
-      : undefined;
   const statusReactionsEnabled = Boolean(params.overrides?.statusReactions);
   const whatsappHistoryLimit =
     typeof groupHistoryLimit === "number" && groupHistoryLimit > 0
@@ -195,15 +192,17 @@ export function buildWhatsAppQaConfig(
           ...baseCfg.tools,
           media: {
             ...baseCfg.tools?.media,
+            models: [
+              {
+                provider: "openai",
+                model: "gpt-4o-transcribe",
+                capabilities: ["audio" as const],
+              },
+              ...(baseCfg.tools?.media?.models ?? []),
+            ],
             audio: {
               ...baseCfg.tools?.media?.audio,
               enabled: true,
-              models: [
-                {
-                  provider: "openai",
-                  model: "gpt-4o-transcribe",
-                },
-              ],
             },
           },
         },
@@ -249,6 +248,13 @@ export function buildWhatsAppQaConfig(
     ...audioPreflightConfig,
     ...broadcastConfig,
     ...actionToolConfig,
+    commands: {
+      ...baseCfg.commands,
+      ownerAllowFrom: uniqueStrings([
+        ...normalizeStringEntries(baseCfg.commands?.ownerAllowFrom),
+        ...params.ownerAllowFrom,
+      ]),
+    },
     plugins: {
       ...baseCfg.plugins,
       allow: pluginAllow,
@@ -345,22 +351,9 @@ export function buildWhatsAppQaConfig(
               : {}),
             ...(statusReactionsEnabled
               ? {
-                  ...(statusReactionOverride?.removeAckAfterReply !== undefined
-                    ? {
-                        removeAckAfterReply: statusReactionOverride.removeAckAfterReply,
-                      }
-                    : {}),
                   statusReactions: {
                     ...baseCfg.messages?.statusReactions,
                     enabled: true,
-                    ...(statusReactionOverride?.timing
-                      ? {
-                          timing: {
-                            ...baseCfg.messages?.statusReactions?.timing,
-                            ...statusReactionOverride.timing,
-                          },
-                        }
-                      : {}),
                   },
                 }
               : {}),

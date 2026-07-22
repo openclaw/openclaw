@@ -270,6 +270,8 @@ export type ClawHubPackageSearchResult = {
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  // Search may return the same slug for multiple publishers; exact install refs need this handle.
+  ownerHandle?: string | null;
   displayName: string;
   summary?: string;
   version?: string;
@@ -740,6 +742,12 @@ function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
   return parseStrictNonNegativeInteger(normalized);
 }
 
+// Successful ClawHub payloads must reject malformed UTF-8 so replacement
+// characters never pass validation or enter persistent caches.
+function decodeClawHubResponseBody(buffer: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+}
+
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
   const { response, url, hasToken } = await clawhubRequest(params);
   if (!response.ok) {
@@ -763,7 +771,7 @@ async function parseClawHubJsonBody<T>(
       new Error(`ClawHub ${url.pathname} response stalled after ${chunkTimeoutMs}ms`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(buffer)) as T;
+    return JSON.parse(decodeClawHubResponseBody(buffer)) as T;
   } catch (cause) {
     throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
   }
@@ -1335,7 +1343,7 @@ export async function fetchClawHubSkillCard(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
-  return new TextDecoder().decode(bytes);
+  return decodeClawHubResponseBody(bytes);
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1624,7 +1632,9 @@ export async function reportClawHubSkillInstallTelemetry(params: {
 }
 
 function isClawHubTelemetryDisabled(): boolean {
-  const raw = process.env.CLAWHUB_DISABLE_TELEMETRY ?? process.env.CLAWDHUB_DISABLE_TELEMETRY;
+  const raw =
+    normalizeOptionalString(process.env.CLAWHUB_DISABLE_TELEMETRY) ??
+    normalizeOptionalString(process.env.CLAWDHUB_DISABLE_TELEMETRY);
   if (!raw) {
     return false;
   }
@@ -1946,7 +1956,7 @@ export async function fetchClawHubPromotionsFeed(
     timeoutMs: params.timeoutMs,
     resourceLabel: "promotions feed",
   });
-  const payload = new TextDecoder().decode(buffer);
+  const payload = decodeClawHubResponseBody(buffer);
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(payload);

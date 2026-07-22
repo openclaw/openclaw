@@ -23,7 +23,10 @@ import {
   connectTestGatewayClient,
   ensurePairedTestGatewayClientIdentity,
 } from "./gateway-cli-backend.live-helpers.js";
+import { requireSuccessfulNativeCommandCompactionEvidence } from "./gateway-codex-harness.command-evidence.live-helpers.js";
 import {
+  buildCodexHarnessLargeOutputCommand,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   EXPECTED_CODEX_MODELS_COMMAND_TEXT,
   EXPECTED_CODEX_STATUS_COMMAND_TEXT,
   isExpectedCodexStatusCommandText,
@@ -95,7 +98,7 @@ const CODEX_HARNESS_LARGE_OUTPUT_BYTES = resolveBoundedPositiveIntEnv(
   "OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES",
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES,
   300_000,
-  1_000_000,
+  CODEX_HARNESS_MAX_LARGE_OUTPUT_BYTES,
   100_000,
 );
 const CODEX_HARNESS_SUBAGENT_COUNT = resolveBoundedPositiveIntEnv(
@@ -431,7 +434,7 @@ async function writeLiveGatewayConfig(params: {
   token: string;
   workspace: string;
 }): Promise<void> {
-  parseModelKey(params.modelKey);
+  const parsedModel = parseModelKey(params.modelKey);
   const cfg: OpenClawConfig = {
     gateway: {
       mode: "local",
@@ -500,6 +503,22 @@ async function writeLiveGatewayConfig(params: {
         },
       ],
     },
+    ...(CODEX_HARNESS_AUTH_MODE === "api-key" && parsedModel.provider === "openai"
+      ? {
+          secrets: { providers: { default: { source: "env" } } },
+          models: {
+            mode: "merge",
+            providers: {
+              openai: {
+                api: "openai-responses",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                baseUrl: "https://api.openai.com/v1",
+                models: [],
+              },
+            },
+          },
+        }
+      : {}),
   };
   await fs.writeFile(params.configPath, `${JSON.stringify(cfg, null, 2)}\n`);
 }
@@ -851,13 +870,23 @@ async function verifyCodexCompactionStress(params: {
     minimum: 0,
     sessionKey: params.sessionKey,
   });
+  await requestCodexCommandText({
+    client: params.client,
+    command: "/codex permissions yolo",
+    events: params.events,
+    expectedText: "Codex permissions set to full access.",
+    sessionKey: params.sessionKey,
+  });
 
-  const outputLines = Math.ceil(CODEX_HARNESS_LARGE_OUTPUT_BYTES / 90);
   let completedCompactions = 0;
   let reportedCompactions = 0;
   for (let turn = 1; turn <= CODEX_HARNESS_COMPACTION_STRESS_TURNS; turn += 1) {
     const acknowledgement = `CODEX-LARGE-OUTPUT-${turn}-OK`;
-    const largeOutputCommand = `node -e 'for(let i=0;i<${outputLines};i++){console.log(i.toString(36).padStart(8,"0")+"-"+((i*2654435761)>>>0).toString(16).padStart(8,"0")+"-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")}'`;
+    const commandMarker = `OPENCLAW-CODEX-LARGE-OUTPUT-${turn}-${randomBytes(6).toString("hex").toUpperCase()}`;
+    const largeOutputCommand = buildCodexHarnessLargeOutputCommand({
+      commandMarker,
+      outputBytes: CODEX_HARNESS_LARGE_OUTPUT_BYTES,
+    });
     const { text, events, compactionCount } = await requestAgentTextWithEvents({
       client: params.client,
       eventPrefixes: ["codex_app_server.", "compaction", "tool"],
@@ -880,67 +909,18 @@ async function verifyCodexCompactionStress(params: {
     ).length;
     completedCompactions += turnCompletedCompactions;
     reportedCompactions += compactionCount;
-    const commandStartIndex = events.findIndex((event) => {
-      if (
-        event.stream !== "tool" ||
-        event.data?.phase !== "start" ||
-        event.data?.name !== "bash" ||
-        !event.data?.args ||
-        typeof event.data.args !== "object"
-      ) {
-        return false;
-      }
-      const command = (event.data.args as { command?: unknown }).command;
-      // Codex may preserve the command text or wrap it in a login shell.
-      return (
-        typeof command === "string" &&
-        command.includes("node -e") &&
-        command.includes(`i<${outputLines}`) &&
-        command.includes("2654435761") &&
-        command.includes("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
-      );
-    });
-    const commandItemId = events[commandStartIndex]?.data?.itemId;
-    const commandResultIndex = events.findIndex((event, index) => {
-      const result = event.data?.result;
-      return (
-        index > commandStartIndex &&
-        event.stream === "tool" &&
-        event.data?.phase === "result" &&
-        event.data?.itemId === commandItemId &&
-        event.data?.status === "completed" &&
-        event.data?.isError === false &&
-        result !== null &&
-        typeof result === "object" &&
-        (result as { exitCode?: unknown }).exitCode === 0
-      );
-    });
-    expect(
-      commandResultIndex,
-      `large-output turn did not successfully complete the exact native command; events=${JSON.stringify(events)}`,
-    ).toBeGreaterThan(commandStartIndex);
-
     const history: { messages?: unknown[] } = await params.client.request("chat.history", {
       sessionKey: params.sessionKey,
       limit: 100,
     });
-    const serialized = JSON.stringify(history.messages ?? []);
-    const originalLengths = Array.from(serialized.matchAll(/original (\d+) chars/gu), (match) =>
-      Number(match[1]),
-    );
-    const hasTruncatedToolResult = originalLengths.some((length) => length > 10_000);
-    const postCommandCompaction = events.some(
-      (event, index) =>
-        index > commandResultIndex &&
-        event.stream === "compaction" &&
-        event.data?.phase === "end" &&
-        event.data?.completed === true,
-    );
-    // Native compaction can replace the command row after the successful large-output result.
-    expect(
-      hasTruncatedToolResult || postCommandCompaction,
-      `expected a truncated large native tool result or its later native compaction; lengths=${JSON.stringify(originalLengths)}`,
-    ).toBe(true);
+    const historyMessages = history.messages ?? [];
+    requireSuccessfulNativeCommandCompactionEvidence({
+      commandMarker,
+      events,
+      expectedCommand: largeOutputCommand,
+      messages: historyMessages,
+      minimumOutputChars: Math.floor(CODEX_HARNESS_LARGE_OUTPUT_BYTES * 0.95),
+    });
   }
 
   expect(completedCompactions, "expected at least one native automatic compaction").toBeGreaterThan(
@@ -1230,6 +1210,9 @@ async function verifyCodexGuardianProbe(params: {
   const review = assertGuardianReviewCompleted({
     events: deniedResult.events,
     label: "ask-back probe",
+    // The strict projection path is proved above. Codex may refuse this risky
+    // prompt before creating a review, so its explicit ask-back is also valid.
+    requireEvents: false,
   });
   // The approve/deny call is Codex policy-owned and may change independently.
   // OpenClaw's strict projection contract is covered by the allow probe above.

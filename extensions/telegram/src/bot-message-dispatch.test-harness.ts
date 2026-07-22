@@ -104,6 +104,7 @@ const loadModelCatalogHoisted = vi.hoisted(() => vi.fn(async () => ({})));
 const findModelInCatalogHoisted = vi.hoisted(() => vi.fn(() => null));
 const modelSupportsVisionHoisted = vi.hoisted(() => vi.fn(() => false));
 const resolveAgentDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/agent"));
+const resolveAgentWorkspaceDirHoisted = vi.hoisted(() => vi.fn(() => "/tmp/workspace"));
 const resolveDefaultModelForAgentHoisted = vi.hoisted(() =>
   vi.fn(() => ({ provider: "openai", model: "gpt-test" })),
 );
@@ -270,9 +271,10 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   findModelInCatalog: findModelInCatalogHoisted,
-  loadModelCatalog: loadModelCatalogHoisted,
+  loadPreparedModelCatalog: loadModelCatalogHoisted,
   modelSupportsVision: modelSupportsVisionHoisted,
   resolveAgentDir: resolveAgentDirHoisted,
+  resolveAgentWorkspaceDir: resolveAgentWorkspaceDirHoisted,
   resolveDefaultModelForAgent: resolveDefaultModelForAgentHoisted,
 }));
 
@@ -571,7 +573,6 @@ export function createContext(overrides?: Partial<TelegramMessageContext>): Tele
     sendChatActionHandler: { sendChatAction: vi.fn(async () => undefined) },
     ackReactionPromise: null,
     reactionApi: null,
-    removeAckAfterReply: false,
   } as unknown as TelegramMessageContext;
   base.turn = {
     storePath: "/tmp/openclaw/telegram-sessions.json",

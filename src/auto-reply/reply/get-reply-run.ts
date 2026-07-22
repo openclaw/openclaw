@@ -7,6 +7,7 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
+  resolveAgentConfig,
   type AutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
@@ -39,16 +40,18 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
@@ -586,7 +589,7 @@ export async function runPreparedReply(
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
-    isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+    isFastTestEnv: isFastTestRuntimeEnv(),
   });
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg,
@@ -617,7 +620,7 @@ export async function runPreparedReply(
     originatingChannel: ctx.OriginatingChannel,
   });
   const typingMode = resolveTypingMode({
-    configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
+    configured: resolveAgentConfig(cfg, agentId)?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned,
     isHeartbeat,
@@ -929,6 +932,7 @@ export async function runPreparedReply(
     queuedBody: string;
     transcriptBody: string;
     transcriptCommandBody: string;
+    media?: MediaFact[];
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
@@ -961,31 +965,31 @@ export async function runPreparedReply(
       sourceReplyDeliveryMode,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
+      media: opts?.media,
     });
   };
-  const skillResult =
-    process.env.OPENCLAW_TEST_FAST === "1"
-      ? {
+  const skillResult = isFastTestRuntimeEnv()
+    ? {
+        sessionEntry,
+        skillsSnapshot: sessionEntry?.skillsSnapshot,
+        systemSent: currentSystemSent,
+      }
+    : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
+        const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
+        return await ensureSkillSnapshot({
           sessionEntry,
-          skillsSnapshot: sessionEntry?.skillsSnapshot,
-          systemSent: currentSystemSent,
-        }
-      : await traceRunPhase("reply.ensure_skill_snapshot", async () => {
-          const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
-          return await ensureSkillSnapshot({
-            sessionEntry,
-            sessionEntryHandle,
-            sessionStore,
-            sessionKey,
-            storePath,
-            sessionId,
-            isFirstTurnInSession,
-            workspaceDir,
-            cfg,
-            execOverrides,
-            skillFilter: opts?.skillFilter,
-          });
+          sessionEntryHandle,
+          sessionStore,
+          sessionKey,
+          storePath,
+          sessionId,
+          isFirstTurnInSession,
+          workspaceDir,
+          cfg,
+          execOverrides,
+          skillFilter: opts?.skillFilter,
         });
+      });
   sessionEntry = skillResult.sessionEntry;
   if (sessionEntry) {
     sessionEntryHandle?.replaceCurrent(sessionEntry);
@@ -996,6 +1000,7 @@ export async function runPreparedReply(
     queuedBody,
     transcriptBody,
     transcriptCommandBody,
+    media: promptMedia,
     currentInboundContext,
   } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
@@ -1374,6 +1379,7 @@ export async function runPreparedReply(
           queuedBody,
           transcriptBody,
           transcriptCommandBody,
+          media: promptMedia,
           currentInboundContext,
         } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
@@ -1460,12 +1466,16 @@ export async function runPreparedReply(
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
+  const userTurnMediaForPersistence = [...resolveMediaFacts(ctx), ...(opts?.media ?? [])];
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
-  const userTurnTranscriptText = resolvePersistedUserTurnText(transcriptBody, {
-    hasMedia: userTurnMediaForPersistence.length > 0,
-  });
+  // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
+  // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
+  // room-event lines that merely contain the marker keep their real text.
+  const userTurnTranscriptText =
+    !hasUserBody && transcriptBody === MEDIA_ONLY_USER_TEXT
+      ? ""
+      : resolvePersistedUserTurnText(transcriptBody);
   const conversationIdentity = conversationIdentityFromMsgContext({ ctx: sessionCtx });
   const conversationRef = conversationIdentity?.conversationRef;
   const transportMessageId =
@@ -1507,12 +1517,7 @@ export async function runPreparedReply(
             ? { provenance: { kind: "internal_system" as const, sourceTool: "heartbeat" } }
             : {}),
           ...(transport ? { transport } : {}),
-          ...(userTurnMediaForPersistence.length > 0
-            ? {
-                media: userTurnMediaForPersistence,
-                mediaOnlyText: "[User sent media without caption]",
-              }
-            : {}),
+          ...(userTurnMediaForPersistence.length > 0 ? { media: userTurnMediaForPersistence } : {}),
           // Persist the message's own arrival timestamp so the single
           // LLM-boundary stamping site (normalizeMessagesForLlmBoundary) can
           // derive a stable per-message `[DOW YYYY-MM-DD HH:MM TZ]` prefix that
@@ -1576,6 +1581,7 @@ export async function runPreparedReply(
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
+    media: promptMedia,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,

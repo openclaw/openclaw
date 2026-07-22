@@ -65,3 +65,8 @@ The consumer Teams web client has been live-validated for the app interstitial, 
 ## Tool and gateway surface
 
 The `teams_meetings` agent tool supports `join`, `leave`, `status`, `transcript`, and `speak`. Gateway methods use the `teamsmeetings.*` prefix. The node command is `teamsmeetings.chrome`.
+
+## Related
+
+- [Meeting plugins overview](/plugins/meeting-plugins)
+- [Microsoft Teams channel](/channels/msteams)

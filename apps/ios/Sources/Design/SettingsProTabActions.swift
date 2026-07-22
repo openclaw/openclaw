@@ -149,10 +149,10 @@ extension SettingsProTab {
         self.selectGatewayCredentialTarget(entry.stableID, allowManualOverride: false)
     }
 
-    func forgetPendingGateway() {
+    func forgetPendingGateway() async {
         guard let entry = self.pendingForgetGateway else { return }
         self.pendingForgetGateway = nil
-        guard self.gatewayController.forgetGateway(stableID: entry.stableID) else {
+        guard await self.gatewayController.forgetGateway(stableID: entry.stableID) else {
             self.setupStatusText = String(
                 format: String(localized: "Could not forget %@."),
                 entry.name)
@@ -933,6 +933,7 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .gateway: String(localized: "Gateway")
+        case .systemAgent: String(localized: "OpenClaw")
         case .appleWatch: String(localized: "Apple Watch")
         case .approvals: String(localized: "Approvals")
         case .permissions: String(localized: "Permissions")
