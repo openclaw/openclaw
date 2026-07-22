@@ -310,10 +310,10 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `Claude catalog worker propagates caller cancellation`() async {
-        let started = LockedCounter()
+        let started = DispatchSemaphore(value: 0)
         let worker = MacNodeClaudeSessionCatalogWorker(
             listOperation: { _ in
-                started.increment()
+                started.signal()
                 while !Task.isCancelled {
                     Thread.sleep(forTimeInterval: 0.001)
                 }
@@ -321,7 +321,10 @@ struct MacNodeRuntimeTests {
             },
             readOperation: { _ in "unused" })
         let task = Task { try await worker.list(paramsJSON: nil) }
-        #expect(await self.waitForCount(1, counter: started))
+        let operationStarted = await Task.detached {
+            started.wait(timeout: .now() + 5) == .success
+        }.value
+        #expect(operationStarted)
 
         task.cancel()
         await #expect(throws: CancellationError.self) {
