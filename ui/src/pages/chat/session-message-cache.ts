@@ -3,6 +3,7 @@ import {
   DEFAULT_MAIN_KEY,
   isUiGlobalSessionKey,
   normalizeAgentId,
+  normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   resolveUiConfiguredMainKey,
   resolveUiDefaultAgentId,
@@ -63,14 +64,16 @@ function resolveCacheAgentId(host: ChatMessageCacheHost, target: ChatMessageCach
 }
 
 function resolveCanonicalSessionKey(host: ChatMessageCacheHost, sessionKey: string): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  const normalized = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  const colonIndex = sessionKey.indexOf(":");
+  const secondColon = colonIndex >= 0 ? sessionKey.indexOf(":", colonIndex + 1) : -1;
+  const rawRest = secondColon >= 0 ? sessionKey.slice(secondColon + 1) : sessionKey;
+  const lowered = normalizeLowercaseStringOrEmpty(rawRest);
   const configuredMainKey = resolveUiConfiguredMainKey(host);
   return isUiGlobalSessionKey(sessionKey) ||
-    normalized === DEFAULT_MAIN_KEY ||
-    normalized === configuredMainKey
+    lowered === DEFAULT_MAIN_KEY ||
+    lowered === configuredMainKey
     ? DEFAULT_MAIN_KEY
-    : normalized;
+    : normalizeSessionKeyForUiComparison(rawRest);
 }
 
 function resolveChatMessageCacheKey(
