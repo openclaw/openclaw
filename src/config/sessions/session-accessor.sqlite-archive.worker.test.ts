@@ -32,7 +32,10 @@ import { touchTranscriptMutationInTransaction } from "./session-accessor.sqlite-
 import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
-type TestTranscriptEvent = Parameters<typeof replaceSqliteTranscriptEvents>[1][number];
+type TestTranscriptEvent = {
+  id: string;
+  [key: string]: unknown;
+};
 
 describe("SQLite transcript archive worker", () => {
   let tempDir: string;
@@ -64,23 +67,28 @@ describe("SQLite transcript archive worker", () => {
     );
     await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
-    const database = openLifecycleTestDatabase(storePath);
-    const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
     const heartbeatTimes = [performance.now()];
     const heartbeat = setInterval(() => {
       heartbeatTimes.push(performance.now());
     }, 5);
     let materialized: Awaited<ReturnType<typeof materializeSqliteSessionStateDeletePlans>>;
     try {
+      const database = openLifecycleTestDatabase(storePath);
+      const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
       materialized = await materializeSqliteSessionStateDeletePlans([plan]);
     } finally {
       heartbeatTimes.push(performance.now());
       clearInterval(heartbeat);
     }
 
-    const heartbeatGaps = heartbeatTimes
-      .slice(1)
-      .map((time, index) => time - heartbeatTimes[index]);
+    const heartbeatGaps: number[] = [];
+    for (let index = 1; index < heartbeatTimes.length; index += 1) {
+      const current = heartbeatTimes[index];
+      const previous = heartbeatTimes[index - 1];
+      if (current !== undefined && previous !== undefined) {
+        heartbeatGaps.push(current - previous);
+      }
+    }
     expect(heartbeatTimes.length - 2).toBeGreaterThan(5);
     expect(Math.max(...heartbeatGaps)).toBeLessThan(150);
     expect(materialized).toHaveLength(1);
@@ -229,6 +237,13 @@ describe("SQLite transcript archive worker", () => {
           .select("session_id")
           .where("session_id", "=", sessionId),
       ).rows.length,
+      indexState: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_index_state")
+          .select("session_id")
+          .where("session_id", "=", sessionId),
+      ).rows.length,
       routes: executeSqliteQuerySync(
         database.db,
         db.selectFrom("session_routes").select("session_id").where("session_id", "=", sessionId),
@@ -265,6 +280,7 @@ describe("SQLite transcript archive worker", () => {
     expect(before).toEqual({
       acp: 1,
       fts: 1,
+      indexState: 1,
       routes: 1,
       sessions: 1,
       trajectory: 1,

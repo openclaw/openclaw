@@ -211,7 +211,7 @@ function normalizeArchiveWorkerError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-function runSqliteTranscriptArchiveWorker(
+function spawnSqliteTranscriptArchiveWorker(
   plans: readonly SqliteTranscriptArchiveWorkerPlan[],
 ): Promise<SqliteTranscriptArchiveWorkerResult[]> {
   const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
@@ -227,43 +227,57 @@ function runSqliteTranscriptArchiveWorker(
   }
 
   return new Promise((resolve, reject) => {
-    let settled = false;
-    const settle = (finish: () => void, terminate: boolean) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      worker.removeAllListeners();
-      if (terminate) {
-        void worker.terminate();
-      }
-      finish();
-    };
+    let results: SqliteTranscriptArchiveWorkerResult[] | undefined;
+    let workerError: Error | undefined;
     worker.once("message", (message: SqliteTranscriptArchiveWorkerMessage) => {
-      settle(() => resolve(message.results), false);
+      results = message.results;
     });
     worker.once("error", (error) => {
-      settle(() => reject(normalizeArchiveWorkerError(error)), true);
+      // An uncaught Worker error is followed by exit. Wait for that event so
+      // callers never race the Worker's SQLite/file handles on Windows.
+      workerError = normalizeArchiveWorkerError(error);
     });
     worker.once("exit", (code) => {
-      settle(
-        () =>
-          reject(
-            new Error(
-              code === 0
-                ? "SQLite transcript archive worker exited without results"
-                : `SQLite transcript archive worker exited with code ${code}`,
-            ),
-          ),
-        false,
-      );
+      worker.removeAllListeners();
+      if (workerError) {
+        reject(workerError);
+        return;
+      }
+      if (code !== 0) {
+        reject(new Error(`SQLite transcript archive worker exited with code ${code}`));
+        return;
+      }
+      if (!results) {
+        reject(new Error("SQLite transcript archive worker exited without results"));
+        return;
+      }
+      resolve(results);
     });
   });
 }
 
+// The old synchronous implementation naturally serialized whole-buffer
+// archives across the process. Preserve that peak-memory bound while moving
+// the work off-thread: independent stores may queue, but only one archive
+// Worker holds a transcript generation in memory at a time.
+let sqliteTranscriptArchiveWorkerTail: Promise<void> = Promise.resolve();
+
+function runSqliteTranscriptArchiveWorker(
+  plans: readonly SqliteTranscriptArchiveWorkerPlan[],
+): Promise<SqliteTranscriptArchiveWorkerResult[]> {
+  const execution = sqliteTranscriptArchiveWorkerTail.then(() =>
+    spawnSqliteTranscriptArchiveWorker(plans),
+  );
+  sqliteTranscriptArchiveWorkerTail = execution.then(
+    () => undefined,
+    () => undefined,
+  );
+  return execution;
+}
+
 // Runs duplicate probing, archive write, rename, fsync, and readback outside
-// SQLite write transactions and off the gateway event loop. One worker handles
-// deduped plans serially so large generations cannot multiply memory pressure.
+// SQLite write transactions and off the gateway event loop. The global worker
+// queue and per-call dedupe prevent concurrent whole-buffer memory spikes.
 export async function materializeSqliteSessionStateDeletePlans(
   plans: readonly SqliteSessionStateDeletePlan[],
 ): Promise<MaterializedSqliteSessionStateDeletePlan[]> {

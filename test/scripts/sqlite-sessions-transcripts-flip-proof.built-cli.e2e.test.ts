@@ -270,15 +270,19 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
         });
       void deletion.catch(() => undefined);
       const prePublicationProbeLatencies: number[] = [];
+      const shouldProbeBeforePublication = () => !deleteSettled && archivePublishedAt === undefined;
       try {
-        while (!deleteSettled && archivePublishedAt === undefined) {
+        while (shouldProbeBeforePublication()) {
           const probeStartedAt = performance.now();
           await probeClient.request("system-presence", {}, { timeoutMs: 2_000 });
           const probeCompletedAt = performance.now();
-          if (archivePublishedAt === undefined || probeCompletedAt < archivePublishedAt) {
-            prePublicationProbeLatencies.push(probeCompletedAt - probeStartedAt);
-          }
-          await new Promise<void>((resolve) => setTimeout(resolve, 5));
+          // Record every probe that started before publication was observed.
+          // A synchronous implementation can delay this response until after
+          // publication; dropping that crossing sample would hide the stall.
+          prePublicationProbeLatencies.push(probeCompletedAt - probeStartedAt);
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 5);
+          });
         }
       } finally {
         clearInterval(publicationPoll);
