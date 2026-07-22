@@ -142,19 +142,12 @@ function resolveIMessageApprovalCliOptions(params: {
 }
 
 /**
- * imsg always echoes the poll question as a separate caption message, so make
- * it carry what is being approved rather than an opaque slug. Truncated: the
- * poll payload is capped at 4096 bytes and the full command is on the prompt.
+ * imsg always echoes the poll question as a separate caption message, so keep
+ * it to a short label. The pending command is already rendered in full on the
+ * prompt directly above the balloon; repeating it here just doubles the text.
  */
 function buildIMessageApprovalPollCaption(view: PendingApprovalView): string {
-  const command = ("commandText" in view ? view.commandText : "")?.trim();
-  const slug = view.approvalId.slice(0, 8);
-  if (!command) {
-    return `Approve ${slug}?`;
-  }
-  const single = command.replace(/\s+/gu, " ");
-  const shown = single.length > 80 ? `${single.slice(0, 79)}…` : single;
-  return `Approve: ${shown}`;
+  return `Approve ${view.approvalId.slice(0, 8)}?`;
 }
 
 /**

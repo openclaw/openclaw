@@ -405,7 +405,7 @@ describe("imessageApprovalNativeRuntime", () => {
       expect(actionsMock.sendPoll).toHaveBeenCalledWith(
         expect.objectContaining({
           chatGuid: "iMessage;-;+15551230000",
-          question: "Approve: echo hi",
+          question: "Approve exec-pol?",
           choices: ["👍 Allow Once", "👎 Deny"],
           replyToMessageId: "prompt-guid",
         }),
