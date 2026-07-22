@@ -106,7 +106,10 @@ export type SetupMigrationStage = {
       "stagedReportDir" | "stagedRoots" | "workspaceDir"
     >;
     readConfigFile: () => Promise<OpenClawConfig>;
-    commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+    commitConfigFile: (
+      config: OpenClawConfig,
+      expectedConfig: OpenClawConfig,
+    ) => Promise<OpenClawConfig>;
   }) => Promise<{ config: OpenClawConfig; resume: SetupMigrationPromotionResume }>;
   cleanup: () => Promise<void>;
 };
@@ -533,7 +536,7 @@ export async function recoverSetupMigrationPromotion(params: {
     return createPromotionResume(found.path, journal);
   }
   if (journal.status === "committed") {
-    if (currentConfigHash === journal.configHashTarget && allFinal) {
+    if (allFinal) {
       return createPromotionResume(found.path, journal);
     }
     journal.status = "indeterminate";
@@ -939,7 +942,7 @@ export async function createSetupMigrationStage(params: {
         }
         let committed: OpenClawConfig;
         try {
-          committed = await commitConfigFile(configTarget);
+          committed = await commitConfigFile(configTarget, expectedConfig);
         } catch (error) {
           const current = await readConfigFile().catch(() => undefined);
           if (current && hashConfig(current) === journal.configHashTarget) {

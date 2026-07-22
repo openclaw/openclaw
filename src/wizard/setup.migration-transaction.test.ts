@@ -31,12 +31,8 @@ vi.mock("./setup.inference-verification.js", () => ({
   offerLiveModelVerification: mocks.verify,
 }));
 
-vi.mock("../plugins/runtime/runtime-config.js", () => ({
-  createRuntimeConfig: () => ({
-    current: () => mocks.currentConfig?.value ?? {},
-    mutateConfigFile: mocks.canonicalMutateConfigFile,
-    replaceConfigFile: vi.fn(),
-  }),
+vi.mock("../config/mutate.js", () => ({
+  mutateConfigFile: mocks.canonicalMutateConfigFile,
 }));
 
 import { runSetupMigrationImport } from "./setup.migration-import.js";
@@ -190,7 +186,10 @@ async function runImport(params: {
   root: string;
   source: string;
   currentConfig: { value: Record<string, unknown> };
-  commit?: (config: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  commit?: (
+    config: Record<string, unknown>,
+    expectedConfig: Record<string, unknown>,
+  ) => Promise<Record<string, unknown>>;
 }) {
   const workspace = path.join(params.root, "workspace");
   mocks.currentConfig = params.currentConfig;
@@ -207,9 +206,12 @@ async function runImport(params: {
     prompter: prompter(),
     runtime: runtime(),
     readConfigFile: async () => structuredClone(params.currentConfig.value),
-    commitConfigFile: async (config) => {
+    commitConfigFile: async (config, expectedConfig) => {
       const committed = params.commit
-        ? await params.commit(config as Record<string, unknown>)
+        ? await params.commit(
+            config as Record<string, unknown>,
+            expectedConfig as Record<string, unknown>,
+          )
         : config;
       params.currentConfig.value = structuredClone(committed as Record<string, unknown>);
       return committed;

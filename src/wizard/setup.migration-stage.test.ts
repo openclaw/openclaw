@@ -555,6 +555,50 @@ describe("setup migration stage", () => {
     expect(journal.status).toBe("committed");
   });
 
+  it("allows committed recovery after legitimate config changes", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000002Z");
+    const finalWorkspace = path.join(root, "workspace");
+    const targetConfig = { gateway: { mode: "local" as const } };
+    await fs.mkdir(reportDir, { recursive: true });
+    await fs.mkdir(finalWorkspace, { recursive: true });
+    await fs.writeFile(
+      path.join(reportDir, "onboarding-promotion.json"),
+      JSON.stringify({
+        version: 1,
+        status: "committed",
+        providerId: "claude",
+        configHashBefore: configHash({}),
+        configHashTarget: configHash(targetConfig),
+        components: [
+          {
+            name: "workspace",
+            stagedPath: path.join(root, "staged-workspace"),
+            finalPath: finalWorkspace,
+            status: "promoted",
+          },
+        ],
+        continuation: {
+          ...continuation(),
+          workspaceDir: finalWorkspace,
+          stagedReportDir: path.join(root, "staged-report"),
+          stagedRoots: [],
+        },
+        updatedAt: "2026-07-21T00:00:02.000Z",
+      }),
+      { mode: 0o600 },
+    );
+
+    await expect(
+      recoverSetupMigrationPromotion({
+        stateDir,
+        providerId: "claude",
+        readConfigFile: async () => ({ gateway: { port: 23456 } }),
+      }),
+    ).resolves.toBeDefined();
+  });
+
   it("rejects committed recovery after the promoted target was reset", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");

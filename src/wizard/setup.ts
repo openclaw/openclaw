@@ -1,8 +1,9 @@
+import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOnboardingAgentTarget } from "../commands/onboard-agent-target.js";
 import type { GatewayAuthChoice, OnboardMode, OnboardOptions } from "../commands/onboard-types.js";
-import { resolveGatewayPort } from "../config/config.js";
+import { ConfigMutationConflictError, resolveGatewayPort } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeSecretInputString } from "../config/types.secrets.js";
@@ -246,7 +247,23 @@ async function runSetupWizardOnce(
       prompter,
       runtime,
       readConfigFile: readValidSetupConfigFile,
-      commitConfigFile: (cfg) => writeWizardConfigFile(cfg, { allowConfigSizeDrop: true }),
+      async commitConfigFile(cfg, expectedConfig) {
+        const latest = await readSetupConfigFileSnapshot();
+        if (!latest.valid) {
+          throw new Error("Migration target config became invalid. Run `openclaw doctor`.");
+        }
+        const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
+        if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
+          throw new ConfigMutationConflictError("config changed during migration promotion", {
+            currentHash: latest.hash ?? null,
+          });
+        }
+        return await writeWizardConfigFile(cfg, {
+          allowConfigSizeDrop: true,
+          baseSnapshot: latest,
+          ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
+        });
+      },
       continueOnboarding: true,
     });
     if (migrationOutcome.kind === "resumed-promotion") {

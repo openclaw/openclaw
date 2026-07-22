@@ -695,8 +695,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
         "migrationProvider.apply",
       ) as [MigrationApplyCall, MigrationPlan];
       expect(applyCall.source).toBe(source);
-      expect(applyCall.reportDir).toContain(path.join(stateDir, "migration", "hermes"));
-      expect(appliedPlan).toBe(planned);
+      expect(applyCall.reportDir).toContain(".openclaw-migration-state-");
+      expect(applyCall.reportDir).toContain(path.join("migration", "hermes"));
+      expect(appliedPlan).not.toBe(planned);
+      expect(appliedPlan.items[0]?.target).toContain(".openclaw-migration-workspace-");
       expect(readTestConfig().agents?.defaults?.workspace).toBe(workspace);
       expect(ensureWorkspaceAndSessionsMock).not.toHaveBeenCalled();
       expect(healthCommandMock).not.toHaveBeenCalled();

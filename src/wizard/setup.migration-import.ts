@@ -494,13 +494,12 @@ function hasPendingDeferredMigrationItems(
 async function createPromotionConfigRuntime(
   config: OpenClawConfig,
 ): Promise<MigrationConfigRuntime> {
-  const { createRuntimeConfig } = await import("../plugins/runtime/runtime-config.js");
-  const canonicalRuntime = createRuntimeConfig();
+  const { mutateConfigFile } = await import("../config/mutate.js");
   let currentConfig = structuredClone(config);
   return {
     current: () => currentConfig,
     async mutateConfigFile(mutation) {
-      const result = await canonicalRuntime.mutateConfigFile(mutation);
+      const result = await mutateConfigFile(mutation);
       currentConfig = structuredClone(result.nextConfig);
       return result;
     },
@@ -616,7 +615,10 @@ export async function runSetupMigrationImport(params: {
   prompter: WizardPrompter;
   runtime: RuntimeEnv;
   readConfigFile: () => Promise<OpenClawConfig>;
-  commitConfigFile: (config: OpenClawConfig) => Promise<OpenClawConfig>;
+  commitConfigFile: (
+    config: OpenClawConfig,
+    expectedConfig: OpenClawConfig,
+  ) => Promise<OpenClawConfig>;
   continueOnboarding?: boolean;
 }): Promise<SetupMigrationImportOutcome> {
   const [
