@@ -1,7 +1,7 @@
 // Public retry helpers for plugins that need retry config or policy runners.
 
 /** Transient failures that prove the request did not reach the remote server. */
-export const PRE_CONNECT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+const PRE_CONNECT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
   "EAI_AGAIN",
   "ECONNREFUSED",
   "ENETUNREACH",
@@ -10,7 +10,7 @@ export const PRE_CONNECT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** Network failures that are transient for idempotent or deduplicated requests. */
-export const TRANSIENT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+const TRANSIENT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
   ...PRE_CONNECT_NETWORK_ERROR_CODES,
   "ECONNRESET",
   "EPIPE",

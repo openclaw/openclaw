@@ -4,12 +4,12 @@ export { avoidTrailingHighSurrogateBreak };
 
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
 
-export function clampToCodePointBoundary(text: string, index: number): number {
+function clampToCodePointBoundary(text: string, index: number): number {
   const boundary = Math.min(Math.max(0, index), text.length);
   return avoidTrailingHighSurrogateBreak(text, 0, boundary);
 }
 
-export function findWhitespaceBreak(window: string): number {
+function findWhitespaceBreak(window: string): number {
   for (let index = window.length - 1; index >= 0; index--) {
     if (/\s/.test(window.charAt(index))) {
       return index;
@@ -18,7 +18,7 @@ export function findWhitespaceBreak(window: string): number {
   return -1;
 }
 
-export function findCjkPunctuationBreak(window: string): number {
+function findCjkPunctuationBreak(window: string): number {
   for (let end = window.length; end > 0;) {
     const code = window.charCodeAt(end - 1);
     const start = code >= 0xdc00 && code <= 0xdfff && end > 1 ? end - 2 : end - 1;
