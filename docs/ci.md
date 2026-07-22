@@ -243,6 +243,7 @@ pnpm test:ui                                  # Control UI unit/browser suite
 pnpm ui:i18n:check                            # generated Control UI locale parity (release gate)
 pnpm localization:catalogs:detect              # PR-safe adopted catalog drift detection
 pnpm localization:catalogs:check               # strict generated/release parity gate
+pnpm localization:surfaces:check               # new product-string surface disposition gate
 pnpm native:i18n:baseline                     # update source-owned native extraction inventory
 pnpm native:i18n:verify                       # source inventory + Android/Apple localization safety
 pnpm native:i18n:check                        # strict translated/platform-generated parity (release gate)
