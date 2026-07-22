@@ -83,7 +83,7 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(connected.ok).toBe(true);
       expect(connected.payload).toMatchObject({
         deviceAuthMigration: { pending: true },
-        auth: { role: "operator", scopes: expect.arrayContaining(SCOPES) },
+        auth: { role: "operator", scopes: ["operator.pairing"] },
       });
       expect(
         (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
@@ -107,7 +107,8 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(crossDeviceApproval.ok).toBe(false);
 
       const config = await rpcReq(ws, "config.get", {});
-      expect(config.ok).toBe(true);
+      expect(config.ok).toBe(false);
+      expect(config.error?.message).toContain("missing scope");
     } finally {
       ws?.close();
       await harness.close();
@@ -153,8 +154,11 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(connected.ok).toBe(true);
       expect(connected.payload).toMatchObject({
         deviceAuthMigration: { pending: true },
-        auth: { role: "operator", scopes: expect.arrayContaining(SCOPES) },
+        auth: { role: "operator", scopes: ["operator.pairing"] },
       });
+      const config = await rpcReq(ws, "config.get", {});
+      expect(config.ok).toBe(false);
+      expect(config.error?.message).toContain("missing scope");
     } finally {
       ws?.close();
       await harness.close();

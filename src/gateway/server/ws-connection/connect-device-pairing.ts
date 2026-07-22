@@ -116,7 +116,7 @@ export async function authorizeGatewayConnectDevice(
     allowControlUiDeviceAuthMigration,
   } = state;
   let hasServerApprovedDeviceTokenBaseline = false;
-  let controlUiDeviceAuthMigrationPending = false;
+  let connectionAdmittedForControlUiDeviceAuthMigration = false;
   let allowControlUiDeviceAuthMigrationForUnpairedInstall = false;
   let pairedClientId: string | undefined;
   let pairedBrowserOrigin: string | undefined;
@@ -156,7 +156,7 @@ export async function authorizeGatewayConnectDevice(
     // Plain-HTTP browsers cannot create a device identity. Preserve the exact
     // legacy shared-auth posture until the operator reopens this UI through a
     // secure context; never mint or approve a device without a signed key.
-    controlUiDeviceAuthMigrationPending = true;
+    connectionAdmittedForControlUiDeviceAuthMigration = true;
   }
   if (device && devicePublicKey) {
     const formatAuditList = (items: string[] | undefined): string => {
@@ -502,7 +502,7 @@ export async function authorizeGatewayConnectDevice(
         // A shipped break-glass configuration can leave an install with no
         // approved browser. Keep only this signed, shared-authenticated
         // operator online long enough to approve its own pending request.
-        controlUiDeviceAuthMigrationPending = true;
+        connectionAdmittedForControlUiDeviceAuthMigration = true;
         scopes = ["operator.pairing"];
         return true;
       }
@@ -578,7 +578,7 @@ export async function authorizeGatewayConnectDevice(
         if (!ok) {
           return undefined;
         }
-        if (!controlUiDeviceAuthMigrationPending) {
+        if (!connectionAdmittedForControlUiDeviceAuthMigration) {
           const approvedDevice = await getPairedDevice(device.id);
           pairedClientId =
             approvedDevice?.publicKey === devicePublicKey ? approvedDevice.clientId : undefined;
@@ -635,6 +635,12 @@ export async function authorizeGatewayConnectDevice(
     return undefined;
   }
 
+  if (connectionAdmittedForControlUiDeviceAuthMigration) {
+    // Temporary upgrade admission is gateway-wide, so cap authority here before
+    // client registration, hello publication, or token issuance can observe it.
+    scopes = ["operator.pairing"];
+  }
+
   const { deviceToken, bootstrapDeviceTokens } = await issueGatewayConnectDeviceTokens({
     state: { ...state, scopes, handoffBootstrapProfile },
     scopes,
@@ -647,6 +653,6 @@ export async function authorizeGatewayConnectDevice(
     handoffBootstrapProfile,
     deviceToken,
     bootstrapDeviceTokens,
-    controlUiDeviceAuthMigrationPending,
+    controlUiDeviceAuthMigrationPending: connectionAdmittedForControlUiDeviceAuthMigration,
   };
 }

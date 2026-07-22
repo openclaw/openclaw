@@ -48,8 +48,8 @@ Connecting from a new browser or device usually requires a **one-time pairing ap
 <Warning>
 When upgrading directly from a release that used the retired
 `gateway.controlUi.dangerouslyDisableDeviceAuth=true` break-glass setting,
-OpenClaw keeps token/password-authenticated Control UI access available for
-remediation. If the browser is on plain HTTP and cannot create device identity,
+OpenClaw keeps token/password- or trusted-proxy-authenticated Control UI access
+available for pairing-only remediation. If the browser is on plain HTTP and cannot create device identity,
 reopen it over HTTPS or localhost first. Then click **Secure this browser** in
 the warning banner. The Gateway returns to normal device-auth enforcement only
 after a signed browser pairs explicitly; it never creates or approves an

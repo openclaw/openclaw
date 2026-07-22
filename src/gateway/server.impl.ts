@@ -779,7 +779,7 @@ export async function startGatewayServer(
   let controlUiDeviceAuthMigrationPending = controlUiDeviceAuthMigrationState?.status === "pending";
   if (controlUiDeviceAuthMigrationPending) {
     log.warn(
-      "Retired gateway.controlUi.dangerouslyDisableDeviceAuth config detected. Shared token/password auth remains available for remediation; reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
+      "Retired gateway.controlUi.dangerouslyDisableDeviceAuth config detected. Authenticated Control UI access remains available for pairing-only remediation; reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
     );
   }
   if (authBootstrap.generatedToken) {
