@@ -39,7 +39,7 @@ export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId
 
 // This marker is a provider fact, never an inference from invocation origin or
 // a legacy threadId. Delegated mutations may rely on it after cache hydration.
-export type TelegramMessageThreadBinding = {
+type TelegramMessageThreadBinding = {
   kind: "provider-observed-v1";
   threadId: string;
 };
