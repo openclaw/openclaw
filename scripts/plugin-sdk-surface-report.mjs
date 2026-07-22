@@ -146,7 +146,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
-      4677,
+      // +18: generic schema primitives needed by plugin-owned channel config schemas.
+      4695,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -154,7 +155,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: settled-turn full-attempt projector.
-      2841,
+      // +4: generic channel schema shape builders.
+      2845,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
