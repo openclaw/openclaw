@@ -3,7 +3,7 @@ import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
 
 const CONTRACT_VERSION = "v1";
 export const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
-const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
+export const AGENTIC_OS_RUNTIME_MAX_RECORDS = 1_024;
 const AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS = 5 * 60 * 1000;
 const AGENTIC_OS_RUNTIME_SESSION_RETENTION_MS = 24 * 60 * 60 * 1000;
 
@@ -544,6 +544,7 @@ export async function spawnAgenticOsSession(
     return rejectConflict("conflicting sessions_spawn client_request_id");
   }
   assertRecordCapacity(spawnByIdempotencyKey, "session spawn replay");
+  assertRecordCapacity(spawnPendingByIdempotencyKey, "pending session spawn");
   const pending: SpawnPending = {
     fingerprint,
     promise: (async () => {

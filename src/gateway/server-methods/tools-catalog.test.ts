@@ -170,9 +170,26 @@ describe("tools.catalog handler", () => {
     expect(runtimeMethods.find((method) => method.name === "sessions_status")).toMatchObject({
       parameters: ["session_key"],
     });
+    expect(runtimeMethods.filter((method) => method.name === "sessions_spawn")).toHaveLength(1);
+    expect(runtimeMethods.find((method) => method.name === "sessions_spawn")).toMatchObject({
+      parameters: expect.arrayContaining([
+        "client_request_id",
+        "idempotency_key",
+        "gateway_lease_id",
+        "metadata",
+      ]),
+    });
     const catalog = payload.tools ?? payload.groups.flatMap((group) => group.tools);
     expect(catalog.map((tool) => tool.id)).not.toContain("subagents.allowLease.acquire");
     expect(catalog.map((tool) => tool.id)).not.toContain("sessions_status");
+    expect(catalog.find((tool) => tool.id === "sessions_spawn")?.parameters ?? []).not.toEqual(
+      expect.arrayContaining([
+        "client_request_id",
+        "idempotency_key",
+        "gateway_lease_id",
+        "metadata",
+      ]),
+    );
   });
 
   it("omits agents_wait until Swarm is enabled for the catalog agent", async () => {

@@ -166,20 +166,6 @@ function createSessionsSpawnToolSchema(params: {
         ? '"run" one-shot; "session" persistent/thread-bound. Omit with visible=true.'
         : '"run" one-shot. Omit with visible=true; visible sessions are persistent.',
     }),
-    client_request_id: Type.Optional(
-      Type.String({ description: "Agentic OS runtime contract v1 client request id." }),
-    ),
-    idempotency_key: Type.Optional(
-      Type.String({ description: "Agentic OS runtime contract v1 idempotency key." }),
-    ),
-    gateway_lease_id: Type.Optional(
-      Type.String({ description: "Agentic OS runtime contract v1 gateway allow lease id." }),
-    ),
-    metadata: Type.Optional(
-      Type.Record(Type.String(), Type.Unknown(), {
-        description: "Agentic OS runtime contract v1 normalized session metadata.",
-      }),
-    ),
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
       description: "Hidden session cleanup; visible=true always keeps the session.",
     }),

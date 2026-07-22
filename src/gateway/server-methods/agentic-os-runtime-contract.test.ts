@@ -2,16 +2,27 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const spawnSubagentDirectMock = vi.hoisted(() =>
-  vi.fn(async () => ({
+  vi.fn(async (_params?: { task?: string }) => ({
     status: "accepted",
     childSessionKey: "agent:ai-engineer:subagent:real-child",
     runId: "run-real-child",
     mode: "run",
   })),
 );
+const waitForAgentJobMock = vi.hoisted(() => vi.fn(async () => null));
+const findTaskByRunIdForStatusMock = vi.hoisted(() =>
+  vi.fn((): { status: string; startedAt?: number; endedAt?: number } | undefined => ({
+    status: "running",
+    startedAt: 5,
+  })),
+);
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: spawnSubagentDirectMock,
+}));
+vi.mock("./agent-job.js", () => ({ waitForAgentJob: waitForAgentJobMock }));
+vi.mock("../../tasks/task-status-access.js", () => ({
+  findTaskByRunIdForStatus: findTaskByRunIdForStatusMock,
 }));
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
@@ -94,6 +105,10 @@ describe("Agentic OS runtime contract v1", () => {
       runId: "run-real-child",
       mode: "run",
     });
+    waitForAgentJobMock.mockReset();
+    waitForAgentJobMock.mockResolvedValue(null);
+    findTaskByRunIdForStatusMock.mockReset();
+    findTaskByRunIdForStatusMock.mockReturnValue({ status: "running", startedAt: 5 });
   });
 
   it("replays duplicate allow lease acquire and rejects conflicting reuse", async () => {
@@ -243,6 +258,54 @@ describe("Agentic OS runtime contract v1", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
   });
 
+  it("caps distinct slow pending spawns atomically and fails the overflow request closed", async () => {
+    const gatewayLeaseId = await acquireLease();
+    let releasePending!: () => void;
+    const pendingGate = new Promise<void>((resolve) => {
+      releasePending = resolve;
+    });
+    spawnSubagentDirectMock.mockImplementation(async (request) => {
+      await pendingGate;
+      const suffix = request?.task?.replace(/\D/g, "") || "unknown";
+      return {
+        status: "accepted",
+        childSessionKey: `agent:ai-engineer:subagent:bounded-${suffix}`,
+        runId: `run-bounded-${suffix}`,
+        mode: "run",
+      };
+    });
+    const makeSpawnParams = (index: number) => ({
+      task: `bounded pending ${index}`,
+      runtime: "subagent",
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: `spawn-pending-${index}`,
+      idempotency_key: `spawn-pending-idem-${index}`,
+      metadata: {
+        ...sessionMetadata,
+        client_request_id: `spawn-pending-${index}`,
+        idempotency_key: `spawn-pending-idem-${index}`,
+        task_digest: `sha256:pending-${index}`,
+      },
+    });
+
+    const pending = Array.from({ length: 1_024 }, (_, index) =>
+      invoke("sessions_spawn", makeSpawnParams(index)),
+    );
+    await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1_024), {
+      timeout: 10_000,
+    });
+    expectInvalid(
+      await invoke("sessions_spawn", makeSpawnParams(1_024)),
+      "pending session spawn capacity reached",
+    );
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1_024);
+
+    releasePending();
+    const completed = await Promise.all(pending);
+    expect(completed.every((call) => call[0] === true)).toBe(true);
+  });
+
   it("rejects released, expired, and wrong-owner leases before spawning", async () => {
     const gatewayLeaseId = await acquireLease();
     await invoke("subagents.allowLease.release", {
@@ -331,10 +394,49 @@ describe("Agentic OS runtime contract v1", () => {
         key: sessionKey,
         observed: expect.any(Boolean),
         message_count: expect.any(Number),
+        lifecycle_status: "running",
+        runtime_status: "running",
+        terminal: false,
       });
     }
     expect(history.messages).toEqual([]);
     expect(history).not.toHaveProperty("task");
+  });
+
+  it("projects canonical failed child lifecycle without exposing raw failure text", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const accepted = payload(
+      await invoke("sessions_spawn", {
+        task: "verify failure lifecycle",
+        runtime: "subagent",
+        agentId: "ai-engineer",
+        gateway_lease_id: gatewayLeaseId,
+        client_request_id: "spawn-failure",
+        idempotency_key: "spawn-failure-idem",
+        metadata: {
+          ...sessionMetadata,
+          client_request_id: "spawn-failure",
+          idempotency_key: "spawn-failure-idem",
+        },
+      }),
+    );
+    waitForAgentJobMock.mockResolvedValue({
+      status: "error",
+      startedAt: 10,
+      endedAt: 20,
+      error: "private provider failure",
+    });
+    const status = payload(
+      await invoke("sessions_status", { session_key: accepted.session_key as string }),
+    );
+    expect(status.runtime_session).toMatchObject({
+      lifecycle_status: "failed",
+      runtime_status: "error",
+      terminal: true,
+      started_at_ms: 10,
+      ended_at_ms: 20,
+    });
+    expect(JSON.stringify(status.runtime_session)).not.toContain("private provider failure");
   });
 
   it("prunes aged session projections after bounded retention", async () => {

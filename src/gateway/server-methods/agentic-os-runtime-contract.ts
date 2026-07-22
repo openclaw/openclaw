@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ContractInputError,
   acquireAgenticOsAllowLease,
@@ -10,6 +11,7 @@ import {
   spawnAgenticOsSession,
   statusAgenticOsSession,
 } from "../agentic-os-runtime-contract.js";
+import { waitForAgentJob } from "./agent-job.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -139,22 +141,46 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
     await respondWithContract(opts.params, opts.respond, async (input) => {
       const tracked = statusAgenticOsSession(input, authenticatedPrincipalId(opts.client));
       const sessionKey = tracked.session_key;
-      let canonical: Record<string, unknown>;
+      let canonical: Record<string, unknown> | null = null;
       try {
         canonical = await callCanonicalHandler(sessionReadHandlers["sessions.get"]!, opts, {
           sessionKey,
           limit: 1,
         });
       } catch {
-        throw new ContractInputError("canonical sessions.get read failed");
+        // A child can fail before its transcript is created; lifecycle remains authoritative.
       }
-      const messages = Array.isArray(canonical.messages) ? canonical.messages : [];
+      const messages = Array.isArray(canonical?.messages) ? canonical.messages : [];
+      const runId = typeof tracked.runId === "string" ? tracked.runId : undefined;
+      const runtimeTask = runId ? findTaskByRunIdForStatus(runId) : undefined;
+      const runSnapshot = runId ? await waitForAgentJob({ runId, timeoutMs: 0 }) : null;
+      const lifecycleStatus = runSnapshot
+        ? runSnapshot.status === "ok"
+          ? "completed"
+          : "failed"
+        : runtimeTask
+          ? runtimeTask.status === "queued" || runtimeTask.status === "running"
+            ? "running"
+            : runtimeTask.status === "succeeded"
+              ? "completed"
+              : "failed"
+          : "unknown";
       return {
         ...tracked,
         runtime_session: {
           key: sessionKey,
           observed: messages.length > 0,
           message_count: messages.length,
+          transcript_available: canonical !== null,
+          lifecycle_status: lifecycleStatus,
+          runtime_status: runSnapshot?.status ?? runtimeTask?.status ?? "unavailable",
+          terminal: runSnapshot
+            ? true
+            : runtimeTask
+              ? runtimeTask.status !== "queued" && runtimeTask.status !== "running"
+              : false,
+          started_at_ms: runSnapshot?.startedAt ?? runtimeTask?.startedAt,
+          ended_at_ms: runSnapshot?.endedAt ?? runtimeTask?.endedAt,
         },
       };
     });

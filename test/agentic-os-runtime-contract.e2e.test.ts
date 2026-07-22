@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
@@ -13,6 +14,7 @@ import {
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "agentic-os-probe/agentic-os-probe";
 const CHILD_RESULT = "agentic os real child completed";
+const FAILURE_MARKER = "agentic-os-real-child-failure";
 
 type MockModelServer = {
   baseUrl: string;
@@ -164,6 +166,18 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         }
         expect(duplicateSpawn.session_key).toBe(firstSpawn.session_key);
         expect(duplicateSpawn.runId).toBe(firstSpawn.runId);
+        const runningStatus = await client.request<{
+          runtime_session?: {
+            lifecycle_status?: string;
+            runtime_status?: string;
+            terminal?: boolean;
+          };
+        }>("sessions_status", { session_key: firstSpawn.session_key });
+        expect(runningStatus.runtime_session).toMatchObject({
+          lifecycle_status: "running",
+          runtime_status: "running",
+          terminal: false,
+        });
         const completed = await client.request<{ status?: string }>(
           "agent.wait",
           { runId: firstSpawn.runId, timeoutMs: 120_000 },
@@ -190,7 +204,15 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
           },
           { interval: 50, timeout: 30_000 },
         );
-        let status: { session_key?: string; runtime_session?: { key?: string } | null };
+        let status: {
+          session_key?: string;
+          runtime_session?: {
+            key?: string;
+            lifecycle_status?: string;
+            runtime_status?: string;
+            terminal?: boolean;
+          } | null;
+        };
         let history: { session_key?: string; messages?: unknown[] };
         try {
           status = await client.request("sessions_status", { session_key: firstSpawn.session_key });
@@ -210,7 +232,12 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
           ]),
         );
         expect(status.session_key).toBe(firstSpawn.session_key);
-        expect(status.runtime_session?.key).toBe(firstSpawn.session_key);
+        expect(status.runtime_session).toMatchObject({
+          key: firstSpawn.session_key,
+          lifecycle_status: "completed",
+          runtime_status: "ok",
+          terminal: true,
+        });
         expect(history.session_key).toBe(firstSpawn.session_key);
         expect(JSON.stringify(history.messages)).toContain(CHILD_RESULT);
         expect(modelServer.requests.filter((body) => body.includes(taskMarker))).toHaveLength(1);
@@ -223,6 +250,40 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
             session_key: firstSpawn.session_key,
           }),
         ).rejects.toThrow(/different authenticated principal/i);
+
+        const failureMetadata = {
+          ...metadata,
+          client_request_id: `spawn-failure-${probeId}`,
+          idempotency_key: `spawn-failure-idem-${probeId}`,
+          task_digest: sha256(FAILURE_MARKER),
+        };
+        const failureSpawn = await client.request<{ runId: string; session_key: string }>(
+          "sessions_spawn",
+          {
+            ...spawnParams,
+            task: `Trigger the isolated failure marker ${FAILURE_MARKER}`,
+            taskName: "agentic-os-real-gateway-failure-probe",
+            client_request_id: failureMetadata.client_request_id,
+            idempotency_key: failureMetadata.idempotency_key,
+            metadata: failureMetadata,
+          },
+        );
+        const failed = await client.request<{ status?: string }>(
+          "agent.wait",
+          { runId: failureSpawn.runId, timeoutMs: 120_000 },
+          { timeoutMs: 125_000 },
+        );
+        expect(failed.status, instance.logs()).toBe("error");
+        const failedStatus = await client.request<{
+          runtime_session?: { lifecycle_status?: string; runtime_status?: string };
+        }>("sessions_status", { session_key: failureSpawn.session_key });
+        expect(failedStatus.runtime_session).toMatchObject({
+          lifecycle_status: "failed",
+          runtime_status: "error",
+        });
+        expect(modelServer.requests.filter((body) => body.includes(FAILURE_MARKER))).toHaveLength(
+          1,
+        );
 
         const releaseParams = {
           ...acquireParams,
@@ -328,7 +389,9 @@ async function startMockModelServer(): Promise<MockModelServer> {
     requests,
     close: async () => {
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     },
   };
 }
@@ -352,7 +415,18 @@ async function handleModelRequest(
   for await (const chunk of request) {
     chunks.push(Buffer.from(chunk));
   }
-  requests.push(Buffer.concat(chunks).toString("utf8"));
+  const body = Buffer.concat(chunks).toString("utf8");
+  requests.push(body);
+  if (body.includes(FAILURE_MARKER)) {
+    response.writeHead(401, { "content-type": "application/json" });
+    response.end(
+      JSON.stringify({
+        error: { type: "invalid_request_error", code: "fixture_failure", message: "failed" },
+      }),
+    );
+    return;
+  }
+  await delay(750);
   writeModelResponse(response);
 }
 
@@ -454,6 +528,9 @@ async function writeEvidenceIfRequested(params: {
     cross_principal_status_rejected: true,
     released_lease_spawn_rejected: true,
     canonical_session_observed: true,
+    lifecycle_running_observed: true,
+    lifecycle_completed_observed: true,
+    lifecycle_failure_observed: true,
     duplicate_lease_identity_parity: true,
     duplicate_spawn_identity_parity: true,
     child_completed: true,
