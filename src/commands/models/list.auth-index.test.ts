@@ -140,10 +140,15 @@ describe("createModelListAuthIndex", () => {
   );
 
   it("uses explicit synthetic refs without loading plugin metadata", () => {
+    const metadataSnapshot = {
+      registrySource: "persisted",
+      plugins: [],
+    } as unknown as PluginMetadataSnapshot;
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,
       env: {},
+      metadataSnapshot,
       syntheticAuthProviderRefs: ["codex"],
       routeResolverFactory: dualRouteResolverFactory,
     });

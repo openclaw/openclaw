@@ -14,7 +14,8 @@ import {
 import { parseModelPolicyWildcardRef } from "../config/model-policy-ref.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
@@ -89,11 +90,20 @@ function resolveManifestPluginsForModelIdNormalization(params: {
     return params.manifestPlugins;
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  return resolvePluginMetadataSnapshot({
+  if (!workspaceDir) {
+    const currentManifestPlugins = getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+    })?.plugins;
+    if (currentManifestPlugins) {
+      return currentManifestPlugins;
+    }
+  }
+  return loadManifestMetadataSnapshot({
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  })?.plugins;
+  }).plugins;
 }
 
 function createModelManifestPluginContext(params: {
@@ -1341,11 +1351,17 @@ function resolveConfiguredModelManifestPlugins(params: {
     return undefined;
   }
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  return resolvePluginMetadataSnapshot({
+  if (!workspaceDir) {
+    return getCurrentPluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+    })?.plugins;
+  }
+  return loadManifestMetadataSnapshot({
     config: params.cfg,
     env: process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-  })?.plugins;
+  }).plugins;
 }
 
 /** Build catalog entries from configured provider model rows. */
