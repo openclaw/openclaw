@@ -1529,6 +1529,40 @@ describe("update-cli", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
+  it("runs the fresh doctor for a core-changing downgrade without plugin changes", async () => {
+    const downgradedRoot = createCaseDir("openclaw-downgraded-fresh-doctor-root");
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: downgradedRoot,
+          before: { version: "2026.4.14" },
+          after: { version: "2026.4.10" },
+        }),
+    });
+    readPackageVersion.mockResolvedValue("2026.4.14");
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "latest", version: "2026.4.10" });
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
+      "/tmp/openclaw-updated-entry.mjs",
+    );
+
+    await updateCommand({ yes: true, tag: "2026.4.10", restart: false });
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
+    expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+    expect(resolveGatewayInstallEntrypoint).toHaveBeenCalledTimes(1);
+    expect(runExec).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(runExec).mock.calls[0]?.[1]).toEqual([
+      "/tmp/openclaw-updated-entry.mjs",
+      "doctor",
+      "--repair",
+      "--non-interactive",
+      "--no-workspace-suggestions",
+      "--yes",
+    ]);
+  });
+
   it("pins the compatibility host version to the downgraded target during current-process post-core plugin convergence (#87914)", async () => {
     const downgradedRoot = createCaseDir("openclaw-downgraded-compat-root");
     setupUpdatedRootRefresh({

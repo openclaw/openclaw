@@ -607,27 +607,28 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
   }
 }
 
+export function didCoreUpdateChangeInstall(result: UpdateRunResult): boolean {
+  if (isPackageManagerUpdateMode(result.mode)) {
+    return true;
+  }
+  if (result.mode !== "git") {
+    return false;
+  }
+  const beforeSha = normalizeOptionalString(result.before?.sha);
+  const afterSha = normalizeOptionalString(result.after?.sha);
+  if (beforeSha && afterSha && beforeSha !== afterSha) {
+    return true;
+  }
+  const beforeVersion = normalizeOptionalString(result.before?.version);
+  const afterVersion = normalizeOptionalString(result.after?.version);
+  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+}
+
 export function shouldResumePostCoreUpdateInFreshProcess(params: {
   result: UpdateRunResult;
   downgradeRisk: boolean;
 }): boolean {
-  if (params.downgradeRisk) {
-    return false;
-  }
-  if (isPackageManagerUpdateMode(params.result.mode)) {
-    return true;
-  }
-  if (params.result.mode !== "git") {
-    return false;
-  }
-  const beforeSha = normalizeOptionalString(params.result.before?.sha);
-  const afterSha = normalizeOptionalString(params.result.after?.sha);
-  if (beforeSha && afterSha && beforeSha !== afterSha) {
-    return true;
-  }
-  const beforeVersion = normalizeOptionalString(params.result.before?.version);
-  const afterVersion = normalizeOptionalString(params.result.after?.version);
-  return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
+  return !params.downgradeRisk && didCoreUpdateChangeInstall(params.result);
 }
 
 export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {

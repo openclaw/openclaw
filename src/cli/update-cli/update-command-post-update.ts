@@ -33,6 +33,7 @@ import {
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
+  didCoreUpdateChangeInstall,
   markControlPlaneUpdateRestartSentinelFailureBestEffort,
   shouldResumePostCoreUpdateInFreshProcess,
   writeControlPlaneUpdateRestartSentinelBestEffort,
@@ -272,7 +273,11 @@ export async function finishUpdate(params: {
         root: postUpdateRoot,
         pluginUpdate: initialPluginUpdate,
         // A plugin-only update can replace its migration owner without replacing core.
-        freshDoctorRequired: initialPluginUpdate.sync.changed || initialPluginUpdate.npm.changed,
+        // Downgrades and resume fallbacks can also leave an updated core on disk in this process.
+        freshDoctorRequired:
+          didCoreUpdateChangeInstall(params.result) ||
+          initialPluginUpdate.sync.changed ||
+          initialPluginUpdate.npm.changed,
         yes: params.opts.yes === true,
         json: params.opts.json === true,
         timeoutMs: params.updateStepTimeoutMs,
