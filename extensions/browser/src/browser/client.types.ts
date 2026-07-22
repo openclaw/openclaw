@@ -5,7 +5,7 @@
  */
 import type { lookup as dnsLookupCb } from "node:dns";
 
-export type BrowserCdpLookup = typeof dnsLookupCb;
+type BrowserCdpLookup = typeof dnsLookupCb;
 
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
