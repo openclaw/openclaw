@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
+import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -50,6 +51,7 @@ import {
   getDeliveryLastError,
   isDeliverySuspended,
 } from "./subagent-delivery-state.js";
+import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -1143,7 +1145,10 @@ function restoreSubagentRunsOnce() {
           start: async () => {
             const response = await subagentRegistryDeps.callGateway({
               method: "agent",
-              params: launch.request,
+              params: applySubagentLaunchAuthorization(launch.request, launch.authorization),
+              // Restart replay must restore the trusted launch capability; otherwise
+              // the queued child silently falls back to its session/default route.
+              ...(launch.authorization ? { scopes: [ADMIN_SCOPE] } : {}),
               timeoutMs: launch.timeoutMs,
             });
             const gatewayRunId = readGatewayRunId(response) ?? runId;

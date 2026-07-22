@@ -608,7 +608,10 @@ describe("getReplyFromConfig message hooks", () => {
       params.sessionCtx.MediaPaths = [stagedPath];
       params.sessionCtx.MediaUrl = stagedPath;
       params.sessionCtx.MediaUrls = [stagedPath];
-      return { staged: new Map([[remotePath, stagedPath]]) };
+      const stagedFact = { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" };
+      params.ctx.media = [stagedFact];
+      params.sessionCtx.media = [stagedFact];
+      return { staged: new Map([[0, stagedPath]]) };
     });
     mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
       order.push("understand");

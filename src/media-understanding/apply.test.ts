@@ -1170,10 +1170,10 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nDescription:\nshared description");
   });
 
-  it("uses media workspace for staged files and agent workspace for provider resolution", async () => {
-    const mediaWorkspaceDir = await createTempMediaDir();
+  it("uses the agent workspace as a fallback for relative media paths", async () => {
+    const workspaceDir = await createTempMediaDir();
     const relativeImagePath = path.join("media", "inbound", "workspace.jpg");
-    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    const imagePath = path.join(workspaceDir, relativeImagePath);
     await fs.mkdir(path.dirname(imagePath), { recursive: true });
     await fs.writeFile(imagePath, "image-bytes");
     const describeImage = vi.fn(async () => ({ text: "workspace image" }));
@@ -1181,7 +1181,6 @@ describe("applyMediaUnderstanding", () => {
       Body: "",
       MediaPath: relativeImagePath,
       MediaType: "image/jpeg",
-      MediaWorkspaceDir: mediaWorkspaceDir,
     };
     const cfg: OpenClawConfig = {
       tools: {
@@ -1198,7 +1197,7 @@ describe("applyMediaUnderstanding", () => {
       ctx,
       cfg,
       agentDir: "/tmp/openclaw-agent",
-      workspaceDir: "/tmp/openclaw-workspace",
+      workspaceDir,
       providers: {
         openai: {
           id: "openai",
@@ -1212,7 +1211,7 @@ describe("applyMediaUnderstanding", () => {
     expect(describeImage).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw-agent",
-        workspaceDir: "/tmp/openclaw-workspace",
+        workspaceDir,
         fileName: "workspace.jpg",
         provider: "openai",
         model: "gpt-5.4",
@@ -1312,9 +1311,7 @@ describe("applyMediaUnderstanding", () => {
     const ctx: MsgContext = {
       Body: "preflight transcript",
       Transcript: "preflight transcript",
-      MediaPath: audioPath,
-      MediaType: "audio/ogg",
-      MediaTranscribedIndexes: [0],
+      media: [{ path: audioPath, contentType: "audio/ogg", transcribed: true }],
     };
     const cfg: OpenClawConfig = {
       tools: {

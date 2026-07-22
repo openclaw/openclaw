@@ -282,6 +282,7 @@ type SetupInferenceRunEmbeddedAgent = (
   params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
     onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
     authProfileStateMode?: "read-write" | "read-only";
+    preparedModelRuntimeMode?: "isolated-read-only";
   },
 ) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
 
@@ -3434,6 +3435,7 @@ async function runSetupInferenceTest(params: {
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
         authProfileStateMode,
+        preparedModelRuntimeMode: "isolated-read-only",
         ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(plan.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }

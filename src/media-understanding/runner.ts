@@ -40,6 +40,7 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { resolveMediaFacts } from "../media/media-facts.js";
 import { runExec } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
@@ -344,15 +345,13 @@ export function resolveMediaAttachmentLocalRoots(params: {
   ctx: MsgContext;
   workspaceDir?: string;
 }): readonly string[] {
-  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
-  // inbound attachments were staged into a sandbox workspace. The paths in
-  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
-  // container can read them), and the workspace dir is carried separately so
-  // host-side media-understanding can still resolve them via this root list.
-  const workspaceDir = params.ctx.MediaWorkspaceDir ?? params.workspaceDir;
+  const workspaceDirs = resolveMediaFacts(params.ctx).flatMap((fact) =>
+    fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
+  );
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
-    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
+    workspaceDirs,
+    params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }

@@ -474,15 +474,19 @@ const GITHUB_YAML_PINNING_GUARD_TEST_TARGETS = ["test/scripts/ci-workflow-guards
 const GITHUB_WORKFLOW_OWNER_TEST_TARGETS = new Map([
   [
     ".github/workflows/ci-build-artifacts-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-arm-testbox.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts"],
+    ["test/scripts/install-trufflehog.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
     ".github/workflows/ci-check-testbox.yml",
-    ["test/scripts/changed-lanes.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+    [
+      "test/scripts/changed-lanes.test.ts",
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+    ],
   ],
   [
     ".github/workflows/ci.yml",
@@ -713,7 +717,11 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   [".github/actions/ensure-base-commit/action.yml", ["test/scripts/ci-workflow-guards.test.ts"]],
   [
     ".github/actions/setup-node-env/action.yml",
-    ["test/scripts/package-acceptance-workflow.test.ts", "test/scripts/ci-workflow-guards.test.ts"],
+    [
+      "test/scripts/install-trufflehog.test.ts",
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ],
   ],
   [
     ".github/actions/setup-node-env/dependency-fingerprint.mjs",
@@ -1102,6 +1110,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/github/resolve-openclaw-ref.sh", ["test/scripts/resolve-openclaw-ref.test.ts"]],
   ["scripts/ci-hydrate-testbox-env.sh", ["test/scripts/ci-hydrate-testbox-env.test.ts"]],
+  ["scripts/install-trufflehog.sh", ["test/scripts/install-trufflehog.test.ts"]],
   [
     "scripts/github/run-openclaw-cross-os-release-checks.sh",
     ["test/scripts/openclaw-cross-os-release-workflow.test.ts"],
