@@ -164,6 +164,23 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async () => {
 });
 
 describe("active-memory plugin", () => {
+  it("removes an injected Context block from the retrieval query", () => {
+    const prompt = `what should I pack?\n\n${testing.buildPromptPrefix("User prefers aisle seats.")}`;
+    const query = testing.buildSearchQuery({ latestUserMessage: prompt });
+
+    expect(query).toBe("what should I pack?");
+    expect(query).not.toContain("Context:");
+    expect(query).not.toContain("User prefers aisle seats.");
+  });
+
+  it("keeps user-authored lines that merely start with Context", () => {
+    const query = testing.buildSearchQuery({
+      latestUserMessage: "Context: my project uses TypeScript",
+    });
+
+    expect(query).toBe("Context: my project uses TypeScript");
+  });
+
   it("keeps previous-message query context UTF-16 well-formed", () => {
     const query = testing.buildSearchQuery({
       latestUserMessage: "why?",

@@ -392,6 +392,116 @@ describe("buildChannelInboundEventContext", () => {
     ]);
   });
 
+  it("preserves deprecated-only structured context sources", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        supplemental: {
+          untrustedContext: [
+            {
+              label: "Deprecated supplemental metadata",
+              payload: { source: "supplemental" },
+            },
+          ],
+        },
+        extra: {
+          UntrustedStructuredContext: [
+            {
+              label: "Deprecated extra metadata",
+              payload: { source: "extra" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Deprecated extra metadata",
+        payload: { source: "extra" },
+      },
+      {
+        label: "Deprecated supplemental metadata",
+        payload: { source: "supplemental" },
+      },
+    ]);
+  });
+
+  it("prefers channel-named structured context sources over deprecated names", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        supplemental: {
+          channelStructuredContext: [
+            {
+              label: "Current supplemental metadata",
+              payload: { source: "supplemental" },
+            },
+          ],
+          untrustedContext: [
+            {
+              label: "Deprecated supplemental metadata",
+              payload: { source: "supplemental" },
+            },
+          ],
+        },
+        extra: {
+          ChannelStructuredContext: [
+            {
+              label: "Current extra metadata",
+              payload: { source: "extra" },
+            },
+          ],
+          UntrustedStructuredContext: [
+            {
+              label: "Deprecated extra metadata",
+              payload: { source: "extra" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Current extra metadata",
+        payload: { source: "extra" },
+      },
+      {
+        label: "Current supplemental metadata",
+        payload: { source: "supplemental" },
+      },
+    ]);
+  });
+
+  it("keeps deprecated structured context when a group prompt also contributes", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        supplemental: {
+          untrustedGroupSystemPrompt: "room guidance",
+        },
+        extra: {
+          UntrustedStructuredContext: [
+            {
+              label: "Deprecated channel metadata",
+              payload: { topic: "topic text" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Deprecated channel metadata",
+        payload: { topic: "topic text" },
+      },
+      {
+        label: "Group prompt context",
+        type: "group_prompt_context",
+        payload: { text: "room guidance" },
+      },
+    ]);
+  });
+
   it("preserves thread-addressable origins alongside flat reply targets", async () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({

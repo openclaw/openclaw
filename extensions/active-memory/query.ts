@@ -106,6 +106,9 @@ function normalizeSearchQueryText(text: string): string {
       if (!line) {
         return false;
       }
+      if (line === ACTIVE_MEMORY_CONTEXT_HEADER) {
+        return false;
+      }
       if (/^(conversation info|sender|untrusted context)\b/i.test(line)) {
         return false;
       }

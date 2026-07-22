@@ -87,11 +87,16 @@ function resolveMockChannelStructuredContext(
   params: Pick<BuildContextParams, "extra" | "supplemental">,
 ): ChannelStructuredContextEntries | undefined {
   const entries: ChannelStructuredContextEntries = [];
-  const extraEntries = params.extra?.ChannelStructuredContext;
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
     entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.channelStructuredContext ?? []));
+  entries.push(
+    ...(params.supplemental?.channelStructuredContext ??
+      params.supplemental?.untrustedContext ??
+      []),
+  );
 
   const groupPrompt = normalizeUntrustedGroupPrompt(
     params.supplemental?.untrustedGroupSystemPrompt,

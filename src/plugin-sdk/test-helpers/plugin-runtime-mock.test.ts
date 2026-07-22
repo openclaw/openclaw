@@ -404,4 +404,54 @@ describe("createPluginRuntimeMock", () => {
       },
     ]);
   });
+
+  it("preserves deprecated structured context beside group prompt facts", () => {
+    const runtime = createPluginRuntimeMock();
+
+    const ctx = runtime.channel.inbound.buildContext({
+      channel: "test",
+      from: "test:user:u1",
+      sender: { id: "u1" },
+      conversation: {
+        kind: "group",
+        id: "room-1",
+        routePeer: { kind: "group", id: "room-1" },
+      },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:test:group:room-1",
+      },
+      reply: {
+        to: "test:room:room-1",
+        originatingTo: "test:room:room-1",
+      },
+      message: {
+        rawBody: "hello",
+        envelopeFrom: "User One",
+      },
+      supplemental: {
+        untrustedGroupSystemPrompt: "room guidance",
+      },
+      extra: {
+        UntrustedStructuredContext: [
+          {
+            label: "Deprecated metadata",
+            payload: { value: "kept" },
+          },
+        ],
+      },
+    });
+
+    expect(ctx.ChannelStructuredContext).toEqual([
+      {
+        label: "Deprecated metadata",
+        payload: { value: "kept" },
+      },
+      {
+        label: "Group prompt context",
+        type: "group_prompt_context",
+        payload: { text: "room guidance" },
+      },
+    ]);
+  });
 });

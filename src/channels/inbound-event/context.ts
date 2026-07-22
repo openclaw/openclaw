@@ -435,11 +435,16 @@ function resolveChannelStructuredContext(params: {
   extra?: Record<string, unknown>;
 }): ChannelStructuredContextEntries | undefined {
   const entries: ChannelStructuredContextEntries = [];
-  const extraEntries = params.extra?.ChannelStructuredContext;
+  const extraEntries =
+    params.extra?.ChannelStructuredContext ?? params.extra?.UntrustedStructuredContext;
   if (Array.isArray(extraEntries)) {
     entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.channelStructuredContext ?? []));
+  entries.push(
+    ...(params.supplemental?.channelStructuredContext ??
+      params.supplemental?.untrustedContext ??
+      []),
+  );
 
   // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
   // Keeping it with untrusted context preserves its user-role boundary.
