@@ -161,7 +161,22 @@ final class GatewayTLSFirstUseClaims: @unchecked Sendable {
     }
 }
 
+struct GatewayTLSKeychainOperations: @unchecked Sendable {
+    let copyMatching: (CFDictionary, UnsafeMutablePointer<CFTypeRef?>?) -> OSStatus
+    let add: (CFDictionary) -> OSStatus
+    let update: (CFDictionary, CFDictionary) -> OSStatus
+    let delete: (CFDictionary) -> OSStatus
+
+    static let live = GatewayTLSKeychainOperations(
+        copyMatching: { SecItemCopyMatching($0, $1) },
+        add: { SecItemAdd($0, nil) },
+        update: { SecItemUpdate($0, $1) },
+        delete: { SecItemDelete($0) })
+}
+
 public enum GatewayTLSStore {
+    @TaskLocal static var keychainOperations = GatewayTLSKeychainOperations.live
+
     private enum FingerprintRead {
         case missing
         case value(String)
@@ -241,7 +256,7 @@ public enum GatewayTLSStore {
             kSecAttrGeneric as String: replacementData,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        guard SecItemUpdate(query as CFDictionary, updates as CFDictionary) == errSecSuccess else {
+        guard self.keychainOperations.update(query as CFDictionary, updates as CFDictionary) == errSecSuccess else {
             return false
         }
         return self.clearSafeLegacyFingerprint(stableID: stableID)
@@ -250,9 +265,7 @@ public enum GatewayTLSStore {
     @discardableResult
     public static func clearFingerprint(stableID: String) -> Bool {
         guard let account = self.keychainAccount(stableID: stableID) else { return false }
-        let removedCanonical = GenericPasswordKeychainStore.delete(
-            service: self.keychainService,
-            account: account)
+        let removedCanonical = self.deleteFingerprint(account: account)
         let removedLegacy = self.clearSafeLegacyFingerprint(stableID: stableID)
         let removed = removedCanonical && removedLegacy
         if removed {
@@ -263,7 +276,7 @@ public enum GatewayTLSStore {
 
     @discardableResult
     public static func clearAllFingerprints() -> Bool {
-        let removedKeychain = SecItemDelete([
+        let removedKeychain = self.keychainOperations.delete([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: self.keychainService,
         ] as CFDictionary)
@@ -361,7 +374,7 @@ public enum GatewayTLSStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = self.keychainOperations.copyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound {
             return .missing
         }
@@ -392,7 +405,7 @@ public enum GatewayTLSStore {
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        let status = self.keychainOperations.copyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound {
             return .missing
         }
@@ -431,7 +444,7 @@ public enum GatewayTLSStore {
             kSecAttrGeneric as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        let updateStatus = SecItemUpdate(query as CFDictionary, updates as CFDictionary)
+        let updateStatus = self.keychainOperations.update(query as CFDictionary, updates as CFDictionary)
         if updateStatus == errSecSuccess {
             return true
         }
@@ -453,7 +466,7 @@ public enum GatewayTLSStore {
             kSecAttrGeneric as String: data,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        let addStatus = SecItemAdd(insert as CFDictionary, nil)
+        let addStatus = self.keychainOperations.add(insert as CFDictionary)
         if addStatus == errSecSuccess {
             return fingerprint
         }
@@ -497,17 +510,23 @@ public enum GatewayTLSStore {
         let removedV2 = self.keychainAccount(
             stableID: stableID,
             prefix: self.legacyCanonicalAccountPrefix).map {
-            GenericPasswordKeychainStore.delete(
-                service: self.keychainService,
-                account: $0)
+            self.deleteFingerprint(account: $0)
         } ?? true
         guard self.canSafelyReadLegacyRawStorageKey(stableID) else { return removedV2 }
-        let removedRaw = GenericPasswordKeychainStore.delete(
-            service: self.keychainService,
-            account: stableID)
+        let removedRaw = self.deleteFingerprint(account: stableID)
         UserDefaults(suiteName: self.legacySuiteName)?
             .removeObject(forKey: self.legacyKeyPrefix + stableID)
         return removedRaw && removedV2
+    }
+
+    private static func deleteFingerprint(account: String) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: self.keychainService,
+            kSecAttrAccount as String: account,
+        ]
+        let status = self.keychainOperations.delete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
     }
 
     private static func clearAllLegacyFingerprints() {
