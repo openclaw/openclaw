@@ -493,7 +493,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.skills).toEqual(["commands"]);
   });
 
-  it("hydrates package channel command metadata while reconstructing from an older index", () => {
+  it("hydrates package metadata while dropping setup fields with mismatched CLI names", () => {
     const rootDir = makeTempDir();
     writePlugin(rootDir, "installed", "installed-");
     fs.writeFileSync(
@@ -517,6 +517,14 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
                     flags: "--tenant <tenant>",
                     negatedFlags: "--no-tenant",
                     description: "Installed tenant",
+                  },
+                },
+                {
+                  key: "credential",
+                  kind: "string",
+                  cli: {
+                    flags: "--token <value>",
+                    description: "Installed credential",
                   },
                 },
               ],

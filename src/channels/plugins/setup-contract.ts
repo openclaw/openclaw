@@ -1,3 +1,4 @@
+import { Option } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -53,6 +54,11 @@ export type ChannelSetupFieldMetadata = ChannelSetupField & {
 export type ChannelSetupMetadata = {
   fields: readonly ChannelSetupFieldMetadata[];
 };
+
+export function resolveChannelSetupFieldCliAttributeName(flags: string): string | undefined {
+  const option = new Option(flags);
+  return option.long ? option.attributeName() : undefined;
+}
 
 type ChannelSetupFieldValue<Field extends ChannelSetupField> = Field extends {
   kind: "boolean";
@@ -335,12 +341,31 @@ export function defineChannelSetupContract<const Fields extends Record<string, C
   params: { fields: Fields } & ChannelSetupContractAdapterParams<Fields>,
 ): ChannelOwnedSetupContract {
   const { fields } = params;
+  const fieldEntries = Object.entries(fields);
+  // The field key crosses serialized projections, Commander parsing, and parseInput.
+  // Match Commander's attribute name so all three stay aligned by construction.
+  for (const [key, field] of fieldEntries) {
+    let attributeName: string | undefined;
+    try {
+      attributeName = resolveChannelSetupFieldCliAttributeName(field.cli.flags);
+    } catch {
+      throw new Error(`Channel setup field "${key}" has invalid CLI flags "${field.cli.flags}".`);
+    }
+    if (!attributeName) {
+      throw new Error(`Channel setup field "${key}" must declare a long CLI flag.`);
+    }
+    if (attributeName !== key) {
+      throw new Error(
+        `Channel setup field "${key}" must match camelCased long flag name "${attributeName}" from "${field.cli.flags}".`,
+      );
+    }
+  }
   const adapter =
     params.adapter ??
     (params.legacyAdapter as TypedChannelSetupAdapter<ChannelSetupInputForFields<Fields>>);
   const prepareAccountConfigInput = adapter.prepareAccountConfigInput;
   const metadata: ChannelSetupMetadata = {
-    fields: Object.entries(fields).map(([key, field]) => Object.assign({ key }, field)),
+    fields: fieldEntries.map(([key, field]) => Object.assign({}, field, { key })),
   };
   return {
     kind: "channel-owned",

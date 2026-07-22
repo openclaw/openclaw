@@ -1,7 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
-import { defineChannelSetupContract } from "./setup-contract.js";
+import { defineChannelSetupContract, type ChannelSetupField } from "./setup-contract.js";
 
 describe("defineChannelSetupContract", () => {
+  it("requires field keys to match camelCased long flag names", () => {
+    expect(() =>
+      defineChannelSetupContract({
+        fields: {
+          credential: {
+            kind: "string",
+            cli: { flags: "--token <value>", description: "Credential" },
+          },
+        },
+        adapter: { applyAccountConfig: ({ cfg }) => cfg },
+      }),
+    ).toThrow('Channel setup field "credential" must match camelCased long flag name "token"');
+
+    expect(() =>
+      defineChannelSetupContract({
+        fields: {
+          apiToken: {
+            kind: "string",
+            cli: { flags: "--api-token <value>", description: "API token" },
+          },
+        },
+        adapter: { applyAccountConfig: ({ cfg }) => cfg },
+      }),
+    ).not.toThrow();
+  });
+
+  it("publishes the validated map key over a field-owned key property", () => {
+    const contract = defineChannelSetupContract({
+      fields: {
+        apiToken: {
+          key: "credential",
+          kind: "string",
+          cli: { flags: "--api-token <value>", description: "API token" },
+        } as ChannelSetupField,
+      },
+      adapter: { applyAccountConfig: ({ cfg }) => cfg },
+    });
+
+    expect(contract.metadata.fields[0]?.key).toBe("apiToken");
+  });
+
   it("parses channel-owned fields and gives adapters inferred input types", () => {
     const applyAccountConfig = vi.fn(
       ({

@@ -160,7 +160,7 @@ export const setupContract = defineChannelSetupContract({
 }
 ```
 
-Supported field kinds are `string`, `boolean`, `integer`, `string-list`, and `choice`. Use `sensitive: true` for credentials. Boolean fields may add `cli.negatedFlags` when both positive and `--no-*` forms are needed. `channel`, `account`, and the account display `name` remain the shared control envelope.
+Supported field kinds are `string`, `boolean`, `integer`, `string-list`, and `choice`. Use `sensitive: true` for credentials. Each field key must equal the camelCased attribute name of its long CLI flag, such as `apiToken` for `--api-token`. Boolean fields may add `cli.negatedFlags` when both positive and `--no-*` forms are needed. `channel`, `account`, and the account display `name` remain the shared control envelope.
 
 The released `setup`/`ChannelSetupInput` adapter stays available for existing external plugins. New plugins should expose `setupContract`; OpenClaw always prefers it when both are present.
 
