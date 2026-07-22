@@ -694,12 +694,43 @@ export function createMemorySearchTool(options: {
                 pausedIndexIdentityReason =
                   resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
                 if (pausedIndexIdentityReason) {
+                  // Cached manager may predate a memory index identity change
+                  // (e.g. session memory enabled after the gateway cached the
+                  // manager). Close once, reacquire against current identity,
+                  // and retry the search before returning unavailable.
+                  const { closeMemorySearchManager } = await loadMemoryToolRuntime();
+                  await closeMemorySearchManager?.({ cfg, agentId });
+                  const refreshed = await runWithDefaultDeadline(async () =>
+                    trackMemoryManager(
+                      await getMemoryManagerContextWithPurpose({
+                        cfg,
+                        agentId,
+                        purpose: memoryManagerPurpose,
+                        acquireLocalService: options.acquireLocalService,
+                        withLease: options.withLease,
+                      }),
+                    ),
+                  );
+                  if (!("error" in refreshed)) {
+                    managerMs = refreshed.debug?.managerMs;
+                    managerCacheState = refreshed.debug?.managerCacheState;
+                    activeMemory = refreshed;
+                    rawResults = await searchActiveMemory();
+                    pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                      activeMemory.manager.status(),
+                    );
+                  }
+                }
+                if (pausedIndexIdentityReason) {
                   return;
                 }
                 // One-shot CLI managers have no background lifecycle, so keep their bootstrap
                 // retry. Long-lived QMD managers must not run update work in the tool hot path.
+                // Explicit corpus=sessions zero-hit is a legitimate miss; do not force a full
+                // sync that can turn a normal miss into a slow or timing-sensitive tool call.
                 if (
                   rawResults.length === 0 &&
+                  requestedCorpus !== "sessions" &&
                   activeMemory.manager.sync &&
                   (statusBeforeRetry.backend !== "qmd" || options.oneShotCliRun === true)
                 ) {
