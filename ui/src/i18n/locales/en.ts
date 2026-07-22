@@ -4353,6 +4353,7 @@ export const en: TranslationMap = {
     sessionDiscussion: {
       title: "Discussion",
       show: "Show discussion",
+      hide: "Hide discussion",
       disconnected: "Gateway is disconnected.",
       loading: "Loading discussion…",
       opening: "Opening discussion…",
