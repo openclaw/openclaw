@@ -4,6 +4,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
+import { resetLegacyWorkspaceStateCheckForTest } from "../agents/workspace-legacy-state.test-support.js";
 import {
   deleteWorkspaceState,
   prepareWorkspaceStateDeletion,
@@ -28,6 +30,7 @@ describe("legacy workspace Doctor migration", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
+      resetLegacyWorkspaceStateCheckForTest();
       envSnapshot?.restore();
       envSnapshot = undefined;
       cleanup();
@@ -108,6 +111,108 @@ describe("legacy workspace Doctor migration", () => {
         expect.objectContaining({ kind: "attestation", workspaceKey: orphanKey }),
       ]),
     });
+  });
+
+  it("detects and migrates legacy state in sandbox workspace copies", async () => {
+    const context = setup();
+    const sandboxContext = {
+      ...context,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: context.workspaceDir,
+            sandbox: { mode: "all", workspaceAccess: "ro" },
+          },
+        },
+      } satisfies OpenClawConfig,
+    };
+    const sandboxCopyDir = path.join(context.stateDir, "sandboxes", "agent-main-deadbeef");
+    await fsp.mkdir(sandboxCopyDir, { recursive: true });
+    const completedAt = "2026-07-15T10:01:00.000Z";
+    const setupPath = path.join(sandboxCopyDir, "openclaw-workspace-state.json");
+    await fsp.writeFile(setupPath, JSON.stringify({ setupCompletedAt: completedAt }), "utf8");
+
+    // The runtime gate blocks the sandboxed turn on the copy, but Doctor must
+    // be able to find and clear it (previously detection missed these dirs).
+    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: sandboxCopyDir })).toThrow(
+      /Legacy workspace setup state requires migration/,
+    );
+    const detected = detect(sandboxContext);
+    expect(detected.hasLegacy).toBe(true);
+    expect(detected.sources).toEqual([
+      expect.objectContaining({
+        kind: "setup",
+        sourcePath: path.join(
+          resolveWorkspaceStateIdentity(sandboxCopyDir).workspacePath,
+          "openclaw-workspace-state.json",
+        ),
+      }),
+    ]);
+
+    const result = await migrate(sandboxContext);
+
+    expect(result.warnings).toEqual([]);
+    expect(fs.existsSync(setupPath)).toBe(false);
+    expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: sandboxCopyDir })).not.toThrow();
+    const identity = resolveWorkspaceStateIdentity(sandboxCopyDir);
+    expect(
+      openOpenClawStateDatabase({ env: context.env })
+        .db.prepare("SELECT setup_completed_at FROM workspace_setup_state WHERE workspace_key = ?")
+        .get(identity.workspaceKey),
+    ).toEqual({ setup_completed_at: completedAt });
+  });
+
+  it.each([
+    { name: "sandbox mode is off", sandbox: { mode: "off", workspaceAccess: "ro" } },
+    { name: "workspace access is rw", sandbox: { mode: "all", workspaceAccess: "rw" } },
+  ] as const)("ignores sandbox copies when $name", async ({ sandbox }) => {
+    const context = setup();
+    const sandboxContext = {
+      ...context,
+      cfg: {
+        agents: {
+          defaults: { workspace: context.workspaceDir, sandbox },
+        },
+      } satisfies OpenClawConfig,
+    };
+    const sandboxCopyDir = path.join(context.stateDir, "sandboxes", "agent-main-deadbeef");
+    await fsp.mkdir(sandboxCopyDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(sandboxCopyDir, "openclaw-workspace-state.json"),
+      JSON.stringify({ setupCompletedAt: "2026-07-15T10:01:00.000Z" }),
+      "utf8",
+    );
+
+    expect(detect(sandboxContext).hasLegacy).toBe(false);
+  });
+
+  it("detects legacy state in a custom sandbox workspace root", async () => {
+    const context = setup();
+    const customRoot = path.join(context.homeDir, "custom-sandboxes");
+    const sandboxCopyDir = path.join(customRoot, "agent-main-deadbeef");
+    await fsp.mkdir(sandboxCopyDir, { recursive: true });
+    await fsp.writeFile(
+      path.join(sandboxCopyDir, "openclaw-workspace-state.json"),
+      JSON.stringify({ setupCompletedAt: "2026-07-15T10:01:00.000Z" }),
+      "utf8",
+    );
+    const sandboxContext = {
+      ...context,
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: context.workspaceDir,
+            sandbox: { mode: "all", workspaceAccess: "ro", workspaceRoot: customRoot },
+          },
+        },
+      } satisfies OpenClawConfig,
+    };
+
+    const detected = detect(sandboxContext);
+
+    expect(detected.sources).toEqual([
+      expect.objectContaining({ kind: "setup", sourcePath: expect.stringContaining(customRoot) }),
+    ]);
   });
 
   it("imports setup and attestation state, records receipts, and removes files", async () => {
