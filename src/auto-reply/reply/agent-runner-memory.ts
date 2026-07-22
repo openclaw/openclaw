@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -777,6 +778,18 @@ export async function runPreflightCompactionIfNeeded(params: {
   if (params.isHeartbeat || isCli) {
     return entry ?? params.sessionEntry;
   }
+
+  // Defense in depth: if the resolved backend owns native compaction, do not
+  // run OpenClaw's own preflight compaction. This catches sessions that reach
+  // a CLI backend via provider/model routing but where isCliProvider() returns
+  // false because the provider string differs from the backend key.
+  const resolvedBackend = resolveCliBackendConfig(params.followupRun.run.provider, params.cfg);
+  if (resolvedBackend?.ownsNativeCompaction) {
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} provider=${params.followupRun.run.provider} reason=owns_native_compaction`,
+    );
+    return entry ?? params.sessionEntry;
+  }
   if (
     followupUsesCodexRuntime({
       cfg: params.cfg,
@@ -1125,7 +1138,13 @@ export async function runMemoryFlushIfNeeded(params: {
     followupRun: params.followupRun,
     sessionEntry: entry,
   });
-  const canAttemptFlush = memoryFlushWritable && !params.isHeartbeat && !isCli;
+  // Defense in depth: also skip memory flush for backends that own native compaction.
+  const flushBackendOwnsCompaction =
+    !isCli &&
+    resolveCliBackendConfig(params.followupRun.run.provider, params.cfg)?.ownsNativeCompaction ===
+      true;
+  const canAttemptFlush =
+    memoryFlushWritable && !params.isHeartbeat && !isCli && !flushBackendOwnsCompaction;
   const contextWindowTokens = resolveMemoryFlushContextWindowTokens({
     cfg: params.cfg,
     provider: resolveFollowupContextConfigProvider({
