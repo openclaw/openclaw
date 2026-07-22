@@ -104,7 +104,7 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
   const getProviderRuntimeHandle = (): PreparedProviderRuntimePluginHandle => {
     if (
       providerRuntimeHandle &&
-      providerRuntimeHandle.prepared === true &&
+      providerRuntimeHandle.prepared &&
       providerRuntimeHandle.provider === params.provider &&
       providerRuntimeHandle.modelId === params.modelId &&
       providerRuntimeHandle.workspaceDir === effectiveWorkspace

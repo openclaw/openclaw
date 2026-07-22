@@ -289,7 +289,10 @@ describe("AgentRuntimePlan", () => {
       route: "dispatcher" as const,
       reason: "prepared-route",
     });
-    const providerRuntimeHandle: ProviderRuntimePluginHandle & { prepared: true } = {
+    const providerRuntimeHandle: ProviderRuntimePluginHandle & {
+      modelId: string;
+      prepared: true;
+    } = {
       provider: "openai",
       modelId: "gpt-5.4",
       prepared: true,
@@ -328,7 +331,7 @@ describe("AgentRuntimePlan", () => {
     );
     resolveProviderFollowupFallbackRouteMock.mockClear();
 
-    const suppliedHandle: ProviderRuntimePluginHandle & { prepared: true } = {
+    const suppliedHandle: ProviderRuntimePluginHandle & { modelId: string; prepared: true } = {
       provider: "openai",
       modelId: "gpt-5.4",
       prepared: true,
@@ -364,7 +367,7 @@ describe("AgentRuntimePlan", () => {
     );
     resolveProviderFollowupFallbackRouteMock.mockClear();
 
-    const suppliedHandle: ProviderRuntimePluginHandle & { prepared: true } = {
+    const suppliedHandle: ProviderRuntimePluginHandle & { modelId: string; prepared: true } = {
       provider: "openai",
       modelId: "gpt-5.4",
       prepared: true,
