@@ -5,12 +5,11 @@ const consultRealtimeVoiceAgent = vi.hoisted(() => vi.fn(async () => ({ text: "d
 
 vi.mock("../talk/agent-consult-runtime.js", () => ({ consultRealtimeVoiceAgent }));
 
-import {
-  consultMeetingAgent,
-  createMeetingRealtimeEngineBindings,
-  type MeetingAgentConsultSurface,
-} from "./agent-consult.js";
-import type { MeetingPlatformRuntimeMetadata } from "./platform-adapter.js";
+import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
+import type {
+  MeetingAgentConsultSurface,
+  MeetingPlatformRuntimeMetadata,
+} from "./platform-adapter.js";
 
 const surface: MeetingAgentConsultSurface = {
   id: "test-meeting",
@@ -42,10 +41,12 @@ const platform: MeetingPlatformRuntimeMetadata = {
   },
 };
 
-function createBindings() {
+function createBindings(agentId: string | undefined) {
   return createMeetingRealtimeEngineBindings({
     platform,
-    config: { realtime: { agentId: "Support", toolPolicy: "safe-read-only" } },
+    config: {
+      realtime: { ...(agentId ? { agentId } : {}), toolPolicy: "safe-read-only" },
+    },
     fullConfig: { agents: { list: [{ id: "operator", default: true }] } },
     runtime: { agent: {} } as never,
     logger: {} as never,
@@ -62,18 +63,13 @@ function makeSession(
   } as unknown as RealtimeVoiceBridgeSession;
 }
 
-describe("consultMeetingAgent", () => {
+describe("createMeetingRealtimeEngineBindings", () => {
   beforeEach(() => {
     consultRealtimeVoiceAgent.mockClear();
   });
 
   it("targets the configured default agent when agentId is omitted", async () => {
-    await consultMeetingAgent({
-      surface,
-      config: { agents: { list: [{ id: "operator", default: true }] } },
-      runtime: { agent: {} } as never,
-      logger: {} as never,
-      toolPolicy: "safe-read-only",
+    await createBindings(undefined).consultAgent({
       meetingSessionId: "meeting-1",
       args: { question: "What should I say?" },
       transcript: [],
@@ -89,13 +85,7 @@ describe("consultMeetingAgent", () => {
   });
 
   it("keeps an explicit agentId ahead of the configured default", async () => {
-    await consultMeetingAgent({
-      surface,
-      config: { agents: { list: [{ id: "operator", default: true }] } },
-      runtime: { agent: {} } as never,
-      logger: {} as never,
-      agentId: "Support",
-      toolPolicy: "safe-read-only",
+    await createBindings("Support").consultAgent({
       meetingSessionId: "meeting-2",
       args: { question: "What should I say?" },
       transcript: [],
@@ -111,7 +101,7 @@ describe("consultMeetingAgent", () => {
   });
 
   it("derives realtime engine bindings from platform metadata", async () => {
-    const bindings = createBindings();
+    const bindings = createBindings("Support");
 
     expect(bindings.platform).toEqual({
       displayName: "Test Meeting",
@@ -143,7 +133,7 @@ describe("consultMeetingAgent", () => {
     const submitToolResult = vi.fn(() => accepted);
     const events: Array<{ type: string; final?: boolean }> = [];
 
-    const handled = createBindings().handleToolCall({
+    const handled = createBindings("Support").handleToolCall({
       strategy: "agent",
       session: makeSession(submitToolResult),
       event: {
@@ -171,7 +161,7 @@ describe("consultMeetingAgent", () => {
     const events: Array<{ type: string }> = [];
 
     await expect(
-      createBindings().handleToolCall({
+      createBindings("Support").handleToolCall({
         strategy: "bidi",
         session: makeSession(submitToolResult),
         event: {

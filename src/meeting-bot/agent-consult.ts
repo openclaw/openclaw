@@ -25,9 +25,7 @@ import type {
   MeetingRuntimePlatform,
 } from "./realtime-engine.js";
 
-export type { MeetingAgentConsultSurface } from "./platform-adapter.js";
-
-export function resolveMeetingRealtimeTools(
+function resolveMeetingRealtimeTools(
   policy: RealtimeVoiceAgentConsultToolPolicy,
 ): RealtimeVoiceTool[] {
   return resolveRealtimeVoiceAgentConsultTools(policy);
@@ -107,7 +105,7 @@ async function submitMeetingConsultWorkingResponse(params: {
   );
 }
 
-export async function consultMeetingAgent(params: {
+async function consultMeetingAgent(params: {
   surface: MeetingAgentConsultSurface;
   config: OpenClawConfig;
   runtime: PluginRuntime;
@@ -147,7 +145,7 @@ export async function consultMeetingAgent(params: {
   });
 }
 
-export async function handleMeetingRealtimeConsultToolCall(params: {
+async function handleMeetingRealtimeConsultToolCall(params: {
   surface: MeetingAgentConsultSurface;
   strategy: string;
   session: RealtimeVoiceBridgeSession;
