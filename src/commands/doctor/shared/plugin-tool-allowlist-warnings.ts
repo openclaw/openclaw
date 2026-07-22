@@ -11,6 +11,7 @@ import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
+  type ToolProfileDefinitions,
 } from "../../../agents/tool-policy.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -414,10 +415,14 @@ function nonSandboxToolPolicyBlocksMcp(policy: unknown, serverNames: readonly st
   return !entriesMatchAnyMcpTool(entries, serverNames);
 }
 
-function profileToolPolicyBlocksMcp(policy: unknown, serverNames: readonly string[]): boolean {
+function profileToolPolicyBlocksMcp(
+  policy: unknown,
+  serverNames: readonly string[],
+  profileDefinitions?: ToolProfileDefinitions,
+): boolean {
   const profile = hasRecord(policy) && typeof policy.profile === "string" ? policy.profile : "";
   const profilePolicy = mergeAlsoAllowPolicy(
-    resolveToolProfilePolicy(profile),
+    resolveToolProfilePolicy(profile, profileDefinitions),
     getList(policy, "alsoAllow"),
   );
   return Boolean(profilePolicy && !toolPolicyAllowsAnyMcpServer(profilePolicy, serverNames));
@@ -454,8 +459,8 @@ function nonSandboxToolPoliciesBlockMcp(params: {
   };
 
   return (
-    profileToolPolicyBlocksMcp(profilePolicy, params.serverNames) ||
-    profileToolPolicyBlocksMcp(providerProfilePolicy, params.serverNames) ||
+    profileToolPolicyBlocksMcp(profilePolicy, params.serverNames, globalTools?.profiles) ||
+    profileToolPolicyBlocksMcp(providerProfilePolicy, params.serverNames, globalTools?.profiles) ||
     nonSandboxToolPolicyBlocksMcp(globalTools, params.serverNames) ||
     nonSandboxToolPolicyBlocksMcp(globalProviderPolicy, params.serverNames) ||
     nonSandboxToolPolicyBlocksMcp(agentTools, params.serverNames) ||
