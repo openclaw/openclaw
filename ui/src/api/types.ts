@@ -492,6 +492,7 @@ type SessionCompactionCheckpointPreview = Pick<
 
 export type GatewaySessionRow = {
   key: string;
+  createdBy?: import("../../../packages/gateway-protocol/src/schema/sessions.js").SessionCreatorIdentity;
   spawnedBy?: string;
   /** Collector swarm group that owns this child session, when applicable. */
   swarmGroupId?: string;

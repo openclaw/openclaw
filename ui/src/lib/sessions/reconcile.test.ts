@@ -43,6 +43,45 @@ test("sessions.changed removes a label when the event carries null", () => {
   expect(reconciled.result?.sessions[0]?.displayName).toBeUndefined();
 });
 
+test("sessions.changed invalidates the complete creator facet until canonical refresh", () => {
+  const key = "agent:main:main";
+  const result = buildResult([
+    {
+      key,
+      kind: "global",
+      updatedAt: 1,
+      createdBy: { id: "profile-ada", label: "Ada" },
+    },
+  ]);
+  result.creators = [{ id: "profile-ada", label: "Ada" }];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "reset",
+    updatedAt: 2,
+    createdBy: { id: "profile-bob", label: "Bob" },
+  });
+
+  expect(reconciled.result?.sessions[0]?.createdBy?.id).toBe("profile-bob");
+  expect(reconciled.result?.creators).toBeUndefined();
+});
+
+test("sessions.changed preserves the creator facet when ownership is unchanged", () => {
+  const key = "agent:main:main";
+  const createdBy = { id: "profile-ada", label: "Ada" };
+  const result = buildResult([{ key, kind: "global", updatedAt: 1, createdBy }]);
+  result.creators = [createdBy];
+
+  const reconciled = reconcileSessionChanged(result, {
+    sessionKey: key,
+    reason: "send",
+    updatedAt: 2,
+    createdBy,
+  });
+
+  expect(reconciled.result?.creators).toEqual([createdBy]);
+});
+
 describe("reconcileSessionChanged", () => {
   it("drops a cleared icon from the merged row", () => {
     const key = "agent:main:main";

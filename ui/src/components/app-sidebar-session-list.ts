@@ -139,7 +139,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          <span class="sidebar-session-indicator">${leadingIndicator}</span>
+          <span class="sidebar-session-indicator">${leadingIndicator}</span
+          >${this.renderSidebarSessionOwnerChip(session)}
           <span class="sidebar-recent-session__text">
             <span class="sidebar-recent-session__name hover-marquee"
               >${session.archived
@@ -559,10 +560,8 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
-        // Threads hides its bare header when empty, except while a draft needs
-        // a home or a session drag needs the unpin drop target. Empty custom
-        // categories keep rendering: they are user-created containers and the
-        // "New group…" / drag-into-group flows depend on seeing them.
+        // Threads hides its bare empty header; unfiltered custom categories stay
+        // visible because creation and drag flows depend on them as drop targets.
         if (
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
@@ -653,6 +652,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
             `
           : nothing}
         <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+          ${this.renderSidebarSessionCreatorFilter()}
           ${this.renderSessionListBody(visibleSessions, {
             showDraft:
               Boolean(this.draftSessionAgentId) &&
@@ -677,6 +677,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
   private renderSessionCatalogs(
     navigationState: ReturnType<AppSidebarSessionListElement["getSessionNavigationState"]>,
   ) {
+    const creatorRows = this.sessionCreatorCatalogRows();
     return renderSessionCatalogGroups({
       catalogs: this.sessionCatalogs,
       connected: this.connected,
@@ -686,10 +687,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
       projectGrouping: this.catalogProjectGrouping,
-      liveRows: [
-        ...(this.sessionsResult?.sessions ?? []),
-        ...Object.values(this.sessionRowsByAgent).flat(),
-      ],
+      liveRows: creatorRows.liveRows,
+      hiddenLiveSessionKeys: creatorRows.hiddenLiveSessionKeys,
+      hideUnownedSessions: this.sessionCreatorFilterActive,
       renderLiveRow: (row, display) =>
         this.renderRecentSession(navigationState.toSidebarSession(row), display),
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),
