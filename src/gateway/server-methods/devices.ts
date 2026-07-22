@@ -17,6 +17,7 @@ import {
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
   getPendingDevicePairing,
+  hasEffectivePairedDeviceRole,
   listDevicePairing,
   removePairedDevice,
   type DeviceAuthToken,
@@ -229,15 +230,15 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const list = await listDevicePairing();
     const authz = resolveDeviceSessionAuthz(client);
-    const visibleList =
-      authz.callerDeviceId && !authz.isAdminCaller
-        ? {
-            pending: list.pending.filter(
-              (request) => request.deviceId.trim() === authz.callerDeviceId,
-            ),
-            paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
-          }
-        : list;
+    let visibleList = list;
+    if (authz.isDeviceAuthMigrationSession && !authz.callerDeviceId) {
+      visibleList = { pending: [], paired: [] };
+    } else if (authz.callerDeviceId && !authz.isAdminCaller) {
+      visibleList = {
+        pending: list.pending.filter((request) => request.deviceId.trim() === authz.callerDeviceId),
+        paired: list.paired.filter((device) => device.deviceId.trim() === authz.callerDeviceId),
+      };
+    }
     respond(
       true,
       {
@@ -271,6 +272,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const authz = resolveDeviceSessionAuthz(client);
     let migrationApprovalScopes: string[] | undefined;
     if (!authz.isAdminCaller) {
+      if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_APPROVAL_DENIED_MESSAGE),
+        );
+        return;
+      }
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
         respond(
@@ -399,9 +408,12 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
+    const approvedEffectiveOperator = hasEffectivePairedDeviceRole(approved.device, "operator");
     if (authz.isDeviceAuthMigrationCaller) {
       client!.isControlUiDeviceAuthMigration = false;
       client!.isControlUiDeviceAuthMigrationSession = false;
+    }
+    if (approvedEffectiveOperator) {
       context.completeControlUiDeviceAuthMigration?.(normalizedDeviceId);
     }
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
@@ -427,6 +439,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
+    if (authz.isDeviceAuthMigrationSession && !authz.isDeviceAuthMigrationCaller) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, DEVICE_PAIR_REJECTION_DENIED_MESSAGE),
+      );
+      return;
+    }
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {

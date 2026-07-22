@@ -88,6 +88,23 @@ describe("Control UI device-auth upgrade migration", () => {
         (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
       ).toBeUndefined();
 
+      const { requestDevicePairing } = await import("../infra/device-pairing.js");
+      const otherIdentityPath = path.join(
+        os.tmpdir(),
+        `openclaw-device-auth-migration-device-less-target-${randomUUID()}.sqlite`,
+      );
+      const otherIdentity = loadOrCreateDeviceIdentity({ path: otherIdentityPath });
+      const otherRequest = await requestDevicePairing({
+        deviceId: otherIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem),
+        role: "operator",
+        scopes: SCOPES,
+      });
+      const crossDeviceApproval = await rpcReq(ws, "device.pair.approve", {
+        requestId: otherRequest.request.requestId,
+      });
+      expect(crossDeviceApproval.ok).toBe(false);
+
       const config = await rpcReq(ws, "config.get", {});
       expect(config.ok).toBe(true);
     } finally {

@@ -32,6 +32,7 @@ describe("device management authz", () => {
     expect(
       resolveDeviceSessionAuthz(
         client({
+          isControlUiDeviceAuthMigrationSession: true,
           isControlUiDeviceAuthMigration: true,
         }),
       ),
@@ -40,6 +41,26 @@ describe("device management authz", () => {
       callerScopes: ["operator.admin", "operator.pairing"],
       isAdminCaller: false,
       isDeviceAuthMigrationCaller: true,
+      isDeviceAuthMigrationSession: true,
+    });
+  });
+
+  it("withholds device-management admin power from a device-less migration session", () => {
+    expect(
+      resolveDeviceSessionAuthz(
+        client({
+          isControlUiDeviceAuthMigrationSession: true,
+          connect: {
+            ...client({}).connect,
+            device: undefined,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      callerDeviceId: null,
+      isAdminCaller: false,
+      isDeviceAuthMigrationCaller: false,
+      isDeviceAuthMigrationSession: true,
     });
   });
 

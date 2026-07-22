@@ -2062,6 +2062,9 @@ export async function startGatewayServer(
             });
           },
           completeControlUiDeviceAuthMigration: (deviceId: string) => {
+            if (!controlUiDeviceAuthMigrationPending) {
+              return;
+            }
             // Close the process-local grace immediately after approval. The
             // durable receipt prevents stale legacy config from reopening it.
             controlUiDeviceAuthMigrationPending = false;

@@ -6,6 +6,7 @@ export type DeviceSessionAuthz = {
   callerScopes: string[];
   isAdminCaller: boolean;
   isDeviceAuthMigrationCaller: boolean;
+  isDeviceAuthMigrationSession: boolean;
 };
 
 export type DeviceManagementAuthz = DeviceSessionAuthz & {
@@ -16,6 +17,7 @@ export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceS
   const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const rawCallerDeviceId = client?.connect?.device?.id;
   const isDeviceAuthMigrationCaller = client?.isControlUiDeviceAuthMigration === true;
+  const isDeviceAuthMigrationSession = client?.isControlUiDeviceAuthMigrationSession === true;
   const callerDeviceId =
     // Migration admission verifies this exact signed device before marking the
     // session. It gets self-service ownership, never cross-device admin power.
@@ -27,8 +29,12 @@ export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceS
   return {
     callerDeviceId,
     callerScopes,
-    isAdminCaller: !isDeviceAuthMigrationCaller && callerScopes.includes("operator.admin"),
+    isAdminCaller:
+      !isDeviceAuthMigrationSession &&
+      !isDeviceAuthMigrationCaller &&
+      callerScopes.includes("operator.admin"),
     isDeviceAuthMigrationCaller,
+    isDeviceAuthMigrationSession,
   };
 }
 
@@ -43,6 +49,9 @@ export function resolveDeviceManagementAuthz(
 }
 
 export function deniesCrossDeviceManagement(authz: DeviceManagementAuthz): boolean {
+  if (authz.isDeviceAuthMigrationSession && !authz.callerDeviceId) {
+    return true;
+  }
   return Boolean(
     authz.callerDeviceId &&
     authz.callerDeviceId !== authz.normalizedTargetDeviceId &&
