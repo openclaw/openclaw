@@ -1,15 +1,12 @@
 // Gateway catalog reads use the atomic prepared runtime generation.
-import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type {
+  GatewayModelCatalogOwnerSnapshot,
+  GatewayModelCatalogSnapshot,
+} from "./server-model-catalog.types.js";
 
 export type GatewayModelChoice = import("../agents/model-catalog.js").ModelCatalogEntry;
-type GatewayModelCatalogOwnerSnapshot = Pick<
-  PreparedModelRuntimeSnapshot,
-  "agentId" | "agentDir" | "workspaceDir" | "config" | "modelCatalog"
->;
-export type GatewayModelCatalogSnapshot = ModelCatalogSnapshot &
-  Pick<PreparedModelRuntimeSnapshot, "agentId" | "agentDir" | "workspaceDir" | "config">;
+export type { GatewayModelCatalogSnapshot } from "./server-model-catalog.types.js";
 
 type GatewayModelCatalogConfig = ReturnType<typeof getRuntimeConfig>;
 type LoadPublishedPreparedModelCatalogOwnerSnapshot = (params: {

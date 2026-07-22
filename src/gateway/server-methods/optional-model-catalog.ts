@@ -1,7 +1,7 @@
 // Optional model-catalog loading gives session/tool methods metadata when fast
 // while never blocking their primary response path on catalog discovery.
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /**

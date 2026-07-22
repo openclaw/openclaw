@@ -46,7 +46,7 @@ import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
-import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.js";
+import type { GatewayModelCatalogSnapshot } from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
