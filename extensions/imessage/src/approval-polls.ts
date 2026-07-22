@@ -299,6 +299,21 @@ async function hasTombstone(params: {
   return false;
 }
 
+/**
+ * Outcomes for votes we own are logged at info, not verbose: an approval
+ * decision is security-relevant, and diagnosing "the tap did nothing" must not
+ * require re-running the gateway in debug.
+ */
+function info(message: string, fields: Record<string, unknown>): void {
+  try {
+    getOptionalIMessageRuntime()
+      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-polls" })
+      .info(message, fields);
+  } catch {
+    // Logger surface is optional in tests; never let logging mask the outcome.
+  }
+}
+
 function warn(message: string, fields: Record<string, unknown>): void {
   try {
     getOptionalIMessageRuntime()
@@ -319,7 +334,6 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   accountId: string;
   message: IMessagePayload;
   gatewayUrl?: string;
-  logVerboseMessage?: (message: string) => void;
 }): Promise<boolean> {
   const event = readPollVoteEvent(params.message);
   if (!event) {
@@ -340,6 +354,9 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   // An un-vote is owned but never resolves: it must not emit "removed their
   // vote" prose while the approval is still pending.
   if (!event.selected) {
+    info("approval poll deselect ignored; first selection decides", {
+      approvalId: target.approvalId,
+    });
     return true;
   }
   if (event.claimedParticipant && event.claimedParticipant !== event.actorHandle) {
@@ -351,15 +368,16 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
   }
   const decision = target.optionDecisions.find(([optionId]) => optionId === event.optionId)?.[1];
   if (!decision) {
-    params.logVerboseMessage?.(
-      `imessage: approval poll vote ignored unknown option id=${target.approvalId}`,
-    );
+    info("approval poll vote ignored: option not bound to a decision", {
+      approvalId: target.approvalId,
+      optionId: event.optionId,
+    });
     return true;
   }
   if (getIMessageApprovalApprovers({ cfg: params.cfg, accountId: params.accountId }).length === 0) {
-    params.logVerboseMessage?.(
-      `imessage: approval poll vote denied id=${target.approvalId}; polls require explicit approvers`,
-    );
+    info("approval poll vote denied: no explicit approvers configured", {
+      approvalId: target.approvalId,
+    });
     return true;
   }
   const auth = imessageApprovalAuth.authorizeActorAction({
@@ -370,9 +388,10 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     approvalKind: target.approvalKind,
   });
   if (!auth.authorized) {
-    params.logVerboseMessage?.(
-      `imessage: approval poll vote denied id=${target.approvalId} sender=${event.actorHandle}`,
-    );
+    info("approval poll vote denied: sender not an approver", {
+      approvalId: target.approvalId,
+      actorHandle: event.actorHandle,
+    });
     return true;
   }
 
@@ -387,16 +406,18 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
       gatewayUrl: params.gatewayUrl,
     });
     unregisterIMessageApprovalPollTarget({ ...lookupKey, approvalId: target.approvalId });
-    params.logVerboseMessage?.(
-      `imessage: approval poll vote ${result.applied ? "resolved" : "already resolved"} id=${target.approvalId} sender=${event.actorHandle} decision=${decision}`,
-    );
+    info(`approval poll vote ${result.applied ? "resolved" : "already resolved"}`, {
+      approvalId: target.approvalId,
+      actorHandle: event.actorHandle,
+      decision,
+    });
     return true;
   } catch (error) {
     if (isApprovalNotFoundError(error)) {
       unregisterIMessageApprovalPollTarget({ ...lookupKey, approvalId: target.approvalId });
-      params.logVerboseMessage?.(
-        `imessage: approval poll vote ignored for expired approval id=${target.approvalId}`,
-      );
+      info("approval poll vote ignored: approval already gone", {
+        approvalId: target.approvalId,
+      });
       return true;
     }
     // Keep the binding on a transient gateway/network failure so a retry can

@@ -895,7 +895,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         cfg,
         accountId: accountInfo.accountId,
         message,
-        logVerboseMessage: logVerbose,
       })
     ) {
       // A vote is a real message row, so the debouncer still owns its ingress
