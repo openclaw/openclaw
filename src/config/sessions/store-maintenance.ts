@@ -393,6 +393,14 @@ function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
   return /^[^:]+:(?:group|channel):.+$/.test(rest);
 }
 
+function isAgentPrimarySessionKey(sessionKey: string): boolean {
+  // The agent's primary interactive session (`agent:<id>:main`, e.g. the TUI/webchat
+  // conversation). Subagent/cron/hook keys carry a prefixed `rest`, so an exact `main`
+  // match uniquely identifies the operator-facing session.
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeLowercaseStringOrEmpty(parsed?.rest) === "main";
+}
+
 function isProtectedSessionMaintenanceEntry(
   sessionKey: string,
   entry: SessionEntry | undefined,
@@ -400,6 +408,13 @@ function isProtectedSessionMaintenanceEntry(
   // Human conversation surfaces are protected; synthetic automation sessions are disposable.
   if (isSyntheticSessionMaintenanceKey(sessionKey)) {
     return false;
+  }
+  // The agent's own primary `main` session is the operator's live interactive conversation.
+  // Evicting it out from under an in-flight run corrupts the session file the runtime still
+  // holds (surfacing as `session file changed while embedded prompt lock was released`), so it
+  // is always durable regardless of entry-cap/disk pressure from other sessions.
+  if (isAgentPrimarySessionKey(sessionKey)) {
+    return true;
   }
   if (parseSessionThreadInfoFast(sessionKey).threadId) {
     return true;

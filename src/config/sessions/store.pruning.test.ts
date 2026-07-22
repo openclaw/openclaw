@@ -674,6 +674,26 @@ describe("capEntryCount", () => {
     expect(store.old).toBeUndefined();
   });
 
+  it("never evicts the agent primary main session even when protected entries fill the cap (#112637)", () => {
+    const now = Date.now();
+    const mainKey = "agent:main:main";
+    // `main` is the oldest entry, so pre-fix it was the first unprotected eviction target once
+    // protected thread entries (>= maxEntries) left zero removable budget.
+    const store = makeStore([
+      [mainKey, makeEntry(now - 10 * DAY_MS)],
+      ["agent:main:slack:channel:C1:thread:1", makeEntry(now - 3 * DAY_MS)],
+      ["agent:main:slack:channel:C2:thread:2", makeEntry(now - 2 * DAY_MS)],
+      ["agent:main:slack:channel:C3:thread:3", makeEntry(now - DAY_MS)],
+    ]);
+
+    const evicted = capEntryCount(store, 2);
+
+    // Every entry is now protected (main + threads), so nothing is evicted and `main` survives.
+    expect(store).toHaveProperty(mainKey);
+    expect(evicted).toBe(0);
+    expect(Object.keys(store)).toHaveLength(4);
+  });
+
   it("preserves model-locked harness sessions when capping", () => {
     const now = Date.now();
     const lockedKey = "agent:main:harness-owned:locked";
@@ -821,6 +841,17 @@ describe("enforceSessionDiskBudget", () => {
 });
 
 describe("isProtectedSessionMaintenanceEntry", () => {
+  it("always protects the agent's primary main session across agents", () => {
+    expect(isProtectedSessionMaintenanceEntry("agent:main:main", makeEntry(Date.now()))).toBe(true);
+    expect(isProtectedSessionMaintenanceEntry("agent:worker:main", makeEntry(Date.now()))).toBe(
+      true,
+    );
+    // A non-main, metadata-less session key remains disposable.
+    expect(isProtectedSessionMaintenanceEntry("agent:main:opaque", makeEntry(Date.now()))).toBe(
+      false,
+    );
+  });
+
   it("treats generated ACP bridge sessions as disposable", () => {
     expect(
       isProtectedSessionMaintenanceEntry("agent:main:acp-bridge:session-1", {
