@@ -31,6 +31,7 @@ import {
   SystemAgentSchema,
   TalkSchema,
 } from "./zod-schema.root-support.js";
+import { RuntimeContextConfigSchema } from "./zod-schema.runtime-context.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
 
@@ -346,6 +347,7 @@ export const OpenClawSchemaShape = {
   nodeHost: NodeHostSchema,
   agents: AgentsSchema,
   tools: ToolsSchema,
+  runtimeContext: RuntimeContextConfigSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
   broadcast: BroadcastSchema,

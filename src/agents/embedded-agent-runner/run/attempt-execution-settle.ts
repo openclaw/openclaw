@@ -162,6 +162,7 @@ export async function runEmbeddedAttemptSettledPhase(
         ...(orphanRepair ? { orphanRepair } : {}),
         sessionAgentId: input.setup.sessionAgentId,
         runtimeModel: runtimeInfo.model,
+        runtimeSelfContextToolAvailable: effectiveTools.some((tool) => tool.name === "runtime"),
         systemPromptText: sessionRuntimeState.systemPromptText,
         setActiveSessionSystemPrompt,
         cache: {

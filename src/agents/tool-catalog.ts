@@ -110,6 +110,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "runtime",
+    label: "runtime",
+    description: "Inspect configured runtime, scale/offload options, and cost hints",
+    sectionId: "runtime",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "code_execution",
     label: "code_execution",
     description: "Run sandboxed remote analysis",
@@ -496,7 +504,7 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
   },
 };
 
-function buildCoreToolGroupMap() {
+function buildCoreToolGroupMap(): Record<string, string[]> {
   const sectionToolMap = new Map<string, string[]>();
   for (const tool of CORE_TOOL_DEFINITIONS) {
     const groupId = `group:${tool.sectionId}`;
