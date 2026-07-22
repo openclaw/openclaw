@@ -357,6 +357,9 @@ const config = {
     "src/boards/board-layout.ts": ["types"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
+    // Test and E2E callers reach these hooks through runtime.test-support.ts;
+    // the full-tree companion config still audits their actual consumers.
+    "src/commitments/runtime.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],
     // GatewayBoardProvider and boardExists are constructed/asserted by the
     // focused Control UI provider tests, not by a separate production module.
@@ -364,6 +367,10 @@ const config = {
     // Greeting cache/fact contracts (hash, alert text, store shapes) are
     // asserted by the focused greeting unit tests, not by another prod module.
     "src/system-agent/greeting.ts": ["exports", "types"],
+    // Focused tests consume these diagnostic/test seams; production code uses
+    // the surrounding runtime helpers rather than importing the exports.
+    "extensions/signal/src/setup-core.ts": ["exports"],
+    "src/infra/heartbeat-wake.ts": ["exports"],
   },
   workspaces: {
     ".": {
@@ -479,6 +486,24 @@ const config = {
         "src/schema.ts!",
         "src/startup-unavailable.ts!",
         "src/version.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/normalization-core": {
+      // Mirror package.json exports; root and UI builds consume these source subpaths directly.
+      entry: [
+        "src/index.ts!",
+        "src/agent-id.ts!",
+        "src/boolean-coercion.ts!",
+        "src/error-coercion.ts!",
+        "src/expect.ts!",
+        "src/number-coercion.ts!",
+        "src/phone-presentation.ts!",
+        "src/record-coerce.ts!",
+        "src/result.ts!",
+        "src/string-coerce.ts!",
+        "src/string-normalization.ts!",
+        "src/utf16-slice.ts!",
       ],
       project: ["src/**/*.ts!"],
     },
@@ -653,7 +678,11 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
+      ...bundledPluginWorkspace(),
+      // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "apache-arrow"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: bundledPluginWorkspace(),
@@ -720,6 +749,11 @@ const config = {
       "vault-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/whatsapp`]: {
+      ...bundledPluginWorkspace(),
+      // Baileys loads its optional audio decoder at runtime for supported media.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "audio-decode"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
