@@ -466,7 +466,7 @@ async function describeImagesWithModelInternal(
       promptInUserContent: shouldPlaceImagePromptInUserContent(model),
     });
 
-    const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
+    const maxTokens = resolveImageToolMaxTokens(model.maxTokens);
     const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
       const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
       const timeoutMs = configuredTimeoutMs;
