@@ -2,7 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MeetingBrowserJoinSession,
   MeetingManualActionCategory,
-  MeetingRuntimePlatformAdapter,
+  MeetingPlatformAdapter,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { ZoomMeetingsMode } from "../config.js";
 import type { ZoomMeetingsChromeHealth, ZoomMeetingsTranscriptSnapshot } from "./types.js";
@@ -254,12 +254,7 @@ function parseTranscript(
   };
 }
 
-export const ZOOM_MEETINGS_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
-  MeetingBrowserJoinSession<ZoomMeetingsMode>,
-  ZoomMeetingsMode,
-  ZoomMeetingsChromeHealth,
-  ZoomMeetingsTranscriptSnapshot
-> = {
+export const ZOOM_MEETINGS_PLATFORM_ADAPTER = {
   id: "zoom-meetings",
   displayName: "Zoom meetings",
   browserLabel: "Zoom meeting",
@@ -363,4 +358,9 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
       return parsePermissionGrantNotes(result);
     },
   },
-};
+} satisfies MeetingPlatformAdapter<
+  MeetingBrowserJoinSession<ZoomMeetingsMode>,
+  ZoomMeetingsMode,
+  ZoomMeetingsChromeHealth,
+  ZoomMeetingsTranscriptSnapshot
+>;

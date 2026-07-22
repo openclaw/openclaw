@@ -74,7 +74,6 @@ export type {
   MeetingManualAction,
   MeetingManualActionCategory,
   MeetingPlatformAdapter,
-  MeetingRuntimePlatformAdapter,
 } from "../meeting-bot/platform-adapter.js";
 export { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
 export {

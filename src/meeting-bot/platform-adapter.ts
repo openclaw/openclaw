@@ -139,6 +139,8 @@ export interface MeetingPlatformAdapter<
   displayName: string;
   browserLabel: string;
   logScope: string;
+  agentConsult?: MeetingPlatformRuntimeMetadata["agentConsult"];
+  session?: MeetingPlatformRuntimeMetadata["session"];
   nodeCommandName: string;
   nodeConfigPath: string;
   urls: {
@@ -159,26 +161,3 @@ export interface MeetingPlatformAdapter<
     buildPlan(params: DialInParams): DialInPlan;
   };
 }
-
-export interface MeetingRuntimePlatformAdapter<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
-  CreateParams = never,
-  CreateResult = never,
-  DialInParams = never,
-  DialInPlan = never,
->
-  extends
-    MeetingPlatformAdapter<
-      Session,
-      Mode,
-      Health,
-      Transcript,
-      CreateParams,
-      CreateResult,
-      DialInParams,
-      DialInPlan
-    >,
-    MeetingPlatformRuntimeMetadata {}

@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MeetingBrowserJoinSession,
   MeetingManualActionCategory,
-  MeetingRuntimePlatformAdapter,
+  MeetingPlatformAdapter,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode } from "../config.js";
@@ -234,16 +234,7 @@ function classifyMeetManualAction(
   };
 }
 
-export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
-  MeetingBrowserJoinSession<GoogleMeetMode>,
-  GoogleMeetMode,
-  GoogleMeetChromeHealth,
-  GoogleMeetTranscriptSnapshot,
-  { runtime: PluginRuntime; config: GoogleMeetConfig },
-  Awaited<ReturnType<typeof createMeetWithBrowserProxyOnNode>>,
-  GoogleMeetDialInParams,
-  GoogleMeetDialInPlan
-> = {
+export const GOOGLE_MEET_PLATFORM_ADAPTER = {
   id: "google-meet",
   displayName: "Google Meet",
   browserLabel: "Meet",
@@ -359,4 +350,13 @@ export const GOOGLE_MEET_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
       return { number, pin, dtmfSequence };
     },
   },
-};
+} satisfies MeetingPlatformAdapter<
+  MeetingBrowserJoinSession<GoogleMeetMode>,
+  GoogleMeetMode,
+  GoogleMeetChromeHealth,
+  GoogleMeetTranscriptSnapshot,
+  { runtime: PluginRuntime; config: GoogleMeetConfig },
+  Awaited<ReturnType<typeof createMeetWithBrowserProxyOnNode>>,
+  GoogleMeetDialInParams,
+  GoogleMeetDialInPlan
+>;

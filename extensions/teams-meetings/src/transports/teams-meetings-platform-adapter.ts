@@ -2,7 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MeetingBrowserJoinSession,
   MeetingManualActionCategory,
-  MeetingRuntimePlatformAdapter,
+  MeetingPlatformAdapter,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { TeamsMeetingsMode } from "../config.js";
 import {
@@ -257,12 +257,7 @@ function parseTranscript(
   };
 }
 
-export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
-  MeetingBrowserJoinSession<TeamsMeetingsMode>,
-  TeamsMeetingsMode,
-  TeamsMeetingsChromeHealth,
-  TeamsMeetingsTranscriptSnapshot
-> = {
+export const TEAMS_MEETINGS_PLATFORM_ADAPTER = {
   id: "teams-meetings",
   displayName: "Microsoft Teams meetings",
   browserLabel: "Teams meeting",
@@ -366,4 +361,9 @@ export const TEAMS_MEETINGS_PLATFORM_ADAPTER: MeetingRuntimePlatformAdapter<
       return parsePermissionGrantNotes(result);
     },
   },
-};
+} satisfies MeetingPlatformAdapter<
+  MeetingBrowserJoinSession<TeamsMeetingsMode>,
+  TeamsMeetingsMode,
+  TeamsMeetingsChromeHealth,
+  TeamsMeetingsTranscriptSnapshot
+>;
