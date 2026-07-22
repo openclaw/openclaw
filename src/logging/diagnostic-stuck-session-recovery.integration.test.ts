@@ -448,7 +448,7 @@ describe("stuck session recovery integration", () => {
       eventType: "session.stuck",
       reason: "stale_session_state",
       classification: "stale_session_state",
-      activeWorkKind: "embedded_run",
+      activeWorkKind: undefined,
       recoveryEligible: true,
     };
 
