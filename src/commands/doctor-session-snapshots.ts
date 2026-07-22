@@ -214,12 +214,11 @@ function resolveExpectedBundledSkillPath(params: {
   cachedPath: string;
   bundledSkillsDir: string;
   pathExists: (filePath: string) => boolean;
-  homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string | undefined {
   // Snapshot paths use shell `~` semantics. OPENCLAW_HOME may point at an isolated
   // runtime profile, so expanding against it would make the active runtime look stale.
-  const osHomeDir = params.homeDir ?? resolveOsHomeDir(params.env);
+  const osHomeDir = resolveOsHomeDir(params.env);
   const expandedCachedPath = osHomeDir
     ? expandHomePrefix(params.cachedPath, { home: osHomeDir })
     : params.cachedPath;
@@ -265,7 +264,6 @@ function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
   store: Record<string, SessionEntry>;
   bundledSkillsDir: string | undefined;
   pathExists?: (filePath: string) => boolean;
-  homeDir?: string;
   env?: NodeJS.ProcessEnv;
 }): StaleSessionSnapshotPathFinding[] {
   const bundledSkillsDir = params.bundledSkillsDir?.trim();
@@ -284,7 +282,6 @@ function scanSessionStoreForStaleRuntimeSnapshotPaths(params: {
         cachedPath: cached.path,
         bundledSkillsDir,
         pathExists,
-        homeDir: params.homeDir,
         env: params.env,
       });
       if (!expectedPath) {
