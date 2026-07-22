@@ -108,21 +108,29 @@ function rowAdvertisesNonTextModel(
 function rowAdvertisesChatModel(
   record: Record<string, unknown>,
   nestedRecords: readonly (Record<string, unknown> | undefined)[],
-): boolean {
+): boolean | undefined {
+  const explicitChatCapability = readLiveModelBoolean(nestedRecords[0], [
+    "completion_chat",
+    "chat_completion",
+    "chatCompletion",
+  ]);
+  if (explicitChatCapability !== undefined) {
+    return explicitChatCapability;
+  }
   const capabilityStrings = readLiveModelStringArray(
     [record, ...nestedRecords],
     ["capabilities", "features", "endpoints", "supported_endpoints"],
   );
-  if (capabilityStrings.some((value) => /chat|completion|response|generation/.test(value))) {
+  if (
+    capabilityStrings.some((value) =>
+      /(?:^|[./:])(?:chat|responses?|generate|completions?)(?:$|[./:])|(?:^|[./:_-])(?:chat[-_]completions?|completions?[-_]chat|text[-_]generation)(?:$|[./:_-])/.test(
+        value,
+      ),
+    )
+  ) {
     return true;
   }
-  return (
-    readLiveModelBoolean(nestedRecords[0], [
-      "completion_chat",
-      "chat_completion",
-      "chatCompletion",
-    ]) === true
-  );
+  return undefined;
 }
 
 function commonPrefixLength(left: string, right: string): number {
@@ -173,14 +181,19 @@ function buildOpenAICompatibleLiveModel(
   if (readLiveModelBoolean(record, ["active", "enabled", "available"]) === false) {
     return undefined;
   }
+  if (readLiveModelBoolean(record, ["archived", "deprecated"]) === true) {
+    return undefined;
+  }
   const capabilities = readLiveModelCatalogRecord(record.capabilities);
   const architecture = readLiveModelCatalogRecord(record.architecture);
   const topProvider = readLiveModelCatalogRecord(record.top_provider);
   const modelInfo = readLiveModelCatalogRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
+  const advertisedChatCapability = rowAdvertisesChatModel(record, nestedRecords);
   if (
-    rowAdvertisesNonTextModel(record, nestedRecords) ||
-    (!rowAdvertisesChatModel(record, nestedRecords) && NON_TEXT_MODEL_ID_PATTERN.test(id))
+    advertisedChatCapability === false ||
+    (advertisedChatCapability !== true &&
+      (rowAdvertisesNonTextModel(record, nestedRecords) || NON_TEXT_MODEL_ID_PATTERN.test(id)))
   ) {
     return undefined;
   }

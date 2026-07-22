@@ -785,6 +785,20 @@ describe("provider-catalog-live-runtime", () => {
         { id: "text-embedding-4", object: "model" },
         { id: "gpt-image-2-oai", object: "model" },
         { id: "retired-chat", object: "model", active: false },
+        { id: "archived-chat", object: "model", archived: true },
+        { id: "deprecated-chat", object: "model", deprecated: true },
+        {
+          id: "fim-only",
+          object: "model",
+          capabilities: { completion_chat: false, completion_fim: true },
+        },
+        { id: "image-generation-v2", object: "model", features: ["image_generation"] },
+        {
+          id: "chat-and-image-v2",
+          object: "model",
+          capabilities: { completion_chat: true },
+          features: ["image_generation"],
+        },
         {
           id: "image-only",
           object: "model",
@@ -805,6 +819,7 @@ describe("provider-catalog-live-runtime", () => {
     });
 
     expect(provider.models).toEqual([
+      expect.objectContaining({ id: "chat-and-image-v2" }),
       expect.objectContaining({
         id: "chat-v2",
         reasoning: true,
