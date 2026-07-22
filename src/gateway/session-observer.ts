@@ -36,12 +36,6 @@ import {
   noteSessionObserverEvent,
 } from "./session-observer-notes.js";
 
-export { SessionObserverAskError } from "./session-observer-contract.js";
-export type {
-  SessionObserverAskErrorReason,
-  SessionObserverService,
-} from "./session-observer-contract.js";
-
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
 const MIN_NOTES_PER_DIGEST = 4;

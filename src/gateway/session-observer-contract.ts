@@ -10,7 +10,7 @@ export type SessionObserverEvent = {
   agentId?: string;
 };
 
-export type SessionObserverAskErrorReason =
+type SessionObserverAskErrorReason =
   | "busy"
   | "disabled"
   | "not-subscribed"
