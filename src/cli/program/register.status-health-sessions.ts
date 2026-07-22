@@ -57,6 +57,32 @@ function mergeSessionsListOptions(
   };
 }
 
+// Gateway-backed single-target commands cannot honor parent list/store filters.
+// Rejecting them prevents operators from thinking a different store/scope was used.
+function rejectUnsupportedSessionsParentOptions(params: {
+  subcommand: "compact" | "diagnose";
+  parentOpts?: SessionsListCliOptions;
+  targetDescription: string;
+}): boolean {
+  const parentOpts = params.parentOpts;
+  const unsupportedParentOptions = [
+    parentOpts?.store !== undefined ? "--store" : undefined,
+    parentOpts?.allAgents ? "--all-agents" : undefined,
+    parentOpts?.active !== undefined ? "--active" : undefined,
+    parentOpts?.limit !== undefined ? "--limit" : undefined,
+    parentOpts?.verbose ? "--verbose" : undefined,
+  ].filter((flag): flag is string => flag !== undefined);
+  if (unsupportedParentOptions.length === 0) {
+    return false;
+  }
+  const plural = unsupportedParentOptions.length > 1 ? "options" : "option";
+  defaultRuntime.error(
+    `\`sessions ${params.subcommand}\` does not support the parent \`sessions\` ${plural} ${unsupportedParentOptions.join(", ")}; ${params.targetDescription}.`,
+  );
+  defaultRuntime.exit(1);
+  return true;
+}
+
 async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
   setVerbose(Boolean(opts.verbose));
   const { sessionsCommand } = await import("../../commands/sessions.js");
@@ -289,6 +315,72 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     });
 
   sessionsCmd
+    .command("diagnose")
+    .description("Diagnose one session from live Gateway and stored evidence")
+    .option("--session-key <key>", "Session key to diagnose")
+    .option("--session-id <id>", "Stored session id to diagnose")
+    .option("--label <label>", "Session label to diagnose")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--tail <count>", "Number of recent transcript events to summarize", "30")
+    .option("--timeout <ms>", "Gateway request timeout in milliseconds", "10000")
+    .option("--json", "Output JSON", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions diagnose", "Diagnose the most relevant active or recent session."],
+          [
+            "openclaw sessions diagnose --session-key agent:main:telegram:direct:owner",
+            "Diagnose one session key.",
+          ],
+          ["openclaw sessions diagnose --session-id <id> --json", "Machine-readable output."],
+          ["openclaw sessions diagnose --tail 80", "Include more bounded evidence metadata."],
+        ])}`,
+    )
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            agent?: string;
+            json?: boolean;
+            store?: string;
+            allAgents?: boolean;
+            active?: string;
+            limit?: string;
+            verbose?: boolean;
+          }
+        | undefined;
+      if (
+        rejectUnsupportedSessionsParentOptions({
+          subcommand: "diagnose",
+          parentOpts,
+          targetDescription: "the gateway diagnoses from selectors and --agent",
+        })
+      ) {
+        return;
+      }
+      await runWithVerboseAndTimeout(
+        {
+          timeout: opts.timeout,
+        },
+        async ({ timeoutMs }) => {
+          const { sessionsDiagnoseCommand } = await import("../../commands/sessions-diagnose.js");
+          await sessionsDiagnoseCommand(
+            {
+              sessionKey: opts.sessionKey as string | undefined,
+              sessionId: opts.sessionId as string | undefined,
+              label: opts.label as string | undefined,
+              agent: (opts.agent as string | undefined) ?? parentOpts?.agent,
+              tail: opts.tail as string | undefined,
+              timeoutMs,
+              json: Boolean(opts.json || parentOpts?.json),
+            },
+            defaultRuntime,
+          );
+        },
+      );
+    });
+
+  sessionsCmd
     .command("tail")
     .description("Tail human-readable session trajectory progress")
     .option("--session-key <key>", "Session key to tail (default: active sessions or latest)")
@@ -390,19 +482,6 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         )}`,
     )
     .action(async (key: string, opts, command) => {
-      // Sibling `sessions` subcommands inherit parent options (see list/cleanup
-      // above): `--agent`/`--json` may be supplied on the parent `sessions`
-      // command, e.g. `openclaw sessions --agent work compact <key>`. Merge those
-      // so a parent `--agent` is not silently dropped and the wrong agent's
-      // session compacted.
-      //
-      // The parent also defines list-only options (`--store`/`--all-agents`/
-      // `--active`/`--limit`). `compact` mutates the single session the gateway
-      // resolves from <key> + --agent, so it cannot honor a parent `--store`
-      // (the gateway picks the store) and the rest are meaningless here.
-      // Silently dropping `--store` is the dangerous case — the user could
-      // believe they targeted one store while the gateway compacts another — so
-      // reject any unsupported inherited option instead of ignoring it.
       const parentOpts = command.parent?.opts() as
         | {
             agent?: string;
@@ -414,19 +493,13 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             verbose?: boolean;
           }
         | undefined;
-      const unsupportedParentOptions = [
-        parentOpts?.store !== undefined ? "--store" : undefined,
-        parentOpts?.allAgents ? "--all-agents" : undefined,
-        parentOpts?.active !== undefined ? "--active" : undefined,
-        parentOpts?.limit !== undefined ? "--limit" : undefined,
-        parentOpts?.verbose ? "--verbose" : undefined,
-      ].filter((flag): flag is string => flag !== undefined);
-      if (unsupportedParentOptions.length > 0) {
-        const plural = unsupportedParentOptions.length > 1 ? "options" : "option";
-        defaultRuntime.error(
-          `\`sessions compact\` does not support the parent \`sessions\` ${plural} ${unsupportedParentOptions.join(", ")}; the gateway resolves the target store from <key> and --agent.`,
-        );
-        defaultRuntime.exit(1);
+      if (
+        rejectUnsupportedSessionsParentOptions({
+          subcommand: "compact",
+          parentOpts,
+          targetDescription: "the gateway resolves the target store from <key> and --agent",
+        })
+      ) {
         return;
       }
       const maxLines = parseStrictPositiveIntOrUndefined(opts.maxLines);

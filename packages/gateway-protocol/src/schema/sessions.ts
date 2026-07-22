@@ -7,8 +7,10 @@ import { ErrorShapeSchema } from "./frames.js";
 import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 import { SessionsCreateParamsSchema } from "./sessions-create.js";
+import { SessionsDiagnoseParamsSchema, SessionsDiagnoseResultSchema } from "./sessions-diagnose.js";
 
 export { SessionsCreateParamsSchema };
+export { SessionsDiagnoseParamsSchema, SessionsDiagnoseResultSchema };
 
 export const SESSION_OBSERVER_HEALTH_VALUES = [
   "on-track",
@@ -762,6 +764,8 @@ export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsCleanupParams = Static<typeof SessionsCleanupParamsSchema>;
 export type SessionsPreviewParams = Static<typeof SessionsPreviewParamsSchema>;
 export type SessionsDescribeParams = Static<typeof SessionsDescribeParamsSchema>;
+export type SessionsDiagnoseParams = Static<typeof SessionsDiagnoseParamsSchema>;
+export type SessionsDiagnoseResult = Static<typeof SessionsDiagnoseResultSchema>;
 export type SessionsResolveParams = Static<typeof SessionsResolveParamsSchema>;
 export type SessionsSearchParams = Static<typeof SessionsSearchParamsSchema>;
 export type SessionsSearchHit = Static<typeof SessionsSearchHitSchema>;

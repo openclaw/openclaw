@@ -2036,6 +2036,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/sessions
 - Headings:
   - H1: openclaw sessions
+  - H2: Diagnose a session
+  - H2: Session discovery details
   - H2: Tail trajectory progress
   - H2: Export a trajectory bundle
   - H2: Cleanup maintenance

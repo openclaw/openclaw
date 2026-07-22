@@ -2,6 +2,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import { createAbortError } from "./abort-signal.js";
@@ -455,14 +456,24 @@ export function listAgentRunsForSession(params: {
 export function hasProjectedAgentRunForSession(params: {
   sessionKeys: readonly string[];
   sessionId?: string;
+  agentId?: string;
+  defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
 }): boolean {
   const lifecycleGeneration = getAgentEventState().lifecycleGeneration;
+  const targetAgentId = resolveProjectedRunTargetAgentId(params);
   for (const context of getAgentEventState().runContextById.values()) {
-    const matches =
-      (context.sessionKey !== undefined && params.sessionKeys.includes(context.sessionKey)) ||
-      (params.sessionId !== undefined && context.sessionId === params.sessionId);
+    const matchesSessionKey =
+      context.sessionKey !== undefined && params.sessionKeys.includes(context.sessionKey);
+    const matchesSessionId =
+      params.sessionId !== undefined &&
+      context.sessionId === params.sessionId &&
+      (context.sessionKey === undefined || matchesSessionKey);
+    const matchesAgent =
+      !context.agentId || !targetAgentId || normalizeAgentId(context.agentId) === targetAgentId;
     if (
-      matches &&
+      (matchesSessionKey || matchesSessionId) &&
+      matchesAgent &&
       context.projectSessionActive === true &&
       context.lifecycleGeneration === lifecycleGeneration
     ) {
@@ -470,6 +481,28 @@ export function hasProjectedAgentRunForSession(params: {
     }
   }
   return false;
+}
+
+function resolveProjectedRunTargetAgentId(params: {
+  sessionKeys: readonly string[];
+  agentId?: string;
+  defaultAgentId?: string;
+  scopeUnknownByAgent?: boolean;
+}): string | undefined {
+  const onlyUnknownKeys = params.sessionKeys.every((sessionKey) => sessionKey === "unknown");
+  if (onlyUnknownKeys && params.scopeUnknownByAgent !== true) {
+    return undefined;
+  }
+  if (params.agentId) {
+    return normalizeAgentId(params.agentId);
+  }
+  for (const sessionKey of params.sessionKeys) {
+    const parsed = parseAgentSessionKey(sessionKey);
+    if (parsed?.agentId) {
+      return normalizeAgentId(parsed.agentId);
+    }
+  }
+  return params.defaultAgentId ? normalizeAgentId(params.defaultAgentId) : undefined;
 }
 
 /** Clears context and sequence state for a run that has ended or been discarded. */

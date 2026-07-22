@@ -183,6 +183,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     let admission = await admitReplyTurn({
       sessionKey: params.dispatchOperationSessionKey,
       sessionId: operationSessionId,
+      agentId: params.ctx.AgentId,
       expectedSessionId: params.resolveOperationExpectedSessionId(),
       expectedActiveOperation: params.initialDispatchReplyOperation,
       storePath: params.operationSessionStoreEntry.storePath,
@@ -230,6 +231,7 @@ export function createDispatchReplyOperationCoordinator(params: {
         admission = await admitReplyTurn({
           sessionKey: params.dispatchOperationSessionKey,
           sessionId: operationSessionId,
+          agentId: params.ctx.AgentId,
           expectedSessionId: params.resolveOperationExpectedSessionId(),
           expectedActiveOperation: params.initialDispatchReplyOperation,
           storePath: params.operationSessionStoreEntry.storePath,

@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   healthCommand: vi.fn(),
   sessionsCommand: vi.fn(),
   sessionsCleanupCommand: vi.fn(),
+  sessionsDiagnoseCommand: vi.fn(),
   sessionsTailCommand: vi.fn(),
   sessionsCompactCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
@@ -34,6 +35,7 @@ const statusCommand = mocks.statusCommand;
 const healthCommand = mocks.healthCommand;
 const sessionsCommand = mocks.sessionsCommand;
 const sessionsCleanupCommand = mocks.sessionsCleanupCommand;
+const sessionsDiagnoseCommand = mocks.sessionsDiagnoseCommand;
 const sessionsTailCommand = mocks.sessionsTailCommand;
 const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
@@ -93,6 +95,10 @@ vi.mock("../../commands/sessions-cleanup.js", () => ({
   sessionsCleanupCommand: mocks.sessionsCleanupCommand,
 }));
 
+vi.mock("../../commands/sessions-diagnose.js", () => ({
+  sessionsDiagnoseCommand: mocks.sessionsDiagnoseCommand,
+}));
+
 vi.mock("../../commands/sessions-tail.js", () => ({
   sessionsTailCommand: mocks.sessionsTailCommand,
 }));
@@ -147,6 +153,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     healthCommand.mockResolvedValue(undefined);
     sessionsCommand.mockResolvedValue(undefined);
     sessionsCleanupCommand.mockResolvedValue(undefined);
+    sessionsDiagnoseCommand.mockResolvedValue(undefined);
     sessionsTailCommand.mockResolvedValue(undefined);
     sessionsCompactCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
@@ -410,6 +417,68 @@ describe("registerStatusHealthSessionsCommands", () => {
     expectCommandOptions(sessionsCleanupCommand, {
       allAgents: true,
     });
+  });
+
+  it("runs sessions diagnose with forwarded live diagnosis options", async () => {
+    await runCli([
+      "sessions",
+      "--agent",
+      "work",
+      "--json",
+      "diagnose",
+      "--session-key",
+      "agent:work:telegram:direct:owner",
+      "--tail",
+      "50",
+      "--timeout",
+      "7000",
+    ]);
+
+    expectCommandOptions(sessionsDiagnoseCommand, {
+      sessionKey: "agent:work:telegram:direct:owner",
+      sessionId: undefined,
+      label: undefined,
+      agent: "work",
+      tail: "50",
+      timeoutMs: 7000,
+      json: true,
+    });
+  });
+
+  it("rejects an inherited parent --store for diagnose instead of inspecting a different gateway store", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/other-sessions.json",
+      "diagnose",
+      "--session-key",
+      "agent:main:main",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("sessions diagnose"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsDiagnoseCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects other unsupported inherited parent list options for diagnose", async () => {
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "--active",
+      "120",
+      "--limit",
+      "25",
+      "--verbose",
+      "diagnose",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--active"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--limit"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--verbose"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsDiagnoseCommand).not.toHaveBeenCalled();
   });
 
   it("runs sessions tail with forwarded progress options", async () => {

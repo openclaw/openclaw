@@ -39,13 +39,17 @@ export function serializeSqliteSessionCreatorIdentity(
   return normalized ? JSON.stringify(normalized) : null;
 }
 
-export function parseSqliteSessionEntryJson(row: { entry_json: string }): SessionEntry | null {
+export function parseSqliteSessionEntryJson(row: {
+  entry_json: string;
+  session_id?: string | null;
+  updated_at?: number | null;
+}): SessionEntry | null {
   try {
     const parsed = JSON.parse(row.entry_json) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return null;
     }
-    const entry = parsed as SessionEntry;
+    const entry = parsed as Partial<SessionEntry>;
     // entry_json stays authoritative across downgrade/upgrade cycles: an older
     // binary can rewrite it without knowing about the additive projection column.
     const createdBy = normalizeSessionCreatorIdentity(entry.createdBy);
@@ -54,7 +58,23 @@ export function parseSqliteSessionEntryJson(row: { entry_json: string }): Sessio
     } else {
       delete entry.createdBy;
     }
-    return entry;
+    const sessionId =
+      typeof entry.sessionId === "string" && entry.sessionId.trim()
+        ? entry.sessionId
+        : typeof row.session_id === "string" && row.session_id.trim()
+          ? row.session_id
+          : undefined;
+    const updatedAt =
+      typeof entry.updatedAt === "number"
+        ? entry.updatedAt
+        : typeof row.updated_at === "number"
+          ? row.updated_at
+          : undefined;
+    return {
+      ...entry,
+      ...(sessionId ? { sessionId } : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
+    } as SessionEntry;
   } catch {
     return null;
   }

@@ -333,6 +333,7 @@ enum class GatewayMethod(
   SessionsMessagesUnsubscribe("sessions.messages.unsubscribe"),
   SessionsPreview("sessions.preview"),
   SessionsDescribe("sessions.describe"),
+  SessionsDiagnose("sessions.diagnose"),
   SessionsCompactionList("sessions.compaction.list"),
   SessionsCompactionGet("sessions.compaction.get"),
   SessionsCompactionBranch("sessions.compaction.branch"),

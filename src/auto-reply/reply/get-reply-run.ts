@@ -1303,6 +1303,7 @@ export async function runPreparedReply(
     const adoption = await admitReplyTurn({
       sessionKey: commandTurnContinuationTargetKey,
       sessionId: providedReplyOperation.sessionId,
+      agentId,
       expectedSessionId: preparedSessionState.sessionEntry?.sessionId,
       storePath,
       kind: "visible",
