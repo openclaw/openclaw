@@ -3,24 +3,22 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionCreatedActorSchema, type SessionCreatedActor } from "./sessions.js";
-
-export const SESSION_VISIBILITY_VALUES = ["shared", "read-only", "suggest", "draft"] as const;
-
-export const SessionVisibilitySchema = Type.Union([
-  Type.Literal("shared"),
-  Type.Literal("read-only"),
-  Type.Literal("suggest"),
-  Type.Literal("draft"),
-]);
+import {
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+  type SessionSharingRole,
+  type SessionVisibility,
+} from "./sessions-sharing-values.js";
 
 export const SessionSharingIdentitySchema = SessionCreatedActorSchema;
 
-export const SessionSharingRoleSchema = Type.Union([
-  Type.Literal("admin"),
-  Type.Literal("owner"),
-  Type.Literal("member"),
-  Type.Literal("viewer"),
-]);
+export {
+  SESSION_VISIBILITY_VALUES,
+  SessionSharingRoleSchema,
+  SessionVisibilitySchema,
+  type SessionSharingRole,
+  type SessionVisibility,
+} from "./sessions-sharing-values.js";
 
 export const SessionSharingActionSchema = Type.Union([
   Type.Literal("visibility"),
@@ -84,9 +82,7 @@ export const SessionSharingEventSchema = closedObject({
   ts: Type.Integer({ minimum: 0 }),
 });
 
-export type SessionVisibility = Static<typeof SessionVisibilitySchema>;
 export type SessionSharingIdentity = SessionCreatedActor;
-export type SessionSharingRole = Static<typeof SessionSharingRoleSchema>;
 export type SessionSharingAction = Static<typeof SessionSharingActionSchema>;
 export type SessionVisibilitySetParams = Static<typeof SessionVisibilitySetParamsSchema>;
 export type SessionVisibilitySetResult = Static<typeof SessionVisibilitySetResultSchema>;
