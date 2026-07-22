@@ -2,6 +2,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { stripToolMessages } from "../../agents/tools/chat-history-text.js";
 import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import {
   ContractInputError,
   acquireAgenticOsAllowLease,
@@ -55,6 +56,14 @@ function authenticatedRequesterAgentId(opts: GatewayRequestHandlerOptions): stri
   return getRuntimeConfig ? resolveDefaultAgentId(getRuntimeConfig()) : "main";
 }
 
+function rejectConnectedClientMissingAdmin(client: GatewayClient | null, respond: RespondFn): boolean {
+  if (!client || client.connect.scopes?.includes(ADMIN_SCOPE)) {
+    return false;
+  }
+  respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`));
+  return true;
+}
+
 async function callCanonicalHandler(
   handler: GatewayRequestHandler,
   opts: GatewayRequestHandlerOptions,
@@ -80,6 +89,9 @@ async function callCanonicalHandler(
 export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
   "subagents.allowLease.acquire": async (opts) => {
     const { params, respond } = opts;
+    if (rejectConnectedClientMissingAdmin(opts.client, respond)) {
+      return;
+    }
     void [
       params?.client_lease_id,
       params?.idempotency_key,

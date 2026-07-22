@@ -65,7 +65,12 @@ const sessionMetadata = {
   task_digest: "sha256:test",
 };
 
-async function invoke(method: string, params: Record<string, unknown> = {}, deviceId?: string) {
+async function invoke(
+  method: string,
+  params: Record<string, unknown> = {},
+  deviceId?: string,
+  scopes?: string[],
+) {
   const respond = vi.fn();
   const handler = agenticOsRuntimeContractHandlers[method];
   if (!handler) {
@@ -82,7 +87,15 @@ async function invoke(method: string, params: Record<string, unknown> = {}, devi
       loadGatewayModelCatalogSnapshot: async () => ({ entries: [] }),
       logGateway: { debug: () => {}, error: () => {}, warn: () => {} },
     } as never,
-    client: deviceId ? ({ connect: { device: { id: deviceId } } } as never) : null,
+    client:
+      deviceId || scopes
+        ? ({
+            connect: {
+              device: { id: deviceId },
+              scopes: scopes ?? ["operator.admin", "operator.read", "operator.write"],
+            },
+          } as never)
+        : null,
     req: { type: "req", id: "req-1", method },
     isWebchatConnect: () => false,
   });
@@ -155,6 +168,24 @@ describe("Agentic OS runtime contract v1", () => {
       }),
       "conflicting allow lease client_lease_id",
     );
+  });
+
+  it("requires operator.admin for connected allow lease acquire callers", async () => {
+    expectInvalid(
+      await invoke(
+        "subagents.allowLease.acquire",
+        acquireParams,
+        "device-write",
+        ["operator.write", "operator.read"],
+      ),
+      "missing scope: operator.admin",
+    );
+    const response = payload(
+      await invoke("subagents.allowLease.acquire", acquireParams, "device-admin", [
+        "operator.admin",
+      ]),
+    );
+    expect(response.status).toBe("active");
   });
 
   it("isolates lease and session projections by authenticated principal", async () => {
