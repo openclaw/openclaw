@@ -27,7 +27,7 @@ installGatewayTestHooks({ scope: "suite" });
 const BROWSER_ORIGIN = "https://control.example.com";
 const SCOPES = ["operator.admin", "operator.pairing"];
 
-async function signedDevice(ws: WebSocket, identityPath: string) {
+async function signedDevice(ws: WebSocket, identityPath: string, scopes: string[] = SCOPES) {
   const nonce = await readConnectChallengeNonce(ws);
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   const signedAt = Date.now();
@@ -36,7 +36,7 @@ async function signedDevice(ws: WebSocket, identityPath: string) {
     clientId: CONTROL_UI_CLIENT.id,
     clientMode: CONTROL_UI_CLIENT.mode,
     role: "operator",
-    scopes: SCOPES,
+    scopes,
     signedAtMs: signedAt,
     token: "secret",
     nonce: nonce ?? "",
@@ -585,6 +585,72 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(list.payload?.pending).toContainEqual(
         expect.objectContaining({ deviceId: signed.identity.deviceId }),
       );
+    } finally {
+      ws?.close();
+      await harness.close();
+    }
+  });
+
+  it("adds pairing capability when a migrating browser requested read-only access", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const identityPath = path.join(
+      os.tmpdir(),
+      `openclaw-device-auth-migration-read-only-${randomUUID()}.sqlite`,
+    );
+    let ws: WebSocket | undefined;
+    try {
+      ws = await harness.openWs({ origin: BROWSER_ORIGIN });
+      const signed = await signedDevice(ws, identityPath, ["operator.read"]);
+      const connected = await connectReq(ws, {
+        token: "secret",
+        scopes: ["operator.read"],
+        client: CONTROL_UI_CLIENT,
+        device: signed.device,
+      });
+      expect(connected.ok).toBe(true);
+      expect(connected.payload).toMatchObject({
+        deviceAuthMigration: { pending: true },
+        auth: { role: "operator", scopes: ["operator.pairing"] },
+      });
+
+      const list = await rpcReq<{
+        pending: Array<{ requestId: string; deviceId: string; scopes?: string[] }>;
+      }>(ws, "device.pair.list", {});
+      const ownRequest = list.payload?.pending.find(
+        (request) => request.deviceId === signed.identity.deviceId,
+      );
+      expect(ownRequest?.scopes).toEqual(
+        expect.arrayContaining(["operator.read", "operator.pairing"]),
+      );
+      const approved = await rpcReq(ws, "device.pair.approve", {
+        requestId: ownRequest?.requestId,
+      });
+      expect(approved.ok).toBe(true);
+
+      const { listDevicePairing } = await import("../infra/device-pairing.js");
+      const paired = (await listDevicePairing()).paired.find(
+        (device) => device.deviceId === signed.identity.deviceId,
+      );
+      expect(paired?.tokens?.operator?.scopes).toEqual(
+        expect.arrayContaining(["operator.read", "operator.pairing"]),
+      );
+      const { readControlUiDeviceAuthMigrationState } =
+        await import("../state/control-ui-device-auth-migration.js");
+      expect(readControlUiDeviceAuthMigrationState({ env: process.env })).toMatchObject({
+        status: "completed",
+        deviceId: signed.identity.deviceId,
+      });
     } finally {
       ws?.close();
       await harness.close();

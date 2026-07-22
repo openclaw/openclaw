@@ -345,10 +345,18 @@ export async function authorizeGatewayConnectDevice(
           : undefined;
       const bootstrapApprovalProfile =
         setupCodeMobileBootstrapProfile ?? controlUiOperatorBootstrapProfile;
+      const pairingRequestScopes =
+        allowControlUiDeviceAuthMigrationForUnpairedInstall &&
+        deviceAuthMigrationScopes.length > 0 &&
+        reason === "not-paired" &&
+        !existingPairedDevice
+          ? uniqueStrings([...scopes, ...deviceAuthMigrationScopes])
+          : scopes;
       const pairing = await requestDevicePairing({
         deviceId: device.id,
         publicKey: devicePublicKey,
         ...clientPairingMetadata,
+        scopes: pairingRequestScopes,
         ...(bootstrapPairingRoles
           ? {
               roles: bootstrapPairingRoles,
