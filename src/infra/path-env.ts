@@ -141,8 +141,8 @@ function resolveMiseDataDir(params: { homeDir: string; platform: NodeJS.Platform
     return miseDataDir;
   }
 
-  // mise treats every present directory override literally, including an empty value;
-  // only an absent variable advances to the next platform fallback.
+  // Match mise's override/XDG/platform order; candidate validation and PATH
+  // placement remain owned by the existing bootstrap policy below.
   const xdgDataHome = process.env.XDG_DATA_HOME;
   if (xdgDataHome !== undefined) {
     return path.join(xdgDataHome, "mise");
