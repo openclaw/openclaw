@@ -1,9 +1,7 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
-import {
-  resolveTrustedSourceLinkedOfficialClawHubInstall,
-} from "./official-external-install-records.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   resolveOfficialExternalPluginId,
