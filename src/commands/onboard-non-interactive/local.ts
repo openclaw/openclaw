@@ -9,10 +9,14 @@ import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
-import { resolveConfiguredSecretInputString } from "../../gateway/resolve-configured-secret-input-string.js";
+import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { applyLocalSetupWorkspaceConfig, applySkipBootstrapConfig } from "../onboard-config.js";
+import {
+  applyLocalSetupWorkspaceConfig,
+  applySkipBootstrapConfig,
+  resolveOnboardingWorkspaceConflict,
+} from "../onboard-config.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -110,12 +114,13 @@ async function resolveGatewayHealthProbeToken(
   if (nextConfig.gateway?.auth?.mode === "password") {
     // Password mode uses the configured password directly; token fallback must
     // stay disabled or the probe can validate the wrong auth mode.
-    const resolved = await resolveConfiguredSecretInputString({
+    const resolved = await resolveConfiguredSecretInputWithFallback({
       config: nextConfig,
       env: process.env,
       value: nextConfig.gateway.auth.password,
       path: "gateway.auth.password",
       unresolvedReasonStyle: "detailed",
+      readFallback: () => process.env.OPENCLAW_GATEWAY_PASSWORD,
     });
     return {
       password: resolved.value,
@@ -166,13 +171,28 @@ export async function runNonInteractiveLocalSetup(params: {
   const { opts, runtime, baseConfig, baseHash } = params;
   const mode = "local" as const;
 
-  const workspaceDir = resolveNonInteractiveWorkspaceDir({
+  const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
     opts,
     baseConfig,
     defaultWorkspaceDir: DEFAULT_WORKSPACE,
   });
+  const workspaceConflict = resolveOnboardingWorkspaceConflict(baseConfig, requestedWorkspaceDir);
+  const workspaceDir = workspaceConflict?.currentWorkspaceDir ?? requestedWorkspaceDir;
+  if (workspaceConflict) {
+    runtime.error(
+      [
+        "Warning: existing agents keep their current workspace during non-interactive onboarding.",
+        `Current workspace: ${workspaceConflict.currentWorkspaceDir}`,
+        `Requested workspace: ${workspaceConflict.requestedWorkspaceDir}`,
+        `Run \`${formatCliCommand("openclaw onboard --classic")}\` to confirm moving the existing agent fleet.`,
+      ].join("\n"),
+    );
+  }
 
-  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: OpenClawConfig = applyLocalSetupWorkspaceConfig(
+    baseConfig,
+    requestedWorkspaceDir,
+  );
   if (opts.skipBootstrap) {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
@@ -208,6 +228,7 @@ export async function runNonInteractiveLocalSetup(params: {
       opts,
       runtime,
       baseConfig,
+      workspaceDir,
     });
     if (!nextConfigAfterAuth) {
       return;

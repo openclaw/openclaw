@@ -4,6 +4,10 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { upsertSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import {
+  SWARM_CODE_MODE_IDEMPOTENCY_KEY,
+  SWARM_CODE_MODE_REQUEST_FINGERPRINT,
+} from "../swarm-code-mode.js";
 
 const hoisted = vi.hoisted(() => {
   const spawnSubagentDirectMock = vi.fn();
@@ -149,11 +153,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },
@@ -261,15 +263,143 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.timeoutSeconds).toBeUndefined();
   });
 
+  it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+
+    expect(schema.properties?.collect).toBeUndefined();
+    expect(schema.properties?.outputSchema).toBeUndefined();
+    expect(schema.properties?.fastMode).toBeUndefined();
+    expect(schema.properties?.groupId).toBeUndefined();
+    await expect(tool.execute("disabled", { task: "collect", collect: true })).rejects.toThrow(
+      "tools.swarm.enabled=true",
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("requires collector children to delegate only through collect mode", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:worker:subagent:collector",
+      swarmCollector: true,
+      config: { tools: { swarm: true } },
+    });
+
+    await expect(tool.execute("normal-child", { task: "ask for approval" })).rejects.toThrow(
+      "requires collect=true",
+    );
+    await tool.execute("collector-child", { task: "collect safely", collect: true });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledOnce();
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({ collect: true }),
+      expect.any(Object),
+    );
+  });
+
+  it("forwards collector parameters and requesting run identity when enabled", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterRunId: "parent-run",
+      config: { tools: { swarm: true } },
+    });
+    const schema = tool.parameters as { properties?: Record<string, unknown> };
+    expect(schema.properties?.collect).toBeDefined();
+    expect(schema.properties?.outputSchema).toBeDefined();
+    expect(schema.properties?.fastMode).toBeDefined();
+    expect(schema.properties?.groupId).toBeDefined();
+
+    await tool.execute("collector", {
+      task: "collect",
+      collect: true,
+      outputSchema: { type: "object", required: ["answer"] },
+      fastMode: "auto",
+      groupId: "swarm:custom",
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs).toMatchObject({
+      collect: true,
+      outputSchema: { type: "object", required: ["answer"] },
+      fastMode: "auto",
+      groupId: "swarm:custom",
+      expectsCompletionMessage: false,
+    });
+    const spawnContext = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 1, "spawnSubagentDirect");
+    expect(spawnContext.requesterRunId).toBe("parent-run");
+  });
+
+  it("forwards host-only Code Mode idempotency metadata", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      requesterRunId: "parent-run",
+      config: { tools: { swarm: true } },
+    });
+    const input: Record<PropertyKey, unknown> = { task: "collect", collect: true };
+    Object.defineProperty(input, SWARM_CODE_MODE_IDEMPOTENCY_KEY, {
+      value: "cm-restart:bridge:1",
+    });
+    Object.defineProperty(input, SWARM_CODE_MODE_REQUEST_FINGERPRINT, {
+      value: "sha256:request",
+    });
+
+    await tool.execute("collector", input);
+
+    const spawnArgs = hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(spawnArgs.swarmLaunchReplayKey).toBe("cm-restart:bridge:1");
+    expect(spawnArgs.swarmLaunchRequestFingerprint).toBe("sha256:request");
+  });
+
+  it("requires collect=true for outputSchema", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: true } },
+    });
+    await expect(
+      tool.execute("schema-without-collect", {
+        task: "collect",
+        outputSchema: { type: "object" },
+      }),
+    ).rejects.toThrow("requires collect=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("requires collect=true for groupId", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: { tools: { swarm: true } },
+    });
+    await expect(
+      tool.execute("group-without-collect", {
+        task: "ordinary child",
+        groupId: "swarm:custom",
+      }),
+    ).rejects.toThrow("requires collect=true");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
   it("advertises visible sessions with terse UI guidance", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
-      properties?: { visible?: { description?: string }; worktree?: unknown };
+      properties?: Record<
+        string,
+        { anyOf?: unknown; description?: string; enum?: string[] } | undefined
+      >;
     };
 
     expect(schema.properties?.visible?.description).toBe(
-      "visible: user sees session in UI. Use when user asked or talks via web/app.",
+      "Persistent UI session; subagent only; omit mode/thread/thinking/lightContext/attachments/attachAs; unavailable with inherited tool allow/denylist.",
     );
+    expect(tool.description).toContain("`visible=true`: persistent dashboard session");
+    expect(tool.description).toContain('no `mode="run"`');
+    expect(tool.description).toContain("inherited tool allow/denylist");
+    expect(tool.description).toContain("`tools.sessions.visibility`");
+    expect(schema.properties?.runtime?.description).toContain("visible=true");
+    expect(schema.properties?.mode?.description).toContain("Omit with visible=true");
+    expect(schema.properties?.lightContext?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.attachments?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.attachAs?.description).toContain("unavailable with visible=true");
+    expect(schema.properties?.mode?.enum).toEqual(["run"]);
+    expect(schema.properties?.mode?.anyOf).toBeUndefined();
     expect(schema.properties?.worktree).toBeDefined();
   });
 
@@ -328,6 +458,7 @@ describe("sessions_spawn tool", () => {
         model: "anthropic/claude-sonnet-4-6",
         task: "inspect issue",
         parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
         fork: true,
         cwd: dir,
         worktree: true,
@@ -359,7 +490,7 @@ describe("sessions_spawn tool", () => {
 
     await expect(
       tool.execute("hidden-worktree", { task: "inspect", worktree: true }),
-    ).rejects.toThrow("worktree options require visible=true");
+    ).rejects.toThrow("Parameters require visible=true: worktree");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
@@ -397,6 +528,7 @@ describe("sessions_spawn tool", () => {
         agentId: "reviewer",
         model: "anthropic/claude-sonnet-4-6",
         parentSessionKey: "agent:main:main",
+        spawnDepth: 1,
       }),
     );
     expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("fork");
@@ -498,32 +630,32 @@ describe("sessions_spawn tool", () => {
     [
       "thinking",
       { thinking: "high" },
-      "thinking unavailable with visible=true: thinking overrides are not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: thinking: thinking overrides are not wired to the sessions.create path",
     ],
     [
       "thread",
       { thread: true },
-      "thread unavailable with visible=true: visible sessions route to the dashboard, not a channel thread",
+      "Parameters unavailable with visible=true: thread: visible sessions route to the dashboard, not a channel thread",
     ],
     [
       "mode",
       { mode: "session" },
-      "mode unavailable with visible=true: visible sessions are persistent dashboard sessions",
+      "Parameters unavailable with visible=true: mode: visible sessions are persistent dashboard sessions",
     ],
     [
       "lightContext",
       { lightContext: true },
-      "lightContext unavailable with visible=true: bootstrap staging is not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: lightContext: bootstrap staging is not wired to the sessions.create path",
     ],
     [
       "attachments",
       { attachments: [{ name: "note.txt", content: "hello" }] },
-      "attachments unavailable with visible=true: attachment staging is not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: attachments: attachment staging is not wired to the sessions.create path",
     ],
     [
       "attachAs",
       { attachAs: { mountPath: "inputs" } },
-      "attachAs unavailable with visible=true: attachment staging is not wired to the sessions.create path",
+      "Parameters unavailable with visible=true: attachAs: attachment staging is not wired to the sessions.create path",
     ],
   ] as const)("rejects visible %s overrides with a reason", async (_name, override, message) => {
     const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
@@ -531,6 +663,26 @@ describe("sessions_spawn tool", () => {
     await expect(
       tool.execute("visible-unsupported", { task: "inspect", visible: true, ...override }),
     ).rejects.toThrow(message);
+  });
+
+  it("reports every unsupported visible parameter in one error", async () => {
+    const tool = createSessionsSpawnTool({ agentSessionKey: "agent:main:main" });
+
+    await expect(
+      tool.execute("visible-unsupported-many", {
+        task: "inspect",
+        runtime: "acp",
+        thinking: "high",
+        thread: true,
+        mode: "run",
+        lightContext: true,
+        attachments: [{ name: "note.txt", content: "hello" }],
+        attachAs: { mountPath: "inputs" },
+        visible: true,
+      }),
+    ).rejects.toThrow(
+      'Parameters unavailable with visible=true: runtime: supports runtime="subagent" only; thinking: thinking overrides are not wired to the sessions.create path; thread: visible sessions route to the dashboard, not a channel thread; mode: visible sessions are persistent dashboard sessions; lightContext: bootstrap staging is not wired to the sessions.create path; attachments: attachment staging is not wired to the sessions.create path; attachAs: attachment staging is not wired to the sessions.create path',
+    );
   });
 
   it("denies visible sessions when tool restrictions cannot carry forward", async () => {
@@ -549,7 +701,8 @@ describe("sessions_spawn tool", () => {
 
     expect(result.details).toMatchObject({
       status: "forbidden",
-      error: "Visible sessions unavailable with inherited tool restrictions.",
+      error:
+        "Visible sessions unavailable with inherited tool restrictions. This session was spawned with a tool allow/denylist; visible sessions require an unrestricted session.",
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
@@ -823,7 +976,9 @@ describe("sessions_spawn tool", () => {
       );
       await upsertSessionEntry(
         { agentId: "main", sessionKey: childKey, storePath },
-        { sessionId: "child", updatedAt: 1, parentSessionKey: "agent:main:main" },
+        // Canonical spawn-child shape: sessions.create persists explicit
+        // spawnDepth; parentSessionKey alone is UI threading and adds no depth.
+        { sessionId: "child", updatedAt: 1, spawnDepth: 1, parentSessionKey: "agent:main:main" },
       );
       const callGateway = vi.fn();
       const tool = createSessionsSpawnTool({
@@ -851,11 +1006,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: false,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: false,
           },
         },
       },
@@ -878,11 +1031,9 @@ describe("sessions_spawn tool", () => {
       agentChannel: "discord",
       agentAccountId: "default",
       config: {
-        channels: {
-          discord: {
-            threadBindings: {
-              spawnSessions: true,
-            },
+        session: {
+          threadBindings: {
+            spawnSessions: true,
           },
         },
       },

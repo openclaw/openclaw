@@ -7,6 +7,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import type {
   OpenClawPluginApi,
   ProviderAuthContext,
+  ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderResolveDynamicModelContext,
   ProviderNormalizeResolvedModelContext,
@@ -24,6 +25,8 @@ import {
   upsertAuthProfileWithLock,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import {
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
@@ -54,11 +57,16 @@ import {
   normalizeAnthropicProviderConfigForProvider,
 } from "./config-defaults.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
 import { createClaudeSessionNodeInvokePolicies } from "./session-catalog-node-commands.js";
 import { registerClaudeSessionDiscovery } from "./session-catalog-registration.js";
 import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
+
+type ProviderAuthMethodNonInteractiveValidationContext = Parameters<
+  NonNullable<ProviderAuthMethod["validateNonInteractive"]>
+>[0];
 
 const PROVIDER_ID = "anthropic";
 
@@ -109,6 +117,13 @@ const ANTHROPIC_SETUP_TOKEN_NOTE_LINES = [
   "Anthropic staff told us this OpenClaw path is allowed again.",
   `If you want a direct API billing path instead, use ${formatCliCommand("openclaw models auth login --provider anthropic --method api-key --set-default")} or ${formatCliCommand("openclaw models auth login --provider anthropic --method cli --set-default")}.`,
 ] as const;
+
+function buildAnthropicCatalogProvider() {
+  return buildManifestModelProviderConfig({
+    providerId: PROVIDER_ID,
+    catalog: manifest.modelCatalog.providers.anthropic,
+  });
+}
 
 function resolveAnthropicSonnet5Cost(nowMs: number = Date.now()) {
   return nowMs >= ANTHROPIC_SONNET_5_STANDARD_PRICING_START_MS
@@ -194,9 +209,16 @@ async function runAnthropicSetupTokenAuth(ctx: ProviderAuthContext): Promise<Pro
   };
 }
 
-async function runAnthropicSetupTokenNonInteractive(
-  ctx: ProviderAuthMethodNonInteractiveContext,
-): Promise<ProviderAuthConfig | null> {
+function validateAnthropicSetupTokenNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveValidationContext,
+): string | null {
+  if (ctx.opts.secretInputMode === "ref") {
+    ctx.runtime.error(
+      "Anthropic setup-token input cannot be stored with --secret-input-mode ref. Use --secret-input-mode plaintext.",
+    );
+    ctx.runtime.exit(1);
+    return null;
+  }
   const rawToken =
     typeof ctx.opts.token === "string" ? normalizeAnthropicSetupTokenInput(ctx.opts.token) : "";
   const tokenError = validateAnthropicSetupToken(rawToken);
@@ -207,6 +229,25 @@ async function runAnthropicSetupTokenNonInteractive(
       ),
     );
     ctx.runtime.exit(1);
+    return null;
+  }
+  try {
+    resolveAnthropicSetupTokenExpiry(ctx.opts.tokenExpiresIn);
+  } catch (error) {
+    ctx.runtime.error(
+      `Invalid --token-expires-in: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    ctx.runtime.exit(1);
+    return null;
+  }
+  return rawToken;
+}
+
+async function runAnthropicSetupTokenNonInteractive(
+  ctx: ProviderAuthMethodNonInteractiveContext,
+): Promise<ProviderAuthConfig | null> {
+  const rawToken = validateAnthropicSetupTokenNonInteractive(ctx);
+  if (!rawToken) {
     return null;
   }
 
@@ -836,6 +877,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
           groupHint: "Claude CLI + API key + token",
         },
         run: async (ctx: ProviderAuthContext) => await runAnthropicSetupTokenAuth(ctx),
+        validateNonInteractive: async (ctx) =>
+          Boolean(validateAnthropicSetupTokenNonInteractive(ctx)),
         runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) =>
           await runAnthropicSetupTokenNonInteractive(ctx),
       },
@@ -859,6 +902,29 @@ export function buildAnthropicProvider(): ProviderPlugin {
         },
       }),
     ],
+    catalog: {
+      order: "simple",
+      run: (ctx) =>
+        buildOpenAICompatibleProviderCatalog({
+          ctx,
+          providerId,
+          buildProvider: buildAnthropicCatalogProvider,
+          modelDiscovery: {
+            endpointPath: "v1/models",
+            buildRequestHeaders: ({ apiKey, discoveryApiKey }) => {
+              const key = discoveryApiKey ?? apiKey;
+              return {
+                "anthropic-version": "2023-06-01",
+                ...(key ? { "x-api-key": key } : {}),
+              };
+            },
+          },
+        }),
+    },
+    staticCatalog: {
+      order: "simple",
+      run: async () => ({ provider: buildAnthropicCatalogProvider() }),
+    },
     normalizeConfig: ({ provider, providerConfig }) =>
       normalizeAnthropicProviderConfigForProvider({ provider, providerConfig }),
     applyConfigDefaults: ({ config, env }) => applyAnthropicConfigDefaults({ config, env }),

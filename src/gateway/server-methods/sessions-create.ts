@@ -18,7 +18,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveUserPath } from "../../utils.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import {
   buildDashboardSessionKey,
   createGatewaySession,
@@ -26,7 +26,7 @@ import {
 } from "../session-create-service.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "../session-utils.js";
+import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "../session-utils.js";
 import { chatHandlers } from "./chat.js";
 import { resolveSessionCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -211,7 +211,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         !hasInitialTurn &&
         cfg.session?.dmScope === "main"
       ) {
-        const parent = loadSessionEntry(
+        const parent = loadSessionEntryReadOnly(
           parentSessionKey,
           requestedAgent.agentId ? { agentId: requestedAgent.agentId } : undefined,
         );
@@ -321,6 +321,11 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     let messageSeq: number | undefined;
+    const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
+      ADMIN_SCOPE,
+      clientScopes,
+    ).allowed;
     const created = await createGatewaySession({
       cfg,
       key: sessionKey,
@@ -328,7 +333,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       label: p.label,
       ...(catalogTarget ? { catalogTarget: catalogTarget.target } : { model: p.model }),
       thinkingLevel: p.thinkingLevel,
+      allowExistingModelSelection,
       parentSessionKey: p.parentSessionKey,
+      spawnDepth: p.spawnDepth,
       spawnedCwd: sessionCwd,
       worktree: sessionWorktree
         ? {

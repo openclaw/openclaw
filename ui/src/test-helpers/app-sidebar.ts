@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, vi } from "vitest";
 import type {
   SessionCatalog,
+  SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, SessionsListResult } from "../api/types.ts";
+import type { NavigationRouteId } from "../app-navigation.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import type {
   ApplicationContext,
@@ -13,6 +15,10 @@ import type {
 } from "../app/context.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { ApplicationOverlays } from "../app/overlays.ts";
+import type {
+  SidebarWorkboardBoard,
+  SidebarWorkboardRenderers,
+} from "../components/app-sidebar-workboard.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "./application-context.ts";
 import { createStorageMock } from "./storage.ts";
@@ -26,15 +32,27 @@ type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
 type SessionState = SessionCapability["state"];
 
 export type SidebarLifecycleState = HTMLElement & {
+  activeRouteId?: string;
+  activeWorkboardBoardId: string;
+  enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
+  offline: boolean;
+  lastError: string | null;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
   sidebarEntries: readonly string[];
+  workboardBoards: readonly SidebarWorkboardBoard[];
+  workboardBoardsReady: boolean;
+  workboardRenderers?: SidebarWorkboardRenderers;
+  sidebarLiveActivity: boolean;
   onUpdateSidebarEntries?: (entries: string[]) => void;
   pinnedAgentIds: readonly string[];
   sessionKey: string;
-  onNavigate: (routeId: string, options?: { search?: string }) => void;
+  onNavigate: (
+    routeId: string,
+    options?: { pathname?: string; search?: string; hash?: string },
+  ) => void;
   sessionCatalogs: SessionCatalog[];
   sessionRowsByAgent: Record<string, SessionsListResult["sessions"]>;
   sessionCreatedOrder: Map<string, number>;
@@ -45,6 +63,7 @@ export type SidebarLifecycleState = HTMLElement & {
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -63,6 +82,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",
@@ -84,6 +104,17 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     subscribeEvents(listener: (event: { event: string; payload: unknown }) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
+    },
+    updateSelfUser(
+      patch: Partial<Omit<NonNullable<ApplicationGatewaySnapshot["selfUser"]>, "id">>,
+    ) {
+      if (!snapshot.selfUser) {
+        return;
+      }
+      snapshot = { ...snapshot, selfUser: { ...snapshot.selfUser, ...patch } };
+      for (const listener of listeners) {
+        listener(snapshot);
+      }
     },
   } as unknown as ApplicationGateway;
   return {
@@ -152,6 +183,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const groupsPut = vi.fn(() => Promise.resolve());
   const groupsRename = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
   const groupsDelete = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -171,6 +203,12 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   );
   const refresh = vi.fn(() => Promise.resolve());
   const refreshReplacement = vi.fn(() => Promise.resolve());
+  const subscribeMessages = vi.fn((key: string, options?: { agentId?: string | null }) =>
+    Promise.resolve({ key, agentId: options?.agentId ?? null }),
+  );
+  const unsubscribeMessages = vi.fn(
+    (_subscription: Parameters<SessionCapability["unsubscribeMessages"]>[0]) => Promise.resolve(),
+  );
   const list = vi.fn((_options?: Parameters<SessionCapability["list"]>[0]) =>
     Promise.resolve<SessionsListResult | null>(null),
   );
@@ -186,6 +224,17 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return () => listeners.delete(listener);
     },
     subscribeCreated: () => () => undefined,
+    pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
+    setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
+      if (summary) {
+        pullRequestSummaries.set(key, summary);
+      } else {
+        pullRequestSummaries.delete(key);
+      }
+      for (const listener of listeners) {
+        listener(state);
+      }
+    },
     groupsLoad: () => Promise.resolve(),
     groupsPut,
     groupsRename,
@@ -197,6 +246,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     list,
     refresh,
     refreshReplacement,
+    subscribeMessages,
+    unsubscribeMessages,
   } as unknown as SessionCapability;
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
@@ -216,6 +267,8 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     list,
     refresh,
     refreshReplacement,
+    subscribeMessages,
+    unsubscribeMessages,
     publish,
     publishList(statePatch: Partial<SessionState>) {
       canonicalListRevision += 1;

@@ -1,7 +1,11 @@
 import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
-import { compareSessionRowsByUpdatedAt } from "./navigation.ts";
+import {
+  compareSessionRowsByUpdatedAt,
+  sessionMatchesArchivedFilter,
+  type SessionArchivedFilter,
+} from "./navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -12,7 +16,7 @@ import {
 export type SessionReconcileOptions = {
   resultAgentId?: string | null;
   selectedGlobalAgentId?: string | null;
-  showArchived?: boolean;
+  archivedFilter?: SessionArchivedFilter;
 };
 
 export type SessionChangedResult = {
@@ -380,6 +384,9 @@ export function reconcileSessionChanged(
   if (rowFields.lastRunError === null) {
     delete row.lastRunError;
   }
+  if (rowFields.agentStatus === null) {
+    delete row.agentStatus;
+  }
   const next = reconcileSessionHistory(result, row, undefined, {
     ...options,
     selectedGlobalAgentId,
@@ -420,7 +427,7 @@ export function reconcileSessionHistory(
     return result;
   }
   const session = sanitizeSessionRow(row);
-  const showArchived = options.showArchived === true;
+  const archivedFilter = options.archivedFilter ?? "active";
   const selectedGlobalAgentId = options.selectedGlobalAgentId ?? null;
   const resultAgentId = options.resultAgentId?.trim()
     ? normalizeAgentId(options.resultAgentId)
@@ -435,7 +442,7 @@ export function reconcileSessionHistory(
     const sessions =
       isPersistedSessionRow(session) &&
       !isOutsideResultScope &&
-      (session.archived === true) === showArchived
+      sessionMatchesArchivedFilter(session, archivedFilter)
         ? [session]
         : [];
     return {
@@ -471,13 +478,12 @@ export function reconcileSessionHistory(
   if (isStaleForActiveSession(visibleSession, existing)) {
     return { ...result, defaults: nextDefaults };
   }
-  const sessions =
-    (visibleSession.archived === true) === showArchived
-      ? [
-          ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
-          visibleSession,
-        ].toSorted(compareSessionRowsByUpdatedAt)
-      : result.sessions.filter((candidate) => candidate.key !== visibleKey);
+  const sessions = sessionMatchesArchivedFilter(visibleSession, archivedFilter)
+    ? [
+        ...result.sessions.filter((candidate) => candidate.key !== visibleKey),
+        visibleSession,
+      ].toSorted(compareSessionRowsByUpdatedAt)
+    : result.sessions.filter((candidate) => candidate.key !== visibleKey);
   return {
     ...result,
     defaults: nextDefaults,

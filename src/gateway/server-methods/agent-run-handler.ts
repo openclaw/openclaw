@@ -152,6 +152,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
     const {
       images,
       imageOrder,
+      media,
       replyTo,
       recipientChannel,
       recipientAccountId,
@@ -480,6 +481,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       message,
       images,
       imageOrder,
+      media,
       effectiveTranscriptInputText,
       inputProvenance,
       runId,

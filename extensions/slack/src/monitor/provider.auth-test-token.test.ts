@@ -341,10 +341,12 @@ describe("user identity provider transport", () => {
   const userSocketConfig = () => ({
     channels: {
       slack: {
-        identity: "user",
+        postAs: "user",
         userToken: "test-user-token",
         appToken: "test-app-token",
-        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        dm: { enabled: true },
+        dmPolicy: "open",
+        allowFrom: ["*"],
         groupPolicy: "open",
       },
     },
@@ -481,11 +483,13 @@ describe("user identity provider transport", () => {
     const config = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           mode: "http",
           userToken: "test-user-token",
           signingSecret: "test-signing-secret",
-          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          dm: { enabled: true },
+          dmPolicy: "open",
+          allowFrom: ["*"],
           groupPolicy: "open",
         },
       },
@@ -510,7 +514,7 @@ describe("user identity provider transport", () => {
     const config = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           appToken: "test-app-token",
         },
       },
@@ -526,7 +530,7 @@ describe("user identity provider transport", () => {
     const config = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           userToken: "test-user-token",
         },
       },
@@ -541,7 +545,7 @@ describe("user identity provider transport", () => {
     const config = {
       channels: {
         slack: {
-          identity: "user",
+          postAs: "user",
           mode: "http",
           userToken: "test-user-token",
         },

@@ -1,3 +1,4 @@
+import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 // Imessage plugin module implements setup core behavior.
 import type {
   ChannelSetupAdapter,
@@ -63,6 +64,13 @@ const CHAT_TARGET_ALLOWFROM_PREFIXES = [
 ];
 const SERVICE_ALLOWFROM_PREFIXES = ["imessage:", "sms:", "auto:"];
 
+type IMessageSetupInput = ChannelSetupInput & {
+  cliPath?: string;
+  dbPath?: string;
+  service?: "imessage" | "sms" | "auto";
+  region?: string;
+};
+
 function normalizeAllowFromEntryForPrefixCheck(entry: string): string {
   let lower = normalizeLowercaseStringOrEmpty(entry);
   let stripped = true;
@@ -91,12 +99,7 @@ export function parseIMessageAllowFromEntries(raw: string): { entries: string[];
   });
 }
 
-function buildIMessageSetupPatch(input: {
-  cliPath?: string;
-  dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
-  region?: string;
-}) {
+function buildIMessageSetupPatch(input: IMessageSetupInput) {
   return {
     ...(input.cliPath ? { cliPath: input.cliPath } : {}),
     ...(input.dbPath ? { dbPath: input.dbPath } : {}),
@@ -135,6 +138,7 @@ async function promptIMessageAllowFrom(params: {
         channel,
         accountId,
         allowFrom,
+        setupSurface: imessageSetupAdapter,
       }),
   });
 }
@@ -180,6 +184,7 @@ export const imessageDmPolicy = {
               ),
             }
           : { dmPolicy: policy },
+      setupSurface: imessageSetupAdapter,
     });
   },
   promptAllowFrom: promptIMessageAllowFrom,
@@ -222,10 +227,13 @@ export const imessageCompletionNote = {
   ],
 };
 
-export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  buildPatch: (input) => buildIMessageSetupPatch(input),
-});
+export const imessageSetupAdapter: ChannelSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    buildPatch: (input) => buildIMessageSetupPatch(input as IMessageSetupInput),
+  }),
+  singleAccountKeysToMove: ["cliPath", "dbPath", "service", "region"],
+};
 
 export const imessageSetupStatusBase = {
   configuredLabel: t("wizard.channels.statusConfigured"),

@@ -27,7 +27,7 @@ import {
   loadSessionStore,
   saveSessionStore,
   updateSessionStore,
-  updateSessionStoreEntry,
+  patchSessionEntryWithKey,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
@@ -152,16 +152,16 @@ describe("resolveSessionResetPolicy", () => {
         resetType: "group",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(groupPolicy.mode).toBe("none");
     });
   });
 
-  it("defaults to daily resets at 4am local time", () => {
+  it("defaults to no automatic reset", () => {
     const policy = resolveSessionResetPolicy({
       resetType: "direct",
     });
 
-    expect(policy.mode).toBe("daily");
+    expect(policy.mode).toBe("none");
     expect(policy.atHour).toBe(4);
   });
 
@@ -833,7 +833,7 @@ describe("session store writer queue", () => {
       );
       writeSpy.mockClear();
 
-      await updateSessionStoreEntry({
+      await patchSessionEntryWithKey({
         storePath,
         sessionKey: key,
         update: async (entry) => ({ displayName: entry.displayName, updatedAt: entry.updatedAt }),

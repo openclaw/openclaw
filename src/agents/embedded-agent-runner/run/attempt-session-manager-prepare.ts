@@ -1,6 +1,7 @@
 /**
  * Prepares the durable session manager before embedded-agent session creation.
  */
+import { parseSqliteSessionFileMarker } from "../../../config/sessions/sqlite-marker.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
@@ -26,6 +27,23 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
 type WithOwnedSessionWriteLock = <T>(operation: () => Promise<T> | T) => Promise<T>;
+type CompactionPersistenceGuard = Pick<
+  NonNullable<Parameters<typeof guardSessionManager>[1]>,
+  "withCompactionPersistence"
+>;
+
+function buildCompactionPersistenceGuard(params: {
+  sessionFile: string;
+  sessionLockController: Pick<EmbeddedAttemptSessionLockController, "withOwnedSessionFileWrite">;
+}): CompactionPersistenceGuard {
+  if (parseSqliteSessionFileMarker(params.sessionFile)) {
+    return {};
+  }
+  return {
+    withCompactionPersistence: (append, validateAppend) =>
+      params.sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
+  };
+}
 
 export async function prepareEmbeddedAttemptSessionManager(input: {
   attempt: EmbeddedRunAttemptParams;
@@ -101,11 +119,16 @@ export async function prepareEmbeddedAttemptSessionManager(input: {
     suppressNextUserMessagePersistence: attempt.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: attempt.suppressTranscriptOnlyAssistantPersistence,
     suppressAssistantErrorPersistence: attempt.suppressAssistantErrorPersistence,
+    skipBeforeMessageWriteHooks: attempt.operation === "settled-tool-finalization",
     onMessagePersisted: () => {
       input.sessionLockController.refreshAfterOwnedSessionWrite();
     },
-    withCompactionPersistence: (append, validateAppend) =>
-      input.sessionLockController.withOwnedSessionFileWrite(append, validateAppend),
+    // SQLite owns compaction persistence and validation inside its transaction.
+    // This append validator is a JSONL file-ownership fence, not a storage shim.
+    ...buildCompactionPersistenceGuard({
+      sessionFile: attempt.sessionFile,
+      sessionLockController: input.sessionLockController,
+    }),
     onUserMessagePreparingForPersistence: (_message, recorder, preparedMessage) => {
       latestPersistedUserMessage = undefined;
       latestUserTurnTranscriptRecorder =

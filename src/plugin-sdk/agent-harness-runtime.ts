@@ -50,11 +50,16 @@ export type {
   AgentHarnessRuntimeArtifactBinding,
   AgentHarnessSideQuestionParams,
   AgentHarnessSideQuestionResult,
+  AgentHarnessSettledTurnFinalizationResult,
   AgentHarnessResetParams,
+  AgentHarnessSessionForkFailureCode,
+  AgentHarnessSessionForkParams,
+  AgentHarnessSessionForkResult,
   AgentHarnessSupport,
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export { AgentHarnessSessionSupersededError } from "../agents/harness/errors.js";
+export { projectSettledTurnFinalizationAttemptResult } from "../agents/harness/settled-turn-finalization-result.js";
 export { fingerprintResolvedAuthProfileCredential } from "../agents/execution-auth-binding.js";
 export type {
   AgentHarnessUserInputAnswers,
@@ -99,7 +104,6 @@ export type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareContext,
   AgentToolResultMiddlewareEvent,
-  AgentToolResultMiddlewareHarness,
   AgentToolResultMiddlewareOptions,
   AgentToolResultMiddlewareResult,
   AgentToolResultMiddlewareRuntime,
@@ -165,7 +169,6 @@ export {
   type ToolResultFailureKind,
 } from "../agents/tool-result-error.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
   resolveAgentDir,
   resolveDefaultAgentDir,

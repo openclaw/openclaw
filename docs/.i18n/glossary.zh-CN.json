@@ -44,6 +44,10 @@
     "target": "ClawHub"
   },
   {
+    "source": "Claws",
+    "target": "Claws"
+  },
+  {
     "source": "ClawRouter (managed multi-provider routing)",
     "target": "ClawRouter（托管式多提供商路由）"
   },
@@ -132,6 +136,14 @@
     "target": "Gateway RPC 参考"
   },
   {
+    "source": "Building a Gateway client",
+    "target": "构建 Gateway 客户端"
+  },
+  {
+    "source": "Embedding OpenClaw",
+    "target": "嵌入 OpenClaw"
+  },
+  {
     "source": "Secure file operations",
     "target": "安全文件操作"
   },
@@ -154,6 +166,10 @@
   {
     "source": "Code mode",
     "target": "代码模式"
+  },
+  {
+    "source": "Swarm",
+    "target": "Swarm"
   },
   {
     "source": "Codex harness",

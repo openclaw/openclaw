@@ -91,16 +91,19 @@ import {
   type SessionStoreTarget,
   type SessionScope,
 } from "../config/sessions.js";
-import { listSessionEntries as listAccessorSessionEntries } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntries as listAccessorSessionEntries,
+  listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-workspace-state.js";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
-  normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -108,7 +111,7 @@ import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
-import { listGatewayAgentIds } from "./agent-list.js";
+import { listGatewayAgentsBasic } from "./agent-list.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
 import {
@@ -971,7 +974,11 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
+function loadSessionEntryWithMode(
+  sessionKey: string,
+  opts: { agentId?: string; clone?: boolean } | undefined,
+  readOnly: boolean,
+) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTargetWithStore({
@@ -979,6 +986,7 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
     key,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+    ...(readOnly ? { readOnly: true } : {}),
   });
   const storePath = target.storePath;
   const store = target.store;
@@ -993,6 +1001,17 @@ export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; 
     storeKeys: target.storeKeys,
     legacyKey,
   };
+}
+
+export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string; clone?: boolean }) {
+  return loadSessionEntryWithMode(sessionKey, opts, false);
+}
+
+export function loadSessionEntryReadOnly(
+  sessionKey: string,
+  opts?: { agentId?: string; clone?: boolean },
+) {
+  return loadSessionEntryWithMode(sessionKey, opts, true);
 }
 
 function resolveFreshestSessionStoreMatchFromStoreKeys(
@@ -1196,26 +1215,23 @@ function resolveGatewayAgentModel(
 export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]> },
+  options?: {
+    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]>;
+    includeSystem?: boolean;
+  },
 ): {
   defaultId: string;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
 } {
-  const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  const scope = cfg.session?.scope ?? "per-sender";
-  const configuredById = new Map<
-    string,
-    { name?: string; identity?: GatewayAgentRow["identity"] }
-  >();
+  const basic = listGatewayAgentsBasic(cfg);
+  const configuredById = new Map<string, { identity?: GatewayAgentRow["identity"] }>();
   for (const entry of cfg.agents?.list ?? []) {
     if (!entry?.id) {
       continue;
     }
     const agentId = normalizeAgentId(entry.id);
-    const configuredName = normalizeOptionalString(entry.name);
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
@@ -1227,22 +1243,13 @@ export function listAgentsForGateway(
           avatarUrl,
         }
       : undefined;
-    configuredById.set(agentId, {
-      name: configuredName ?? identity?.name,
-      identity,
-    });
+    configuredById.set(agentId, { identity });
   }
-  const explicitIds = new Set(
-    (cfg.agents?.list ?? [])
-      .map((entry) => (entry?.id ? normalizeAgentId(entry.id) : ""))
-      .filter(Boolean),
-  );
-  const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
-  let agentIds = listGatewayAgentIds(cfg).filter((id) => (allowedIds ? allowedIds.has(id) : true));
-  if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
-    agentIds = [...agentIds, mainKey];
-  }
-  const agents = agentIds.map((id) => {
+  const roster = options?.includeSystem
+    ? basic.agents
+    : basic.agents.filter((entry) => entry.kind !== "system");
+  const agents = roster.map((entry) => {
+    const { id } = entry;
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
@@ -1276,7 +1283,8 @@ export function listAgentsForGateway(
     return Object.assign(
       {
         id,
-        name: meta?.name,
+        ...(options?.includeSystem ? { kind: entry.kind } : {}),
+        name: entry.name,
         identity: meta?.identity,
         workspace,
         workspaceGit,
@@ -1295,7 +1303,7 @@ export function listAgentsForGateway(
       model ? { model } : {},
     );
   });
-  return { defaultId, mainKey, scope, agents };
+  return { defaultId: basic.defaultId, mainKey: basic.mainKey, scope: basic.scope, agents };
 }
 
 function buildGatewaySessionStoreScanTargets(params: {
@@ -1340,7 +1348,7 @@ function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
-  options: { allowLegacyFallback?: boolean } = {},
+  options: { allowLegacyFallback?: boolean; readOnly?: boolean } = {},
 ): Record<string, SessionEntry> {
   try {
     if (options.allowLegacyFallback) {
@@ -1349,8 +1357,11 @@ function loadGatewaySessionLookupStore(
         return legacyStore;
       }
     }
+    const listEntries = options.readOnly
+      ? listAccessorSessionEntriesReadOnly
+      : listAccessorSessionEntries;
     return Object.fromEntries(
-      listAccessorSessionEntries({
+      listEntries({
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
         storePath,
@@ -1368,6 +1379,7 @@ function resolveGatewaySessionStoreLookup(params: {
   agentId: string;
   clone?: boolean;
   initialStore?: Record<string, SessionEntry>;
+  readOnly?: boolean;
 }): {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -1391,6 +1403,7 @@ function resolveGatewaySessionStoreLookup(params: {
   const loadStore = (target: SessionStoreTarget) =>
     loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
       allowLegacyFallback: !configured,
+      readOnly: params.readOnly,
     });
   const firstCandidate = candidates[0] ?? fallback;
   let selectedStorePath = firstCandidate.storePath;
@@ -1437,6 +1450,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
   clone?: boolean;
+  readOnly?: boolean;
 }): GatewaySessionStoreTargetWithStore | null {
   const parsed = parseAgentSessionKey(params.key);
   const legacyAgentId = normalizeAgentId(parsed?.agentId);
@@ -1471,7 +1485,9 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId);
+    const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
+      readOnly: params.readOnly,
+    });
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
@@ -1506,6 +1522,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
   key: string;
   agentId?: string;
   clone?: boolean;
+  readOnly?: boolean;
   store?: Record<string, SessionEntry>;
 }): GatewaySessionStoreTargetWithStore {
   const key = normalizeOptionalString(params.key) ?? "";
@@ -1513,6 +1530,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     cfg: params.cfg,
     key,
     clone: params.clone,
+    readOnly: params.readOnly,
   });
   if (explicitDeletedMainTarget) {
     return explicitDeletedMainTarget;
@@ -1535,6 +1553,7 @@ export function resolveGatewaySessionStoreTargetWithStore(params: {
     canonicalKey,
     agentId,
     clone: params.clone,
+    readOnly: params.readOnly,
     initialStore: params.store,
   });
 
@@ -1926,6 +1945,14 @@ export function buildGatewaySessionRow(params: {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
   const now = params.now ?? Date.now();
+  const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  const observerDigest =
+    entry?.observerDigest &&
+    // Strictly newer: a run end and restart can share a millisecond, and the
+    // prior run's digest must not project onto the replacement run.
+    (entry.startedAt === undefined || entry.observerDigest.updatedAt > entry.startedAt)
+      ? entry.observerDigest
+      : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
@@ -1935,6 +1962,8 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const parsedAgent = parseAgentSessionKey(key);
+  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
@@ -1954,9 +1983,10 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    originLabel;
+    // Dashboard origin labels identify the authenticated sender. Using them as
+    // titles leaks account names into the sidebar while the generated title is pending.
+    (isDashboardSession ? undefined : originLabel);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
-  const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
   );
@@ -2205,6 +2235,7 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     worktree: entry?.worktree,
@@ -2234,6 +2265,16 @@ export function buildGatewaySessionRow(params: {
     icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
+    agentStatus,
+    observerDigest: observerDigest
+      ? {
+          runId: observerDigest.runId,
+          headline: observerDigest.headline,
+          health: observerDigest.health,
+          updatedAt: observerDigest.updatedAt,
+          revision: observerDigest.revision,
+        }
+      : undefined,
     lastInteractionAt: entry?.lastInteractionAt,
     lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,
@@ -2424,7 +2465,7 @@ export function loadGatewaySessionRow(
   },
 ): GatewaySessionRow | null {
   const now = options?.now ?? Date.now();
-  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey, {
+  const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntryReadOnly(sessionKey, {
     clone: false,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
@@ -2606,6 +2647,9 @@ function filterSessionEntries(params: {
       );
     })
     .filter(([, entry]) => {
+      if (opts.archived === "all") {
+        return true;
+      }
       const archived = entry?.archivedAt !== undefined;
       return opts.archived === true ? archived : !archived;
     })

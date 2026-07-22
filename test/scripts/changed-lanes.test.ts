@@ -1439,6 +1439,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "environment variable count ratchet",
       "max-lines suppression ratchet",
       "changelog attributions",
       "guarded extension wildcard re-exports",
@@ -1715,6 +1716,7 @@ describe("scripts/changed-lanes", () => {
       "apps/android/version.json",
       "apps/ios/CHANGELOG.md",
       "apps/macos/Sources/OpenClaw/Resources/Info.plist",
+      "docs/.generated/config-baseline.counts.json",
       "docs/.generated/config-baseline.sha256",
       "package.json",
     ]);
@@ -2311,6 +2313,21 @@ describe("scripts/changed-lanes", () => {
     expect(
       stagedPlan.commands.find((command) => command.name === "max-lines suppression ratchet"),
     ).toMatchObject({ args: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"] });
+  });
+
+  it("adds the environment variable count ratchet for production source", () => {
+    const result = detectChangedLanes(["src/runtime.ts"]);
+    const worktreePlan = createChangedCheckPlan(result, { base: "main" });
+    const stagedPlan = createChangedCheckPlan(result, { staged: true });
+
+    expect(
+      worktreePlan.commands.find(
+        (command) => command.name === "environment variable count ratchet",
+      ),
+    ).toMatchObject({ args: ["check:env-var-count", "--base", "main"] });
+    expect(
+      stagedPlan.commands.find((command) => command.name === "environment variable count ratchet"),
+    ).toMatchObject({ args: ["check:env-var-count", "--staged", "--base", "HEAD"] });
   });
 
   it("keeps the temp creation report out of non-test changed paths", () => {

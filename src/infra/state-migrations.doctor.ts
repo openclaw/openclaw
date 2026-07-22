@@ -47,6 +47,7 @@ import {
   detectLegacyCommitments,
   migrateLegacyCommitments,
 } from "./state-migrations.commitments.js";
+import { migrateLegacyConfigMachineState } from "./state-migrations.config-machine-state.js";
 import {
   detectLegacyDebugProxyCaptureSidecar,
   migrateLegacyDebugProxyCaptureSidecar,
@@ -170,13 +171,13 @@ function describeStateSchemaMigration(migration: OpenClawStateDatabaseSchemaMigr
   return migration.kind satisfies never;
 }
 
-let autoMigrateChecked = false;
+const autoMigrateChecked = new Set<string>();
 
 const PLUGIN_DOCTOR_MIGRATION_LOCK_TIMEOUT_MS = 250;
 const PLUGIN_DOCTOR_MIGRATION_LOCK_POLL_INTERVAL_MS = 25;
 
 export function resetAutoMigrateLegacyStateForTest(): void {
-  autoMigrateChecked = false;
+  autoMigrateChecked.clear();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   resetLegacySessionSurfacesForTest();
 }
@@ -1205,18 +1206,23 @@ export async function autoMigrateLegacyState(params: {
   warnings: string[];
   notices?: string[];
 }> {
-  if (autoMigrateChecked) {
+  const env = params.env ?? process.env;
+  const homedir = params.homedir ?? os.homedir;
+  const migrationMode = params.doctorOnlyStateMigrations === true ? "doctor-repair" : "automatic";
+  const initialStateDir = resolveStateDir(env, homedir);
+  const checkKey = `${path.resolve(initialStateDir)}\0${migrationMode}`;
+  if (autoMigrateChecked.has(checkKey)) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
   }
-  autoMigrateChecked = true;
+  autoMigrateChecked.add(checkKey);
 
-  const env = params.env ?? process.env;
   const stateDirResult = await autoMigrateLegacyStateDir({
     env,
-    homedir: params.homedir,
+    homedir,
     log: params.log,
   });
-  const stateDir = resolveStateDir(env, params.homedir ?? os.homedir);
+  const stateDir = resolveStateDir(env, homedir);
+  autoMigrateChecked.add(`${path.resolve(stateDir)}\0${migrationMode}`);
   const stateSchema = repairOpenClawStateDatabaseSchema({
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
   });
@@ -1230,6 +1236,10 @@ export async function autoMigrateLegacyState(params: {
     };
   }
   const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
+  const configMachineState = migrateLegacyConfigMachineState({
+    config: pluginDoctorConfig,
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
     config: pluginDoctorConfig,
     env,
@@ -1351,6 +1361,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
       ...pluginStateSidecar.changes,
@@ -1372,6 +1383,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
@@ -1406,6 +1418,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
         pluginStateSidecar.changes.length > 0 ||
@@ -1452,6 +1465,7 @@ export async function autoMigrateLegacyState(params: {
     const changes = [
       ...stateDirResult.changes,
       ...stateSchema.changes,
+      ...configMachineState.changes,
       ...orphanKeys.changes,
       ...acpSessionMetadata.changes,
       ...deviceIdentity.changes,
@@ -1459,6 +1473,7 @@ export async function autoMigrateLegacyState(params: {
     const warnings = [
       ...stateDirResult.warnings,
       ...stateSchema.warnings,
+      ...configMachineState.warnings,
       ...detected.warnings,
       ...orphanKeys.warnings,
       ...acpSessionMetadata.warnings,
@@ -1474,6 +1489,7 @@ export async function autoMigrateLegacyState(params: {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        configMachineState.changes.length > 0 ||
         orphanKeys.changes.length > 0 ||
         acpSessionMetadata.changes.length > 0 ||
         deviceIdentity.changes.length > 0,
@@ -1554,6 +1570,7 @@ export async function autoMigrateLegacyState(params: {
   const changes = [
     ...stateDirResult.changes,
     ...stateSchema.changes,
+    ...configMachineState.changes,
     ...orphanKeys.changes,
     ...acpSessionMetadata.changes,
     ...pluginStateSidecar.changes,
@@ -1579,6 +1596,7 @@ export async function autoMigrateLegacyState(params: {
   const warnings = [
     ...stateDirResult.warnings,
     ...stateSchema.warnings,
+    ...configMachineState.warnings,
     ...detected.warnings,
     ...orphanKeys.warnings,
     ...acpSessionMetadata.warnings,

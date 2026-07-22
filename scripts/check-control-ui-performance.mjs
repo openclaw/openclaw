@@ -12,7 +12,11 @@ const KIB = 1024;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze({
   startupJsRequests: 18,
   startupCssRequests: 1,
-  startupJsGzipBytes: 310 * KIB,
+  // 314 KiB accompanies cloud-workspace conflict recovery (2026-07): the live
+  // notice and sidebar attention must be available on initial chat render, and
+  // their bounded recovery copy exhausted the previous ceiling after rebasing.
+  // One KiB restores explicit headroom without changing the request budget.
+  startupJsGzipBytes: 314 * KIB,
   // 45 KiB CSS ceilings maintainer-approved 2026-07 alongside the interleaved
   // sidebar zone styling; headroom over the ~36.5 KiB post-diet baseline.
   startupCssGzipBytes: 45 * KIB,

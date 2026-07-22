@@ -86,15 +86,16 @@ function buildConfiguredAudioCfg() {
   return withFastReplyConfig({
     tools: {
       media: {
+        models: [
+          {
+            type: "cli",
+            command: "/usr/local/bin/stt-transcribe",
+            args: ["{{MediaPath}}"],
+            capabilities: ["audio"],
+          },
+        ],
         audio: {
           enabled: true,
-          models: [
-            {
-              type: "cli",
-              command: "/usr/local/bin/stt-transcribe",
-              args: ["{{MediaPath}}"],
-            },
-          ],
         },
       },
     },
@@ -318,7 +319,7 @@ describe("getReplyFromConfig message hooks", () => {
     );
   });
 
-  it("recognizes locked-harness audio from its filename when MIME metadata is missing", async () => {
+  it("does not infer locked-harness audio from its filename when MIME metadata is missing", async () => {
     const sessionKey = "agent:main:harness:claude-cli:locked-audio-filename";
     mocks.resolveReplySessionPreprocessingState.mockReturnValueOnce({
       sessionEntry: {
@@ -340,15 +341,13 @@ describe("getReplyFromConfig message hooks", () => {
         RawBody: "<media:file>",
         CommandBody: "<media:file>",
         MediaType: undefined,
+        MediaTypes: undefined,
       }),
       undefined,
       buildConfiguredAudioCfg(),
     );
 
-    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledOnce();
-    expect(mocks.applyMediaUnderstanding.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ processingMode: "audio-only" }),
-    );
+    expect(mocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
   it("runs normal media understanding for an unlocked voice note", async () => {
@@ -610,7 +609,10 @@ describe("getReplyFromConfig message hooks", () => {
       params.sessionCtx.MediaPaths = [stagedPath];
       params.sessionCtx.MediaUrl = stagedPath;
       params.sessionCtx.MediaUrls = [stagedPath];
-      return { staged: new Map([[remotePath, stagedPath]]) };
+      const stagedFact = { path: stagedPath, contentType: "image/jpeg", workspaceDir: "/tmp" };
+      params.ctx.media = [stagedFact];
+      params.sessionCtx.media = [stagedFact];
+      return { staged: new Map([[0, stagedPath]]) };
     });
     mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
       order.push("understand");

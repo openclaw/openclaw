@@ -71,13 +71,10 @@ describe("resolveWhatsAppAuthDir", () => {
   it("merges top-level and account-specific config through shared helpers", () => {
     const resolved = resolveWhatsAppAccount({
       cfg: {
-        messages: {
-          messagePrefix: "[global]",
-        },
         channels: {
           whatsapp: {
             sendReadReceipts: false,
-            messagePrefix: "[root]",
+            responsePrefix: "[root]",
             debounceMs: 100,
             accounts: {
               work: {

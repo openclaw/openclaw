@@ -1,8 +1,14 @@
+// @vitest-environment node
 // Control UI tests cover application-owned overlay races.
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
+
+vi.mock("../build-info.ts", () => ({
+  controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
+    Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
+}));
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
 const VERIFICATION_POLL_MS = 250;
@@ -34,6 +40,7 @@ function createGatewayHarness(
     assistantAgentId: "main",
     client: initialClient,
     connected: initialConnected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     lastError: null,
@@ -116,6 +123,59 @@ async function flushMicrotasks() {
   await Promise.resolve();
 }
 
+describe("Control UI refresh nudge", () => {
+  it("waits for a reconnect before flagging a version mismatch", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    const mismatchedHello = {
+      server: { version: "2.0.0" },
+    } as ApplicationGatewaySnapshot["hello"];
+
+    harness.update({ client: gatewayClient, connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ sessionKey: "agent:main:same-connection" });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ connected: false, hello: null });
+    harness.update({ connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+
+    harness.update({ sessionKey: "agent:main:after-reconnect" });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+
+    overlays.dispose();
+  });
+
+  it("does not flag a matching reconnect and resets on a fresh client lifetime", () => {
+    const gatewayClient = client(async () => []);
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    const matchingHello = {
+      server: { version: "1.0.0" },
+    } as ApplicationGatewaySnapshot["hello"];
+    const mismatchedHello = {
+      server: { version: "2.0.0" },
+    } as ApplicationGatewaySnapshot["hello"];
+
+    harness.update({ client: gatewayClient, connected: true, hello: matchingHello });
+    harness.update({ connected: false, hello: null });
+    harness.update({ connected: true, hello: matchingHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    harness.update({ connected: false, hello: null });
+    harness.update({ connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(true);
+
+    harness.update({ client: null, connected: false, hello: null });
+    harness.update({ client: gatewayClient, connected: true, hello: mismatchedHello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+
+    overlays.dispose();
+  });
+});
+
 describe("application approval overlays", () => {
   it("resolves OpenClaw changes through unified human approval", async () => {
     const request = vi.fn<RequestFn>(async (method) =>
@@ -182,7 +242,7 @@ describe("application approval overlays", () => {
     overlays.dispose();
   });
 
-  it("does not attach an older resolve failure to a newer approval", async () => {
+  it("keeps a resolve failure attached to its older request", async () => {
     const resolveAttempt = deferred();
     const request = vi.fn<RequestFn>((method) =>
       method.endsWith(".list") ? Promise.resolve([]) : resolveAttempt.promise,
@@ -197,11 +257,92 @@ describe("application approval overlays", () => {
     await decision;
 
     expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual([
-      "approval-newer",
       "approval-active",
+      "approval-newer",
     ]);
-    expect(overlays.snapshot.approvalError).toBeNull();
+    expect(overlays.snapshot.approvalErrors.get("approval-active")).toBe(
+      "Approval failed: gateway unavailable",
+    );
     expect(overlays.snapshot.approvalBusy).toBe(false);
+    overlays.dispose();
+  });
+
+  it("keeps A's failure visible after deciding B successfully", async () => {
+    const firstResolve = deferred();
+    const secondResolve = deferred();
+    let resolveCalls = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolveCalls += 1;
+      return resolveCalls === 1 ? firstResolve.promise : secondResolve.promise;
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.emitApproval("approval-a", 1_000);
+    harness.emitApproval("approval-b", 2_000);
+    const firstDecision = overlays.decideApproval("allow-once", "approval-a");
+    firstResolve.reject(new Error("gateway unavailable"));
+    await firstDecision;
+    expect(overlays.snapshot.approvalErrors.get("approval-a")).toBe(
+      "Approval failed: gateway unavailable",
+    );
+
+    const secondDecision = overlays.decideApproval("deny", "approval-b");
+    secondResolve.resolve({ ok: true });
+    await secondDecision;
+
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-a"]);
+    expect(overlays.snapshot.approvalErrors.get("approval-a")).toBe(
+      "Approval failed: gateway unavailable",
+    );
+    overlays.dispose();
+  });
+
+  it("clears an approval's error when that approval is retried", async () => {
+    const firstResolve = deferred();
+    let resolveCalls = 0;
+    const request = vi.fn<RequestFn>((method) => {
+      if (method.endsWith(".list")) {
+        return Promise.resolve([]);
+      }
+      resolveCalls += 1;
+      return resolveCalls === 1 ? firstResolve.promise : Promise.resolve({ ok: true });
+    });
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+
+    harness.emitApproval("approval-a", 1_000);
+    const failedDecision = overlays.decideApproval("allow-once");
+    firstResolve.reject(new Error("gateway unavailable"));
+    await failedDecision;
+    expect(overlays.snapshot.approvalErrors.has("approval-a")).toBe(true);
+
+    await overlays.decideApproval("allow-once");
+
+    expect(overlays.snapshot.approvalQueue).toEqual([]);
+    expect(overlays.snapshot.approvalErrors.has("approval-a")).toBe(false);
+    overlays.dispose();
+  });
+
+  it("resolves a selected queued approval by id", async () => {
+    const request = vi.fn<RequestFn>(async (method) =>
+      method.endsWith(".list") ? [] : { ok: true },
+    );
+    const harness = createGatewayHarness(client(request));
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.emitApproval("approval-oldest", 1_000);
+    harness.emitApproval("approval-newer", 2_000);
+
+    await overlays.decideApproval("deny", "approval-newer");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-newer",
+      decision: "deny",
+    });
+    expect(overlays.snapshot.approvalQueue.map((entry) => entry.id)).toEqual(["approval-oldest"]);
     overlays.dispose();
   });
 
@@ -230,7 +371,7 @@ describe("application approval overlays", () => {
     oldResolve.reject(new Error("gateway client stopped"));
     await oldDecision;
     expect(overlays.snapshot.approvalBusy).toBe(true);
-    expect(overlays.snapshot.approvalError).toBeNull();
+    expect(overlays.snapshot.approvalErrors).toEqual(new Map());
 
     newResolve.resolve({ ok: true });
     await newDecision;
@@ -277,7 +418,7 @@ describe("application approval overlays", () => {
     resolveAttempt.reject(new Error("disposed"));
     await decision;
 
-    expect(overlays.snapshot.approvalError).toBeNull();
+    expect(overlays.snapshot.approvalErrors).toEqual(new Map());
   });
 });
 

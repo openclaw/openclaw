@@ -31,6 +31,13 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "clickclack",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "CLICKCLACK_BOT_TOKEN"
+          ]
+        }
+      },
       "label": "ClickClack",
       "selectionLabel": "ClickClack",
       "detailLabel": "ClickClack Bot",
@@ -46,6 +53,10 @@
         "nativeSkillsAutoEnabled": false
       },
       "cliAddOptions": [
+        {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        },
         {
           "flags": "--code <code>",
           "description": "ClickClack one-time setup code or setup URL"

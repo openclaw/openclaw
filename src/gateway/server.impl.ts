@@ -10,6 +10,7 @@ import { clearSessionSuspensionTimers } from "../agents/session-suspension.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import {
   getLoadedChannelPluginEntryById,
   listLoadedChannelPlugins,
@@ -58,7 +59,6 @@ import {
 } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { upsertPresence } from "../infra/system-presence.js";
-import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
@@ -79,7 +79,11 @@ import {
 } from "../secrets/runtime-state.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createLazyPromise } from "../shared/lazy-runtime.js";
-import { recordRemoteNodeInfo, removeRemoteNodeInfo } from "../skills/runtime/remote.js";
+import {
+  recordRemoteNodeInfo,
+  removeRemoteNodeInfo,
+  removeRemoteNodeInfoForConnection,
+} from "../skills/runtime/remote.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -101,6 +105,7 @@ import {
 import { isLoopbackHost } from "./net.js";
 import { disposeNodeConnectionNotifications } from "./node-connection-notifications.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { clearNodeWakeState } from "./node-wake-state.js";
 import {
   mergeActivationSectionsIntoRuntimeConfig,
   resolveGatewayReloadPluginActivationCandidate,
@@ -127,7 +132,6 @@ import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js"
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
 import { GATEWAY_EVENTS } from "./server-methods-list.js";
-import { clearNodeWakeState } from "./server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
@@ -168,10 +172,10 @@ const loadWorkerPlacementStartupModule = createLazyRuntimeModule(
   () => import("./server-worker-placement-startup.js"),
 );
 
-export async function resetModelCatalogCacheForTest(): Promise<void> {
-  const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
+export async function resetPreparedModelCatalogForTest(): Promise<void> {
+  const { resetPreparedModelCatalogForTest: resetPreparedModelCatalogForTestLocal } =
     await loadGatewayModelCatalogModule();
-  await resetModelCatalogCacheForTestLocal();
+  await resetPreparedModelCatalogForTestLocal();
 }
 
 ensureOpenClawCliOnPath();
@@ -558,6 +562,7 @@ export type GatewayServerOptions = {
   channelWizardRunner?: import("./server-methods/wizard.js").ChannelSetupWizardRunner;
   sidecarStartup?: GatewaySidecarStartupMode;
   channelAutostartSuppression?: ChannelAutostartSuppression;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   /**
    * Optional startup timestamp used for concise readiness logging.
    */
@@ -623,6 +628,7 @@ export async function startGatewayServer(
 
   const minimalTestGateway =
     isVitestRuntimeEnv() && process.env.OPENCLAW_TEST_MINIMAL_GATEWAY === "1";
+  const ambientEnvTriggers = opts.ambientEnvTriggers ?? "allow";
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
@@ -725,6 +731,18 @@ export async function startGatewayServer(
   startupTrace.setConfig(cfgAtStart);
   if (authBootstrap.generatedToken) {
     log.warn(formatRuntimeGatewayAuthTokenWarning());
+  }
+  // prepareGatewayStartupConfig has already applied startupAuthOverride to cfgAtStart,
+  // so this warning follows the effective auth mode rather than dormant file config.
+  const trustedProxyDeviceAutoApprove = cfgAtStart.gateway?.auth?.trustedProxy?.deviceAutoApprove;
+  if (
+    cfgAtStart.gateway?.auth?.mode === "trusted-proxy" &&
+    trustedProxyDeviceAutoApprove?.enabled === true &&
+    trustedProxyDeviceAutoApprove.scopes?.some((scope) => scope.trim() === ADMIN_SCOPE)
+  ) {
+    log.warn(
+      "SECURITY WARNING: gateway.auth.trustedProxy.deviceAutoApprove.scopes includes operator.admin; every proxy-authenticated user can auto-approve a new browser device with full admin, and requests without scopes receive full admin automatically. Remove operator.admin to require manual approval until per-identity roles are available.",
+    );
   }
   const resolvedStartupAuthOverride = startupAuthOverride
     ? (Object.fromEntries(
@@ -857,6 +875,7 @@ export async function startGatewayServer(
           env: runtimeEnv.env,
           ...(metadata?.manifestRegistry ? { manifestRegistry: metadata.manifestRegistry } : {}),
           discovery: metadata?.discovery,
+          ambientEnvTriggers,
         });
     const applyCandidateOverrides = captureConfigOverrideApplier();
     const reapplyCompareOverlays = (config: OpenClawConfig): OpenClawConfig =>
@@ -909,6 +928,7 @@ export async function startGatewayServer(
       pluginMetadataSnapshot: startupConfigLoad.pluginMetadataSnapshot,
       workerProviderIds: workerEnvironmentStartup?.durableProviderIds ?? [],
       minimalTestGateway,
+      ambientEnvTriggers,
       log,
       loadRuntimePlugins: false,
       loadSetupRuntimePlugins: true,
@@ -922,6 +942,7 @@ export async function startGatewayServer(
     pluginLookUpTable,
     baseMethods,
     runtimePluginsLoaded,
+    ambientAutostartSuppressedChannelIds,
   } = pluginBootstrap;
   const coreGatewayMethodNames = listCoreGatewayMethodNames();
   setCurrentPluginMetadataSnapshot(pluginLookUpTable, {
@@ -1085,8 +1106,7 @@ export async function startGatewayServer(
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
   };
-  const preauthHandshakeTimeoutMs =
-    cfgAtStart.gateway?.handshakeTimeoutMs ?? getRuntimeConfig().gateway?.handshakeTimeoutMs;
+  const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
@@ -1150,6 +1170,7 @@ export async function startGatewayServer(
     startupTrace,
     deferStartupAccountStartsUntil: startupAccountStartsReady,
     getNativeApprovalRuntime: () => gatewayInstanceRuntime?.nativeApprovals,
+    ambientAutostartSuppressedChannelIds,
   });
   channelManager.setAutostartSuppression(opts.channelAutostartSuppression ?? null);
   const sidecarStartup = opts.sidecarStartup ?? "start";
@@ -1198,6 +1219,7 @@ export async function startGatewayServer(
     sessionMessageSubscribers,
     getWorkerIngressEndpoint,
     getMcpAppSandboxPort,
+    ensureSandboxHostPort,
   } = await startupTrace.measure("runtime.state", () =>
     createGatewayRuntimeState({
       cfg: cfgAtStart,
@@ -1234,6 +1256,53 @@ export async function startGatewayServer(
     }),
   );
   resolveWorkerGatewayEndpoint = getWorkerIngressEndpoint;
+  const presenceWatchedSessions = (connId: string): string[] => {
+    // Presence snapshots stay small even if a long-lived client accumulates
+    // subscriptions. Keep only the 32 most recently subscribed session keys.
+    return [...sessionMessageSubscribers.getForConnection(connId)].slice(-32).toSorted();
+  };
+  const updateWatchedSessionsPresence = (connId: string, previous: readonly string[]) => {
+    const watchedSessions = presenceWatchedSessions(connId);
+    if (
+      watchedSessions.length === previous.length &&
+      watchedSessions.every((key, index) => key === previous[index])
+    ) {
+      return;
+    }
+    const client = [...clients].find((candidate) => candidate.connId === connId);
+    if (!client?.presenceKey) {
+      return;
+    }
+    upsertPresence(client.presenceKey, {
+      watchedSessions: watchedSessions.length > 0 ? watchedSessions : undefined,
+    });
+    broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+  };
+  const subscribeSessionMessageEvents: GatewayRequestContext["subscribeSessionMessageEvents"] = (
+    connId,
+    sessionKey,
+    options,
+  ) => {
+    const previous = presenceWatchedSessions(connId);
+    const rollback = sessionMessageSubscribers.subscribe(connId, sessionKey, options);
+    updateWatchedSessionsPresence(connId, previous);
+    if (!rollback) {
+      return undefined;
+    }
+    const rollbackPresence = (() => {
+      const rollbackPrevious = presenceWatchedSessions(connId);
+      rollback();
+      updateWatchedSessionsPresence(connId, rollbackPrevious);
+    }) as NonNullable<ReturnType<GatewayRequestContext["subscribeSessionMessageEvents"]>>;
+    rollbackPresence.commit = () => rollback.commit();
+    return rollbackPresence;
+  };
+  const unsubscribeSessionMessageEvents: GatewayRequestContext["unsubscribeSessionMessageEvents"] =
+    (connId, sessionKey) => {
+      const previous = presenceWatchedSessions(connId);
+      sessionMessageSubscribers.unsubscribe(connId, sessionKey);
+      updateWatchedSessionsPresence(connId, previous);
+    };
   const restartRecoveryCandidates = new Map<string, RestartRecoveryCandidate>();
   const { createGatewayNodeSessionRuntime } = await import("./server-node-session-runtime.js");
   const {
@@ -1245,6 +1314,7 @@ export async function startGatewayServer(
     nodeUnsubscribe,
     nodeUnsubscribeAll,
     broadcastVoiceWakeChanged,
+    broadcastVoiceWakeRoutingChanged,
     hasTalkNodeConnected,
   } = createGatewayNodeSessionRuntime({
     broadcast,
@@ -1252,7 +1322,12 @@ export async function startGatewayServer(
     sessionMessageSubscribers,
     listRegisteredNodePluginToolCommands: () => pluginRegistry.nodeHostCommands,
     nodePluginToolsEnabled: cfgAtStart.gateway?.nodes?.pluginTools?.enabled !== false,
-    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.skills?.enabled !== false,
+    nodeSkillsEnabled: cfgAtStart.gateway?.nodes?.allowSkills !== false,
+    onPairingInvalidated: ({ nodeId, connId }) => {
+      upsertPresence(nodeId, { reason: "disconnect" });
+      broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
+      removeRemoteNodeInfoForConnection(nodeId, connId);
+    },
   });
   const { createWatchNodeHttpRuntime } = await import("./watch-node-http.js");
   const watchNodeHttpRuntime = createWatchNodeHttpRuntime({
@@ -1285,6 +1360,7 @@ export async function startGatewayServer(
         deviceFamily: session.deviceFamily,
         commands: session.commands,
         remoteIp: session.remoteIp,
+        pairingGeneration: session.pairingGeneration,
       });
     },
     onNodeDisconnected: (nodeId) => {
@@ -1507,10 +1583,6 @@ export async function startGatewayServer(
       clearFallbackGatewayContextForServer();
     }
   };
-  const broadcastVoiceWakeRoutingChanged = (config: VoiceWakeRoutingConfig) => {
-    broadcast("voicewake.routing.changed", { config }, { dropIfSlow: true });
-  };
-
   try {
     const earlyRuntime = await startupTrace.measure("runtime.early", () =>
       loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
@@ -1542,8 +1614,8 @@ export async function startGatewayServer(
           removeChatRun,
           agentRunSeq,
           nodeSendToSession,
-          ...(typeof cfgAtStart.media?.ttlHours === "number"
-            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
+          ...(typeof cfgAtStart.attachments?.ttlHours === "number"
+            ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.attachments.ttlHours) }
             : {}),
           skillsRefreshDelayMs: runtimeState.skillsRefreshDelayMs,
           getSkillsRefreshTimer: () => runtimeState.skillsRefreshTimer,
@@ -1566,22 +1638,24 @@ export async function startGatewayServer(
           import("./server-runtime-startup-services.js"),
         ]),
       );
-    const runtimeSubscriptions = await startupTrace.measure("runtime.subscriptions", () =>
-      startGatewayEventSubscriptions({
-        log,
-        broadcast,
-        broadcastToConnIds,
-        nodeSendToSession,
-        agentRunSeq,
-        chatRunState,
-        toolEventRecipients,
-        sessionEventSubscribers,
-        sessionMessageSubscribers,
-        chatAbortControllers,
-        restartRecoveryCandidates,
-      }),
+    const { sessionObserver, ...runtimeSubscriptionUnsubs } = await startupTrace.measure(
+      "runtime.subscriptions",
+      () =>
+        startGatewayEventSubscriptions({
+          log,
+          broadcast,
+          broadcastToConnIds,
+          nodeSendToSession,
+          agentRunSeq,
+          chatRunState,
+          toolEventRecipients,
+          sessionEventSubscribers,
+          sessionMessageSubscribers,
+          chatAbortControllers,
+          restartRecoveryCandidates,
+        }),
     );
-    Object.assign(runtimeState, runtimeSubscriptions);
+    Object.assign(runtimeState, runtimeSubscriptionUnsubs);
 
     const runtimeServices = await startupTrace.measure("runtime.services", () =>
       startGatewayRuntimeServices({
@@ -1779,16 +1853,22 @@ export async function startGatewayServer(
     }): Promise<GatewayPluginReloadResult> => {
       const beforeChannelTargets = listAttachedChannelConfigTargets();
       const beforeChannelIds = new Set(beforeChannelTargets.keys());
-      const [{ loadPluginLookUpTable }, { prepareGatewayPluginLoad }, { startPluginServices }] =
-        await Promise.all([
-          import("../plugins/plugin-lookup-table.js"),
-          loadGatewayPluginBootstrapModule(),
-          import("../plugins/services.js"),
-        ]);
+      const [
+        { loadPluginLookUpTable },
+        { listAmbientOnlyConfiguredChannelIds },
+        { prepareGatewayPluginLoad },
+        { startPluginServices },
+      ] = await Promise.all([
+        import("../plugins/plugin-lookup-table.js"),
+        import("../plugins/channel-presence-policy.js"),
+        loadGatewayPluginBootstrapModule(),
+        import("../plugins/services.js"),
+      ]);
       const nextPluginActivationConfig = resolveGatewayStartupPluginActivationConfig({
         runtimeConfig: params.nextConfig,
         activationSourceConfig: params.nextConfig,
         env: params.env,
+        ambientEnvTriggers,
       });
       const nextPluginLookUpTable = loadPluginLookUpTable({
         config: nextPluginActivationConfig,
@@ -1797,7 +1877,20 @@ export async function startGatewayServer(
         activationSourceConfig: params.nextConfig,
         // Workers can be created after startup; reload planning needs the live durable set.
         workerProviderIds: workerEnvironmentStartup?.listDurableProviderIds() ?? [],
+        ambientEnvTriggers,
       });
+      const nextAmbientAutostartSuppressedChannelIds =
+        ambientEnvTriggers === "suppress"
+          ? new Set(
+              listAmbientOnlyConfiguredChannelIds({
+                config: params.nextConfig,
+                activationSourceConfig: params.nextConfig,
+                env: params.env,
+                includePersistedAuthState: false,
+                manifestRecords: nextPluginLookUpTable.manifestRegistry.plugins,
+              }),
+            )
+          : new Set<string>();
       const nextStartupPluginIds = new Set(nextPluginLookUpTable.startup.pluginIds);
       const nextStartupChannelIds = new Set<ChannelId>();
       for (const plugin of nextPluginLookUpTable.manifestRegistry.plugins) {
@@ -1834,6 +1927,9 @@ export async function startGatewayServer(
       }
       const previousPluginServices = runtimeState.pluginServices;
       await params.commitRuntime();
+      channelManager.setAmbientAutostartSuppressedChannelIds(
+        nextAmbientAutostartSuppressedChannelIds,
+      );
       const loaded = prepareGatewayPluginLoad({
         cfg: params.nextConfig,
         workspaceDir: defaultWorkspaceDir,
@@ -1842,6 +1938,7 @@ export async function startGatewayServer(
         hostServices: pluginHostServices,
         baseMethods,
         pluginLookUpTable: nextPluginLookUpTable,
+        ambientEnvTriggers,
       });
       setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
         config: params.nextConfig,
@@ -1893,7 +1990,9 @@ export async function startGatewayServer(
           deps,
           runtimeState,
           getRuntimeConfig,
+          sessionObserver,
           getMcpAppSandboxPort,
+          ensureSandboxHostPort,
           resolveTerminalLaunchPolicy: terminalLaunchPolicy.resolve,
           isTerminalEnabled: terminalLaunchPolicy.isEnabled,
           execApprovalManager,
@@ -1956,11 +2055,12 @@ export async function startGatewayServer(
           removeChatRun,
           subscribeSessionEvents: sessionEventSubscribers.subscribe,
           unsubscribeSessionEvents: sessionEventSubscribers.unsubscribe,
-          subscribeSessionMessageEvents: sessionMessageSubscribers.subscribe,
-          unsubscribeSessionMessageEvents: sessionMessageSubscribers.unsubscribe,
+          subscribeSessionMessageEvents,
+          unsubscribeSessionMessageEvents,
           unsubscribeAllSessionEvents: (connId: string) => {
             sessionEventSubscribers.unsubscribe(connId);
             sessionMessageSubscribers.unsubscribeAll(connId);
+            sessionObserver.removeConnection(connId);
           },
           getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
           registerToolEventRecipient: toolEventRecipients.add,
@@ -2019,6 +2119,7 @@ export async function startGatewayServer(
             pluginIds: startupPluginIds,
             pluginLookUpTable,
             logDiagnostics: false,
+            ambientEnvTriggers,
           }),
         );
         replaceAttachedPluginRuntime(loaded);
@@ -2135,6 +2236,7 @@ export async function startGatewayServer(
             logTailscale,
             gatewayPluginConfigAtStart,
             activationSourceConfig: startupActivationSourceConfig,
+            ambientEnvTriggers,
             pluginRegistry,
             defaultWorkspaceDir,
             deps,
@@ -2158,6 +2260,7 @@ export async function startGatewayServer(
                     startupPluginIds,
                     pluginLookUpTable,
                     startupTrace,
+                    ambientEnvTriggers,
                   });
                 },
             onStartupPluginsLoading: () => {
@@ -2250,6 +2353,7 @@ export async function startGatewayServer(
         ? (startupLastGoodSnapshot.hash ?? null)
         : null,
       initialAuthoredConfig: startupLastGoodSnapshot.parsed,
+      initialIncludedPaths: startupLastGoodSnapshot.includedPaths ?? [],
       initialSnapshotValid: startupLastGoodSnapshot.valid,
       initialSnapshotIssues: startupLastGoodSnapshot.issues,
       initialInternalWriteHash: startupInternalWriteHash,

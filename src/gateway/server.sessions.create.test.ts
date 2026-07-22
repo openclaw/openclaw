@@ -5,7 +5,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   findLiveRegistryWorktreeByOwner,
   listRegistryWorktrees,
@@ -36,6 +37,7 @@ import {
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -422,6 +424,21 @@ test("sessions.create persists a Gateway cwd without a managed worktree", async 
   );
 });
 
+test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
+  const cwd = tempDirs.make("openclaw-session-direct-cwd-", await fs.realpath(os.tmpdir()));
+  const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+  const direct = await directSessionReq("sessions.create", { cwd }, client);
+  expect(direct.ok).toBe(true);
+  expect((direct.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
+
+  const isolated = await directSessionReq("sessions.create", { cwd, worktree: true }, client);
+  expect(isolated.ok).toBe(false);
+  expect(isolated.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "agent workspace is not a git checkout",
+  });
+});
+
 test("sessions.create keeps its cwd contract absolute-only", async () => {
   const created = await directSessionReq("sessions.create", { cwd: "~/repo" });
 
@@ -741,12 +758,16 @@ test.each([undefined, "main"])(
 
     const created = await directSessionReq<{
       key?: string;
-      entry?: { parentSessionKey?: string };
+      entry?: { parentSessionKey?: string; spawnDepth?: number };
     }>("sessions.create", { agentId: "main" });
 
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+    // Auto-parented operator sessions must stay spawn-capable roots: without the
+    // explicit depth, spawn admission derives depth 1 from parentSessionKey and
+    // rejects all sessions_spawn calls at the default maxSpawnDepth of 1.
+    expect(created.payload?.entry?.spawnDepth).toBe(0);
   },
 );
 
@@ -761,7 +782,7 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   const created = await directSessionReq<{
     key?: string;
-    entry?: { parentSessionKey?: string };
+    entry?: { parentSessionKey?: string; spawnDepth?: number };
   }>("sessions.create", {
     agentId: "main",
     parentSessionKey: "agent:main:explicit-parent",
@@ -769,6 +790,9 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+  // Operator creations with a parent (UI forks/threads) are still roots: only a
+  // declared spawnDepth marks spawn lineage.
+  expect(created.payload?.entry?.spawnDepth).toBe(0);
 
   const reused = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -779,6 +803,42 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create persists declared spawn lineage for spawn-owned creations", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": sessionStoreEntry("sess-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string; spawnDepth?: number };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:main",
+    spawnDepth: 2,
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.spawnDepth).toBe(2);
+});
+
+test("sessions.create rejects spawnDepth without parentSessionKey", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    spawnDepth: 1,
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    message: "spawnDepth requires parentSessionKey",
+  });
 });
 
 test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {
@@ -1211,6 +1271,176 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   expect(created.payload?.sessionId).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
+});
+
+test("sessions.create preserves write-scoped fresh keyed model selection but gates adopted rows", async () => {
+  const { storePath } = await createSessionStoreDir();
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [
+    { id: "gpt-test-a", name: "A", provider: "openai" },
+    { id: "gpt-test-b", name: "B", provider: "openai" },
+  ];
+  testState.agentConfig = { subagents: { model: "openai/gpt-test-a" } };
+  const writeClient = { connect: { scopes: ["operator.write"] } } as never;
+  const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
+  const unscopedClient = { connect: {} } as never;
+  const freshKey = "agent:main:dashboard:fresh-model";
+  const existingKey = "agent:main:dashboard:existing-model";
+  const existingProfileKey = "agent:main:dashboard:existing-profile-model";
+  const existingSubagentKey = "agent:main:subagent:existing-model";
+  await writeSessionStore({
+    entries: {
+      [existingKey]: sessionStoreEntry("sess-existing", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        thinkingLevel: "low",
+      }),
+      [existingProfileKey]: sessionStoreEntry("sess-existing-profile", {
+        providerOverride: "openai",
+        modelOverride: "gpt-test-a",
+        authProfileOverride: "work",
+        authProfileOverrideSource: "user",
+      }),
+      [existingSubagentKey]: sessionStoreEntry("sess-existing-subagent"),
+    },
+  });
+
+  const fresh = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string };
+  }>("sessions.create", { key: freshKey, model: "openai/gpt-test-a" }, { client: writeClient });
+  expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
+  expect(fresh.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+  });
+
+  const sameSelection = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+  }>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low" },
+    { client: writeClient },
+  );
+  expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
+  expect(sameSelection.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    thinkingLevel: "low",
+  });
+
+  const sameSubagentSelection = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string };
+  }>(
+    "sessions.create",
+    { key: existingSubagentKey, model: "openai/gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(sameSubagentSelection.ok, JSON.stringify(sameSubagentSelection.error)).toBe(true);
+  expect(sameSubagentSelection.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+  });
+
+  const sameSelectionWithProfile = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; authProfileOverride?: string };
+  }>(
+    "sessions.create",
+    { key: existingProfileKey, model: "openai/gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(sameSelectionWithProfile.ok, JSON.stringify(sameSelectionWithProfile.error)).toBe(true);
+  expect(sameSelectionWithProfile.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    authProfileOverride: "work",
+  });
+
+  const profileDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingProfileKey, model: "openai/gpt-test-a@other" },
+    { client: writeClient },
+  );
+  expect(profileDenied.ok).toBe(false);
+  expect(profileDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const denied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b" },
+    { client: writeClient },
+  );
+  expect(denied.ok).toBe(false);
+  expect(denied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const unscopedDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b" },
+    { client: unscopedClient },
+  );
+  expect(unscopedDenied.ok).toBe(false);
+  expect(unscopedDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  testState.agentConfig = {
+    models: {
+      "openai/gpt-test-b": { alias: "gpt-test-a" },
+    },
+  };
+  const aliasDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, model: "gpt-test-a" },
+    { client: writeClient },
+  );
+  expect(aliasDenied.ok).toBe(false);
+  expect(aliasDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  expect(loadSessionEntry({ sessionKey: existingKey, storePath })).toMatchObject({
+    sessionId: "sess-existing",
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    thinkingLevel: "low",
+  });
+  expect(loadSessionEntry({ sessionKey: existingProfileKey, storePath })).toMatchObject({
+    sessionId: "sess-existing-profile",
+    providerOverride: "openai",
+    modelOverride: "gpt-test-a",
+    authProfileOverride: "work",
+  });
+
+  const thinkingDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, thinkingLevel: "high" },
+    { client: writeClient },
+  );
+  expect(thinkingDenied.ok).toBe(false);
+  expect(thinkingDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
+  const admin = await directSessionReq<{
+    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+  }>(
+    "sessions.create",
+    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { client: adminClient },
+  );
+  expect(admin.ok, JSON.stringify(admin.error)).toBe(true);
+  expect(admin.payload?.entry).toMatchObject({
+    providerOverride: "openai",
+    modelOverride: "gpt-test-b",
+    thinkingLevel: "high",
+  });
 });
 
 test("sessions.create scopes the main alias to the requested agent", async () => {

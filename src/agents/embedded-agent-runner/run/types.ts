@@ -10,7 +10,6 @@ import type {
 import type { ContextEngine, ContextEnginePromptCacheInfo } from "../../../context-engine/types.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
-import type { PluginHookBeforeAgentStartResult } from "../../../plugins/hook-before-agent-start.types.js";
 import type { AgentHarnessTaskRuntimeScope } from "../../../tasks/agent-harness-task-runtime-scope.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
@@ -21,6 +20,8 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "../../embedded-agent-messaging.types.js";
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
+import type { McpAppChannelView } from "../../mcp-ui-resource.js";
+import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -52,6 +53,8 @@ type EmbeddedRunContextWindowInfo = {
 };
 
 export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
+
+type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
 
 type EmbeddedRunAttemptToolTerminalObservation = {
   toolCallId?: string;
@@ -91,6 +94,9 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Sticky operation identity used to suppress ordinary retry and hook policy. */
+  operation?: EmbeddedRunAttemptOperation;
+  preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   /** Active file-backed artifact target resolved by the run/session target seam. */
   sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
@@ -158,7 +164,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   fastMode?: EmbeddedRunFastModeParam;
   /** True when this attempt is running the auto fast-mode policy. */
   fastModeAuto?: boolean;
-  beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   beforeAgentFinalizeRevisionAttempts?: number;
   maxBeforeAgentFinalizeRevisions?: number;
 };
@@ -257,8 +262,17 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
+  /**
+   * Complete application transcript frozen through a settled tool boundary.
+   * Projection-backed finalizers must fail closed when their harness does not provide it.
+   */
+  settledTurnFinalizationContext?: {
+    readonly source: "openclaw-transcript";
+    readonly messages: readonly AgentMessage[];
+  };
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  latestMcpAppChannelView?: McpAppChannelView;
   lastAssistantTextMessageIndex?: number;
   toolMetas: Array<{
     toolName: string;

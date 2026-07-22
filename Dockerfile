@@ -120,6 +120,10 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
 
 COPY . .
 
+# The build stage also backs non-root live-test containers. Build contexts preserve
+# host modes, so normalize readability before Node resolves workspace packages.
+RUN chmod -R a+rX /app
+
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
 RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do \
@@ -259,6 +263,7 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 # Legacy alias: OPENCLAW_DOCKER_APT_PACKAGES is still accepted as a fallback.
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+ENV PATH="/home/node/.local/bin:${PATH}"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     packages="${OPENCLAW_IMAGE_APT_PACKAGES-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
