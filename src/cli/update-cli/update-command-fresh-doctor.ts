@@ -215,6 +215,9 @@ export async function completePostCorePluginUpdate(params: {
   const configSnapshot = await withNormalConfigValidation(() => readConfigFileSnapshot());
   // A plugin migration that did not converge must fail finalization instead of letting legacy
   // config reach the restarted gateway.
+  // Two reads by design: the fresh child is the only process able to validate under the
+  // UPDATED schema, so its verdict gates the restart; this parent snapshot is best-effort
+  // state under the stale in-memory schema and the restarted gateway re-reads config anyway.
   pluginUpdate = applyPostPluginConfigValidation(
     pluginUpdate,
     freshConfigValid ?? configSnapshot.valid,
