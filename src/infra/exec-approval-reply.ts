@@ -72,6 +72,12 @@ export type ExecApprovalPendingReplyParams = {
   sessionKey?: string | null;
   expiresAtMs?: number;
   nowMs?: number;
+  /**
+   * Omit the `/approve` command fences when the channel already renders the
+   * decisions as native controls (e.g. an iMessage poll). The full id stays in
+   * the info block, so the text fallback is still reconstructable.
+   */
+  omitDecisionCommands?: boolean;
 };
 
 export type ExecApprovalUnavailableReplyParams = {
@@ -436,13 +442,15 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(warningText);
   }
   lines.push("Approval required.");
-  if (primaryAction) {
+  if (primaryAction && !params.omitDecisionCommands) {
     lines.push("Run:");
     lines.push(formatFencedCodeBlock(primaryAction.command, "txt"));
   }
   lines.push("Pending command:");
   lines.push(formatFencedCodeBlock(params.command, "sh"));
-  const secondaryFence = buildApprovalCommandFence(secondaryActions);
+  const secondaryFence = params.omitDecisionCommands
+    ? null
+    : buildApprovalCommandFence(secondaryActions);
   if (secondaryFence) {
     lines.push("Other options:");
     lines.push(secondaryFence);

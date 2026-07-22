@@ -50,7 +50,10 @@ type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type IMessagePendingDelivery = {
   /** Prompt text carrying the tapback hint; used when no poll will be sent. */
   text: string;
-  /** Same prompt without the hint; used when the poll supplies the controls. */
+  /**
+   * Poll-mode prompt: no tapback hint and no `/approve` fences, because the
+   * poll balloon already renders every decision. Keeps id/command/expiry.
+   */
   hintlessText: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
@@ -85,11 +88,17 @@ function buildPendingPayload(params: {
     view: params.view as never,
     nowMs: params.nowMs,
   });
+  const pollContent = buildApprovalReactionPendingContent({
+    request: params.request,
+    view: params.view as never,
+    nowMs: params.nowMs,
+    omitDecisionCommands: true,
+  });
   return {
     text: pendingContent.reactionPayload.text ?? "",
     // manualFallbackPayload is the same prompt minus the "React with:" block,
     // so the poll can own the controls without re-deriving the prompt text.
-    hintlessText: pendingContent.manualFallbackPayload.text ?? "",
+    hintlessText: pollContent.manualFallbackPayload.text ?? "",
     allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
 }
@@ -133,6 +142,22 @@ function resolveIMessageApprovalCliOptions(params: {
 }
 
 /**
+ * imsg always echoes the poll question as a separate caption message, so make
+ * it carry what is being approved rather than an opaque slug. Truncated: the
+ * poll payload is capped at 4096 bytes and the full command is on the prompt.
+ */
+function buildIMessageApprovalPollCaption(view: PendingApprovalView): string {
+  const command = ("commandText" in view ? view.commandText : "")?.trim();
+  const slug = view.approvalId.slice(0, 8);
+  if (!command) {
+    return `Approve ${slug}?`;
+  }
+  const single = command.replace(/\s+/gu, " ");
+  const shown = single.length > 80 ? `${single.slice(0, 79)}…` : single;
+  return `Approve: ${shown}`;
+}
+
+/**
  * Send the poll balloon threaded under the already-delivered prompt. Runs AFTER
  * the prompt so no bridge call ever delays approval delivery; a failure here
  * leaves the prompt intact and the caller restores the tapback hint.
@@ -145,7 +170,7 @@ async function deliverIMessageApprovalPoll(params: {
   cfg: OpenClawConfig;
   target: PreparedIMessageApprovalTarget;
   promptMessageId: string;
-  approvalSlug: string;
+  caption: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 }): Promise<{
   pollGuid: string;
@@ -168,7 +193,7 @@ async function deliverIMessageApprovalPoll(params: {
     const runtime = await loadIMessageActionsRuntime();
     const sent = await runtime.sendPoll({
       chatGuid,
-      question: `Approve ${params.approvalSlug}?`,
+      question: params.caption,
       choices: options.map((option) => option.text),
       replyToMessageId: params.promptMessageId,
       options: { ...cliOptions, chatGuid },
@@ -360,7 +385,7 @@ export const imessageApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
             cfg,
             target: preparedTarget,
             promptMessageId: guid,
-            approvalSlug: view.approvalId.slice(0, 8),
+            caption: buildIMessageApprovalPollCaption(view),
             allowedDecisions: pendingPayload.allowedDecisions,
           })
         : null;

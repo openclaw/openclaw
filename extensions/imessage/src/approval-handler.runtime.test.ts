@@ -301,6 +301,40 @@ describe("imessageApprovalNativeRuntime", () => {
     });
   });
 
+  it("omits the /approve fences from the poll-mode prompt", async () => {
+    // The poll balloon renders every decision, so repeating them as
+    // `/approve <id> ...` fences is noise. Full id stays for reconstruction.
+    const payload = await imessageApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      request: {
+        id: "exec-omit",
+        request: { command: "echo hi" },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "exec-omit",
+        commandText: "echo hi",
+        actions: [
+          { decision: "allow-once", label: "Allow Once", command: "/approve exec-omit allow-once" },
+          { decision: "deny", label: "Deny", command: "/approve exec-omit deny" },
+        ],
+      } as never,
+    });
+
+    expect(payload.hintlessText).not.toContain("Other options:");
+    expect(payload.hintlessText).not.toContain("/approve exec-omit deny");
+    expect(payload.hintlessText).toContain("Pending command:");
+    expect(payload.hintlessText).toContain("Full id:");
+    // The tapback-mode text is unchanged for hosts without poll support.
+    expect(payload.text).toContain("👍 Allow Once");
+  });
+
   describe("native poll controls", () => {
     const pollDeliverArgs = {
       cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } } as never,
@@ -371,7 +405,7 @@ describe("imessageApprovalNativeRuntime", () => {
       expect(actionsMock.sendPoll).toHaveBeenCalledWith(
         expect.objectContaining({
           chatGuid: "iMessage;-;+15551230000",
-          question: "Approve exec-pol?",
+          question: "Approve: echo hi",
           choices: ["👍 Allow Once", "👎 Deny"],
           replyToMessageId: "prompt-guid",
         }),

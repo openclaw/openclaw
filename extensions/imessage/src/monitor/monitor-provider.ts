@@ -898,6 +898,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         logVerboseMessage: logVerbose,
       })
     ) {
+      // A vote is a real message row, so the debouncer still owns its ingress
+      // claim (see dispatch's `deferred` result). Resolving it here means no
+      // session will ever adopt it; abandon explicitly or the claim stalls
+      // until the 300s handler-timeout fires.
+      await ingressLifecycle?.onAbandoned();
       return;
     }
 
