@@ -463,7 +463,7 @@ export type ArtifactDownloadResult = {
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout" | "paused";
-export type SessionPauseReason = "sessions_yield";
+type SessionPauseReason = "sessions_yield";
 type SubagentRunState = "active" | "interrupted" | "historical";
 
 type SessionCompactionCheckpointReason =
