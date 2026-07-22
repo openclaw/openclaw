@@ -47,6 +47,9 @@ describe("isPidAlive", () => {
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw error;
     });
+    mockProcReads({
+      "/proc/42/status": "Name:\tnode\nState:\tS (sleeping)\nPid:\t42\n",
+    });
 
     expect(isPidAlive(42)).toBe(true);
     expect(process["kill"]).toHaveBeenCalledWith(42, 0);
