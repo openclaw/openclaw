@@ -9,10 +9,10 @@ import {
   createAccountScopedGroupAccessSection,
   createAllowlistSetupWizardProxy,
   createPatchedAccountSetupAdapter,
-  createLegacyCompatChannelDmPolicy,
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
   defineTokenCredential,
+  mergeAllowFromEntries,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
@@ -329,11 +329,44 @@ export function createSlackSetupWizardBase(handlers: {
     NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
   >;
 }) {
-  const slackDmPolicy: ChannelSetupDmPolicy = createLegacyCompatChannelDmPolicy({
+  const slackDmPolicy: ChannelSetupDmPolicy = {
     label: "Slack",
     channel,
+    policyKey: "channels.slack.dmPolicy",
+    allowFromKey: "channels.slack.allowFrom",
+    resolveConfigKeys: (_cfg, accountId) =>
+      accountId && accountId !== DEFAULT_ACCOUNT_ID
+        ? {
+            policyKey: `channels.slack.accounts.${accountId}.dmPolicy`,
+            allowFromKey: `channels.slack.accounts.${accountId}.allowFrom`,
+          }
+        : {
+            policyKey: "channels.slack.dmPolicy",
+            allowFromKey: "channels.slack.allowFrom",
+          },
+    getCurrent: (cfg, accountId) =>
+      inspectSlackAccount({ cfg, accountId }).config.dmPolicy ?? "pairing",
+    setPolicy: (cfg, policy, accountId) => {
+      const account = inspectSlackAccount({ cfg, accountId });
+      return patchChannelConfigForAccount({
+        cfg,
+        channel,
+        accountId: account.accountId,
+        patch: {
+          dmPolicy: policy,
+          ...(policy === "open"
+            ? { allowFrom: mergeAllowFromEntries(account.config.allowFrom ?? [], ["*"]) }
+            : {}),
+          dm: {
+            ...account.config.dm,
+            enabled:
+              typeof account.config.dm?.enabled === "boolean" ? account.config.dm.enabled : true,
+          },
+        },
+      });
+    },
     promptAllowFrom: handlers.promptAllowFrom,
-  });
+  };
 
   return {
     channel,

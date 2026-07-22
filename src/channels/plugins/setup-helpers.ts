@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
  *
  * Applies account names and validates setup results for channel onboarding adapters.
  */
-import type { ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { resolveSingleAccountKeysToMove } from "./setup-promotion-helpers.js";
@@ -216,25 +215,6 @@ export function createPatchedAccountSetupAdapter<
         scopeDefaultToAccounts: params.alwaysUseAccounts,
       });
     },
-  };
-}
-
-/** Creates a Zod-backed setup input validator with an optional typed semantic check. */
-export function createZodSetupInputValidator<T extends ChannelSetupInput>(params: {
-  schema: ZodType<T>;
-  validate?: (params: { cfg: OpenClawConfig; accountId: string; input: T }) => string | null;
-}): NonNullable<ChannelSetupAdapter["validateInput"]> {
-  return (inputParams) => {
-    const parsed = params.schema.safeParse(inputParams.input);
-    if (!parsed.success) {
-      return parsed.error.issues[0]?.message ?? "invalid input";
-    }
-    return (
-      params.validate?.({
-        ...inputParams,
-        input: parsed.data,
-      }) ?? null
-    );
   };
 }
 

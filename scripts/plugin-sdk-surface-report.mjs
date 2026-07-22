@@ -147,7 +147,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: structured media placeholder formatter and its text-fact contract.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
       // +1: channel-owned setup contract factory.
-      4724,
+      4680,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -156,7 +156,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: settled-turn full-attempt projector.
       // +1: channel-owned setup contract factory.
-      2882,
+      2843,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

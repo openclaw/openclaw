@@ -1375,6 +1375,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Create a grouped manifest
   - H2: Inspect and preview
   - H2: Inspect installed state
+  - H2: Preview an update
   - H2: Remove an installed Claw
   - H2: Export an installed agent
   - H2: Command reference
