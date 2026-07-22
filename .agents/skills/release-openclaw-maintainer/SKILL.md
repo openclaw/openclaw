@@ -283,7 +283,7 @@ on pinned current `main` as the exact command and validation contract.
    `docker-channel-promote.yml` from current `main` with the exact tag; never
    rebuild or move the immutable release tag.
 10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
-   ClawHub, or private dist-tag artifacts from this path.
+    ClawHub, or private dist-tag artifacts from this path.
 
 ## Keep release channel naming aligned
 
