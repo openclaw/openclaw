@@ -101,6 +101,8 @@ function createClientFactory(
   options: {
     mcpServers?: unknown[];
     errorBeforeCompletion?: { message: string; willRetry: boolean };
+    terminalStatus?: "completed" | "interrupted";
+    assistantDelta?: string;
   } = {},
 ) {
   const methods: string[] = [];
@@ -142,6 +144,17 @@ function createClientFactory(
               },
             });
           }
+          if (options.assistantDelta) {
+            handler({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                itemId: "answer",
+                delta: options.assistantDelta,
+              },
+            });
+          }
           handler({
             method: "rawResponse/completed",
             params: {
@@ -163,7 +176,11 @@ function createClientFactory(
             params: {
               threadId: "thread-finalizer",
               turnId: "turn-finalizer",
-              turn: completedTurnResult().turn,
+              turn: {
+                ...completedTurnResult().turn,
+                status: options.terminalStatus ?? "completed",
+                ...(options.terminalStatus === "interrupted" ? { items: [] } : {}),
+              },
             },
           });
         }
@@ -229,6 +246,27 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requireNoExternalCapabilities: true,
       }),
     ).rejects.toThrow("terminal upstream failure");
+  });
+
+  it("rejects an interrupted turn even when it emitted partial assistant text", async () => {
+    const fake = createClientFactory({
+      terminalStatus: "interrupted",
+      assistantDelta: "Partial answer that must not be delivered.",
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    ).rejects.toThrow("turn ended with status interrupted");
   });
 
   it("attests ring-zero and injects frozen history before starting the final turn", async () => {

@@ -513,6 +513,11 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
           completedTurn.error?.message ?? `codex app-server ${taskLabel} turn failed`,
         );
       }
+      if (completedTurn?.status !== "completed") {
+        throw new Error(
+          `codex app-server ${taskLabel} turn ended with status ${completedTurn?.status ?? "unknown"}`,
+        );
+      }
       const items = collectCompletedItems(completedTurn?.items, completedItems);
       const itemText = collectAssistantTextFromItems(items);
       const deltaText = assistantItemOrder

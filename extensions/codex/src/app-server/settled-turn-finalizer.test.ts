@@ -223,6 +223,20 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
+  it("does not mutate the transcript when the bounded turn is interrupted", async () => {
+    mocks.runBounded.mockRejectedValue(
+      new Error("codex app-server settled-turn finalization turn ended with status interrupted"),
+    );
+
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+        {},
+      ),
+    ).rejects.toThrow("turn ended with status interrupted");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
   it.each(["commandExecution", "contextCompaction", "mcpToolCall", "futureCapabilityItem"])(
     "rejects unexpected native %s evidence before transcript mutation",
     async (type) => {
