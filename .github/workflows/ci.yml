@@ -1347,6 +1347,45 @@ jobs:
             echo "Historical target was validated by the legacy native checks."
           fi
 
+  localization-catalogs:
+    permissions:
+      contents: read
+    name: localization-catalogs
+    needs: [preflight]
+    if: needs.preflight.outputs.run_node == 'true'
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 10
+    steps:
+      - *linux_node_checkout_step
+      - name: Ensure localization diff base (PR strict path)
+        if: github.event_name == 'pull_request'
+        uses: ./.github/actions/ensure-base-commit
+        with:
+          base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
+          fetch-ref: ${{ github.event.pull_request.base.ref }}
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.x"
+          install-bun: "false"
+          sticky-disk: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+          use-actions-cache: ${{ github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'false' || 'true' }}
+      - name: Check adopted localization catalogs
+        env:
+          DIFF_BASE_REVISION: ${{ needs.preflight.outputs.diff_base_revision }}
+        run: |
+          if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(scripts["localization:catalogs:check"] ? 0 : 1)'; then
+            if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] ||
+              { [[ "${{ github.event_name }}" == "pull_request" ]] &&
+                ! git diff --quiet "${DIFF_BASE_REVISION}" HEAD -- src/wizard/i18n/catalogs/generated; }; then
+              pnpm localization:catalogs:check
+            else
+              pnpm localization:catalogs:detect
+            fi
+          else
+            echo "Selected historical target predates the adopted-catalog gate."
+          fi
+
   checks-ui:
     permissions:
       contents: read
@@ -3425,6 +3464,7 @@ jobs:
       - pnpm-store-warmup
       - build-artifacts
       - native-i18n
+      - localization-catalogs
       - checks-ui
       - control-ui-i18n
       - checks-fast-core
@@ -3456,6 +3496,7 @@ jobs:
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}
             build-artifacts=${{ needs.build-artifacts.result }}
             native-i18n=${{ needs.native-i18n.result }}
+            localization-catalogs=${{ needs.localization-catalogs.result }}
             checks-ui=${{ needs.checks-ui.result }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}
             checks-fast-core=${{ needs.checks-fast-core.result }}

@@ -31,12 +31,22 @@ provider names, or user-authored data.
 
 ## Choose the owning workflow
 
-| Surface                          | Reviewed English source                                             | Translation workflow                                                                             | Focused validation                                                |
-| -------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
-| Control UI                       | `ui/src/i18n/locales/en.ts`                                         | Land reviewed English; the Control UI locale refresh workflow updates generated locale artifacts | `pnpm ui:i18n:baseline` followed by `pnpm ui:i18n:verify`         |
-| CLI onboarding and channel setup | `src/wizard/i18n/locales/en.ts`                                     | Update the wizard-owned catalogs                                                                 | `node scripts/run-vitest.mjs src/wizard/i18n/index.test.ts`       |
-| Android and Apple apps           | Native source projected through `apps/.i18n/native-source.json`     | Update native source, then use the native locale refresh workflow for generated artifacts        | `pnpm native:i18n:baseline` followed by `pnpm native:i18n:verify` |
-| Documentation                    | English pages under `docs/` and `docs/.i18n/glossary.<locale>.json` | Land English docs; the publish repository owns translated docs and translation memory            | `pnpm docs:check-i18n-glossary`                                   |
+| Surface                          | Reviewed English source                                                                 | Translation workflow                                                                             | Focused validation                                                                                 |
+| -------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Control UI                       | `ui/src/i18n/locales/en.ts`                                                             | Land reviewed English; the Control UI locale refresh workflow updates generated locale artifacts | `pnpm ui:i18n:baseline` followed by `pnpm ui:i18n:verify`                                          |
+| CLI onboarding and channel setup | `src/wizard/i18n/locales/en.ts`; adopted families in `src/wizard/i18n/catalogs/en.json` | Update hand-owned wizard catalogs; the adopted-catalog refresh workflow owns generated targets   | `pnpm localization:catalogs:check` and `node scripts/run-vitest.mjs src/wizard/i18n/index.test.ts` |
+| Android and Apple apps           | Native source projected through `apps/.i18n/native-source.json`                         | Update native source, then use the native locale refresh workflow for generated artifacts        | `pnpm native:i18n:baseline` followed by `pnpm native:i18n:verify`                                  |
+| Documentation                    | English pages under `docs/` and `docs/.i18n/glossary.<locale>.json`                     | Land English docs; the publish repository owns translated docs and translation memory            | `pnpm docs:check-i18n-glossary`                                                                    |
+
+The adopted-catalog path is the reusable end-to-end exemplar. Add the area to
+`localization/catalogs.json`, keep English in its declared source file, and do
+not hand-edit its generated targets. Pull requests run the credential-free
+`pnpm localization:catalogs:detect` path: English-only drift is reported, while
+malformed current catalogs still fail. After English lands, the trusted
+Localization Catalog Refresh workflow generates and validates target catalogs
+and opens a generated pull request with auto-merge disabled. Generated changes
+and manual/release validation run the strict
+`pnpm localization:catalogs:check` path.
 
 Other CLI commands, the TUI, Gateway errors, approvals, channels, plugins, and
 skill metadata do not gain localization merely because the shared runtime can
