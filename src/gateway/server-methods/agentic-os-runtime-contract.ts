@@ -107,7 +107,7 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
     const { params, respond } = opts;
     void [
       params?.client_lease_id,
-      params?.idempotency_key,
+      params?.release_idempotency_key,
       params?.run_id,
       params?.phase,
       params?.transition_id,

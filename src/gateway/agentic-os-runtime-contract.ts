@@ -53,6 +53,12 @@ const FORBIDDEN_SPAWN_CAMEL_ALIASES = [
   "gatewayLeaseId",
 ] as const;
 
+const FORBIDDEN_RELEASE_ALIASES = [
+  ...FORBIDDEN_LEASE_CAMEL_ALIASES,
+  "releaseIdempotencyKey",
+  "idempotency_key",
+] as const;
+
 const FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES = ["sessionKey"] as const;
 
 const FORBIDDEN_HISTORY_CAMEL_ALIASES = ["session_key"] as const;
@@ -108,7 +114,7 @@ type SpawnPending = {
 const leasesByGatewayId = new Map<string, LeaseRecord>();
 const acquireByIdempotencyKey = new Map<string, LeaseRecord>();
 const acquireByClientLeaseId = new Map<string, LeaseRecord>();
-const releaseByIdempotencyKey = new Map<string, ReleaseReplay>();
+const releaseByReleaseIdempotencyKey = new Map<string, ReleaseReplay>();
 const sessionsByKey = new Map<string, SessionRecord>();
 const spawnByIdempotencyKey = new Map<string, SessionRecord>();
 const spawnByClientRequestId = new Map<string, SessionRecord>();
@@ -241,9 +247,9 @@ function pruneExpiredLeases(now = Date.now()) {
       }
     }
   }
-  for (const [key, replay] of releaseByIdempotencyKey) {
+  for (const [key, replay] of releaseByReleaseIdempotencyKey) {
     if (now - replay.createdAtMs > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS) {
-      releaseByIdempotencyKey.delete(key);
+      releaseByReleaseIdempotencyKey.delete(key);
     }
   }
   for (const [sessionKey, record] of sessionsByKey) {
@@ -342,26 +348,26 @@ export function releaseAgenticOsAllowLease(
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
   pruneExpiredLeases();
-  assertNoForbiddenAliases(params, FORBIDDEN_LEASE_CAMEL_ALIASES);
+  assertNoForbiddenAliases(params, FORBIDDEN_RELEASE_ALIASES);
   const owner = pickStrings(params, ALLOW_LEASE_OWNER_FIELDS);
   if (authenticatedRequesterAgentId && owner.requester_agent_id !== authenticatedRequesterAgentId) {
     return rejectConflict("requester_agent_id does not match authenticated requester");
   }
-  const releaseIdempotencyKey = readString(params, "idempotency_key");
+  const releaseIdempotencyKey = readString(params, "release_idempotency_key");
   const gatewayLeaseId = readString(params, "gateway_lease_id");
   const normalized = {
     ...owner,
-    idempotency_key: releaseIdempotencyKey,
+    release_idempotency_key: releaseIdempotencyKey,
     gateway_lease_id: gatewayLeaseId,
   };
   const fingerprint = stableJson(normalized);
-  const replay = releaseByIdempotencyKey.get(releaseIdempotencyKey);
+  const replay = releaseByReleaseIdempotencyKey.get(releaseIdempotencyKey);
   if (replay) {
     if (replay.authenticatedPrincipalId !== authenticatedPrincipalId) {
       return rejectConflict("allow lease release belongs to a different authenticated principal");
     }
     if (replay.fingerprint !== fingerprint) {
-      return rejectConflict("conflicting allow lease release idempotency_key");
+      return rejectConflict("conflicting allow lease release release_idempotency_key");
     }
     return replay.response;
   }
@@ -380,8 +386,8 @@ export function releaseAgenticOsAllowLease(
   record.released_at_ms = record.released_at_ms ?? Date.now();
   leasesByGatewayId.delete(gatewayLeaseId);
   const response = releaseResponse(record, metadataEnvelope(normalized));
-  assertRecordCapacity(releaseByIdempotencyKey, "allow lease release replay");
-  releaseByIdempotencyKey.set(releaseIdempotencyKey, {
+  assertRecordCapacity(releaseByReleaseIdempotencyKey, "allow lease release replay");
+  releaseByReleaseIdempotencyKey.set(releaseIdempotencyKey, {
     fingerprint,
     response,
     createdAtMs: Date.now(),

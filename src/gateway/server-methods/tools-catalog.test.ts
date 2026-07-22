@@ -167,6 +167,15 @@ describe("tools.catalog handler", () => {
     ).toMatchObject({
       parameters: expect.arrayContaining(["client_lease_id", "idempotency_key", "ttl_ms"]),
     });
+    expect(
+      runtimeMethods.find((method) => method.name === "subagents.allowLease.release"),
+    ).toMatchObject({
+      parameters: expect.arrayContaining([
+        "client_lease_id",
+        "release_idempotency_key",
+        "gateway_lease_id",
+      ]),
+    });
     expect(runtimeMethods.find((method) => method.name === "sessions_status")).toMatchObject({
       parameters: ["session_key"],
     });

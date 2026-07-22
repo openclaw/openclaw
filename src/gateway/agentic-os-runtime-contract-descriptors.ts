@@ -18,7 +18,7 @@ export const AGENTIC_OS_RUNTIME_METHOD_DESCRIPTORS = [
     name: "subagents.allowLease.release",
     parameters: [
       "client_lease_id",
-      "idempotency_key",
+      "release_idempotency_key",
       "run_id",
       "phase",
       "transition_id",

@@ -1,7 +1,10 @@
+import { spawn as spawnProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -20,6 +23,14 @@ type MockModelServer = {
   baseUrl: string;
   requests: string[];
   close: () => Promise<void>;
+};
+
+type AgenticAdapterProof = {
+  agentic_adapter_live_catalog: true;
+  agentic_adapter_release_succeeded: true;
+  agentic_adapter_duplicate_release_parity: true;
+  agentic_adapter_release_metadata_parity: true;
+  agentic_adapter_post_release_absent: true;
 };
 
 const instances: OpenClawTestInstance[] = [];
@@ -84,6 +95,11 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         );
 
         const probeId = randomUUID();
+        const agenticAdapterProof = await runAgenticAdapterReleaseProbe({
+          client,
+          runtimeMethods,
+          probeId,
+        });
         const acquireParams = {
           client_lease_id: `lease-${probeId}`,
           idempotency_key: `acquire-${probeId}`,
@@ -286,15 +302,28 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         );
 
         const releaseParams = {
-          ...acquireParams,
-          idempotency_key: `release-${probeId}`,
+          client_lease_id: acquireParams.client_lease_id,
+          release_idempotency_key: `release-${probeId}`,
+          run_id: acquireParams.run_id,
+          phase: acquireParams.phase,
+          transition_id: acquireParams.transition_id,
+          agent_id: acquireParams.agent_id,
+          requester_agent_id: acquireParams.requester_agent_id,
           gateway_lease_id: firstLease.gateway_lease_id,
         };
-        const released = await client.request<{ released?: boolean }>(
+        const released = await client.request<{ released?: boolean; gateway_lease_id?: string }>(
           "subagents.allowLease.release",
           releaseParams,
         );
         expect(released.released).toBe(true);
+        const duplicateRelease = await client.request<{
+          released?: boolean;
+          gateway_lease_id?: string;
+        }>("subagents.allowLease.release", releaseParams);
+        expect(duplicateRelease).toEqual(released);
+        expect(
+          (await client.request<{ leases?: unknown[] }>("subagents.allowLease.status", {})).leases,
+        ).toEqual([]);
         await expect(
           client.request("sessions_spawn", {
             ...spawnParams,
@@ -316,6 +345,7 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
           taskMarker,
           history,
           modelRequestCount: modelServer.requests.length,
+          agenticAdapterProof,
         });
       } finally {
         await Promise.allSettled([
@@ -369,6 +399,102 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
       },
     },
   };
+}
+
+async function runAgenticAdapterReleaseProbe(params: {
+  client: { request: <T>(method: string, params: Record<string, unknown>) => Promise<T> };
+  runtimeMethods: Array<{ name?: string; parameters?: string[] }>;
+  probeId: string;
+}): Promise<AgenticAdapterProof | undefined> {
+  const script = process.env.AGENTIC_OS_REAL_ADAPTER_PROBE_SCRIPT?.trim();
+  if (!script) {
+    return undefined;
+  }
+  const child = spawnProcess("python3", [script], {
+    stdio: ["pipe", "pipe", "pipe"],
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  let stderr = "";
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr = `${stderr}${chunk}`.slice(-8_192);
+  });
+  const exit = once(child, "exit") as Promise<[number | null, NodeJS.Signals | null]>;
+  const lines = createInterface({ input: child.stdout, crlfDelay: Infinity });
+  const owner = {
+    client_lease_id: `adapter-lease-${params.probeId}`,
+    run_id: `adapter-run-${params.probeId}`,
+    phase: "phase-adapter-release",
+    transition_id: `adapter-transition-${params.probeId}`,
+    agent_id: "worker",
+    requester_agent_id: "main",
+  };
+  child.stdin.write(
+    `${JSON.stringify({
+      catalog: { tools: params.runtimeMethods },
+      acquire_params: {
+        ...owner,
+        idempotency_key: `adapter-acquire-${params.probeId}`,
+        ttl_ms: 60_000,
+      },
+      release_params: {
+        ...owner,
+        release_idempotency_key: `adapter-release-${params.probeId}`,
+      },
+    })}\n`,
+  );
+
+  let result: AgenticAdapterProof | undefined;
+  for await (const line of lines) {
+    const message = JSON.parse(line) as Record<string, unknown>;
+    if (message.type === "rpc") {
+      const method = message.method;
+      const rpcParams = message.params;
+      if (
+        typeof method !== "string" ||
+        !rpcParams ||
+        typeof rpcParams !== "object" ||
+        Array.isArray(rpcParams)
+      ) {
+        throw new Error("Agentic adapter probe emitted an invalid RPC request");
+      }
+      try {
+        const payload = await params.client.request<Record<string, unknown>>(
+          method,
+          rpcParams as Record<string, unknown>,
+        );
+        child.stdin.write(`${JSON.stringify({ ok: true, payload })}\n`);
+      } catch (error) {
+        child.stdin.write(`${JSON.stringify({ ok: false, error: String(error) })}\n`);
+      }
+      continue;
+    }
+    if (message.type === "result") {
+      const proofKeys: Array<keyof AgenticAdapterProof> = [
+        "agentic_adapter_live_catalog",
+        "agentic_adapter_release_succeeded",
+        "agentic_adapter_duplicate_release_parity",
+        "agentic_adapter_release_metadata_parity",
+        "agentic_adapter_post_release_absent",
+      ];
+      if (!proofKeys.every((key) => message[key] === true)) {
+        throw new Error("Agentic adapter probe omitted a required proof");
+      }
+      result = Object.fromEntries(proofKeys.map((key) => [key, true])) as AgenticAdapterProof;
+      continue;
+    }
+    if (message.type === "error") {
+      throw new Error(`Agentic adapter probe failed: ${String(message.error)}`);
+    }
+    throw new Error("Agentic adapter probe emitted an unknown message");
+  }
+  const [exitCode, signal] = await exit;
+  if (exitCode !== 0 || signal || !result) {
+    throw new Error(
+      `Agentic adapter probe did not complete: exit=${String(exitCode)} signal=${String(signal)} stderr_sha256=${sha256(stderr)}`,
+    );
+  }
+  return result;
 }
 
 async function startMockModelServer(): Promise<MockModelServer> {
@@ -491,10 +617,14 @@ async function writeEvidenceIfRequested(params: {
   taskMarker: string;
   history: unknown;
   modelRequestCount: number;
+  agenticAdapterProof?: AgenticAdapterProof;
 }) {
   const evidenceFile = process.env.AGENTIC_OS_REAL_GATEWAY_EVIDENCE_FILE?.trim();
   if (!evidenceFile) {
     return;
+  }
+  if (!params.agenticAdapterProof) {
+    throw new Error("authoritative evidence requires the Agentic adapter release proof");
   }
   const sourcePaths = [
     "src/gateway/agentic-os-runtime-contract.ts",
@@ -533,6 +663,8 @@ async function writeEvidenceIfRequested(params: {
     lifecycle_failure_observed: true,
     duplicate_lease_identity_parity: true,
     duplicate_spawn_identity_parity: true,
+    duplicate_release_identity_parity: true,
+    ...params.agenticAdapterProof,
     child_completed: true,
     child_result_sha256: sha256(CHILD_RESULT),
     child_session_key_sha256: sha256(params.childSessionKey),

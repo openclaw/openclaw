@@ -40,6 +40,15 @@ const acquireParams = {
   ttl_ms: 60_000,
 };
 
+const releaseOwnerParams = {
+  client_lease_id: acquireParams.client_lease_id,
+  run_id: acquireParams.run_id,
+  phase: acquireParams.phase,
+  transition_id: acquireParams.transition_id,
+  agent_id: acquireParams.agent_id,
+  requester_agent_id: acquireParams.requester_agent_id,
+};
+
 const sessionMetadata = {
   run_id: "run-a",
   transition_id: "transition-a",
@@ -169,8 +178,8 @@ describe("Agentic OS runtime contract v1", () => {
     const gatewayLeaseId = await acquireLease();
     expectInvalid(
       await invoke("subagents.allowLease.release", {
-        ...acquireParams,
-        idempotency_key: "lease-release-idem-a",
+        ...releaseOwnerParams,
+        release_idempotency_key: "lease-release-idem-a",
         requester_agent_id: "other",
         gateway_lease_id: gatewayLeaseId,
       }),
@@ -178,13 +187,31 @@ describe("Agentic OS runtime contract v1", () => {
     );
 
     const releaseParams = {
-      ...acquireParams,
-      idempotency_key: "lease-release-idem-a",
+      ...releaseOwnerParams,
+      release_idempotency_key: "lease-release-idem-a",
       gateway_lease_id: gatewayLeaseId,
     };
+    expectInvalid(
+      await invoke("subagents.allowLease.release", {
+        ...releaseOwnerParams,
+        idempotency_key: "legacy-release-idem",
+        gateway_lease_id: gatewayLeaseId,
+      }),
+      "conflicting alias is not accepted: idempotency_key",
+    );
     const released = payload(await invoke("subagents.allowLease.release", releaseParams));
     expect(released.gateway_lease_id).toBe(gatewayLeaseId);
     expect(released.released).toBe(true);
+    expect(released.metadata).toMatchObject({
+      metadata_contract_version: "v1",
+      normalized: {
+        release_idempotency_key: "lease-release-idem-a",
+        gateway_lease_id: gatewayLeaseId,
+      },
+    });
+    expect(
+      (released.metadata as { normalized?: Record<string, unknown> }).normalized,
+    ).not.toHaveProperty("idempotency_key");
     const replayed = payload(await invoke("subagents.allowLease.release", releaseParams));
     expect(replayed).toEqual(released);
   });
@@ -309,8 +336,8 @@ describe("Agentic OS runtime contract v1", () => {
   it("rejects released, expired, and wrong-owner leases before spawning", async () => {
     const gatewayLeaseId = await acquireLease();
     await invoke("subagents.allowLease.release", {
-      ...acquireParams,
-      idempotency_key: "lease-release-idem-a",
+      ...releaseOwnerParams,
+      release_idempotency_key: "lease-release-idem-a",
       gateway_lease_id: gatewayLeaseId,
     });
     const spawnParams = {
