@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /** Connected node-hosted plugin tools available to agent tool resolution. */
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import { NODE_MCP_TOOLS_CALL_COMMAND } from "../infra/node-commands.js";
@@ -35,6 +36,19 @@ const NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH = 1024;
 const NODE_PLUGIN_TOOL_MAX_DESCRIPTORS = 128;
 const log = createSubsystemLogger("gateway/node-plugin-tools");
 let snapshotVersion = 0;
+
+/** Truncate a tool description to the node-plugin length limit, appending an
+ *  ellipsis when the original value was cut so the model can distinguish
+ *  complete descriptions from truncated ones. */
+function truncateToolDescription(value: string): string {
+  const normalized = value.trim();
+  if (normalized.length <= NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH) {
+    return normalized;
+  }
+  const marker = "...";
+  const contentLimit = NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH - marker.length;
+  return `${truncateUtf16Safe(normalized, contentLimit)}${marker}`;
+}
 
 function bumpSnapshotVersion(): void {
   snapshotVersion += 1;
@@ -111,10 +125,7 @@ export function normalizeNodePluginToolDescriptors(params: {
   for (const tool of params.tools ?? []) {
     const pluginId = normalizeString(tool.pluginId);
     const name = normalizeString(tool.name);
-    const description = normalizeString(tool.description).slice(
-      0,
-      NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH,
-    );
+    const description = truncateToolDescription(normalizeString(tool.description));
     const command = normalizeString(tool.command);
     if (
       !pluginId ||
@@ -139,10 +150,7 @@ export function normalizeNodePluginToolDescriptors(params: {
       `${pluginId}\0${name}\0${command}`,
     );
     const descriptor = registeredDescriptor ?? tool;
-    const descriptorDescription = normalizeString(descriptor.description).slice(
-      0,
-      NODE_PLUGIN_TOOL_DESCRIPTION_MAX_LENGTH,
-    );
+    const descriptorDescription = truncateToolDescription(normalizeString(descriptor.description));
     const mcpServer = normalizeString(descriptor.mcp?.server);
     const mcpTool = normalizeString(descriptor.mcp?.tool);
     normalized.push({
