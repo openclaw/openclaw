@@ -35,6 +35,8 @@ const LEGACY_SQLITE_NAMESPACE = "inbound-dedupe";
 const LEGACY_MARKERS_NAMESPACE = "inbound-dedupe-migrations";
 const LEGACY_JSON_VERSION = 1;
 const MATRIX_PLUGIN_ID = "matrix";
+const MIGRATION_COMPLETION_NAMESPACE = "inbound-dedupe-migration-state";
+const MIGRATION_COMPLETION_KEY = "sqlite-json-to-claimable-v1";
 const STATE_DATABASE_RELATIVE_PATH = path.join("state", "openclaw.sqlite");
 const STORAGE_META_FILENAME = "storage-meta.json";
 
@@ -58,6 +60,49 @@ type LegacySqliteRow = {
   value_json: string;
   expires_at: number | bigint | null;
 };
+
+type MatrixInboundDedupeMigrationCompletion = {
+  version: 1;
+  completedAt: number;
+};
+
+function openMatrixInboundDedupeMigrationCompletionStore(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+) {
+  return context.openPluginStateKeyedStore<MatrixInboundDedupeMigrationCompletion>({
+    namespace: MIGRATION_COMPLETION_NAMESPACE,
+    maxEntries: 4,
+    overflowPolicy: "reject-new",
+    env,
+  });
+}
+
+export async function hasCompletedMatrixInboundDedupeMigration(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+): Promise<boolean> {
+  const marker = await openMatrixInboundDedupeMigrationCompletionStore(context, env).lookup(
+    MIGRATION_COMPLETION_KEY,
+  );
+  return (
+    isRecord(marker) &&
+    marker.version === 1 &&
+    typeof marker.completedAt === "number" &&
+    Number.isFinite(marker.completedAt) &&
+    marker.completedAt >= 0
+  );
+}
+
+export async function recordMatrixInboundDedupeMigrationCompletion(
+  context: PluginDoctorStateMigrationContext,
+  env: NodeJS.ProcessEnv,
+): Promise<void> {
+  await openMatrixInboundDedupeMigrationCompletionStore(context, env).register(
+    MIGRATION_COMPLETION_KEY,
+    { version: 1, completedAt: Date.now() },
+  );
+}
 
 function loadNodeSqlite(): typeof import("node:sqlite") {
   const req = createRequire(import.meta.url);
@@ -232,6 +277,26 @@ export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string
   } finally {
     db.close();
   }
+}
+
+export async function verifyMatrixInboundDedupeSourcesRetired(stateDir: string): Promise<string[]> {
+  const warnings: string[] = [];
+  const remaining = await collectMatrixInboundDedupeSources(stateDir);
+  for (const storageRootDir of remaining.sqliteRoots) {
+    try {
+      if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {
+        warnings.push(`Matrix inbound dedupe rows remain after retirement for ${storageRootDir}`);
+      }
+    } catch (err) {
+      warnings.push(
+        `Failed verifying retired Matrix inbound dedupe rows for ${storageRootDir}: ${String(err)}`,
+      );
+    }
+  }
+  for (const storageRootDir of remaining.jsonRoots) {
+    warnings.push(`Matrix inbound dedupe JSON remains after retirement for ${storageRootDir}`);
+  }
+  return warnings;
 }
 
 async function resolveJsonRootAccountId(storageRootDir: string): Promise<string> {

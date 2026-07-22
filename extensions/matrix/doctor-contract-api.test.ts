@@ -571,16 +571,8 @@ describe("matrix doctor contract state migrations", () => {
 
     const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
     const detectParams = createMigrationParams(stateDir);
-    detectParams.context = {
-      openPluginStateKeyedStore() {
-        throw new Error("detection must not open the current plugin-state runtime");
-      },
-    };
     await expect(migration.detectLegacyState(detectParams)).resolves.toEqual({
-      preview: [
-        `Matrix inbound dedupe rows can migrate to the claimable dedupe store: ${sqliteRoot}`,
-        `Matrix inbound dedupe JSON can migrate to the claimable dedupe store: ${path.join(jsonRoot, "inbound-dedupe.json")}`,
-      ],
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
     });
     const detectedDb = new DatabaseSync(legacyDatabasePath, { readOnly: true });
     try {
@@ -599,6 +591,7 @@ describe("matrix doctor contract state migrations", () => {
         "Migrated Matrix inbound dedupe markers to the claimable dedupe store (2 of 3 entries)",
         `Retired Matrix inbound dedupe rows for ${sqliteRoot}`,
         `Archived Matrix inbound dedupe legacy source -> ${path.join(jsonRoot, "inbound-dedupe.json")}.migrated`,
+        "Recorded Matrix inbound dedupe migration completion (1 SQLite roots, 1 JSON roots scanned)",
       ],
       warnings: [],
     });
@@ -665,6 +658,65 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
+  it("records an empty legacy scan and then skips historical databases", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
+    const params = createMigrationParams(stateDir);
+
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+    });
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 0 JSON roots scanned)",
+      ],
+      warnings: [],
+    });
+    const lateDatabasePath = path.join(
+      stateDir,
+      "matrix",
+      "accounts",
+      "late",
+      "matrix.example.org__bot",
+      "token-a",
+      "state",
+      "openclaw.sqlite",
+    );
+    fs.mkdirSync(path.dirname(lateDatabasePath), { recursive: true });
+    fs.writeFileSync(lateDatabasePath, "the completed migration must not open this database");
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [],
+    });
+  });
+
+  it("ignores an invalid legacy-scan completion receipt", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const params = createMigrationParams(stateDir);
+    const receiptStore = params.context.openPluginStateKeyedStore<{
+      version: number;
+      completedAt: number;
+    }>({
+      namespace: "inbound-dedupe-migration-state",
+      maxEntries: 4,
+      overflowPolicy: "reject-new",
+      env: params.env,
+    });
+    await receiptStore.register("sqlite-json-to-claimable-v1", {
+      version: 1,
+      completedAt: -1,
+    });
+
+    await expect(
+      migrationById("matrix-inbound-dedupe-to-claimable-dedupe").detectLegacyState(params),
+    ).resolves.toEqual({
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+    });
+  });
+
   it("archives malformed inbound dedupe JSON without importing it", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
     tempDirs.push(stateDir);
@@ -692,6 +744,9 @@ describe("matrix doctor contract state migrations", () => {
     });
     expect(fs.existsSync(jsonPath)).toBe(false);
     expect(fs.existsSync(`${jsonPath}.migrated`)).toBe(true);
+    await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toEqual({
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+    });
   });
 
   it("keeps newer runtime dedupe rows when legacy imports hit capacity", async () => {

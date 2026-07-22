@@ -55,11 +55,14 @@ import {
 } from "./src/matrix/crypto-state-store.js";
 import {
   collectMatrixInboundDedupeSources,
+  hasCompletedMatrixInboundDedupeMigration,
   importNewestInboundDedupeMarkers,
   MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME,
   readLegacyInboundDedupeJsonSource,
   readLegacyInboundDedupeSqliteSource,
+  recordMatrixInboundDedupeMigrationCompletion,
   retireLegacyInboundDedupeSqliteRows,
+  verifyMatrixInboundDedupeSourcesRetired,
   type LegacyInboundDedupeMarker,
   type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
@@ -307,32 +310,40 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "matrix-inbound-dedupe-to-claimable-dedupe",
     label: "Matrix inbound dedupe markers",
     async detectLegacyState(params) {
-      const preview: string[] = [];
-      const sources = await collectMatrixInboundDedupeSources(params.stateDir);
-      for (const storageRootDir of sources.sqliteRoots) {
-        try {
-          if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount === 0) {
-            continue;
-          }
-        } catch {
-          continue;
-        }
-        preview.push(
-          `Matrix inbound dedupe rows can migrate to the claimable dedupe store: ${storageRootDir}`,
-        );
-      }
-      for (const storageRootDir of sources.jsonRoots) {
-        preview.push(
-          `Matrix inbound dedupe JSON can migrate to the claimable dedupe store: ${path.join(storageRootDir, MATRIX_LEGACY_INBOUND_DEDUPE_FILENAME)}`,
-        );
-      }
-      return preview.length > 0 ? { preview } : null;
+      return (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env))
+        ? null
+        : { preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"] };
     },
     async migrateLegacyState(params) {
       const io: MatrixInboundDedupeMigrationIo = { context: params.context, env: params.env };
       const changes: string[] = [];
       const warnings: string[] = [];
+      if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
+        return { changes, warnings };
+      }
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+
+      const recordCompletionIfClean = async (verifyRetirement = false) => {
+        if (warnings.length > 0) {
+          return;
+        }
+        if (verifyRetirement) {
+          warnings.push(...(await verifyMatrixInboundDedupeSourcesRetired(params.stateDir)));
+          if (warnings.length > 0) {
+            return;
+          }
+        }
+        try {
+          await recordMatrixInboundDedupeMigrationCompletion(params.context, params.env);
+          changes.push(
+            `Recorded Matrix inbound dedupe migration completion (${sources.sqliteRoots.length} SQLite roots, ${sources.jsonRoots.length} JSON roots scanned)`,
+          );
+        } catch (err) {
+          warnings.push(
+            `Failed recording Matrix inbound dedupe migration completion: ${String(err)}`,
+          );
+        }
+      };
 
       // Gather every marker first so the capacity-aware import keeps the
       // globally newest ones instead of whichever storage root imports last.
@@ -373,6 +384,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
       }
       if (sqliteRootsToRetire.length + jsonRootsToRetire.length === 0) {
+        await recordCompletionIfClean();
         return { changes, warnings };
       }
 
@@ -409,6 +421,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           warnings,
         });
       }
+      await recordCompletionIfClean(true);
       return { changes, warnings };
     },
   },
