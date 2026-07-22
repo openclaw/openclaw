@@ -28,6 +28,16 @@ vi.mock("../config/config.js", () => ({
       mainKey: "main",
       scope: "per-sender",
     },
+    agents: {
+      list: [
+        { id: "main" },
+        { id: "other" },
+        { id: "director1" },
+        { id: "re-portal" },
+        { id: "leasing-ops" },
+        { id: "worker" },
+      ],
+    },
     tools: {
       // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
       sessions: { visibility: "all" },
@@ -54,6 +64,16 @@ const TEST_CONFIG = {
   session: {
     mainKey: "main",
     scope: "per-sender",
+  },
+  agents: {
+    list: [
+      { id: "main" },
+      { id: "other" },
+      { id: "director1" },
+      { id: "re-portal" },
+      { id: "leasing-ops" },
+      { id: "worker" },
+    ],
   },
   tools: {
     sessions: { visibility: "all" },

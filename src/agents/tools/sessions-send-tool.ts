@@ -18,7 +18,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
-  buildAgentMainSessionKey,
+buildAgentMainSessionKey,
+  classifySessionKeyShape,
   isSubagentSessionKey,
   normalizeAccountId,
   normalizeAgentId,
@@ -569,6 +570,27 @@ export function createSessionsSendTool(opts?: {
           status: "error",
           error: "Either sessionKey or label is required",
         });
+      }
+      // Reject malformed keys and unknown agents before any session/run is created.
+      // The agentId path already validates via resolveConfiguredAgentMainSessionKey;
+      // this applies the same check to sessionKey and label-resolved keys.
+      const sessionKeyShape = classifySessionKeyShape(sessionKey);
+      if (sessionKeyShape === "malformed_agent") {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: `agent not found: ${sessionKey}`,
+        });
+      }
+      if (sessionKeyShape === "agent") {
+        const targetAgentId = resolveAgentIdFromSessionKey(sessionKey);
+        if (!listAgentIds(cfg).includes(targetAgentId)) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `agent not found: ${targetAgentId}`,
+          });
+        }
       }
       const resolvedSession = await resolveSessionReference({
         sessionKey,

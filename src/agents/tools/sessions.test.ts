@@ -61,7 +61,7 @@ vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
 });
 
 type SessionsToolTestConfig = {
-  agents?: OpenClawConfig["agents"];
+agents?: OpenClawConfig["agents"];
   bindings?: OpenClawConfig["bindings"];
   session: {
     scope: "per-sender";
@@ -77,6 +77,7 @@ type SessionsToolTestConfig = {
 
 const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
   session: { scope: "per-sender", mainKey: "main" },
+  agents: { list: [{ id: "main" }, { id: "other" }] },
   tools: { agentToAgent: { enabled: false } },
 }));
 
@@ -272,7 +273,7 @@ async function executeFireAndForgetA2AFrom(
   vi.mocked(runSessionsSendA2AFlow).mockClear();
   const targetSessionKey = "agent:other:discord:group:ops";
   loadConfigMock.mockReturnValue({
-    ...(options?.bindingDmScope ||
+...(options?.bindingDmScope ||
     options?.defaultBindingDmScope ||
     options?.bindingAccountId ||
     options?.bindingAgentId
@@ -389,6 +390,7 @@ beforeEach(() => {
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
+    agents: { list: [{ id: "main" }, { id: "other" }] },
     tools: { agentToAgent: { enabled: false } },
   });
   setActivePluginRegistry(createTestRegistry([]));
@@ -1526,6 +1528,68 @@ describe("sessions_send gating", () => {
 
     expect(requireDetails(result).status).toBe("ok");
     expect(waitTimeouts).toEqual([MAX_TIMER_TIMEOUT_MS]);
+  });
+
+  it("rejects sessionKey targeting a non-existent agent before starting a run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: false } },
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-phantom-session-key", {
+      sessionKey: "agent:ghost:main",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: ghost");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed agent-prefixed sessionKey before starting a run", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: false } },
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-malformed-session-key", {
+      sessionKey: "agent:ghost",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: agent:ghost");
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects label-resolved key when the target agent does not exist", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      agents: { list: [{ id: "main" }] },
+      tools: { agentToAgent: { enabled: false } },
+    });
+    callGatewayMock.mockResolvedValueOnce({ key: "agent:ghost:main" });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-phantom-label", {
+      label: "ghost-label",
+      message: "ping",
+      timeoutSeconds: 0,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent not found: ghost");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.resolve");
   });
 });
 
