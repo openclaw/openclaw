@@ -84,7 +84,8 @@ describe("Claude CLI node command", () => {
           stdin: "hello",
           systemPrompt: "private prompt",
           cwd,
-          env: { NO_COLOR: "1" },
+          env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
           idleTimeoutMs: 1_000,
           timeoutMs: 2_000,
         }),
@@ -93,7 +94,8 @@ describe("Claude CLI node command", () => {
       cwd,
       stdin: "hello",
       systemPrompt: "private prompt",
-      env: { NO_COLOR: "1" },
+      env: { NO_COLOR: "1", CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token" },
+      clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
     });
   });
 
@@ -118,6 +120,16 @@ describe("Claude CLI node command", () => {
         }),
       ),
     ).rejects.toThrow("environment key is not allowed");
+    await expect(
+      decodeClaudeCliNodeRunParams(
+        JSON.stringify({
+          argv: ["-p"],
+          clearEnv: [["OPENCLAW", "GATEWAY", "TOKEN"].join("_")],
+          idleTimeoutMs: 1_000,
+          timeoutMs: 2_000,
+        }),
+      ),
+    ).rejects.toThrow("clearEnv key is not allowed");
   });
 
   it("requires binary availability before consulting exec approval policy", async () => {

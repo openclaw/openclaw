@@ -137,13 +137,19 @@ export async function handleClaudeCliNodeInvoke(params: {
     isCmdExeInvocation: params.deps.isCmdExeInvocation,
     sanitizeEnv: params.deps.sanitizeEnv,
     runCommand: async (approvalArgv, cwd, env, timeoutMs) => {
+      const childEnv = env ? { ...env } : undefined;
+      for (const key of request.clearEnv ?? []) {
+        if (!Object.hasOwn(request.env ?? {}, key)) {
+          delete childEnv?.[key];
+        }
+      }
       runResult = await runClaudeCliNodeCommand({
         client: params.client,
         frame: params.frame,
         request,
         argv: approvalArgv,
         cwd,
-        env,
+        env: childEnv,
         timeoutMs,
         signal: params.runtime.signal,
       });

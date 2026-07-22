@@ -829,21 +829,19 @@ export async function prepareCliRunContext(
       env: preparedBackend.env,
     } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
     preparedExecution =
-      (nodeClaudePlacement
-        ? undefined
-        : await backendResolved.prepareExecution?.(
-            (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
-              ? {
-                  ...prepareExecutionContext,
-                  // Private bridge for bundled auth-owning CLI backends. This is intentionally not
-                  // part of the public Plugin SDK until a credential-forwarding
-                  // contract exists.
-                  authCredential,
-                }
-              : prepareExecutionContext) as typeof prepareExecutionContext & {
-              authCredential?: AuthProfileCredential;
-            },
-          )) ?? undefined;
+      (await backendResolved.prepareExecution?.(
+        (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
+          ? {
+              ...prepareExecutionContext,
+              // Private bridge for bundled auth-owning CLI backends. This is intentionally not
+              // part of the public Plugin SDK until a credential-forwarding
+              // contract exists.
+              authCredential,
+            }
+          : prepareExecutionContext) as typeof prepareExecutionContext & {
+          authCredential?: AuthProfileCredential;
+        },
+      )) ?? undefined;
     const preparedBackendCleanup =
       cleanupPreparedBackend || preparedExecution?.cleanup
         ? async () => {

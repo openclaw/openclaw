@@ -4106,9 +4106,17 @@ describe("prepareCliRunContext", () => {
       message: { role: "user", content: "gateway-only history", timestamp: 1 },
     });
     try {
+      const prepareExecution = vi.fn(async () => ({
+        env: {
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+        },
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+      }));
       setCliBackendForPrepareTest({
         bundleMcp: true,
         liveSession: true,
+        prepareExecution,
         reseedFromRawTranscriptWhenUncompacted: true,
       });
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
@@ -4184,6 +4192,14 @@ describe("prepareCliRunContext", () => {
       expect(prepareClaudeCliSkillsPlugin).not.toHaveBeenCalled();
       expect(transcriptCheck).not.toHaveBeenCalled();
       expect(orphanCheck).not.toHaveBeenCalled();
+      expect(prepareExecution).toHaveBeenCalledOnce();
+      expect(context.preparedBackend.env).toMatchObject({
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+      });
+      expect(context.preparedBackend.backend.clearEnv).toEqual(
+        expect.arrayContaining(["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"]),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
