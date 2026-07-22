@@ -3507,6 +3507,164 @@ describe("prepareCliRunContext", () => {
     }
   });
 
+  it("translates runtime toolsAllow through a selectable backend and bounds its MCP grant", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [
+      ...context.baseArgs,
+    ]);
+    const resolveRuntimeToolAvailability = vi.fn(() => ({
+      mcp: [
+        "mcp__openclaw__read",
+        "mcp__openclaw__write",
+        "mcp__openclaw__edit",
+        "mcp__openclaw__apply_patch",
+        "mcp__openclaw__exec",
+        "mcp__openclaw__browser",
+        "mcp__openclaw__image",
+      ],
+    }));
+    const mintMcpLoopbackClientGrant = vi.fn(createTestMcpLoopbackClientGrant);
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file",
+          nativeToolMode: "selectable",
+          resolveExecutionArgs,
+          resolveRuntimeToolAvailability,
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            jsonlDialect: "claude-stream-json",
+            input: "stdin",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime: vi.fn(() => ({
+        port: 31783,
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
+      })),
+      ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+      createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      mintMcpLoopbackClientGrant,
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
+    });
+
+    let cleanup: (() => Promise<void>) | undefined;
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-runtime-tools-allow",
+        config: createCliBackendConfig(),
+        toolsAllow: ["group:fs", "exec", "browser", "image"],
+      });
+      cleanup = context.preparedBackend.cleanup;
+
+      expect(resolveRuntimeToolAvailability).toHaveBeenCalledWith({
+        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "browser", "image"],
+      });
+      expect(context.params.toolsAllow).toBeUndefined();
+      expect(context.params.cliToolAvailability).toEqual({
+        native: [],
+        mcp: [
+          "mcp__openclaw__read",
+          "mcp__openclaw__write",
+          "mcp__openclaw__edit",
+          "mcp__openclaw__apply_patch",
+          "mcp__openclaw__exec",
+          "mcp__openclaw__browser",
+          "mcp__openclaw__image",
+        ],
+      });
+      expect(mintMcpLoopbackClientGrant.mock.calls[0]?.[0]?.context.toolsAllow).toEqual([
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "browser",
+        "image",
+      ]);
+    } finally {
+      await cleanup?.();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a backend that expands runtime toolsAllow beyond the requested grant", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+      port: 31783,
+      ownerToken: "loopback-owner-token",
+      nonOwnerToken: "loopback-non-owner-token",
+    }));
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: true,
+          bundleMcpMode: "claude-config-file",
+          nativeToolMode: "selectable",
+          resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
+          resolveRuntimeToolAvailability: () => ({
+            mcp: ["mcp__openclaw__read", "mcp__openclaw__exec"],
+          }),
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            jsonlDialect: "claude-stream-json",
+            input: "stdin",
+            sessionMode: "existing",
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      getActiveMcpLoopbackRuntime,
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionKey: "agent:main:main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "claude-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-runtime-tools-expansion",
+          config: createCliBackendConfig(),
+          toolsAllow: ["read"],
+        }),
+      ).rejects.toThrow(
+        "CLI backend claude-cli expanded runtime toolsAllow outside the requested OpenClaw MCP grant: mcp__openclaw__exec",
+      );
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("bounds the loopback grant to the selectable MCP tool allowlist", async () => {
     const { dir, sessionFile } = createSessionFile();
     const resolveExecutionArgs = vi.fn((context: { baseArgs: readonly string[] }) => [

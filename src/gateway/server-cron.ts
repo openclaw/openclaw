@@ -2,7 +2,7 @@
 // plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
 import { isAgentDeletionBlocked } from "../agents/agent-lifecycle-registry.js";
-import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { listAgentEntries, listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
@@ -35,7 +35,12 @@ import {
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { cronStreamScheduleKey } from "../cron/stream-schedule.js";
 import { createCronScriptRuntime } from "../cron/trigger-script.js";
-import type { CronJob, CronPayload } from "../cron/types.js";
+import type {
+  CronJob,
+  CronPayload,
+  CronRunErrorClassification,
+  CronTriggerFailureCode,
+} from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
@@ -90,6 +95,16 @@ export type GatewayCronState = {
   reconcileStreamWatchers?: () => Promise<void>;
   stopStreamWatchers?: () => Promise<void>;
 };
+
+function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
+  if (code === "timeout") {
+    return { kind: "reason", reason: "timeout" };
+  }
+  if (code === "runtime_unavailable") {
+    return { kind: "reason", reason: "server_error" };
+  }
+  return { kind: "permanent" };
+}
 
 function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [
@@ -249,16 +264,11 @@ export function buildGatewayCronService(params: {
 }): GatewayCronState {
   const cronLogger = getChildLogger({ module: "cron" });
   const env = params.env ?? process.env;
-  const storePath = resolveCronJobsStorePath(params.cfg.cron?.store, env);
+  const storePath = resolveCronJobsStorePath(undefined, env);
   const cronEnabled = env.OPENCLAW_SKIP_CRON !== "1" && params.cfg.cron?.enabled !== false;
 
   const findAgentEntry = (cfg: OpenClawConfig, agentId: string) =>
-    Array.isArray(cfg.agents?.list)
-      ? cfg.agents.list.find(
-          (entry) =>
-            entry && typeof entry.id === "string" && normalizeAgentId(entry.id) === agentId,
-        )
-      : undefined;
+    listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === agentId);
 
   const hasConfiguredAgent = (cfg: OpenClawConfig, agentId: string) =>
     Boolean(findAgentEntry(cfg, agentId));
@@ -810,6 +820,7 @@ export function buildGatewayCronService(params: {
         return {
           status: "error",
           error: `cron script payload failed (${execution.code}): ${execution.error}`,
+          errorClassification: classifyCronScriptFailure(execution.code),
         };
       }
       if (execution.nextCheck && !job.pacing) {
@@ -1031,7 +1042,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
-          globalFailureDestination: params.cfg.cron?.failureDestination,
+          globalFailureDestination: params.cfg.cron?.failureAlert,
         });
       }
     },

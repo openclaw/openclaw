@@ -47,9 +47,9 @@ import {
   formatDurationCompact,
   formatTimeAgo,
 } from "../../../lib/format.ts";
-import "../../../components/tooltip.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
+import "../../../components/tooltip.ts";
 import {
   openExternalUrlSafe,
   reserveExternalWindowForDeferredNavigation,
@@ -59,6 +59,7 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import {
@@ -651,6 +652,7 @@ type StreamGroupOptions = {
   authToken?: string | null;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
+  startupPhase?: ChatRunStartupPhase;
   waitingApproval?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
@@ -688,7 +690,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderChatWorkingIndicator(part, opts.waitingApproval === true)
+            ? renderChatWorkingIndicator(part, opts.waitingApproval === true, opts.startupPhase)
             : part.kind === "question"
               ? renderQuestionStreamPart(part, opts)
               : part.kind === "plan"
@@ -794,6 +796,7 @@ type RenderMessageGroupOptions = {
   userId?: string | null;
   userName?: string | null;
   userAvatar?: string | null;
+  showAvatarGutter?: boolean;
   basePath?: string;
   localMediaPreviewRoots?: readonly string[];
   assistantAttachmentAuthToken?: string | null;
@@ -876,6 +879,8 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           : isWorkspaceConflict
             ? t("chat.workspaceConflict.eventSender")
             : normalizedRole;
+  const showAvatarGutter = opts.showAvatarGutter !== false;
+  const persistUserIdentity = normalizedRole === "user" && showAvatarGutter;
   const roleClass =
     normalizedRole === "user"
       ? "user"
@@ -925,20 +930,22 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         class="chat-group tool chat-group--activity chat-group--with-footer"
         data-chat-row-key=${group.key}
       >
-        ${renderChatAvatar(
-          group.role,
-          {
-            name: assistantName,
-            avatar: opts.assistantAvatar ?? null,
-          },
-          {
-            name: opts.userName ?? null,
-            avatar: opts.userAvatar ?? null,
-          },
-          opts.basePath,
-          opts.assistantAttachmentAuthToken,
-          group.sender,
-        )}
+        ${showAvatarGutter
+          ? renderChatAvatar(
+              group.role,
+              {
+                name: assistantName,
+                avatar: opts.assistantAvatar ?? null,
+              },
+              {
+                name: opts.userName ?? null,
+                avatar: opts.userAvatar ?? null,
+              },
+              opts.basePath,
+              opts.assistantAttachmentAuthToken,
+              group.sender,
+            )
+          : nothing}
         <div class="chat-group-messages">
           <div class="chat-activity-group ${activityExpanded ? "is-open" : ""}">
             <button
@@ -1023,20 +1030,22 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
-      ${renderChatAvatar(
-        group.role,
-        {
-          name: assistantName,
-          avatar: opts.assistantAvatar ?? null,
-        },
-        {
-          name: opts.userName ?? null,
-          avatar: opts.userAvatar ?? null,
-        },
-        opts.basePath,
-        opts.assistantAttachmentAuthToken,
-        group.sender,
-      )}
+      ${showAvatarGutter
+        ? renderChatAvatar(
+            group.role,
+            {
+              name: assistantName,
+              avatar: opts.assistantAvatar ?? null,
+            },
+            {
+              name: opts.userName ?? null,
+              avatar: opts.userAvatar ?? null,
+            },
+            opts.basePath,
+            opts.assistantAttachmentAuthToken,
+            group.sender,
+          )
+        : nothing}
       <div class="chat-group-messages">
         ${group.messages.map((item, index) => {
           const actionDetails = messageActionDetails[index];
@@ -1057,7 +1066,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           `;
         })}
       </div>
-      <div class="chat-group-footer">
+      <div
+        class="chat-group-footer ${persistUserIdentity
+          ? "chat-group-footer--persistent-identity"
+          : ""}"
+      >
         <div class="chat-group-footer__meta">
           ${opts.onRewind && normalizedRole === "user"
             ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
@@ -1065,7 +1078,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
           ${opts.onDelete && normalizedRole === "user"
             ? renderDeleteButton(opts.onDelete, "left")
             : nothing}
-          ${normalizedRole === "user" ? renderChatAuthorAvatar(group.sender) : nothing}
+          ${normalizedRole === "user" && !showAvatarGutter
+            ? renderChatAuthorAvatar(group.sender)
+            : nothing}
           <span class="chat-sender-name">${who}</span>
           ${renderMessageMeta(group.timestamp, meta)}
         </div>

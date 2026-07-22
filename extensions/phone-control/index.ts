@@ -55,8 +55,10 @@ type StoredArmState = { key: string; state: ArmStateFile };
 type PhoneControlConfigView = {
   readonly gateway?: {
     readonly nodes?: {
-      readonly allowCommands?: readonly string[];
-      readonly denyCommands?: readonly string[];
+      readonly commands?: {
+        readonly allow?: readonly string[];
+        readonly deny?: readonly string[];
+      };
     };
   };
 };
@@ -177,11 +179,11 @@ async function consumeArmState(api: OpenClawPluginApi, expected: StoredArmState)
 }
 
 function normalizeDenyList(cfg: PhoneControlConfigView): string[] {
-  return uniqSorted([...(cfg.gateway?.nodes?.denyCommands ?? [])]);
+  return uniqSorted([...(cfg.gateway?.nodes?.commands?.deny ?? [])]);
 }
 
 function normalizeAllowList(cfg: PhoneControlConfigView): string[] {
-  return uniqSorted([...(cfg.gateway?.nodes?.allowCommands ?? [])]);
+  return uniqSorted([...(cfg.gateway?.nodes?.commands?.allow ?? [])]);
 }
 
 function resolveEffectivePhoneControlAllows(params: {
@@ -260,8 +262,7 @@ function patchConfigNodeLists(
       ...cfg.gateway,
       nodes: {
         ...cfg.gateway?.nodes,
-        allowCommands: next.allowCommands,
-        denyCommands: next.denyCommands,
+        commands: { allow: next.allowCommands, deny: next.denyCommands },
       },
     },
   };

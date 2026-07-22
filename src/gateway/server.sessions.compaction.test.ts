@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   appendTranscriptMessage,
   appendTranscriptEvent,
@@ -1536,7 +1537,7 @@ test("sessions.patch rejects archive while terminal compaction owns the session"
   ws.close();
 });
 
-test("sessions.compact maxLines trims SQLite transcript rows and returns an archive marker", async () => {
+test("sessions.compact maxLines trims SQLite transcript rows and archives the full pre-compaction transcript", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await seedSessionEntry({
     entry: sessionStoreEntry("sess-main"),
@@ -1549,6 +1550,12 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
     storePath,
     totalLines: 500,
   });
+  const original = await loadTranscriptRows({
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
+  expect(original).toHaveLength(500);
 
   const { ws } = await openClient();
   const compacted = await rpcReq<{
@@ -1577,7 +1584,15 @@ test("sessions.compact maxLines trims SQLite transcript rows and returns an arch
   expect(retained.at(-1)).toMatchObject({
     message: { content: "line-498" },
   });
-  expect(compacted.payload?.archived).toContain(`sqlite:main:sess-main:${storePath}.bak.`);
+  const archived = compacted.payload?.archived ?? "";
+  expect(path.basename(archived)).toMatch(/^sess-main\.jsonl\.bak\.\d{4}-\d{2}-\d{2}T/);
+  expect(await fs.realpath(path.dirname(archived))).toBe(await fs.realpath(dir));
+  await expect(fs.stat(archived)).resolves.toMatchObject({ mode: expect.any(Number) });
+  const archivedEvents = readSessionArchiveContentSync(archived)
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  expect(archivedEvents).toEqual(original);
   await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
 
   // No active run present, so the interrupt guard short-circuits without aborting.

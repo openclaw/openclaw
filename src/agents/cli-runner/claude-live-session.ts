@@ -19,6 +19,7 @@ import {
   minSecurity,
   normalizeExecAsk,
   resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
@@ -265,7 +266,6 @@ function stripLiveProcessArgs(
 ): string[] {
   const liveProcessFlags = new Set(
     [
-      backend.sessionArg,
       "--session-id",
       stripSystemPrompt ? backend.systemPromptArg : undefined,
       stripSystemPrompt ? backend.systemPromptFileArg : undefined,
@@ -386,7 +386,6 @@ function buildClaudeLiveFingerprint(params: {
   );
   const unstableValueFlags = new Set(
     [
-      params.context.preparedBackend.backend.sessionArg,
       "--session-id",
       normalizeMcpConfigPath ? "--mcp-config" : undefined,
       normalizePluginDir ? "--plugin-dir" : undefined,
@@ -969,8 +968,13 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
     ?.tools?.exec;
   const exec = agentExec ?? context.params.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const configuredAsk = exec?.ask ?? "off";
+  const configured = resolveExecModePolicy({
+    mode: exec?.mode,
+    security: exec?.security ?? "full",
+    ask: exec?.ask ?? "off",
+  });
+  const security = configured.security;
+  const configuredAsk = configured.ask;
   const sessionAsk = normalizeExecAsk(context.params.sessionEntry?.execAsk);
   return {
     agentId,

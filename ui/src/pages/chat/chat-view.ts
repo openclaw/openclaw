@@ -4,6 +4,10 @@ import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
+  SessionObserverDigest,
+  SessionsObserverAskResult,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -26,6 +30,7 @@ import type { ChatSideResult, ChatSideResultPending } from "../../lib/chat/side-
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
+import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import {
   handleChatAttachmentDrop,
   isEditableDropTarget,
@@ -45,8 +50,8 @@ import {
   renderSessionWorkspaceRail,
   type SessionWorkspaceProps,
 } from "./components/chat-session-workspace.ts";
-import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import "./components/chat-sidebar.ts";
+import { isSideChatPanelVisible, renderSideChatPanel } from "./components/chat-side-chat.ts";
 import type {
   DetailFullMessageResult,
   SidebarContent,
@@ -87,10 +92,17 @@ export type ChatProps = {
   sending: boolean;
   canAbort?: boolean;
   runStatus?: ChatRunUiStatus | null;
+  startupStatus?: ChatRunStartupStatus | null;
   waitingApproval?: boolean;
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
+  observerDigest?: SessionObserverDigest | null;
+  observerHudReady?: boolean;
+  observerRunId?: string | null;
+  observerStartedAt?: number;
+  observerLastReadAt?: number;
+  onObserverAsk?: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
@@ -343,6 +355,7 @@ export function renderChat(props: ChatProps) {
       persistCommentary: props.persistCommentary,
       runActive: Boolean(props.canAbort),
       runWorking: isChatRunWorking(props),
+      startupStatus: props.startupStatus,
       waitingApproval: props.waitingApproval,
       planStatus: props.planStatus,
       questionPrompts: props.gatewayQuestionPrompts,
@@ -660,6 +673,22 @@ export function renderChat(props: ChatProps) {
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
+              ${props.observerHudReady
+                ? html`
+                    <openclaw-chat-observer-hud
+                      .sessionKey=${props.sessionKey}
+                      .digest=${props.observerDigest ?? null}
+                      .running=${Boolean(props.observerRunId)}
+                      .activeRunId=${props.observerRunId ?? null}
+                      .startedAt=${props.observerStartedAt}
+                      .lastReadAt=${props.observerLastReadAt}
+                      .sideChatOpen=${sideChatVisible}
+                      .planStatus=${props.planStatus ?? null}
+                      .pullRequests=${props.pullRequests ?? []}
+                      .onAsk=${props.onObserverAsk}
+                    ></openclaw-chat-observer-hud>
+                  `
+                : nothing}
               ${scrollToBottomButton} ${chatColumnFooter}
               ${renderSideChatPanel({
                 ...sideChatProps,

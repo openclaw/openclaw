@@ -33,6 +33,12 @@ a workflow fix that the existing parent run cannot consume.
 ## Respect release guardrails
 
 - Do not change version numbers without explicit operator approval.
+- When normal beta/stable release planning includes a backport audit, read
+  `references/backport-discovery.md` before selecting commits. Freeze the
+  release baseline and main SHA, complete the durable candidate ledger, and get
+  approval for its categorized set before mutating the release branch. This
+  audit is required for discovery; it does not authorize optional backports on
+  an already-frozen candidate.
 - Versions use `YYYY.M.PATCH`, where `PATCH` is the sequential release-train number within the month, not the calendar day.
 - Choose a new beta train from stable and beta releases only. Alpha-only tags do not consume or advance the beta/stable patch number. Continue the highest existing unpublished/published beta train with the next `beta.N` when appropriate; otherwise increment the highest stable/beta patch by one and start at `beta.1`.
 - Example: after stable `2026.6.5`, the next new beta train is `2026.6.6-beta.1`, even if automated alpha-only tags such as `2026.6.10-alpha.1` exist.
@@ -211,8 +217,9 @@ prepare-run <PR>`.
 
 When asked to create the initial `.33` extended-stable line or a later
 maintenance patch, read
-`references/extended-stable-backports.md` and follow it before version, tag, or
-publication work. Treat backport discovery and preparation as an ability of
+`references/backport-discovery.md` and
+`references/extended-stable-backports.md` and follow both before version, tag,
+or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
 The backport ability owns the complete mainline inventory, private-security

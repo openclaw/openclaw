@@ -858,11 +858,7 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const audioLanguage =
-      requestOverrides.language ??
-      entry.language ??
-      params.config?.language ??
-      cfg.tools?.media?.audio?.language;
+    const audioLanguage = requestOverrides.language ?? entry.language ?? params.config?.language;
     const audioPrompt =
       requestOverrides.prompt ??
       resolveAudioProviderPrompt({

@@ -6,6 +6,7 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount, formatDurationCompact } from "../../../lib/format.ts";
 import type { TurnRecap } from "../chat-progress.ts";
+import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 
 // One salt per page load keeps each run stable while varying the animation between visits.
 // The default stance just claws in place; the busier stances stay rare on purpose.
@@ -18,6 +19,17 @@ const STANCES: Array<[stance: string, weight: number]> = [
   ["chat-reading-indicator--shadowbox", 3],
   ["chat-reading-indicator--backflip", 2],
 ];
+const STARTUP_STATUS_LABEL_KEYS = {
+  preparing_workspace: "chat.startupStatus.preparingWorkspace",
+  provisioning_environment: "chat.startupStatus.provisioningEnvironment",
+  preparing_context: "chat.startupStatus.preparingContext",
+  starting_model: "chat.startupStatus.startingModel",
+} as const satisfies Record<ChatRunStartupPhase, Parameters<typeof t>[0]>;
+
+function startupStatusLabel(phase: ChatRunStartupPhase): string {
+  return t(STARTUP_STATUS_LABEL_KEYS[phase]);
+}
+
 function stanceClass(key: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < key.length; i++) {
@@ -38,6 +50,7 @@ function stanceClass(key: string): string {
 export function renderChatWorkingIndicator(
   part: Extract<ChatItem, { kind: "reading-indicator" }>,
   waitingApproval = false,
+  startupPhase?: ChatRunStartupPhase,
 ) {
   // The animated claw stays decorative; the text status exposes progress without
   // announcing every elapsed-time tick to screen readers.
@@ -49,18 +62,26 @@ export function renderChatWorkingIndicator(
       <span class="chat-working-indicator__status">
         ${waitingApproval
           ? html`<span>${t("chat.waitingForApproval")}</span>`
-          : html`
-              <span class="agent-chat__sr-only">${t("common.working")}</span>
-              <openclaw-elapsed-time
-                class="chat-working-indicator__elapsed"
-                .startMs=${part.startedAt}
-              ></openclaw-elapsed-time>
-              <openclaw-working-phrase
-                aria-hidden="true"
-                .startMs=${part.startedAt}
-                .seed=${part.key}
-              ></openclaw-working-phrase>
-            `}
+          : startupPhase
+            ? html`
+                <span>${startupStatusLabel(startupPhase)}</span>
+                <openclaw-elapsed-time
+                  class="chat-working-indicator__elapsed"
+                  .startMs=${part.startedAt}
+                ></openclaw-elapsed-time>
+              `
+            : html`
+                <span class="agent-chat__sr-only">${t("common.working")}</span>
+                <openclaw-elapsed-time
+                  class="chat-working-indicator__elapsed"
+                  .startMs=${part.startedAt}
+                ></openclaw-elapsed-time>
+                <openclaw-working-phrase
+                  aria-hidden="true"
+                  .startMs=${part.startedAt}
+                  .seed=${part.key}
+                ></openclaw-working-phrase>
+              `}
       </span>
     </div>
   `;

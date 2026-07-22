@@ -76,12 +76,14 @@ type ClawWorkspace = {
   files: ClawWorkspaceFile[];
 };
 
-type ClawPackage = {
+export type ClawPackage = {
   kind: "skill" | "plugin";
   source: "clawhub";
   ref: string;
   version: string;
 };
+
+export type ResolvedClawPackage = ClawPackage & { integrity: string };
 
 type ClawMcpServerCommon = {
   toolFilter?: {
@@ -149,7 +151,7 @@ export type ClawWorkspaceSourceSnapshot = {
   digest: string;
 };
 
-export type ClawSourceSnapshot = {
+type ClawSourceSnapshot = {
   workspaceSources: ClawWorkspaceSourceSnapshot[];
 };
 

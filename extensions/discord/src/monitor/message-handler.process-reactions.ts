@@ -60,7 +60,7 @@ export function createDiscordMessageReactionRuntime(params: {
     channel: "discord",
     accountId,
   });
-  const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const removeAckAfterReply = false;
   const shouldSendAckReaction = Boolean(
     ackReaction &&
     shouldAckReactionGate({
@@ -101,7 +101,7 @@ export function createDiscordMessageReactionRuntime(params: {
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
-    emojis: cfg.messages?.statusReactions?.emojis,
+    emojis: undefined,
     timing: statusReactionTiming,
     onError: (err) => {
       logAckFailure({
@@ -185,7 +185,7 @@ export function createDiscordMessageReactionRuntime(params: {
         reactionContext: ackReactionContext,
       }),
       initialEmoji: emoji,
-      emojis: cfg.messages?.statusReactions?.emojis,
+      emojis: undefined,
       timing: statusReactionTiming,
       onError: (err) => {
         logAckFailure({

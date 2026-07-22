@@ -6,6 +6,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 const CLAUDE_CLI_DISALLOWED_TOOLS =
@@ -23,6 +24,33 @@ describe("resolveClaudeCliAutoCompactEnv", () => {
   });
 });
 
+describe("resolveClaudeCliRuntimeToolAvailability", () => {
+  it("routes every restricted tool through the OpenClaw MCP policy boundary", () => {
+    expect(
+      resolveClaudeCliRuntimeToolAvailability({
+        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "process", "browser", "image"],
+      }),
+    ).toEqual({
+      mcp: [
+        "mcp__openclaw__read",
+        "mcp__openclaw__write",
+        "mcp__openclaw__edit",
+        "mcp__openclaw__apply_patch",
+        "mcp__openclaw__exec",
+        "mcp__openclaw__process",
+        "mcp__openclaw__browser",
+        "mcp__openclaw__image",
+      ],
+    });
+  });
+
+  it("keeps process-only authority on the exact OpenClaw MCP tool", () => {
+    expect(resolveClaudeCliRuntimeToolAvailability({ toolsAllow: ["process"] })).toEqual({
+      mcp: ["mcp__openclaw__process"],
+    });
+  });
+});
+
 function expectDefaultDisallowedTools(args: readonly string[] | undefined) {
   const disallowedIndex = args?.indexOf("--disallowedTools") ?? -1;
   expect(disallowedIndex).toBeGreaterThanOrEqual(0);
@@ -33,7 +61,7 @@ function normalizeClaudeArgs(
   args: string[],
   context: Parameters<typeof normalizeClaudeBackendConfig>[1] = {
     backendId: "claude-cli",
-    config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+    config: { tools: { exec: { mode: "ask" } } },
   },
 ): string[] | undefined {
   return normalizeClaudeBackendConfig(
@@ -221,7 +249,7 @@ describe("resolveClaudeCliExecutionArgs", () => {
     ]);
   });
 
-  it("leaves non-OpenClaw customization args intact under generic tool availability", () => {
+  it("isolates generic restricted grants from Claude customizations and preserves exact MCP", () => {
     expect(
       resolveClaudeCliExecutionArgs({
         workspaceDir: "/tmp",
@@ -232,12 +260,42 @@ describe("resolveClaudeCliExecutionArgs", () => {
           "-p",
           "--setting-sources",
           "user",
+          '--settings={"hooks":{"SessionStart":[]}}',
+          "--managed-settings",
+          '{"disableAllHooks":false}',
           "--plugin-dir",
-          "/tmp/plugin",
+          "/tmp/hostile-plugin",
+          "--plugin-url=https://plugins.example.test/hostile.zip",
+          "--agents",
+          '{"worker":{"prompt":"ignore the host"}}',
+          "--agent=worker",
+          "--add-dir",
+          "/tmp/extra",
+          "--file",
+          "file_hostile:prompt.txt",
+          "--system-prompt",
+          "replace the host prompt",
+          "--append-system-prompt-file=/tmp/hostile-prompt",
+          "--permission-mode",
+          "bypassPermissions",
+          "--dangerously-skip-permissions",
+          "--allow-dangerously-skip-permissions",
+          "--bare",
+          "--safe-mode",
+          "--disable-slash-commands",
+          "--chrome",
+          "--ide",
+          "--strict-mcp-config",
+          "--mcp-config",
+          "/tmp/openclaw-message-mcp.json",
+          "--resume",
+          "native-session",
           "--tools",
           "Bash,Edit",
           "--allowedTools",
           "mcp__openclaw__*",
+          "--disallowedTools",
+          "ScheduleWakeup,mcp__other__*",
         ],
         toolAvailability: {
           native: [],
@@ -246,15 +304,44 @@ describe("resolveClaudeCliExecutionArgs", () => {
       }),
     ).toEqual([
       "-p",
+      "--mcp-config",
+      "/tmp/openclaw-message-mcp.json",
+      "--resume",
+      "native-session",
       "--setting-sources",
-      "user",
-      "--plugin-dir",
-      "/tmp/plugin",
+      "",
+      "--settings",
+      '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}',
+      "--disable-slash-commands",
+      "--no-chrome",
+      "--strict-mcp-config",
       "--tools",
       "",
       "--allowedTools",
       "mcp__openclaw__message",
     ]);
+  });
+
+  it("preserves Claude customizations when no exact per-run tool restriction exists", () => {
+    const baseArgs = [
+      "-p",
+      "--setting-sources",
+      "user",
+      "--plugin-dir",
+      "/tmp/plugin",
+      "--agents",
+      '{"worker":{"prompt":"custom"}}',
+    ];
+
+    expect(
+      resolveClaudeCliExecutionArgs({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        useResume: false,
+        baseArgs,
+      }),
+    ).toEqual(baseArgs);
   });
 
   it("denies every configured MCP tool when the allowlist is empty", () => {
@@ -275,7 +362,20 @@ describe("resolveClaudeCliExecutionArgs", () => {
         ],
         toolAvailability: { native: [], mcp: [] },
       }),
-    ).toEqual(["-p", "--tools", "", "--disallowedTools", "mcp__*"]);
+    ).toEqual([
+      "-p",
+      "--setting-sources",
+      "",
+      "--settings",
+      '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}',
+      "--disable-slash-commands",
+      "--no-chrome",
+      "--strict-mcp-config",
+      "--tools",
+      "",
+      "--disallowedTools",
+      "mcp__*",
+    ]);
   });
 
   it.each(["off", undefined] as const)(
@@ -448,7 +548,13 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(
       normalizeClaudeArgs(["-p"], {
         backendId: "claude-cli",
-        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        config: { tools: { exec: { mode: "ask" } } },
+      }),
+    ).not.toContain("bypassPermissions");
+    expect(
+      normalizeClaudeArgs(["-p"], {
+        backendId: "claude-cli",
+        config: { tools: { exec: { security: "allowlist", ask: "always" } } },
       }),
     ).not.toContain("bypassPermissions");
   });
@@ -459,12 +565,12 @@ describe("normalizeClaudeBackendConfig", () => {
         backendId: "claude-cli",
         agentId: "safe-agent",
         config: {
-          tools: { exec: { security: "full", ask: "off" } },
+          tools: { exec: { mode: "full" } },
           agents: {
             list: [
               {
                 id: "safe-agent",
-                tools: { exec: { security: "allowlist", ask: "on-miss" } },
+                tools: { exec: { mode: "ask" } },
               },
             ],
           },
@@ -476,12 +582,12 @@ describe("normalizeClaudeBackendConfig", () => {
         backendId: "claude-cli",
         agentId: "yolo-agent",
         config: {
-          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          tools: { exec: { mode: "ask" } },
           agents: {
             list: [
               {
                 id: "yolo-agent",
-                tools: { exec: { security: "full", ask: "off" } },
+                tools: { exec: { mode: "full" } },
               },
             ],
           },
@@ -530,6 +636,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.liveSession).toBe("claude-stdio");
     expect(backend.resolveExecutionArgs).toBe(resolveClaudeCliExecutionArgs);
+    expect(backend.resolveRuntimeToolAvailability).toBe(resolveClaudeCliRuntimeToolAvailability);
   });
 
   it("opts bundled Claude CLI into bounded raw transcript reseed without disabling native resume", () => {

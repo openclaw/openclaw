@@ -58,7 +58,7 @@ function buildPreparedCliRunContext(params: {
     output: "jsonl" as const,
     input: "stdin" as const,
     modelArg: "--model",
-    sessionArg: "--session-id",
+    sessionArgs: ["--session-id", "{sessionId}"],
     sessionMode: "always" as const,
     systemPromptFileArg: "--append-system-prompt-file",
     systemPromptWhen: "first" as const,

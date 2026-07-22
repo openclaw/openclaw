@@ -965,11 +965,7 @@ describe("qa scenario catalog", () => {
     expect(config?.requiredChannelDriver).toBe("qa-channel");
     expect(scenario.gatewayConfigPatch).toMatchObject({
       session: { dmScope: "per-channel-peer" },
-      agents: {
-        defaults: {
-          memorySearch: { rememberAcrossConversations: true },
-        },
-      },
+      memory: { search: { rememberAcrossConversations: true } },
       plugins: {
         entries: {
           "active-memory": {

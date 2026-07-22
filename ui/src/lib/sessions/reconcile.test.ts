@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, test } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import { reconcileSessionChanged, reconcileSessionHistory } from "./reconcile.ts";

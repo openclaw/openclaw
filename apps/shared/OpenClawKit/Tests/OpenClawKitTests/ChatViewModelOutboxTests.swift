@@ -23,7 +23,7 @@ extension OpenClawChatSQLiteTranscriptCache {
             lastError: lastError)
     }
 
-    fileprivate func markCommandRetriedIfPresent(
+    private func markCommandRetriedIfPresent(
         id: String,
         agentID: String?,
         deliverySessionKey: String,
@@ -661,21 +661,6 @@ private actor DelayingOutbox: OpenClawChatCommandOutbox {
             lastError: lastError)
     }
 
-    func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
-    }
-
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
@@ -820,21 +805,6 @@ private actor SnapshotHoldingOutbox: OpenClawChatCommandOutbox {
             lastError: lastError)
     }
 
-    func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
-    }
-
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {
         await self.base.cancelCommand(id: id)
     }
@@ -915,21 +885,6 @@ private actor CancellationHoldingOutbox: OpenClawChatCommandOutbox {
             attemptVersion: attemptVersion,
             retryCount: retryCount,
             lastError: lastError)
-    }
-
-    func markCommandRetriedIfPresent(
-        id: String,
-        expectation: OpenClawChatOutboxRetryExpectation,
-        agentID: String?,
-        deliverySessionKey: String,
-        routingContract: String) async -> OpenClawChatOutboxUpdateResult
-    {
-        await self.base.markCommandRetriedIfPresent(
-            id: id,
-            expectation: expectation,
-            agentID: agentID,
-            deliverySessionKey: deliverySessionKey,
-            routingContract: routingContract)
     }
 
     func cancelCommand(id: String) async -> OpenClawChatOutboxUpdateResult {

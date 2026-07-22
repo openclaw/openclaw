@@ -1,4 +1,5 @@
 // Defines agent default configuration types shared by runtime schemas.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type {
   AgentModelConfig,
@@ -12,7 +13,6 @@ import type {
   HumanDelayConfig,
   TypingMode,
 } from "./types.base.js";
-import type { MemorySearchConfig } from "./types.tools.js";
 
 /** Workspace bootstrap-file injection policy for agent system prompts. */
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
@@ -35,16 +35,6 @@ export type AgentThinkingLevel =
   | "adaptive"
   | "max"
   | "ultra";
-
-export type Gpt5PromptOverlayConfig = {
-  /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
-  personality?: "friendly" | "on" | "off";
-};
-
-export type PromptOverlaysConfig = {
-  /** Shared GPT-5-family prompt overlay used across providers. */
-  gpt5?: Gpt5PromptOverlayConfig;
-};
 
 export type AgentModelEntryConfig = {
   /** Optional display/lookup alias for this provider/model entry. */
@@ -139,9 +129,7 @@ export type CliBackendConfig = {
   modelArg?: string;
   /** Model aliases mapping (config model id → CLI model id). */
   modelAliases?: Record<string, string>;
-  /** Flag used to pass session id (e.g. --session-id). */
-  sessionArg?: string;
-  /** Extra args used when resuming a session (use {sessionId} placeholder). */
+  /** Args used to pass a session id (use {sessionId} placeholder). */
   sessionArgs?: string[];
   /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
   resumeArgs?: string[];
@@ -200,6 +188,22 @@ export type CliBackendConfig = {
 };
 
 export type AgentDefaultsConfig = {
+  /** @deprecated Doctor-only legacy input. */
+  imageGenerationModel?: AgentToolModelConfig;
+  /** @deprecated Doctor-only legacy input. */
+  videoGenerationModel?: AgentToolModelConfig;
+  /** @deprecated Doctor-only legacy input. */
+  musicGenerationModel?: AgentToolModelConfig;
+  /** @deprecated Doctor-only legacy input. */
+  envelopeTimezone?: string;
+  /** @deprecated Doctor-only legacy input. */
+  envelopeTimestamp?: "on" | "off";
+  /** @deprecated Doctor-only legacy input. */
+  envelopeElapsed?: "on" | "off";
+  /** @deprecated Doctor-only legacy input. */
+  timeFormat?: "auto" | "12" | "24";
+  /** @deprecated Doctor-only legacy input. */
+  promptOverlays?: { gpt5?: { personality?: "friendly" | "on" | "off" } };
   /** Global default provider params applied to all models before per-model and per-agent overrides. */
   params?: Record<string, unknown>;
   /** Primary model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
@@ -213,25 +217,18 @@ export type AgentDefaultsConfig = {
   agentRuntime?: AgentRuntimePolicyConfig;
   /** Optional image-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   imageModel?: AgentToolModelConfig;
-  /** Optional image-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  imageGenerationModel?: AgentToolModelConfig;
-  /** Optional video-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  videoGenerationModel?: AgentToolModelConfig;
-  /** Optional music-generation model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
-  musicGenerationModel?: AgentToolModelConfig;
+  /** Media-generation model preferences by output modality. */
+  mediaModels?: {
+    image?: AgentToolModelConfig;
+    video?: AgentToolModelConfig;
+    music?: AgentToolModelConfig;
+  };
   /** Optional voice model and fallbacks (provider/model) for TTS/STT/realtime voice providers. */
   voiceModel?: AgentToolModelConfig;
-  /**
-   * When true (default), shared image/music/video generation appends other
-   * auth-backed provider defaults after explicit primary/fallback refs. Set to
-   * false to disable implicit cross-provider fallback while keeping explicit
-   * fallbacks.
-   */
-  mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentToolModelConfig;
   /** Maximum PDF file size in megabytes (default: 10). */
-  pdfMaxBytesMb?: number;
+  pdfMaxMb?: number;
   /** Maximum number of PDF pages to process (default: 20). */
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
@@ -247,7 +244,6 @@ export type AgentDefaultsConfig = {
   /** Optional repository root for system prompt runtime line (overrides auto-detect). */
   repoRoot?: string;
   /** Provider-independent prompt overlays applied by model family. */
-  promptOverlays?: PromptOverlaysConfig;
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**
@@ -283,7 +279,6 @@ export type AgentDefaultsConfig = {
    * - once: inject once per unique truncation signature
    * - always: inject on every run with truncation (default)
    */
-  bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
   userTimezone?: string;
   /** Runtime-owned first-turn startup context for bare /new and /reset. */
@@ -291,20 +286,16 @@ export type AgentDefaultsConfig = {
   /** Focused context-budget overrides for high-volume injected/read surfaces. */
   contextLimits?: AgentContextLimitsConfig;
   /** Time format in system prompt: auto (OS preference), 12-hour, or 24-hour. */
-  timeFormat?: "auto" | "12" | "24";
   /**
    * Envelope timestamp timezone: "utc" (default), "local", "user", or an IANA timezone string.
    */
-  envelopeTimezone?: string;
   /**
    * Include absolute timestamps in message envelopes, direct agent prompt prefixes,
    * and embedded model-input prefixes ("on" | "off", default: "on").
    */
-  envelopeTimestamp?: "on" | "off";
   /**
    * Include elapsed time in message envelopes ("on" | "off", default: "on").
    */
-  envelopeElapsed?: "on" | "off";
   /** Optional context window cap (used for runtime estimates + status %). */
   contextTokens?: number;
   /** Optional CLI backends for text-only fallback (claude-cli, etc.). */
@@ -329,10 +320,10 @@ export type AgentDefaultsConfig = {
      */
     executionContract?: EmbeddedAgentExecutionContract;
   };
-  /** Vector memory search configuration (per-agent overrides supported). */
-  memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: AgentThinkingLevel;
+  /** Default fast-mode policy inherited by agent entries that omit it. */
+  fastModeDefault?: FastMode;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -405,12 +396,6 @@ export type AgentDefaultsConfig = {
     accountId?: string;
     /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK."). */
     prompt?: string;
-    /** Include the ## Heartbeats system prompt section for the default agent (default: true). */
-    includeSystemPromptSection?: boolean;
-    /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
-    ackMaxChars?: number;
-    /** Suppress tool error warning payloads during heartbeat runs. */
-    suppressToolErrorWarnings?: boolean;
     /** Run timeout in seconds for heartbeat agent turns. Unset uses global timeout or heartbeat cadence capped at 600 seconds. */
     timeoutSeconds?: number;
     /**
@@ -425,18 +410,6 @@ export type AgentDefaultsConfig = {
      * per-heartbeat token cost by avoiding the full session transcript.
      */
     isolatedSession?: boolean;
-    /**
-     * If true, defer heartbeat runs while this agent's session-keyed subagent or nested command lanes are busy.
-     * Cron lanes are always treated as busy for heartbeat deferral.
-     */
-    skipWhenBusy?: boolean;
-    /**
-     * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
-     * as a separate message prefixed with `Thinking.` (same as `/reasoning on`).
-     *
-     * Default: false (only the final heartbeat payload is delivered).
-     */
-    includeReasoning?: boolean;
   };
   /** Max concurrent agent runs across all conversations. Default: 4. */
   maxConcurrent?: number;
@@ -471,7 +444,7 @@ export type AgentDefaultsConfig = {
 
 export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionPostIndexSyncMode = "off" | "async" | "await";
-export type AgentCompactionIdentifierPolicy = "strict" | "off" | "custom";
+export type AgentCompactionIdentifierPolicy = "strict" | "off";
 export type AgentCompactionQualityGuardConfig = {
   /** Enable compaction summary quality audits and regeneration retries. Default: false. */
   enabled?: boolean;
@@ -494,14 +467,10 @@ export type AgentCompactionConfig = {
   thinkingLevel?: AgentThinkingLevel;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Additional compaction-summary instructions that can preserve language or persona continuity. */
-  customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
   recentTurnsPreserve?: number;
   /** Identifier-preservation instruction policy for compaction summaries. */
   identifierPolicy?: AgentCompactionIdentifierPolicy;
-  /** Custom identifier-preservation instructions used when identifierPolicy is "custom". */
-  identifierInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
   /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
@@ -510,11 +479,7 @@ export type AgentCompactionConfig = {
   postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
   memoryFlush?: AgentCompactionMemoryFlushConfig;
-  /**
-   * H2/H3 section names from AGENTS.md to inject after compaction.
-   * Disabled when unset or [].
-   * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
-   */
+  /** H2/H3 section names from AGENTS.md to inject after compaction. */
   postCompactionSections?: string[];
   /** Optional provider/model or configured bare alias for compaction summarization.
    * When set, compaction uses this model instead of the agent's primary model.
@@ -564,8 +529,4 @@ export type AgentCompactionMemoryFlushConfig = {
    * (bytes, or byte-size string like "2mb"). Set to 0 to disable.
    */
   forceFlushTranscriptBytes?: number | string;
-  /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
-  prompt?: string;
-  /** System prompt appended for the memory flush turn. */
-  systemPrompt?: string;
 };

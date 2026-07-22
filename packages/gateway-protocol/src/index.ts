@@ -144,6 +144,8 @@ import {
   CommandsListResultSchema,
   ChatAbortParamsSchema,
   ChatEventSchema,
+  ChatRunStartupPhaseSchema,
+  ChatStatusEventSchema,
   ChatHistoryParamsSchema,
   ChatMetadataParamsSchema,
   ChatMessageGetParamsSchema,
@@ -429,6 +431,8 @@ import {
   SessionObserverDigestSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
+  SessionsObserverAskParamsSchema,
+  SessionsObserverAskResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -592,6 +596,7 @@ import {
   WorktreesGcResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
+  WorktreeRepositoryStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,
@@ -769,6 +774,7 @@ export const validateSessionsFilesGetParams = lazyCompile(SessionsFilesGetParams
 export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
+export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAskParamsSchema);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
@@ -1050,6 +1056,8 @@ export {
   ConversationTurnResultSchema,
   MessageActionParamsSchema,
   ChatEventSchema,
+  ChatRunStartupPhaseSchema,
+  ChatStatusEventSchema,
   SendParamsSchema,
   PollParamsSchema,
   AgentParamsSchema,
@@ -1144,6 +1152,8 @@ export {
   SessionObserverDigestSchema,
   SessionObserverHealthSchema,
   SessionObserverPlanProgressSchema,
+  SessionsObserverAskParamsSchema,
+  SessionsObserverAskResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -1472,6 +1482,7 @@ export {
   WorktreesGcResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
+  WorktreeRepositoryStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,
@@ -1548,6 +1559,8 @@ export type {
   AgentIdentityResult,
   AgentWaitParams,
   ChatEvent,
+  ChatRunStartupPhase,
+  ChatStatusEvent,
   TickEvent,
   ShutdownEvent,
   WakeParams,
@@ -1794,6 +1807,8 @@ export type {
   SessionObserverDigest,
   SessionObserverHealth,
   SessionObserverPlanProgress,
+  SessionsObserverAskParams,
+  SessionsObserverAskResult,
   SessionPlacementState,
   SessionPlacement,
   SessionWorktreeInfo,
@@ -1953,6 +1968,7 @@ export type {
   WorktreesGcResult,
   WorktreesBranchesParams,
   WorktreeBranch,
+  WorktreeRepositoryStatus,
   WorktreesBranchesResult,
   FsDirEntry,
   FsListDirParams,
