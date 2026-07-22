@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   abortQueuedChatTurnById,
   abortQueuedChatTurns,
@@ -318,5 +318,75 @@ describe("chat-queued-turns", () => {
     expect(a.signal.aborted).toBe(true);
     expect(b.signal.aborted).toBe(true);
     expect(map.size).toBe(0);
+  });
+
+  it("detaches the abort listener when the entry is completed (no closure leak, #106654)", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    let registeredHandler: (() => void) | undefined;
+    const originalAdd = controller.signal.addEventListener.bind(controller.signal);
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    addSpy.mockImplementation((type, handler, options) => {
+      if (type === "abort") {
+        registeredHandler = handler as () => void;
+      }
+      return originalAdd(type, handler as EventListener, options);
+    });
+    expect(registerTurn(map, "run-leak-complete", controller, "sess")).toBe(true);
+
+    expect(completeQueuedChatTurn(map, "run-leak-complete", controller)).toBe(true);
+
+    expect(removeSpy).toHaveBeenCalledWith("abort", registeredHandler);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("detaches the abort listener when a collect entry is retired (no closure leak, #106654)", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    let registeredHandler: (() => void) | undefined;
+    const originalAdd = controller.signal.addEventListener.bind(controller.signal);
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    addSpy.mockImplementation((type, handler, options) => {
+      if (type === "abort") {
+        registeredHandler = handler as () => void;
+      }
+      return originalAdd(type, handler as EventListener, options);
+    });
+    expect(registerTurn(map, "run-leak-retire", controller, "sess")).toBe(true);
+
+    expect(retireQueuedChatTurnCancellation(map, "run-leak-retire", controller)).toBe(true);
+    expect(removeSpy).toHaveBeenCalledWith("abort", registeredHandler);
+
+    // Retiring must not leave a dangling listener that would mutate the entry
+    // on a later abort; completion still removes the idempotency guard.
+    controller.abort();
+    expect(map.has("run-leak-retire")).toBe(true);
+    expect(completeQueuedChatTurn(map, "run-leak-retire", controller)).toBe(true);
+    expect(map.has("run-leak-retire")).toBe(false);
+    // No further detach attempts after the listener was already removed.
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("detaches the abort listener after an abort-triggered removal (no closure leak, #106654)", () => {
+    const map = emptyMap();
+    const controller = new AbortController();
+    const removeSpy = vi.spyOn(controller.signal, "removeEventListener");
+    let registeredHandler: (() => void) | undefined;
+    const originalAdd = controller.signal.addEventListener.bind(controller.signal);
+    const addSpy = vi.spyOn(controller.signal, "addEventListener");
+    addSpy.mockImplementation((type, handler, options) => {
+      if (type === "abort") {
+        registeredHandler = handler as () => void;
+      }
+      return originalAdd(type, handler as EventListener, options);
+    });
+    expect(registerTurn(map, "run-leak-abort", controller, "sess")).toBe(true);
+
+    controller.abort();
+
+    expect(map.has("run-leak-abort")).toBe(false);
+    expect(removeSpy).toHaveBeenCalledWith("abort", registeredHandler);
   });
 });

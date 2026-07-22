@@ -21,6 +21,19 @@ export type QueuedChatTurnEntry = {
 
 export type QueuedChatTurnMap = Map<string, QueuedChatTurnEntry>;
 
+// Abort listeners capture the registering closure (params/runId/entry). Tying
+// their lifetime to the entry's map membership lets restart drains drop the
+// reference immediately instead of waiting for controller GC (see #106654).
+const queuedTurnAbortHandlers = new WeakMap<QueuedChatTurnEntry, () => void>();
+
+function detachQueuedTurnAbortListener(entry: QueuedChatTurnEntry): void {
+  const handler = queuedTurnAbortHandlers.get(entry);
+  if (handler) {
+    entry.controller.signal.removeEventListener("abort", handler);
+    queuedTurnAbortHandlers.delete(entry);
+  }
+}
+
 type RegisterQueuedChatTurnParams = {
   chatQueuedTurns: QueuedChatTurnMap;
   runId: string;
@@ -48,7 +61,11 @@ function deleteQueuedChatTurnEntry(
   if (chatQueuedTurns.get(runId) !== entry) {
     return false;
   }
-  return chatQueuedTurns.delete(runId);
+  const removed = chatQueuedTurns.delete(runId);
+  if (removed) {
+    detachQueuedTurnAbortListener(entry);
+  }
+  return removed;
 }
 
 export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): boolean {
@@ -76,17 +93,15 @@ export function registerQueuedChatTurn(params: RegisterQueuedChatTurnParams): bo
     ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
   };
   params.chatQueuedTurns.set(runId, entry);
-  params.controller.signal.addEventListener(
-    "abort",
-    () => {
-      // Queued entries can outlive active-run cleanup. Retired collect entries
-      // stay as idempotency guards until aggregate completion removes them.
-      if (entry.abortable !== false) {
-        deleteQueuedChatTurnEntry(params.chatQueuedTurns, runId, entry);
-      }
-    },
-    { once: true },
-  );
+  const onAbort = () => {
+    // Queued entries can outlive active-run cleanup. Retired collect entries
+    // stay as idempotency guards until aggregate completion removes them.
+    if (entry.abortable !== false) {
+      deleteQueuedChatTurnEntry(params.chatQueuedTurns, runId, entry);
+    }
+  };
+  params.controller.signal.addEventListener("abort", onAbort, { once: true });
+  queuedTurnAbortHandlers.set(entry, onAbort);
   return true;
 }
 
@@ -119,6 +134,10 @@ export function retireQueuedChatTurnCancellation(
     return false;
   }
   entry.abortable = false;
+  // The entry now stays as an idempotency guard and is removed only by
+  // completion, so detach the abort listener and release its closure
+  // immediately instead of holding it until the controller is GC'd (#106654).
+  detachQueuedTurnAbortListener(entry);
   return true;
 }
 
