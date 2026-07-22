@@ -368,6 +368,28 @@ describe("inworldTTS", () => {
     expect(buffer).toEqual(Buffer.from("audio"));
   });
 
+  it("defaults to a bounded timeout for TTS requests", async () => {
+    const chunk = Buffer.from("audio").toString("base64");
+    queueGuardedResponse(
+      new Response(JSON.stringify({ result: { audioContent: chunk } }), { status: 200 }),
+    );
+
+    await inworldTTS({ text: "test", apiKey: "test-key" });
+
+    expect(lastGuardRequest().timeoutMs).toBe(30_000);
+  });
+
+  it("preserves an explicit timeout for TTS requests", async () => {
+    const chunk = Buffer.from("audio").toString("base64");
+    queueGuardedResponse(
+      new Response(JSON.stringify({ result: { audioContent: chunk } }), { status: 200 }),
+    );
+
+    await inworldTTS({ text: "test", apiKey: "test-key", timeoutMs: 5_000 });
+
+    expect(lastGuardRequest().timeoutMs).toBe(5_000);
+  });
+
   it("releases the guarded dispatcher after failure", async () => {
     const { release } = queueGuardedResponse(new Response("fail", { status: 500 }));
 
