@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
 import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
@@ -312,28 +313,30 @@ describe("configureGatewayForSetup", () => {
       textQueue: [],
     });
 
-    const result = await configureGatewayForSetup({
-      flow: "quickstart",
-      baseConfig: {},
-      nextConfig: {
-        secrets: {
-          providers: {
-            gatewaytokens: {
-              source: "exec",
-              command: process.execPath,
-              args: [
-                "-e",
-                "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='token-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
-              ],
+    const result = await withSecureTestNodeExecPath(async () =>
+      configureGatewayForSetup({
+        flow: "quickstart",
+        baseConfig: {},
+        nextConfig: {
+          secrets: {
+            providers: {
+              gatewaytokens: {
+                source: "exec",
+                command: process.execPath,
+                args: [
+                  "-e",
+                  "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='token-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",
+                ],
+              },
             },
           },
         },
-      },
-      localPort: 18789,
-      quickstartGateway,
-      prompter,
-      runtime,
-    });
+        localPort: 18789,
+        quickstartGateway,
+        prompter,
+        runtime,
+      }),
+    );
 
     expect(result.nextConfig.gateway?.auth?.token).toEqual(quickstartGateway.token);
     expect(result.settings.gatewayToken).toBe("token-from-exec");
