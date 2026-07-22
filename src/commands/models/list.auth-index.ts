@@ -43,7 +43,7 @@ function listValidatedSyntheticAuthProviderRefs(params: {
     ) {
       return [];
     }
-    return params.metadataSnapshot.plugins
+    return params.metadataSnapshot.index.plugins
       .filter((plugin) => plugin.enabled)
       .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
   }
