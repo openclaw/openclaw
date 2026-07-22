@@ -353,18 +353,21 @@ describe("registerChannelsCli", () => {
     );
   });
 
-  it("keeps generic add help limited to the shared control envelope", async () => {
-    const program = new Command().name("openclaw");
+  it.each(["--help", "-h"])(
+    "keeps generic add help via %s limited to the shared control envelope",
+    async (helpFlag) => {
+      const program = new Command().name("openclaw");
 
-    await registerChannelsCli(program, ["node", "openclaw", "channels", "add", "--help"]);
+      await registerChannelsCli(program, ["node", "openclaw", "channels", "add", helpFlag]);
 
-    expect(getChannelAddOptionFlags(program)).toEqual([
-      "--channel <name>",
-      "--account <id>",
-      "--name <name>",
-    ]);
-    expect(listBundledPackageChannelMetadataMock).not.toHaveBeenCalled();
-  });
+      expect(getChannelAddOptionFlags(program)).toEqual([
+        "--channel <name>",
+        "--account <id>",
+        "--name <name>",
+      ]);
+      expect(listBundledPackageChannelMetadataMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("registers add help when channels reuse a long flag with different placeholders", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([

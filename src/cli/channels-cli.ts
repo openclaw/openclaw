@@ -19,6 +19,7 @@ type ChannelSetupCliOptionsModule = typeof import("../channels/plugins/cli-add-o
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
+const CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS = new Set(["--help", "-h"]);
 const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--channel", "--account", "--name"]);
 const CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES = ["--channel=", "--account=", "--name="];
 
@@ -189,6 +190,9 @@ export async function resolveChannelsAddChannelFromArgv(
       continue;
     }
     if (CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
+      continue;
+    }
+    if (CHANNEL_ADD_SHARED_BOOLEAN_OPTIONS.has(arg)) {
       continue;
     }
     if (arg.startsWith("-")) {
