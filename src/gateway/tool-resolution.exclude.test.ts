@@ -166,6 +166,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "conversations_turn",
       "nodes",
       "computer",
+      "mobile_ui",
       "openclaw",
     ]);
     expect(args.inheritedToolDenylist).toEqual([
@@ -179,6 +180,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "conversations_turn",
       "nodes",
       "computer",
+      "mobile_ui",
       "openclaw",
     ]);
   });

@@ -95,6 +95,7 @@ import {
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
 import {
+  ObserverDigestHistory,
   pickFreshestObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
@@ -466,9 +467,10 @@ class ChatPane extends OpenClawLightDomElement {
       }
     | undefined;
   private readonly lastVisibleBoardDock = new Map<string, VisibleBoardDock>();
-  private swarmBoardSnapshot: BoardViewSnapshot | null = null;
-  private swarmBoardSnapshotBase: BoardSnapshot | null = null;
-  private swarmBoardSnapshotRequest = 0;
+  private readonly observerDigestHistory = new ObserverDigestHistory();
+  private builtinBoardSnapshot: BoardViewSnapshot | null = null;
+  private builtinBoardSnapshotBase: BoardSnapshot | null = null;
+  private builtinBoardSnapshotRequest = 0;
   private readonly sessionDiscussionStates = new Map<string, SessionDiscussionState>();
   private readonly sessionDiscussionOpenUrls = new Map<string, string | null>();
   private readonly sessionDiscussionProbes = new Set<string>();
@@ -498,7 +500,7 @@ class ChatPane extends OpenClawLightDomElement {
         () => this.resolveBoardProvider(),
         (provider, notify) =>
           provider.snapshot$.subscribe(() => {
-            this.refreshSwarmBoardSnapshot();
+            this.refreshBuiltinBoardSnapshot();
             notify();
           }),
       )
@@ -1688,30 +1690,42 @@ class ChatPane extends OpenClawLightDomElement {
     return normalized === "main" ? buildAgentMainSessionKey({ agentId: "main" }) : normalized;
   }
 
-  private refreshSwarmBoardSnapshot(): void {
+  private refreshBuiltinBoardSnapshot(): void {
     const state = this.state;
     if (!state) {
       return;
     }
-    const request = ++this.swarmBoardSnapshotRequest;
+    const request = ++this.builtinBoardSnapshotRequest;
     const sessions = state.sessionsResult?.sessions ?? [];
-    void import("../../lib/board/swarm-dashboard.ts").then(({ withSwarmWidget }) => {
-      if (request !== this.swarmBoardSnapshotRequest) {
+    void import("../../lib/board/builtin-dashboard.ts").then(({ withBuiltinDashboardWidgets }) => {
+      if (request !== this.builtinBoardSnapshotRequest) {
         return;
       }
       const currentBase = this.resolveBoardProvider().snapshot$.value;
-      this.swarmBoardSnapshotBase = currentBase;
-      this.swarmBoardSnapshot = withSwarmWidget(currentBase, sessions);
+      const sessionKey = this.resolveBoardSessionKey(currentBase.sessionKey);
+      this.builtinBoardSnapshotBase = currentBase;
+      this.builtinBoardSnapshot = withBuiltinDashboardWidgets(
+        currentBase,
+        sessions,
+        this.observerDigestHistory.get(sessionKey),
+      );
       this.requestUpdate();
     });
+  }
+
+  private recordObserverDigest(digest: SessionObserverDigest): void {
+    const sessionKey = this.resolveBoardSessionKey(digest.sessionKey);
+    if (this.observerDigestHistory.record({ ...digest, sessionKey })) {
+      this.refreshBuiltinBoardSnapshot();
+    }
   }
 
   private resolveBoardView(): ResolvedBoardView {
     const provider = this.resolveBoardProvider();
     const baseSnapshot = provider.snapshot$.value;
     const snapshot: BoardViewSnapshot =
-      this.swarmBoardSnapshotBase === baseSnapshot
-        ? (this.swarmBoardSnapshot ?? baseSnapshot)
+      this.builtinBoardSnapshotBase === baseSnapshot
+        ? (this.builtinBoardSnapshot ?? baseSnapshot)
         : baseSnapshot;
     const hasBoard = snapshot.tabs.length > 0 || snapshot.widgets.length > 0;
     const sessionKey = this.resolveBoardSessionKey(snapshot.sessionKey);
@@ -2033,7 +2047,23 @@ class ChatPane extends OpenClawLightDomElement {
     state.lastError = null;
     state.chatError = null;
     if (preservesBoard) {
+      // Captured before the await: the reset can land and refresh session rows
+      // mid-flight, and invalidating the post-reset id would eat fresh digests.
+      const preResetSessionId = state.sessionsResult?.sessions.find((row) =>
+        areUiSessionKeysEquivalent(row.key, previousSessionKey),
+      )?.sessionId;
       const resetResult = await clearChatHistory(state);
+      if (resetResult !== "failed") {
+        // A reset reuses the session key; prior-run digests must not survive
+        // into the fresh conversation or keep injecting the observer card.
+        this.observerDigestHistory.markReset(
+          this.resolveBoardSessionKey(previousSessionKey),
+          preResetSessionId,
+        );
+        // Recompute rather than null: the builtin snapshot also carries the
+        // swarm card, which must survive an observer-only invalidation.
+        this.refreshBuiltinBoardSnapshot();
+      }
       return resetResult !== "failed";
     }
     const nextSessionKey = await sessions.create({
@@ -2327,6 +2357,9 @@ class ChatPane extends OpenClawLightDomElement {
           if (event.event === "task.suggestion" && event.payload) {
             this.handleTaskSuggestionEvent(event.payload as TaskSuggestionEvent);
           }
+          if (event.event === "session.observer" && event.payload) {
+            this.recordObserverDigest(event.payload as SessionObserverDigest);
+          }
           handlePageGatewayEvent(state, event);
         }
       }),
@@ -2473,7 +2506,14 @@ class ChatPane extends OpenClawLightDomElement {
     state.sessionsResultAgentId = stateValue.agentId;
     state.sessionsLoading = stateValue.loading;
     state.sessionsError = stateValue.error;
-    this.refreshSwarmBoardSnapshot();
+    for (const row of stateValue.result?.sessions ?? []) {
+      const sessionKey = this.resolveBoardSessionKey(row.key);
+      this.observerDigestHistory.sync(sessionKey, row.sessionId);
+      if (row.observerDigest) {
+        this.observerDigestHistory.hydrate(sessionKey, row.observerDigest, row.sessionId);
+      }
+    }
+    this.refreshBuiltinBoardSnapshot();
     const selectedSession = stateValue.result?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
@@ -3654,6 +3694,13 @@ class ChatPane extends OpenClawLightDomElement {
         ? renderBoardSessionSurface({
             snapshot: board.snapshot,
             sessions: state.sessionsResult?.sessions ?? [],
+            observer: {
+              activeRunId: observerRunId,
+              digests: this.observerDigestHistory.get(
+                this.resolveBoardSessionKey(board.snapshot.sessionKey),
+              ),
+              lastReadAt: selectedSession?.lastReadAt,
+            },
             activeTabId: board.activeTabId,
             dock: board.dock,
             reopenDock: board.reopenDock,
