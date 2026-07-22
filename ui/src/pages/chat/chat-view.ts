@@ -105,9 +105,7 @@ export type ChatProps = {
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
   messages: unknown[];
-  historyPagination?: {
-    loading: boolean;
-  };
+  historyPagination?: { loading: boolean };
   sideChatTurns?: ChatSideResult[];
   sideChatPending?: ChatSideResultPending | null;
   sideChatHidden?: boolean;
