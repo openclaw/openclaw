@@ -247,7 +247,7 @@ describe("check-openclaw-package-tarball", () => {
     );
 
     withTarball(
-      ["dist/index.js"],
+      ["dist/index.js", ...Object.keys(largeEntryList)],
       { "dist/index.js": "export {};\n", ...largeEntryList },
       (tarball) => {
         const listing = spawnSync("tar", ["-tf", tarball], {
