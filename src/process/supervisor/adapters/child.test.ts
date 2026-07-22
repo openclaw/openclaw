@@ -4,7 +4,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
@@ -257,6 +257,35 @@ describe("createChildAdapter", () => {
     ]);
     expect(Buffer.concat(chunks).toString("utf8")).toBe("selected-secret");
     expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+  });
+
+  it("captures child close while secret input delivery is still pending", async () => {
+    const { child, emitClose } = createStubChild();
+    const secretStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        emitClose(0);
+        setImmediate(callback);
+      },
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["claude", "-p"],
+      stdinMode: "pipe-open",
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.from("selected-secret"),
+      },
+    });
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
   });
 
   it("uses overlapped I/O for a Windows secret descriptor", async () => {

@@ -127,15 +127,6 @@ export async function createChildAdapter(params: {
       : [],
   });
 
-  if (params.secretInput) {
-    try {
-      await writeSecretInputToChild(spawned.child, params.secretInput);
-    } catch (error) {
-      spawned.child.kill("SIGKILL");
-      throw error;
-    }
-  }
-
   const child = spawned.child as ChildProcessWithoutNullStreams;
   // Pipe errors can arrive before output subscribers attach. Close remains
   // responsible for decoder flush and Windows drain completion.
@@ -409,6 +400,15 @@ export async function createChildAdapter(params: {
     }
     settleWait(resolveObservedExitState(childCloseState));
   });
+
+  if (params.secretInput) {
+    try {
+      await writeSecretInputToChild(spawned.child, params.secretInput);
+    } catch (error) {
+      spawned.child.kill("SIGKILL");
+      throw error;
+    }
+  }
 
   const wait = async () => {
     if (waitResult) {
