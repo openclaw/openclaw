@@ -364,12 +364,14 @@ describe("AppSidebar agent chip", () => {
 
     sidebar.connected = false;
     sidebar.offline = true;
+    sidebar.queuedOutboxCount = 3;
     sidebar.lastError = "gateway unavailable?token=sidebar-secret";
     await sidebar.updateComplete;
     const button = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
     expect(button?.textContent).toContain("Offline");
     expect(button?.textContent).toContain("Reconnecting…");
-    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now");
+    expect(button?.textContent).toContain("3 queued");
+    expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     expect(button?.getAttribute("aria-live")).toBe("polite");
     // The redacted error detail moved from a native title to the shared
     // tooltip's accessible description.
