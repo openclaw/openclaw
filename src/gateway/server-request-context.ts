@@ -20,7 +20,10 @@ type GatewayRequestContextClient = GatewayClient & {
 
 type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
-  runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
+  runtimeState: Pick<
+    GatewayServerLiveState,
+    "cronState" | "configReloader" | "publisherFeedRefresh"
+  >;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
   ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
@@ -159,6 +162,7 @@ export function createGatewayRequestContext(
     getRuntimeConfig: params.getRuntimeConfig,
     notifyPluginMetadataChanged: () =>
       params.runtimeState.configReloader.notifyPluginMetadataChanged(),
+    getPublisherFeedRefresh: () => params.runtimeState.publisherFeedRefresh,
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
     ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,

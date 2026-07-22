@@ -47,6 +47,7 @@ import type {
   GatewayApprovalEventPublisher,
   GatewayRecoveryRuntime,
 } from "../server-instance-runtime.types.js";
+import type { GatewayPublisherFeedRefresh } from "../server-publisher-feed-refresh.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
@@ -150,6 +151,7 @@ export type GatewayRequestContext = {
   cronStorePath: string;
   getRuntimeConfig: () => OpenClawConfig;
   notifyPluginMetadataChanged: () => void;
+  getPublisherFeedRefresh?: () => GatewayPublisherFeedRefresh;
   getMcpAppSandboxPort?: () => number | undefined;
   ensureSandboxHostPort?: () => Promise<number>;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;

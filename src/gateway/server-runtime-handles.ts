@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import type { GatewayHotReloadStatus } from "./config-reload-status.types.js";
+import type { GatewayPublisherFeedRefresh } from "./server-publisher-feed-refresh.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 // Mutable server handles track timers, sidecars, subscriptions, and service
@@ -35,6 +36,7 @@ export type GatewayServerMutableState = {
   skillsRefreshDelayMs: number;
   skillsChangeUnsub: () => void;
   channelHealthMonitor: ChannelHealthMonitor | null;
+  publisherFeedRefresh: GatewayPublisherFeedRefresh;
   stopModelPricingRefresh: () => void;
   mcpServer: { port: number; close: () => Promise<void> } | undefined;
   configReloader: GatewayConfigReloaderHandle;
@@ -44,6 +46,23 @@ export type GatewayServerMutableState = {
   lifecycleUnsub: (() => void) | null;
   taskUnsub: (() => void) | null;
 };
+
+function createInertPublisherFeedRefresh(): GatewayPublisherFeedRefresh {
+  const status = {
+    running: false,
+    stopped: true,
+    lastStartedAt: null,
+    lastCompletedAt: null,
+    lastFollowCount: 0,
+    lastRefreshedCount: 0,
+    lastFailedCount: 0,
+  };
+  return {
+    runNow: async () => ({ ...status }),
+    status: () => ({ ...status }),
+    stop: () => {},
+  };
+}
 
 /** Creates gateway mutable state with inert handles that are safe to stop before startup finishes. */
 export function createGatewayServerMutableState(): GatewayServerMutableState {
@@ -74,6 +93,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: () => {},
     channelHealthMonitor: null as ChannelHealthMonitor | null,
+    publisherFeedRefresh: createInertPublisherFeedRefresh(),
     stopModelPricingRefresh: () => {},
     mcpServer: undefined as { port: number; close: () => Promise<void> } | undefined,
     configReloader: {

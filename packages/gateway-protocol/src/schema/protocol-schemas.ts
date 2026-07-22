@@ -424,6 +424,20 @@ import {
 } from "./plugins.js";
 import { NodeInvokeProtocolSchemas } from "./protocol-schemas-node-invoke.js";
 import { NodePresenceProtocolSchemas } from "./protocol-schemas-node-presence.js";
+import {
+  PublisherFeedFollowSchema,
+  PublisherFeedRefreshStatusSchema,
+  PublisherFeedsFollowParamsSchema,
+  PublisherFeedsFollowResultSchema,
+  PublisherFeedsListParamsSchema,
+  PublisherFeedsListResultSchema,
+  PublisherFeedsRefreshParamsSchema,
+  PublisherFeedsRefreshResultSchema,
+  PublisherFeedsStatusParamsSchema,
+  PublisherFeedsStatusResultSchema,
+  PublisherFeedsUnfollowParamsSchema,
+  PublisherFeedsUnfollowResultSchema,
+} from "./publisher-feeds.js";
 import { PushTestParamsSchema, PushTestResultSchema } from "./push.js";
 import {
   QuestionAnswersSchema,
@@ -1051,6 +1065,18 @@ export const ProtocolSchemas = {
   SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
+  PublisherFeedFollow: PublisherFeedFollowSchema,
+  PublisherFeedRefreshStatus: PublisherFeedRefreshStatusSchema,
+  PublisherFeedsListParams: PublisherFeedsListParamsSchema,
+  PublisherFeedsListResult: PublisherFeedsListResultSchema,
+  PublisherFeedsFollowParams: PublisherFeedsFollowParamsSchema,
+  PublisherFeedsFollowResult: PublisherFeedsFollowResultSchema,
+  PublisherFeedsUnfollowParams: PublisherFeedsUnfollowParamsSchema,
+  PublisherFeedsUnfollowResult: PublisherFeedsUnfollowResultSchema,
+  PublisherFeedsRefreshParams: PublisherFeedsRefreshParamsSchema,
+  PublisherFeedsRefreshResult: PublisherFeedsRefreshResultSchema,
+  PublisherFeedsStatusParams: PublisherFeedsStatusParamsSchema,
+  PublisherFeedsStatusResult: PublisherFeedsStatusResultSchema,
   // Scheduler, logs, approval, plugin control, device, chat, and lifecycle events.
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
