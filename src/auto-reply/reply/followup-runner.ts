@@ -35,7 +35,11 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -592,7 +596,7 @@ export function createFollowupRunner(params: {
       const resolveCurrentVerboseLevel = () => {
         if (replySessionKey && storePath) {
           try {
-            const level = loadSessionEntry({
+            const level = loadSessionEntryReadOnly({
               storePath,
               sessionKey: replySessionKey,
             })?.verboseLevel;

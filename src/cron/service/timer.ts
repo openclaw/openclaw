@@ -1,7 +1,7 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import pMap, { pMapSkip } from "p-map";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
@@ -491,7 +491,7 @@ function resolveMainSessionCronDeliveryContext(
     return undefined;
   }
   try {
-    const sessionEntry = loadSessionEntry({
+    const sessionEntry = loadSessionEntryReadOnly({
       agentId,
       sessionKey: targetSessionKey,
       storePath,

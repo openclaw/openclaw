@@ -5,7 +5,7 @@ import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-
 import { filterHeartbeatTranscriptArtifacts } from "../../../auto-reply/heartbeat-filter.js";
 import { resolveStorePath } from "../../../config/sessions/paths.js";
 import {
-  listSessionEntries,
+  listSessionEntriesReadOnly,
   updateSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
@@ -119,7 +119,7 @@ export async function prepareEmbeddedAttemptHistory(input: {
       });
       const suspension = sessionEntry?.quotaSuspension;
       if (sessionEntry && suspension?.state === "resuming") {
-        const subagents = listSessionEntries({ storePath, clone: false })
+        const subagents = listSessionEntriesReadOnly({ storePath, clone: false })
           .map(({ entry }) => entry)
           .filter((entry) => entry.spawnedBy === sessionEntry.sessionId)
           .map((entry) => ({

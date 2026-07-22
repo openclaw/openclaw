@@ -5,7 +5,7 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/h
 import { stableStringify } from "../../../agents/stable-stringify.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -343,7 +343,7 @@ function resolveFollowupTranscriptTarget(source: FollowupRun) {
   const storePath = resolveStorePath(source.run.config.session?.store, {
     agentId: source.run.agentId,
   });
-  const sessionEntry = loadSessionEntry({
+  const sessionEntry = loadSessionEntryReadOnly({
     storePath,
     sessionKey,
     clone: false,

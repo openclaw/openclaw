@@ -30,6 +30,7 @@ import {
   listSessionsFromStore,
   listSessionsFromStoreAsync,
   loadSessionEntry,
+  loadSessionEntryReadOnly,
   migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
@@ -1860,6 +1861,29 @@ describe("gateway session utils", () => {
         const loaded = loadSessionEntry("agent:main:main", { clone: false });
 
         expect(loaded.entry).toEqual({ sessionId: "sess-main", updatedAt: 7 });
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntryReadOnly does not materialize a missing configured agent", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-entry-read-only-", async ({ stateDir }) => {
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }, { id: "missing" }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntryReadOnly("agent:missing:main");
+
+        expect(loaded.entry).toBeUndefined();
+        expect(fs.existsSync(path.join(stateDir, "agents", "missing"))).toBe(false);
       });
     } finally {
       resetConfigRuntimeState();

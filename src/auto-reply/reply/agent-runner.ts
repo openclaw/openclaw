@@ -36,7 +36,11 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  loadSessionEntryReadOnly,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import {
   formatSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
@@ -1127,7 +1131,7 @@ function refreshSessionEntryFromStore(params: {
     return fallbackEntry;
   }
   try {
-    const latestEntry = loadSessionEntry({
+    const latestEntry = loadSessionEntryReadOnly({
       storePath,
       sessionKey,
     });

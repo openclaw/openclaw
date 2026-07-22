@@ -18,7 +18,7 @@ import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveDefaultSessionStorePath, resolveStorePath } from "./paths.js";
 import {
   listSessionEntries,
-  loadSessionEntry,
+  loadSessionEntryReadOnly,
   loadTranscriptEvents,
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
@@ -269,7 +269,7 @@ function resolveSessionConversationTranscriptTarget(params: {
   }
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
-  const entry = loadSessionEntry({ agentId, sessionKey, storePath });
+  const entry = loadSessionEntryReadOnly({ agentId, sessionKey, storePath });
   if (!entry?.sessionId) {
     return {};
   }

@@ -43,6 +43,7 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../session-utils.js", () => ({
   loadSessionEntry: loadGatewaySessionEntry,
+  loadSessionEntryReadOnly: loadGatewaySessionEntry,
 }));
 
 import { cronHandlers } from "./cron.js";
