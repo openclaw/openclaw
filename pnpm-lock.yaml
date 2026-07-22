@@ -2186,7 +2186,11 @@ importers:
         specifier: 2.4.0
         version: 2.4.0
 
-  packages/normalization-core: {}
+  packages/normalization-core:
+    dependencies:
+      libphonenumber-js:
+        specifier: 1.13.9
+        version: 1.13.9
 
   packages/plugin-package-contract: {}
 
@@ -6373,6 +6377,9 @@ packages:
   libopus-wasm@0.2.0:
     resolution: {integrity: sha512-x/2Gu1/C6L3IICY09zyfp984AWiOYjn53u4WfdY3yh+3KTzMN8Xkm77q3lenWMVIk5SnSzjGEkQT+VQMFHLBHQ==}
     engines: {node: '>=20'}
+
+  libphonenumber-js@1.13.9:
+    resolution: {integrity: sha512-VNS5vWMM7r0P66BYv+TQJATxExEgLxN+34hfHDVhDkUsGAE4cRg0shCNSLTXNKm7nIUscC7AfB51TjxEeF7msQ==}
 
   libsignal@6.0.0:
     resolution: {integrity: sha512-d/5V3YFtDljbFMufz4ncyUYGYhJl+vzAe+c2EFFBQ6bz1h8Q3IOMEGXYMzlibU60I+e8GagMMpji18iez3P1hA==}
@@ -12861,6 +12868,8 @@ snapshots:
   kysely@0.29.2: {}
 
   libopus-wasm@0.2.0: {}
+
+  libphonenumber-js@1.13.9: {}
 
   libsignal@6.0.0:
     dependencies:

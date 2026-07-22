@@ -1888,6 +1888,7 @@ public struct SystemInfoResult: Codable, Sendable {
     public let disktotalbytes: Int?
     public let diskavailablebytes: Int?
     public let diskpath: String?
+    public let defaultagentutilitymodel: AnyCodable?
 
     public init(
         machinename: String,
@@ -1909,7 +1910,8 @@ public struct SystemInfoResult: Codable, Sendable {
         memoryfreebytes: Int,
         disktotalbytes: Int? = nil,
         diskavailablebytes: Int? = nil,
-        diskpath: String? = nil)
+        diskpath: String? = nil,
+        defaultagentutilitymodel: AnyCodable? = nil)
     {
         self.machinename = machinename
         self.hostname = hostname
@@ -1931,6 +1933,7 @@ public struct SystemInfoResult: Codable, Sendable {
         self.disktotalbytes = disktotalbytes
         self.diskavailablebytes = diskavailablebytes
         self.diskpath = diskpath
+        self.defaultagentutilitymodel = defaultagentutilitymodel
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1954,6 +1957,7 @@ public struct SystemInfoResult: Codable, Sendable {
         case disktotalbytes = "diskTotalBytes"
         case diskavailablebytes = "diskAvailableBytes"
         case diskpath = "diskPath"
+        case defaultagentutilitymodel = "defaultAgentUtilityModel"
     }
 }
 
