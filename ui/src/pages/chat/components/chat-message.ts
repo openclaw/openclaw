@@ -47,9 +47,9 @@ import {
   formatDurationCompact,
   formatTimeAgo,
 } from "../../../lib/format.ts";
-import "../../../components/tooltip.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
+import "../../../components/tooltip.ts";
 import {
   openExternalUrlSafe,
   reserveExternalWindowForDeferredNavigation,
@@ -59,6 +59,7 @@ import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 import {
@@ -651,6 +652,7 @@ type StreamGroupOptions = {
   authToken?: string | null;
   planStatus?: PlanStatus | null;
   planActive?: boolean;
+  startupPhase?: ChatRunStartupPhase;
   waitingApproval?: boolean;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
@@ -688,7 +690,7 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
       <div class="chat-group-messages">
         ${parts.map((part) =>
           part.kind === "reading-indicator"
-            ? renderChatWorkingIndicator(part, opts.waitingApproval === true)
+            ? renderChatWorkingIndicator(part, opts.waitingApproval === true, opts.startupPhase)
             : part.kind === "question"
               ? renderQuestionStreamPart(part, opts)
               : part.kind === "plan"

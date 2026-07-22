@@ -696,6 +696,40 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("projects typed run startup status onto the active chat stream", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-startup", {
+      sessionKey: "session-startup",
+      clientRunId: "client-startup",
+      agentId: "main",
+    });
+
+    handler({
+      runId: "run-startup",
+      seq: 1,
+      stream: "run_status",
+      ts: Date.now(),
+      data: { phase: "preparing_context" },
+    });
+
+    expect(chatBroadcastCalls(broadcast)).toEqual([
+      [
+        "chat",
+        {
+          runId: "client-startup",
+          sessionKey: "session-startup",
+          agentId: "main",
+          seq: 1,
+          state: "status",
+          phase: "preparing_context",
+        },
+        { dropIfSlow: true, sessionKeys: ["session-startup"] },
+      ],
+    ]);
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    expect(agentBroadcastCalls(broadcast)).toHaveLength(1);
+  });
+
   it("coalesces assistant agent events under the chat delta throttle", () => {
     let now = 10_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -4543,7 +4577,7 @@ describe("agent event handler", () => {
     expect(payload.sessionKey).toBe("session-from-event");
   });
 
-  it("remaps chat-linked tool runId for non-full verbose payloads", () => {
+  it("remaps chat-linked tool-start runId to the client run before UI delivery", () => {
     const { broadcastToConnIds, chatRunState, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-tool-remap",
     });
@@ -4564,10 +4598,10 @@ describe("agent event handler", () => {
       stream: "tool",
       ts: Date.now(),
       data: {
-        phase: "result",
+        phase: "start",
         name: "exec",
         toolCallId: "tool-remap-1",
-        result: { content: [{ type: "text", text: "secret" }] },
+        args: { command: "true" },
       },
     });
 
