@@ -28,7 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Complete contribution record
 
-This audited record covers the complete v2026.6.33..496c84bf6159bd09ce2c2a261c354ea641757b19 history: 24 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
+This audited record covers the complete v2026.6.33..496c84bf6159bd09ce2c2a261c354ea641757b19 history plus release-validation backports: 25 merged PRs. The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.
 
 #### Pull requests
 
@@ -56,6 +56,7 @@ This audited record covers the complete v2026.6.33..496c84bf6159bd09ce2c2a261c35
 - **PR #103793** Thanks @yetval.
 - **PR #94016** Related #94008. Thanks @sheyanmin and @thomasthelen-kibeauftragter.
 - **PR #112406** Thanks @vincentkoc.
+- **PR #107938** Thanks @steipete.
 ## 2026.6.33
 
 ### Highlights
