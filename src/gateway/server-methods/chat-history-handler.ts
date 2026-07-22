@@ -163,10 +163,13 @@ async function buildChatStartupMetadataResult(params: {
     return undefined;
   }
   try {
-    if (params.modelCatalog.agentId !== params.agentId) {
+    const { buildModelsListResult } = await import("./models-list-result.js");
+    if (
+      params.modelCatalog.agentId !== params.agentId ||
+      params.context.getRuntimeConfig() !== params.cfg
+    ) {
       return undefined;
     }
-    const { buildModelsListResult } = await import("./models-list-result.js");
     return await buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
