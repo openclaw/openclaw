@@ -49,14 +49,15 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
         key: "test-key",
       } as const)
     : undefined;
+  const loadAuthProfileStoreForRuntime = (() => ({
+    version: 1,
+    profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
+  })) as never;
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
     config,
     undefined,
     {
-      loadAuthProfileStoreForRuntime: (() => ({
-        version: 1,
-        profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
-      })) as never,
+      loadAuthProfileStoreForRuntime,
     },
   );
   if (!configuredRoute) {
@@ -87,6 +88,7 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
     configuredRoute.provider === "claude-cli" ? "anthropic" : undefined,
   ].filter((id, index, ids): id is string => Boolean(id) && ids.indexOf(id) === index);
   const deps: SystemAgentVerifiedInferenceDeps = {
+    loadAuthProfileStoreForRuntime,
     ensureAuthProfileStore: (() => ({
       version: 1,
       profiles: profileId ? { [profileId]: credential } : {},
