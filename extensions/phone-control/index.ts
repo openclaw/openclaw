@@ -18,7 +18,8 @@ import {
   type OpenClawPluginService,
 } from "./runtime-api.js";
 
-type ArmGroup = "camera" | "screen" | "computer" | "mobile-ui" | "writes" | "all";
+const ARM_GROUPS = ["camera", "screen", "computer", "mobile-ui", "writes", "all"] as const;
+type ArmGroup = (typeof ARM_GROUPS)[number];
 
 type ArmStateFileV1 = {
   version: 1;
@@ -94,7 +95,7 @@ function resolveCommandsForGroup(group: ArmGroup): string[] {
 }
 
 function formatGroupList(): string {
-  return ["camera", "screen", "computer", "mobile-ui", "writes", "all"].join(", ");
+  return ARM_GROUPS.join(", ");
 }
 
 function parseDurationMs(input: string | undefined): number | null {
@@ -385,15 +386,8 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   if (!value) {
     return null;
   }
-  if (
-    value === "camera" ||
-    value === "screen" ||
-    value === "computer" ||
-    value === "mobile-ui" ||
-    value === "writes" ||
-    value === "all"
-  ) {
-    return value;
+  if ((ARM_GROUPS as readonly string[]).includes(value)) {
+    return value as ArmGroup;
   }
   return null;
 }
