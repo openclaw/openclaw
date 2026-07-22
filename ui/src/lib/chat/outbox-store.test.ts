@@ -142,7 +142,7 @@ describe("stored outbox summaries", () => {
     for (const [gatewayUrl, key, agentId] of [
       ["ws://a.test/control", "workspace-a", "alpha"],
       ["ws://b.test/control", "workspace-b", "beta"],
-    ]) {
+    ] as const) {
       sessionStorage.setItem(
         `openclaw.control.chatComposer.v2:${encodeURIComponent(gatewayUrl)}`,
         JSON.stringify({

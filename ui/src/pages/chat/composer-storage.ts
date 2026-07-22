@@ -2,7 +2,7 @@ import {
   observeDraftRevision,
   rememberDraftRevision,
 } from "../../lib/chat/outbox-store-draft-state.ts";
-import { type ComposerStorageTarget } from "../../lib/chat/outbox-store.ts";
+import type { ComposerStorageTarget } from "../../lib/chat/outbox-store.ts";
 import {
   readStoredOutboxStore,
   writeStoredOutboxStore as writeComposerStore,
