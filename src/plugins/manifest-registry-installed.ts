@@ -466,7 +466,10 @@ function normalizePackageChannelSetup(setup: unknown): PluginPackageChannel["set
       continue;
     }
     try {
-      if (resolveChannelSetupFieldCliAttributeName(flags) !== key) {
+      if (
+        resolveChannelSetupFieldCliAttributeName(flags) !== key ||
+        (negatedFlags && resolveChannelSetupFieldCliAttributeName(negatedFlags) !== key)
+      ) {
         continue;
       }
     } catch {

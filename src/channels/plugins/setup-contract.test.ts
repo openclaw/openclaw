@@ -43,6 +43,40 @@ describe("defineChannelSetupContract", () => {
     expect(contract.metadata.fields[0]?.key).toBe("apiToken");
   });
 
+  it("requires negated flags to resolve to the same field key", () => {
+    expect(() =>
+      defineChannelSetupContract({
+        fields: {
+          tenant: {
+            kind: "boolean",
+            cli: {
+              flags: "--tenant",
+              negatedFlags: "--no-other",
+              description: "Tenant mode",
+            },
+          },
+        },
+        adapter: { applyAccountConfig: ({ cfg }) => cfg },
+      }),
+    ).toThrow('Channel setup field "tenant" must match camelCased long flag name "other"');
+
+    expect(() =>
+      defineChannelSetupContract({
+        fields: {
+          useEnv: {
+            kind: "boolean",
+            cli: {
+              flags: "--use-env",
+              negatedFlags: "--no-use-env",
+              description: "Use environment credentials",
+            },
+          },
+        },
+        adapter: { applyAccountConfig: ({ cfg }) => cfg },
+      }),
+    ).not.toThrow();
+  });
+
   it("parses channel-owned fields and gives adapters inferred input types", () => {
     const applyAccountConfig = vi.fn(
       ({

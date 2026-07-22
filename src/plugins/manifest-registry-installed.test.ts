@@ -527,6 +527,24 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
                     description: "Installed credential",
                   },
                 },
+                {
+                  key: "tenant",
+                  kind: "boolean",
+                  cli: {
+                    flags: "--tenant",
+                    negatedFlags: "--no-other",
+                    description: "Mismatched tenant toggle",
+                  },
+                },
+                {
+                  key: "useEnv",
+                  kind: "boolean",
+                  cli: {
+                    flags: "--use-env",
+                    negatedFlags: "--no-use-env",
+                    description: "Use environment credentials",
+                  },
+                },
               ],
             },
           },
@@ -574,6 +592,15 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
             flags: "--tenant <tenant>",
             negatedFlags: "--no-tenant",
             description: "Installed tenant",
+          },
+        },
+        {
+          key: "useEnv",
+          kind: "boolean",
+          cli: {
+            flags: "--use-env",
+            negatedFlags: "--no-use-env",
+            description: "Use environment credentials",
           },
         },
       ],

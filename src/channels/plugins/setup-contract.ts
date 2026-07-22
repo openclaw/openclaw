@@ -60,6 +60,23 @@ export function resolveChannelSetupFieldCliAttributeName(flags: string): string 
   return option.long ? option.attributeName() : undefined;
 }
 
+function assertChannelSetupFieldCliAttributeName(key: string, flags: string): void {
+  let attributeName: string | undefined;
+  try {
+    attributeName = resolveChannelSetupFieldCliAttributeName(flags);
+  } catch {
+    throw new Error(`Channel setup field "${key}" has invalid CLI flags "${flags}".`);
+  }
+  if (!attributeName) {
+    throw new Error(`Channel setup field "${key}" must declare a long CLI flag.`);
+  }
+  if (attributeName !== key) {
+    throw new Error(
+      `Channel setup field "${key}" must match camelCased long flag name "${attributeName}" from "${flags}".`,
+    );
+  }
+}
+
 type ChannelSetupFieldValue<Field extends ChannelSetupField> = Field extends {
   kind: "boolean";
 }
@@ -345,19 +362,9 @@ export function defineChannelSetupContract<const Fields extends Record<string, C
   // The field key crosses serialized projections, Commander parsing, and parseInput.
   // Match Commander's attribute name so all three stay aligned by construction.
   for (const [key, field] of fieldEntries) {
-    let attributeName: string | undefined;
-    try {
-      attributeName = resolveChannelSetupFieldCliAttributeName(field.cli.flags);
-    } catch {
-      throw new Error(`Channel setup field "${key}" has invalid CLI flags "${field.cli.flags}".`);
-    }
-    if (!attributeName) {
-      throw new Error(`Channel setup field "${key}" must declare a long CLI flag.`);
-    }
-    if (attributeName !== key) {
-      throw new Error(
-        `Channel setup field "${key}" must match camelCased long flag name "${attributeName}" from "${field.cli.flags}".`,
-      );
+    assertChannelSetupFieldCliAttributeName(key, field.cli.flags);
+    if (field.cli.negatedFlags) {
+      assertChannelSetupFieldCliAttributeName(key, field.cli.negatedFlags);
     }
   }
   const adapter =
