@@ -47,25 +47,21 @@ fi
 # uncommitted work in this checkout, and an update must never eat it.
 if ! git diff --quiet || ! git diff --cached --quiet; then
   log "working tree has local changes; commit, stash, or restore them first:"
-  git status --short | head -20
+  status_lines="$(git status --short)"
+  head -20 <<<"$status_lines"
   exit 1
 fi
 
-# Untracked files outside the build dirs cannot change what the updated commit
-# builds, so they only warn (servers accumulate harmless scratch files). Inside
-# the dirs the clean build deletes, untracked work would be silently destroyed,
-# so those fail closed. Accepted tradeoff: a build that globs untracked inputs
-# keeps them, same as before the update.
+# dist, dist-runtime, and .artifacts/tsgo-cache are wholly disposable build
+# outputs: every update deletes and regenerates them, tracked or not — never
+# store anything there. Untracked files elsewhere are kept and only warned
+# about (servers accumulate harmless scratch files). Accepted tradeoff: an
+# untracked file a build tool happens to read stays in effect, same as before
+# the update; operators own what they leave in the checkout.
 untracked="$(git ls-files --others --exclude-standard)"
 if [ -n "$untracked" ]; then
-  doomed="$(printf '%s\n' "$untracked" | grep -E '^(dist|dist-runtime|\.artifacts/tsgo-cache)(/|$)' || true)"
-  if [ -n "$doomed" ]; then
-    log "untracked files inside build dirs would be deleted by the clean build; move them first:"
-    printf '%s\n' "$doomed" | head -10
-    exit 1
-  fi
   log "note: untracked files present (kept, not deployed):"
-  printf '%s\n' "$untracked" | head -10
+  head -10 <<<"$untracked"
 fi
 
 log "fetching ${remote}/main"
@@ -92,6 +88,8 @@ pnpm install --frozen-lockfile
 # Incremental builds have left stale hashed chunks and config validators from
 # the previous revision in dist; a clean build is the reliable path.
 log "clean building"
+# No trailing slashes: if a path is a symlink, rm removes the link itself and
+# never traverses into the target.
 rm -rf dist dist-runtime .artifacts/tsgo-cache
 pnpm build
 
