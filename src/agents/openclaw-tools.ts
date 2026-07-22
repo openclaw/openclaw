@@ -20,7 +20,11 @@ import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentIds,
+} from "./agent-scope.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
@@ -296,7 +300,9 @@ export function createOpenClawTools(
   );
   const requesterSessionKey = options?.agentSessionKey;
   const requesterTurnRunId = options?.runId;
-  const imageToolAgentDir = options?.agentDir;
+  const imageToolAgentDir =
+    options?.agentDir ??
+    (resolvedConfig ? resolveAgentDir(resolvedConfig, sessionAgentId) : undefined);
   const imageTool = resolveImageToolFactoryAvailable({
     config: availabilityConfig ?? resolvedConfig,
     agentDir: imageToolAgentDir,
@@ -324,7 +330,7 @@ export function createOpenClawTools(
   const imageGenerateTool = optionalMediaTools.imageGenerate
     ? createImageGenerateTool({
         config: options?.config,
-        agentDir: options?.agentDir,
+        agentDir: imageToolAgentDir,
         authProfileStore: options?.authProfileStore,
         agentSessionKey: mediaGenerationAgentSessionKey,
         requesterOrigin: deliveryContext ?? undefined,

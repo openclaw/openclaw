@@ -1,6 +1,7 @@
 // Verifies createOpenClawTools wires shared config and context into the TTS tool.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentDir } from "./agent-scope.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -333,6 +334,53 @@ describe("createOpenClawTools media generation session wiring", () => {
     expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
       expect.objectContaining({
         agentSessionKey: "agent:main:slack:channel:C123",
+      }),
+    );
+  });
+
+  it("infers the image generation agent directory from the session agent", () => {
+    const config = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+        },
+        list: [{ id: "reader" }],
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:reader:telegram:direct:123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: resolveAgentDir(config, "reader"),
+      }),
+    );
+  });
+
+  it("preserves an explicit image generation agent directory", () => {
+    const config = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentDir: "/tmp/openclaw-explicit-agent",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw-explicit-agent",
       }),
     );
   });
