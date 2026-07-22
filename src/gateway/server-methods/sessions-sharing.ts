@@ -92,6 +92,30 @@ function requireManageableTarget(params: {
   return { target, role };
 }
 
+// Manager authorization runs before the exclusive queue, so a session can be
+// reset or recreated under the same key while a mutation waits. Requiring the
+// same session instance and a still-valid manager role inside the queue keeps
+// a stale owner from mutating the replacement session's sharing state.
+function requireCurrentManagedTarget(params: {
+  cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
+  client: GatewayClient | null;
+  authorized: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
+}): NonNullable<ReturnType<typeof resolveSessionSharingTarget>> {
+  const current = resolveSessionSharingTarget({
+    cfg: params.cfg,
+    sessionKey: params.authorized.canonicalKey,
+    agentId: params.authorized.agentId,
+  });
+  if (!current || current.entry.sessionId !== params.authorized.entry.sessionId) {
+    throw new Error("session changed before sharing mutation");
+  }
+  const role = resolveSessionSharingRole({ client: params.client, target: current });
+  if (!canManageSessionSharing(role)) {
+    throw new Error("session ownership changed before sharing mutation");
+  }
+  return current;
+}
+
 async function knownSessionIdentities(params: {
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   actor: SessionSharingIdentity;
@@ -207,14 +231,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       return;
     }
     await runExclusiveSharingMutation(managed.target, async () => {
-      const current = resolveSessionSharingTarget({
-        cfg,
-        sessionKey: managed.target.canonicalKey,
-        agentId: managed.target.agentId,
-      });
-      if (!current) {
-        throw new Error("session disappeared before visibility mutation");
-      }
+      const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
       const previous = resolveSessionVisibility(current.entry);
       if (previous === visibility) {
         return;
@@ -337,12 +354,13 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown identity"));
       return;
     }
-    const scope = {
-      agentId: managed.target.agentId,
-      sessionKey: managed.target.canonicalKey,
-      storePath: managed.target.storePath,
-    };
     await runExclusiveSharingMutation(managed.target, async () => {
+      const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
+      const scope = {
+        agentId: current.agentId,
+        sessionKey: current.canonicalKey,
+        storePath: current.storePath,
+      };
       const now = Date.now();
       const added = addSessionMember(scope, {
         identityId: params.identityId,
@@ -355,7 +373,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       try {
         await appendSharingAudit({
           cfg,
-          target: managed.target,
+          target: current,
           text: `${actor.label ?? actor.id} added ${params.identityId} as a session member.`,
           now,
         });
@@ -365,11 +383,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       publishSharingChange({
         context,
-        agentId: managed.target.agentId,
+        agentId: current.agentId,
         event: {
           action: "member-added",
-          sessionKey: managed.target.canonicalKey,
-          agentId: managed.target.agentId,
+          sessionKey: current.canonicalKey,
+          agentId: current.agentId,
           actor,
           identityId: params.identityId,
           ts: now,
@@ -405,12 +423,13 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
     if (!managed) {
       return;
     }
-    const scope = {
-      agentId: managed.target.agentId,
-      sessionKey: managed.target.canonicalKey,
-      storePath: managed.target.storePath,
-    };
     await runExclusiveSharingMutation(managed.target, async () => {
+      const current = requireCurrentManagedTarget({ cfg, client, authorized: managed.target });
+      const scope = {
+        agentId: current.agentId,
+        sessionKey: current.canonicalKey,
+        storePath: current.storePath,
+      };
       const removed = removeSessionMember(scope, params.identityId);
       if (!removed) {
         return;
@@ -420,7 +439,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       try {
         await appendSharingAudit({
           cfg,
-          target: managed.target,
+          target: current,
           text: `${actor.label ?? actor.id} removed ${params.identityId} from session members.`,
           now,
         });
@@ -434,11 +453,11 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
       }
       publishSharingChange({
         context,
-        agentId: managed.target.agentId,
+        agentId: current.agentId,
         event: {
           action: "member-removed",
-          sessionKey: managed.target.canonicalKey,
-          agentId: managed.target.agentId,
+          sessionKey: current.canonicalKey,
+          agentId: current.agentId,
           actor,
           identityId: params.identityId,
           ts: now,
