@@ -3364,23 +3364,18 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.agent-scope-control__select {
+.agent-scope-control openclaw-agent-select {
   min-width: 150px;
   max-width: min(240px, 40vw);
-  height: 34px;
-  padding: 0 30px 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  color: var(--text);
-  background: var(--bg-elevated);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
 }
 
-.agent-scope-control__select:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
+.agent-scope-control .agent-select__trigger {
+  min-height: 34px;
+  border-color: var(--border);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 @media (max-width: 640px) {
@@ -3388,7 +3383,7 @@ td.data-table-key-col {
     display: none;
   }
 
-  .agent-scope-control__select {
+  .agent-scope-control openclaw-agent-select {
     min-width: 128px;
     max-width: 44vw;
   }
@@ -3480,10 +3475,27 @@ td.data-table-key-col {
   object-fit: cover;
 }
 
-.agent-select__avatar--text {
+.agent-select__avatar--text,
+.agent-select__avatar--icon {
   background: var(--secondary);
+  color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+}
+
+.agent-select__avatar--text::before {
+  content: attr(data-avatar);
+}
+
+.agent-select__avatar--icon svg,
+.agent-select__footer-icon svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .agent-select__badge {
@@ -3510,12 +3522,35 @@ td.data-table-key-col {
   background: var(--border);
 }
 
-.agent-select__option-label {
+.agent-select__option-copy {
+  display: grid;
   flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+
+.agent-select__option-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-select__option-description {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-select__footer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
 }
 
 .agent-select__option .agent-select__avatar {
