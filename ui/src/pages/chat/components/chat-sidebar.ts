@@ -91,6 +91,7 @@ type SessionDiscussionSidebarContent = {
   kind: "session-discussion";
   sessionKey: string;
   canOpen: boolean;
+  openUrl?: string | null;
   loadInfo: SessionDiscussionInfoLoader;
   openDiscussion: SessionDiscussionOpener;
   onStateChange: SessionDiscussionStateListener;
@@ -523,6 +524,8 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           props.allowExternalEmbedUrls ?? false,
         )
       : null;
+  const discussionOpenUrl =
+    content?.kind === "session-discussion" ? (content.openUrl ?? null) : null;
   const title =
     content?.kind === "canvas"
       ? content.title?.trim() || "Render Preview"
@@ -541,16 +544,33 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
     <div class="sidebar-panel">
       <div class="sidebar-header">
         <div class="sidebar-title">${title}</div>
-        <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
-          <button
-            @click=${props.onClose}
-            class="btn"
-            type="button"
-            aria-label=${t("chat.detailPanel.close")}
-          >
-            ${icons.x}
-          </button>
-        </openclaw-tooltip>
+        <div class="sidebar-header__actions">
+          ${discussionOpenUrl
+            ? html`
+                <openclaw-tooltip .content=${t("chat.sessionDiscussion.openExternal")}>
+                  <a
+                    class="btn btn--ghost btn--icon"
+                    href=${discussionOpenUrl}
+                    target="_blank"
+                    rel="noopener"
+                    aria-label=${t("chat.sessionDiscussion.openExternal")}
+                  >
+                    ${icons.externalLink}
+                  </a>
+                </openclaw-tooltip>
+              `
+            : nothing}
+          <openclaw-tooltip .content=${t("chat.detailPanel.close")}>
+            <button
+              @click=${props.onClose}
+              class="btn"
+              type="button"
+              aria-label=${t("chat.detailPanel.close")}
+            >
+              ${icons.x}
+            </button>
+          </openclaw-tooltip>
+        </div>
       </div>
       <div
         class="sidebar-content ${content?.kind === "session-discussion"

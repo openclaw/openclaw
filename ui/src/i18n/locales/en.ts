@@ -4289,7 +4289,6 @@ export const en: TranslationMap = {
       loading: "Loading discussion…",
       opening: "Opening discussion…",
       requiresWriteAccess: "Operator write access is required to open this discussion.",
-      opened: "Session discussion",
       openExternal: "Open discussion in a new tab",
       frameTitle: "Session discussion",
       unavailable: "This discussion cannot be embedded.",
