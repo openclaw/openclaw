@@ -35,17 +35,23 @@ function listValidatedSyntheticAuthProviderRefs(params: {
   env: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly string[] {
-  const result = params.metadataSnapshot
-    ? {
-        source: params.metadataSnapshot.registrySource,
-        snapshot: { plugins: params.metadataSnapshot.plugins },
-        diagnostics: params.metadataSnapshot.registryDiagnostics,
-      }
-    : loadPluginRegistrySnapshotWithMetadata({
-        config: params.cfg,
-        workspaceDir: params.workspaceDir,
-        env: params.env,
-      });
+  if (params.metadataSnapshot) {
+    if (
+      params.metadataSnapshot.registryDiagnostics.length > 0 ||
+      (params.metadataSnapshot.registrySource !== "persisted" &&
+        params.metadataSnapshot.registrySource !== "provided")
+    ) {
+      return [];
+    }
+    return params.metadataSnapshot.plugins
+      .filter((plugin) => plugin.enabled)
+      .flatMap((plugin) => plugin.syntheticAuthRefs ?? []);
+  }
+  const result = loadPluginRegistrySnapshotWithMetadata({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
   if (
     result.diagnostics.length > 0 ||
     (result.source !== "persisted" && result.source !== "provided")
