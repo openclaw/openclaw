@@ -1796,7 +1796,7 @@ test("sessions.create stores selected global sessions in the requested agent sto
     "sessions.changed",
     expect.objectContaining({ sessionKey: "global", agentId: "work", reason: "create" }),
     new Set(["conn-1"]),
-    { dropIfSlow: true },
+    { dropIfSlow: true, agentId: "work", sessionKeys: ["global"] },
   );
   testState.sessionStorePath = undefined;
   testState.sessionConfig = undefined;
