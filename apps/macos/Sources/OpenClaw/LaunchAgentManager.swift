@@ -50,8 +50,44 @@ enum LaunchAgentManager {
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
+    private static let profileEnvKeys: Set<String> = [
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_STATE_DIR",
+    ]
+
     static func plistContents(bundlePath: String) -> String {
-        """
+        self.plistContents(
+            bundlePath: bundlePath,
+            path: CommandResolver.preferredPaths().joined(separator: ":"),
+            environment: ProcessInfo.processInfo.environment)
+    }
+
+    static func plistContents(bundlePath: String, environment: [String: String]) -> String {
+        let path = environment["PATH"] ?? "/usr/bin:/bin"
+        return self.plistContents(bundlePath: bundlePath, path: path, environment: environment)
+    }
+
+    static func plistContents(bundlePath: String, path: String, environment: [String: String]) -> String {
+        var envDict: [(String, String)] = []
+        // Always include PATH.
+        envDict.append(("PATH", path))
+        // Include profile env vars when non-empty.
+        for key in self.profileEnvKeys.sorted() {
+            if let value = environment[key], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                envDict.append((key, self.xmlEscape(value)))
+            }
+        }
+        // Include profile env vars when non-empty.
+        for key in self.profileEnvKeys.sorted() {
+            if let value = environment[key], !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                envDict.append((key, self.xmlEscape(value)))
+            }
+        }
+        let envXml = envDict.map { key, value in
+            "            <key>\(key)</key>\n            <string>\(value)</string>"
+        }.joined(separator: "\n")
+
+        return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -68,8 +104,7 @@ enum LaunchAgentManager {
           <true/>
           <key>EnvironmentVariables</key>
           <dict>
-            <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+        \(envXml)
           </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
@@ -78,6 +113,16 @@ enum LaunchAgentManager {
         </dict>
         </plist>
         """
+    }
+
+    /// Escapes XML special characters for plist string values.
+    private static func xmlEscape(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     @discardableResult
