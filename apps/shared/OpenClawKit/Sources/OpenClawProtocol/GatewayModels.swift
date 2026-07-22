@@ -11375,17 +11375,20 @@ public struct ToolsCatalogResult: Codable, Sendable {
     public let profiles: [ToolCatalogProfile]
     public let groups: [ToolCatalogGroup]
     public let tools: [ToolCatalogEntry]?
+    public let runtimemethods: [[String: AnyCodable]]?
 
     public init(
         agentid: String,
         profiles: [ToolCatalogProfile],
         groups: [ToolCatalogGroup],
-        tools: [ToolCatalogEntry]? = nil)
+        tools: [ToolCatalogEntry]? = nil,
+        runtimemethods: [[String: AnyCodable]]? = nil)
     {
         self.agentid = agentid
         self.profiles = profiles
         self.groups = groups
         self.tools = tools
+        self.runtimemethods = runtimemethods
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -11393,6 +11396,7 @@ public struct ToolsCatalogResult: Codable, Sendable {
         case profiles
         case groups
         case tools
+        case runtimemethods = "runtimeMethods"
     }
 }
 
