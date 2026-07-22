@@ -1752,10 +1752,7 @@ describeLive("live models (profile keys)", () => {
         ? []
         : collectProviderApiKeys("anthropic");
       if (anthropicKeys.length > 0) {
-        vi.stubEnv(
-          "ANTHROPIC_API_KEY",
-          expectDefined(anthropicKeys[0], "Anthropic API key 1"),
-        );
+        vi.stubEnv("ANTHROPIC_API_KEY", expectDefined(anthropicKeys[0], "Anthropic API key 1"));
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
