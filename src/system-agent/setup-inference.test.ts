@@ -1105,6 +1105,9 @@ describe("activateSetupInference", () => {
         cleanupCliLiveSessionOnRunEnd: true,
       }),
     );
+    // CLI backends reject any defined runtime toolsAllow (cli-runner prepare
+    // fails closed), so the CLI probe must rely on disableTools alone.
+    expect(runCliAgent.mock.calls[0]?.[0]).not.toHaveProperty("toolsAllow");
     const probeConfig = runCliAgent.mock.calls[0]?.[0].config;
     expect(probeConfig?.agents?.list?.find((agent) => agent.id === "openclaw")).toEqual({
       id: "openclaw",
@@ -1963,6 +1966,10 @@ describe("activateSetupInference", () => {
         sessionId: expect.stringMatching(/^probe-setup-inference-/),
         sessionKey: expect.stringMatching(/^temp:setup-inference:probe-setup-inference-/),
         lane: "session:probe-setup-inference:anthropic",
+        disableTools: true,
+        // Setup probe must fail closed: no tools, empty allowlist. Defense-in-depth
+        // against the Codex native tool-surface gate (GHSA).
+        toolsAllow: [],
       }),
     );
     const probeCall = runEmbeddedAgent.mock.calls[0]?.[0];

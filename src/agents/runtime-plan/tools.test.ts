@@ -70,6 +70,29 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
   });
 
+  it("skips plan and provider normalization for empty tool catalogs", () => {
+    // Zero-tool turns must not cold-load a provider runtime plugin just to
+    // transform an empty list.
+    const normalize = vi.fn();
+    const runtimePlan = {
+      tools: {
+        normalize,
+        logDiagnostics: vi.fn(),
+      },
+    } as unknown as AgentRuntimePlan;
+
+    expect(
+      normalizeAgentRuntimeTools({
+        runtimePlan,
+        tools: [],
+        provider: "openai",
+      }),
+    ).toEqual([]);
+    expect(normalizeAgentRuntimeTools({ tools: [], provider: "openai" })).toEqual([]);
+    expect(normalize).not.toHaveBeenCalled();
+    expect(mocks.normalizeProviderToolSchemas).not.toHaveBeenCalled();
+  });
+
   it("quarantines unreadable tools before RuntimePlan normalization", () => {
     // Broken plugin tool getters are removed before plan/provider normalization
     // so one bad tool cannot crash the full runtime tool list.

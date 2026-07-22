@@ -122,6 +122,12 @@ export function normalizeAgentRuntimeTools<
     TSchemaType,
     TResult
   >[];
+  // Empty catalogs have nothing to normalize. Skip runtime-plan/provider
+  // normalization so zero-tool turns never cold-load a provider runtime
+  // plugin just to transform an empty list.
+  if (normalizableTools.length === 0) {
+    return normalizableTools;
+  }
   const normalized =
     params.runtimePlan?.tools.normalize(normalizableTools, planContext) ??
     normalizeProviderToolSchemas({

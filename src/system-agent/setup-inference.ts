@@ -3501,6 +3501,9 @@ async function runSetupInferenceTest(params: {
         messageChannel: "openclaw",
         messageProvider: "openclaw",
         executionMode: "side-question",
+        // No toolsAllow here: CLI backends reject any defined runtime allowlist
+        // (cli-runner prepare), and resolveToolFreeCliSetupError above already
+        // restricts this probe to backends with a hard tool-free mode.
         disableTools: true,
         cleanupCliLiveSessionOnRunEnd: true,
         onSuccessfulAuthBinding: (binding) => {
@@ -3546,6 +3549,10 @@ async function runSetupInferenceTest(params: {
           ? resolveSetupInferenceProbeStreamParams(plan.agentHarnessRuntimeOverride)
           : {}),
         disableTools: true,
+        // Defense-in-depth: an explicit empty allowlist forces the Codex
+        // app-server native tool surface to fail closed even if a caller ever
+        // drops the disableTools gate. The setup probe never needs tools.
+        toolsAllow: [],
         modelRun: true,
         messageChannel: "openclaw",
         messageProvider: "openclaw",

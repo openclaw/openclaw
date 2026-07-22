@@ -30,21 +30,33 @@ export async function resolveCodexProviderWebSearchSupportForClient(params: {
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
-  const modelProviderOverride = params.modelProviderOverride?.trim().toLowerCase();
-  if (modelProviderOverride === "openai") {
-    return "supported";
-  }
-  if (modelProviderOverride) {
-    // Codex's capability RPC only reports the configured provider, not a
-    // thread-scoped override. Keep managed search for overrides whose hosted
-    // capability cannot be proven from the configured-provider response.
-    return "unsupported";
+  const overrideSupport = resolveCodexModelProviderOverrideWebSearchSupport(
+    params.modelProviderOverride,
+  );
+  if (overrideSupport) {
+    return overrideSupport;
   }
   try {
     return await readConfiguredProviderWebSearchSupport(params);
   } catch {
     return "unknown";
   }
+}
+
+function resolveCodexModelProviderOverrideWebSearchSupport(
+  modelProviderOverride: string | undefined,
+): CodexNativeWebSearchSupport | undefined {
+  const override = modelProviderOverride?.trim().toLowerCase();
+  if (override === "openai") {
+    return "supported";
+  }
+  if (override) {
+    // Codex's capability RPC only reports the configured provider, not a
+    // thread-scoped override. Keep managed search for overrides whose hosted
+    // capability cannot be proven from the configured-provider response.
+    return "unsupported";
+  }
+  return undefined;
 }
 
 export async function resolveCodexProviderWebSearchSupport(params: {
@@ -57,6 +69,14 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
+  // Known overrides resolve without leasing a client; only the
+  // configured-provider probe needs a live app-server request.
+  const overrideSupport = resolveCodexModelProviderOverrideWebSearchSupport(
+    params.modelProviderOverride,
+  );
+  if (overrideSupport) {
+    return overrideSupport;
+  }
   let client: CodexAppServerClient | undefined;
   try {
     client = await params.clientFactory({

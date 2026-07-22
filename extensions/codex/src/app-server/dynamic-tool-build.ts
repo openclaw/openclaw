@@ -508,6 +508,9 @@ export function shouldEnableCodexAppServerNativeToolSurface(
   if (isCodexMemoryFlushRun(params)) {
     return false;
   }
+  // disableTools is the turn-level kill switch: it must win over wildcard
+  // allowlists and exec-host policy, or a disabled turn could still hand
+  // Codex native code mode its shell/file surface.
   if (params.disableTools) {
     return false;
   }

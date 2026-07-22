@@ -1533,6 +1533,10 @@ describe("Codex app-server dynamic tool build", () => {
     params.toolsAllow = undefined;
 
     expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+
+    // Wildcard allowlists must not override the kill switch.
+    params.toolsAllow = ["*"];
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
   });
 
   it("keeps Codex native tool surfaces when the effective exec target is node", () => {
