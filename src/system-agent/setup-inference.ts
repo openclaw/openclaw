@@ -1051,9 +1051,7 @@ async function buildTestPlan(params: {
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<
-  SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }
-> {
+}): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;

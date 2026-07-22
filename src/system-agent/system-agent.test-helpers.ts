@@ -1,7 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
-import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
-import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 // OpenClaw test helpers build runtime environments for rescue tests.
 import {
   fingerprintAuthProfileOwnerShape,
@@ -9,6 +7,8 @@ import {
   fingerprintResolvedAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
@@ -42,24 +42,21 @@ export async function createSystemAgentVerifiedInferenceTestFixture(
         ...(selectedProfileId ? { authProfileId: selectedProfileId } : {}),
       })
     : undefined;
-  const selectedCredential = selectedProfileId && selection
-    ? ({
-        type: "api_key",
-        provider: cliExecutionProvider ?? selection.runtimeProvider ?? selection.provider,
-        key: "test-key",
-      } as const)
-    : undefined;
+  const selectedCredential =
+    selectedProfileId && selection
+      ? ({
+          type: "api_key",
+          provider: cliExecutionProvider ?? selection.runtimeProvider ?? selection.provider,
+          key: "test-key",
+        } as const)
+      : undefined;
   const loadAuthProfileStoreForRuntime = (() => ({
     version: 1,
     profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
   })) as never;
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
-    config,
-    undefined,
-    {
-      loadAuthProfileStoreForRuntime,
-    },
-  );
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
+    loadAuthProfileStoreForRuntime,
+  });
   if (!configuredRoute) {
     throw new Error("missing test route");
   }
