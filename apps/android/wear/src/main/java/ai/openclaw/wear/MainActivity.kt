@@ -24,7 +24,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -57,15 +56,48 @@ internal enum class WearLaunchTarget(
 
 internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
 
+internal fun consumeWearLaunchTarget(intent: Intent?): WearLaunchTarget =
+  parseWearLaunchTarget(intent).also {
+    intent?.removeExtra(extraWearLaunchTarget)
+  }
+
+internal data class WearNavigationRequest(
+  val id: Int,
+  val target: WearLaunchTarget,
+)
+
 internal data class WearLaunchState(
-  val target: WearLaunchTarget = WearLaunchTarget.Chat,
-  val generation: Int = 0,
+  val initialTarget: WearLaunchTarget = WearLaunchTarget.Chat,
+  val navigationRequest: WearNavigationRequest? = null,
+  val nextRequestId: Int = 0,
 ) {
-  fun next(intent: Intent?): WearLaunchState =
-    WearLaunchState(
-      target = parseWearLaunchTarget(intent),
-      generation = generation + 1,
+  fun next(intent: Intent?): WearLaunchState {
+    val requestId = nextRequestId + 1
+    return copy(
+      navigationRequest =
+        WearNavigationRequest(
+          id = requestId,
+          target = consumeWearLaunchTarget(intent),
+        ),
+      nextRequestId = requestId,
     )
+  }
+
+  fun handled(requestId: Int): WearLaunchState = if (navigationRequest?.id == requestId) copy(navigationRequest = null) else this
+
+  companion object {
+    fun initial(intent: Intent?): WearLaunchState = WearLaunchState(initialTarget = consumeWearLaunchTarget(intent))
+  }
+}
+
+@Composable
+internal fun WearLaunchContent(
+  launchState: WearLaunchState,
+  content: @Composable (WearHomePage, WearNavigationRequest?) -> Unit,
+) {
+  // Warm launches are pager events. Keeping this composition identity stable preserves
+  // pending-reply, autospeak, and real-time UI state owned below this boundary.
+  content(launchState.initialTarget.initialPage, launchState.navigationRequest)
 }
 
 internal fun shouldRecreateForScreenshotMode(
@@ -86,19 +118,23 @@ class MainActivity : ComponentActivity() {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    launchState = WearLaunchState(target = parseWearLaunchTarget(intent))
     if (screenshotModeEnabled) {
       screenshotScene = parseWearScreenshotModeIntent(intent)
     }
+    launchState = WearLaunchState.initial(intent)
     setContent {
       val scene = screenshotScene
       if (scene == null) {
-        key(launchState.generation) {
+        WearLaunchContent(launchState) { initialPage, navigationRequest ->
           OpenClawWearApp(
             viewModel = viewModel,
             settingsStore = remember { WearSettingsStore(applicationContext) },
             speaker = remember { WearReplySpeaker(applicationContext) },
-            initialPage = launchState.target.initialPage,
+            initialPage = initialPage,
+            navigationRequest = navigationRequest,
+            onNavigationRequestHandled = { requestId ->
+              launchState = launchState.handled(requestId)
+            },
           )
         }
       } else {
@@ -138,6 +174,8 @@ internal fun OpenClawWearApp(
   settingsStore: WearSettingsStore,
   speaker: WearReplySpeaker,
   initialPage: WearHomePage = WearHomePage.Chat,
+  navigationRequest: WearNavigationRequest? = null,
+  onNavigationRequestHandled: (Int) -> Unit = {},
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
@@ -379,6 +417,8 @@ internal fun OpenClawWearApp(
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
         initialPage = initialPage,
+        navigationRequest = navigationRequest,
+        onNavigationRequestHandled = onNavigationRequestHandled,
         onTalk = {
           if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
           interaction = WearInteractionState.LISTENING
