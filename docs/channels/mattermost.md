@@ -67,6 +67,43 @@ Details: [Plugins](/tools/plugin)
 Self-hosted Mattermost on a private/LAN/tailnet address: outbound Mattermost API requests pass through an SSRF guard that blocks private and internal IPs by default. Opt in with `channels.mattermost.network.dangerouslyAllowPrivateNetwork: true` (per account: `channels.mattermost.accounts.<id>.network.dangerouslyAllowPrivateNetwork`).
 </Note>
 
+## Voice calls
+
+Mattermost direct-message calls can use the same OpenClaw session as typed messages. The bot joins a newly started DM call, uses Mattermost speaking events to delimit each utterance, transcribes it, runs a hidden agent turn, and plays the synthesized reply into the call. Neither the transcript nor the reply is posted to the Mattermost DM.
+
+Requirements:
+
+- Install and enable the Mattermost Calls plugin on the Mattermost server.
+- Configure batch speech-to-text under `tools.media.audio`; see [Audio and voice notes](/nodes/audio).
+- Configure a text-to-speech provider under `messages.tts`; see [Text-to-speech](/tools/tts). `messages.tts.auto` can remain off because call replies explicitly request speech.
+- Keep the same `dmPolicy` and `allowFrom` access controls used for typed DMs. Voice activity from an unauthorized sender is ignored.
+
+Enable calls for the default account:
+
+```json5
+{
+  channels: {
+    mattermost: {
+      voice: {
+        enabled: true,
+      },
+    },
+  },
+}
+```
+
+For a named account, use `channels.mattermost.accounts.<id>.voice.enabled`.
+
+Behavior and current limits:
+
+- Direct-message calls only. Channel and group calls are ignored.
+- One active DM call per Mattermost account. Starting another DM call moves the bot to the new call.
+- The Calls connection stays open across repeated speech turns and keeps about 1.5 seconds of audio pre-roll so the start of an utterance is retained.
+- Bot playback is excluded from capture to prevent self-transcription.
+- A call must start after the voice worker is enabled. If the Gateway starts while a call is already active, end and restart that call.
+- Reply audio is decoded through ffmpeg before WebRTC playback; ensure ffmpeg is available if call playback fails while TTS itself succeeds.
+- Native WebRTC prebuilds are available for macOS (arm64/x64), Linux (arm64/x64), and Windows (x64).
+
 ## Native slash commands
 
 Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash commands on every team the bot is a member of and receives callback POSTs on the gateway HTTP server.

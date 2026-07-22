@@ -41,6 +41,23 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts opt-in voice calling at top-level and per-account", () => {
+    const result = MattermostConfigSchema.safeParse({
+      voice: { enabled: true },
+      accounts: {
+        quiet: { voice: { enabled: false } },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown voice options", () => {
+    const result = MattermostConfigSchema.safeParse({
+      voice: { enabled: true, autoJoinChannels: true },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects dmPolicy="open" without wildcard allowFrom', () => {
     const result = MattermostConfigSchema.safeParse({
       dmPolicy: "open",
