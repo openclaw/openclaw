@@ -9,7 +9,6 @@ const execSyncMock = vi.fn();
 const CLI_CREDENTIALS_CACHE_TTL_MS = 15 * 60 * 1000;
 let readClaudeCliCredentialsCached: typeof import("./cli-credentials.js").readClaudeCliCredentialsCached;
 let readCodexCliActiveApiKey: typeof import("./cli-credentials.js").readCodexCliActiveApiKey;
-let readCodexCliApiKey: typeof import("./cli-credentials.js").readCodexCliApiKey;
 let readCodexCliCredentialsCached: typeof import("./cli-credentials.js").readCodexCliCredentialsCached;
 let readGeminiCliCredentialsCached: typeof import("./cli-credentials.js").readGeminiCliCredentialsCached;
 let readMiniMaxCliCredentialsCached: typeof import("./cli-credentials.js").readMiniMaxCliCredentialsCached;
@@ -65,7 +64,6 @@ describe("cli credentials", () => {
     ({
       readClaudeCliCredentialsCached,
       readCodexCliActiveApiKey,
-      readCodexCliApiKey,
       readCodexCliCredentialsCached,
       readGeminiCliCredentialsCached,
       readMiniMaxCliCredentialsCached,
@@ -601,22 +599,6 @@ describe("cli credentials", () => {
     );
 
     expect(readCodexAuth({ platform: "linux", execSync: execSyncMock })).toBeNull();
-    expect(readCodexCliApiKey({ codexHome: tempHome })).toEqual({
-      type: "api_key",
-      provider: "openai",
-      key: "sk-codex-api-key",
-    });
-  });
-
-  it("does not import a stale Codex API key when auth.json resolves to OAuth mode", () => {
-    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-oauth-mode-"));
-    fs.writeFileSync(
-      path.join(tempHome, "auth.json"),
-      JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: "stale-api-key" }),
-      "utf8",
-    );
-
-    expect(readCodexCliApiKey({ codexHome: tempHome })).toBeNull();
   });
 
   it("reads API-key auth from the active Codex Keychain store", () => {

@@ -697,18 +697,6 @@ function readCodexCliCredentials(options?: {
   return parseCodexOauthCredential(raw as Record<string, unknown>, fallbackExpiry);
 }
 
-/** Reads the API key only when Codex auth.json resolves to API-key mode. */
-export function readCodexCliApiKey(options?: {
-  codexHome?: string;
-}): CodexCliApiKeyCredential | null {
-  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
-  const raw = loadJsonFile(authPath);
-  if (!raw || typeof raw !== "object") {
-    return null;
-  }
-  return parseCodexApiKeyCredential(raw as Record<string, unknown>);
-}
-
 /** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */
 export function readCodexCliCredentialsCached(options?: {
   codexHome?: string;
