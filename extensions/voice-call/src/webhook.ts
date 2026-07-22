@@ -307,6 +307,17 @@ export class VoiceCallWebhookServer {
     return initialMessage.length > 0;
   }
 
+  private beginCallerSpeech(call: CallRecord, providerCallId: string): void {
+    if (
+      this.provider.name !== "twilio" ||
+      this.shouldSuppressBargeInForInitialMessage(call) ||
+      !this.manager.callerTurns.beginSpeech(call.callId)
+    ) {
+      return;
+    }
+    (this.provider as TwilioProvider).clearTtsQueue(providerCallId, "caller-speech");
+  }
+
   /**
    * Initialize media streaming with the selected realtime transcription provider.
    */
@@ -392,10 +403,8 @@ export class VoiceCallWebhookServer {
           return;
         }
 
-        // Clear TTS queue on barge-in (user started speaking, interrupt current playback)
-        if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
-        }
+        this.beginCallerSpeech(call, providerCallId);
+        this.manager.callerTurns.endSpeech(call.callId);
 
         // Create a speech event and process it through the manager
         const event: NormalizedEvent = {
@@ -410,14 +419,10 @@ export class VoiceCallWebhookServer {
         this.processEventWithAutoResponse(event);
       },
       onSpeechStart: (providerCallId) => {
-        if (this.provider.name !== "twilio") {
-          return;
-        }
         const call = this.manager.getCallByProviderCallId(providerCallId);
-        if (this.shouldSuppressBargeInForInitialMessage(call)) {
-          return;
+        if (call) {
+          this.beginCallerSpeech(call, providerCallId);
         }
-        (this.provider as TwilioProvider).clearTtsQueue(providerCallId);
       },
       onPartialTranscript: (callId, partial) => {
         this.logger.info(`Partial transcript ${callId} chars=${partial.length}`);
@@ -444,8 +449,17 @@ export class VoiceCallWebhookServer {
       },
       onDisconnect: (callId, streamSid) => {
         this.logger.info(`Media stream disconnected: ${callId} (${streamSid})`);
+        let hasRegisteredStream = false;
         if (this.provider.name === "twilio") {
-          (this.provider as TwilioProvider).unregisterCallStream(callId, streamSid);
+          const twilio = this.provider as TwilioProvider;
+          twilio.unregisterCallStream(callId, streamSid);
+          hasRegisteredStream = twilio.hasRegisteredStream(callId);
+        }
+        const call = this.manager.getCallByProviderCallId(callId);
+        if (call && !hasRegisteredStream) {
+          // A late disconnect from an older stream must not invalidate the
+          // response or caller state belonging to its replacement stream.
+          this.manager.callerTurns.clear(call.callId);
         }
 
         this.clearPendingDisconnectHangup(callId);
@@ -999,6 +1013,7 @@ export class VoiceCallWebhookServer {
       return;
     }
 
+    const responseToken = this.manager.callerTurns.beginResponse(callId);
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
       const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
@@ -1015,6 +1030,10 @@ export class VoiceCallWebhookServer {
         transcript: call.transcript,
         userMessage,
         onEarlyText: async (text) => {
+          if (!this.manager.callerTurns.isResponseCurrent(callId, responseToken)) {
+            this.logger.info(`Dropping stale early AI response ${callId} chars=${text.length}`);
+            return false;
+          }
           this.logger.info(`Early AI response queued ${callId} chars=${text.length}`);
           const speakResult = await this.manager.speak(callId, text, { listenAfterPlayback: true });
           return speakResult.success;
@@ -1026,12 +1045,19 @@ export class VoiceCallWebhookServer {
         return;
       }
 
+      if (!this.manager.callerTurns.isResponseCurrent(callId, responseToken)) {
+        this.logger.info(`Dropping stale AI response ${callId}`);
+        return;
+      }
+
       if (result.text && !result.deliveredEarly) {
         this.logger.info(`AI response delivered ${callId} chars=${result.text.length}`);
         await this.manager.speak(callId, result.text, { listenAfterPlayback: true });
       }
     } catch (err) {
       this.logger.error(`Auto-response error: ${String(err)}`);
+    } finally {
+      this.manager.callerTurns.finishResponse(callId, responseToken);
     }
   }
 }
