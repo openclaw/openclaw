@@ -29,6 +29,16 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     configFormDirty: false,
     nostrProfileFormState: null,
     nostrProfileAccountId: null,
+    selectedChannel: null,
+    wizard: { phase: "idle" },
+    wizardMultiselect: [],
+    setupBlockedByDirtyConfig: false,
+    onShowDetail: () => {},
+    onCloseDetail: () => {},
+    onStartSetup: () => {},
+    onWizardAnswer: () => {},
+    onWizardToggleMultiselect: () => {},
+    onWizardClose: () => {},
     onRefresh: () => {},
     onWhatsAppStart: () => {},
     onWhatsAppWait: () => {},
@@ -76,7 +86,7 @@ function renderWhatsAppButtons(params: {
   }
 
   const container = document.createElement("div");
-  render(renderWhatsAppCard({ props, whatsapp, accountCountLabel: null }), container);
+  render(renderWhatsAppCard({ props, whatsapp }), container);
   const buttons = Array.from(container.querySelectorAll("button"));
   return {
     buttons,
@@ -159,6 +169,36 @@ describe("channel display selectors", () => {
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
     expect(channelEnabled("quietchat", props)).toBe(false);
+  });
+});
+
+describe("WhatsApp status", () => {
+  function renderPhoneFact(self: WhatsAppStatus["self"]): string | undefined {
+    const whatsapp = createWhatsAppStatus({ linked: true, self });
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+      channels: { whatsapp },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    const container = document.createElement("div");
+    render(renderWhatsAppCard({ props, whatsapp }), container);
+    const label = Array.from(container.querySelectorAll("dt")).find(
+      (node) => node.textContent?.trim() === "Phone number",
+    );
+    return label?.nextElementSibling?.textContent?.trim();
+  }
+
+  it("renders readable phone identity with raw fallback and no JID fallback", () => {
+    expect(renderPhoneFact({ e164: "+4930123456", jid: "4930123456@s.whatsapp.net" })).toBe(
+      "Germany · +49 30 123456",
+    );
+    expect(renderPhoneFact({ e164: "not-a-phone", jid: "account@s.whatsapp.net" })).toBe(
+      "not-a-phone",
+    );
+    expect(renderPhoneFact({ jid: "account@s.whatsapp.net" })).toBeUndefined();
   });
 });
 

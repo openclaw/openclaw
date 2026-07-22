@@ -6,8 +6,10 @@ export * from "./sessions/goals.js";
 export * from "./sessions/artifacts.js";
 export * from "./sessions/metadata.js";
 export * from "./sessions/main-session.js";
+export type { MainRestartRecoveryState } from "./sessions/main-session-recovery.types.js";
 export * from "./sessions/main-session.runtime.js";
 export * from "./sessions/lifecycle.js";
+export * from "./sessions/legacy-store-readonly.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export {
@@ -16,15 +18,6 @@ export {
   patchSessionEntryWithKey,
   resetSessionEntryLifecycle,
   resolveSessionEntryCandidateTarget,
-  type CanonicalizeSessionEntryAliasesResult,
-  type DeleteSessionEntryLifecycleParams,
-  type DeleteSessionEntryLifecycleResult,
-  type ResolvedSessionEntryCandidateTarget,
-  type ResetSessionEntryLifecycleParams,
-  type ResetSessionEntryLifecycleResult,
-  type SessionEntryCandidateAccessScope,
-  type SessionLifecycleArchivedTranscript,
-  type SessionLifecycleStoreTarget,
 } from "./sessions/session-accessor.js";
 export * from "./sessions/session-key.js";
 export * from "./sessions/store.js";

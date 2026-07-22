@@ -40,7 +40,7 @@ final class ExecApprovalsGatewayPrompter {
 
     private func handle(push: GatewayPush) async {
         guard case let .event(evt) = push else { return }
-        guard evt.event == "exec.approval.requested" else { return }
+        guard evt.event == "exec.approval.requested" || evt.event == "openclaw.approval.requested" else { return }
         guard let payload = evt.payload else { return }
         do {
             let data = try JSONEncoder().encode(payload)
@@ -49,16 +49,33 @@ final class ExecApprovalsGatewayPrompter {
             // decision. If this Mac cannot present UI, leave the request
             // unresolved so the Gateway applies its current timeout fallback.
             guard self.shouldPresent(request: request) else { return }
-            guard let decision = ExecApprovalsPromptPresenter.prompt(request.request) else {
+            let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+            let (remainingMs, overflow) = request.expiresAtMs.subtractingReportingOverflow(nowMs)
+            guard !overflow, remainingMs > 0 else { return }
+            guard let decision = await ExecApprovalsPromptPresenter.prompt(
+                request.request,
+                timeoutMs: remainingMs)
+            else {
                 return
             }
-            try await GatewayConnection.shared.requestVoid(
-                method: .execApprovalResolve,
-                params: [
-                    "id": AnyCodable(request.id),
-                    "decision": AnyCodable(decision.rawValue),
-                ],
-                timeoutMs: 10000)
+            if evt.event == "openclaw.approval.requested" {
+                try await GatewayConnection.shared.requestVoid(
+                    method: .approvalResolve,
+                    params: [
+                        "id": AnyCodable(request.id),
+                        "kind": AnyCodable("system-agent"),
+                        "decision": AnyCodable(decision.rawValue),
+                    ],
+                    timeoutMs: 10000)
+            } else {
+                try await GatewayConnection.shared.requestVoid(
+                    method: .execApprovalResolve,
+                    params: [
+                        "id": AnyCodable(request.id),
+                        "decision": AnyCodable(decision.rawValue),
+                    ],
+                    timeoutMs: 10000)
+            }
         } catch {
             self.logger.error("exec approval handling failed \(error.localizedDescription, privacy: .public)")
         }

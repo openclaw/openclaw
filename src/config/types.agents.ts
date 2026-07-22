@@ -5,6 +5,7 @@ import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
   AgentModelEntryConfig,
+  AgentModelPolicyConfig,
   EmbeddedAgentExecutionContract,
   SubagentDelegationMode,
 } from "./types.agent-defaults.js";
@@ -96,6 +97,8 @@ export type AgentConfig = {
   agentRuntime?: AgentModelEntryConfig["agentRuntime"];
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Per-agent model override policy. Replaces the default policy when allow is present. */
+  modelPolicy?: AgentModelPolicyConfig;
   /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
   compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
@@ -144,8 +147,6 @@ export type AgentConfig = {
     /** Require explicit agentId in sessions_spawn (no default same-as-caller). */
     requireAgentId?: boolean;
   };
-  /** Optional outer run loop retry boundaries. */
-  runRetries?: AgentDefaultsConfig["runRetries"];
   /** Optional per-agent embedded OpenClaw overrides. */
   embeddedAgent?: {
     /** Optional per-agent execution contract override. */

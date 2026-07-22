@@ -5,7 +5,6 @@ import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { formatMs, formatRelativeTimestamp } from "../../../lib/format.ts";
 import type { SessionScopeHost } from "../../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import {
@@ -13,36 +12,19 @@ import {
   mergeTaskLists,
   normalizeTaskEventPayload,
   normalizeTasksCancelResult,
+  normalizeTasksGetResult,
   normalizeTasksListResult,
   partitionTasks,
   sortTasks,
-  taskDetail,
-  taskRuntimeLabel,
-  taskStatusChipClass,
-  taskStatusLabel,
-  taskTimestampMs,
-  taskTitle,
   type TaskSummary,
 } from "../../../lib/tasks/data.ts";
+import { renderTaskRow } from "./chat-background-task-row.ts";
+import { newestTaskSnapshot } from "./chat-background-tasks-shared.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 import { paneSessionAgentId } from "./chat-session-workspace.ts";
 
-export type BackgroundTasksProps = {
-  agentId: string;
-  collapsed: boolean;
-  connected: boolean;
-  canCancel: boolean;
-  loading: boolean;
-  error: string | null;
-  /** null until the first load for this agent finished. */
-  tasks: TaskSummary[] | null;
-  cancellingTaskIds: ReadonlySet<string>;
-  finishedCollapsed: boolean;
-  onToggleCollapsed: () => void;
-  onToggleFinished: () => void;
-  onRefresh: () => void;
-  onCancel: (taskId: string) => void;
-  onOpenSession: (sessionKey: string) => void;
-};
+export { STATUS_TONES } from "./chat-background-tasks-shared.ts";
+export type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
 
 type BackgroundTasksState = {
   agentId: string;
@@ -56,7 +38,14 @@ type BackgroundTasksState = {
   loading: boolean;
   pendingReload: boolean;
   requestId: number;
+  // wa-tooltip anchors by document id, so the status row's id must stay unique
+  // per pane: two panes on the same agent would otherwise cross-anchor.
+  statusRowId: string;
   tasks: TaskSummary[] | null;
+  selectedTaskId: string | null;
+  taskDetails: Map<string, TaskSummary>;
+  taskDetailErrors: Map<string, string>;
+  taskDetailLoadingIds: Set<string>;
 };
 
 export type BackgroundTasksHost = {
@@ -76,12 +65,15 @@ export type BackgroundTasksHost = {
 const ACTIVE_TASKS_LIMIT = 200;
 const RECENT_TASKS_LIMIT = 100;
 
+let nextStatusRowId = 0;
+
 function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksState {
   const agentId = paneSessionAgentId(host);
   const current = host.backgroundTasksState;
   if (current?.agentId === agentId) {
     return current;
   }
+  nextStatusRowId += 1;
   const next: BackgroundTasksState = {
     agentId,
     cancellingTaskIds: new Set(),
@@ -94,7 +86,12 @@ function getBackgroundTasksState(host: BackgroundTasksHost): BackgroundTasksStat
     loading: false,
     pendingReload: false,
     requestId: 0,
+    statusRowId: `chat-tasks-status-${nextStatusRowId}`,
     tasks: null,
+    selectedTaskId: null,
+    taskDetails: new Map(),
+    taskDetailErrors: new Map(),
+    taskDetailLoadingIds: new Set(),
   };
   host.backgroundTasksState = next;
   return next;
@@ -139,7 +136,10 @@ function loadBackgroundTasks(
       if (current !== state || current.requestId !== requestId) {
         return;
       }
-      current.tasks = mergeTaskLists(recent, active);
+      const merged = mergeTaskLists(recent, active);
+      current.tasks = sortTasks(
+        merged.map((task) => newestTaskSnapshot(task, current.taskDetails.get(task.id))),
+      );
       current.loadedClient = client;
     } catch (error) {
       const current = getBackgroundTasksState(host);
@@ -181,11 +181,17 @@ function taskMatchesAgentScope(task: TaskSummary, agentId: string): boolean {
  * agents are ignored; a registry restore forces a refetch. */
 export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: unknown) {
   const state = host.backgroundTasksState;
-  if (!state || state.tasks === null) {
+  if (!state) {
     return;
   }
   const event = normalizeTaskEventPayload(payload);
   if (!event) {
+    return;
+  }
+  if (state.tasks === null) {
+    // Activity arrived before the snapshot finished loading: fold it into a
+    // (re)load so collapsed panes still detect the new task in their badge.
+    loadBackgroundTasks(host, state, true);
     return;
   }
   if (event.action === "restored") {
@@ -197,14 +203,106 @@ export function handleBackgroundTasksEvent(host: BackgroundTasksHost, payload: u
       return;
     }
     state.tasks = state.tasks.filter((task) => task.id !== event.taskId);
+    if (state.selectedTaskId === event.taskId) {
+      state.selectedTaskId = null;
+    }
+    state.taskDetails.delete(event.taskId);
+    state.taskDetailErrors.delete(event.taskId);
+    state.taskDetailLoadingIds.delete(event.taskId);
     host.requestUpdate?.();
     return;
   }
   if (!taskMatchesAgentScope(event.task, state.agentId)) {
     return;
   }
-  state.tasks = sortTasks([event.task, ...state.tasks.filter((task) => task.id !== event.task.id)]);
+  const current = state.tasks.find((task) => task.id === event.task.id);
+  const detail = state.taskDetails.get(event.task.id);
+  let newest = current ? newestTaskSnapshot(current, event.task) : event.task;
+  newest = newestTaskSnapshot(newest, detail);
+  state.tasks = sortTasks([newest, ...state.tasks.filter((task) => task.id !== event.task.id)]);
+  if (detail) {
+    state.taskDetails = new Map(state.taskDetails).set(event.task.id, {
+      ...newest,
+      ...(detail.prompt ? { prompt: detail.prompt } : {}),
+    });
+  }
   host.requestUpdate?.();
+}
+
+async function loadBackgroundTaskDetail(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  task: TaskSummary,
+) {
+  const rowId = task.id;
+  const client = host.client;
+  if (
+    !client ||
+    !host.connected ||
+    state.taskDetails.has(rowId) ||
+    state.taskDetailLoadingIds.has(rowId)
+  ) {
+    return;
+  }
+  state.taskDetailLoadingIds = new Set(state.taskDetailLoadingIds).add(rowId);
+  const nextErrors = new Map(state.taskDetailErrors);
+  nextErrors.delete(rowId);
+  state.taskDetailErrors = nextErrors;
+  host.requestUpdate?.();
+  try {
+    const payload = await client.request("tasks.get", { taskId: rowId });
+    if (getBackgroundTasksState(host) !== state) {
+      return;
+    }
+    const detail = normalizeTasksGetResult(payload);
+    if (!detail || detail.id !== rowId) {
+      throw new Error(t("chat.backgroundTasks.detailFailed"));
+    }
+    const current = state.tasks?.find((candidate) => candidate.id === rowId);
+    // A delete event invalidates the in-flight lookup. Do not let its late
+    // response resurrect a registry entry that no longer exists.
+    if (!current) {
+      return;
+    }
+    const newest = newestTaskSnapshot(current, detail);
+    state.taskDetails = new Map(state.taskDetails).set(rowId, {
+      ...newest,
+      ...(detail.prompt ? { prompt: detail.prompt } : {}),
+    });
+    if (state.tasks) {
+      state.tasks = sortTasks([
+        newest,
+        ...state.tasks.filter((candidate) => candidate.id !== rowId),
+      ]);
+    }
+  } catch (error) {
+    if (getBackgroundTasksState(host) === state) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : t("chat.backgroundTasks.detailFailed");
+      state.taskDetailErrors = new Map(state.taskDetailErrors).set(rowId, message);
+    }
+  } finally {
+    if (getBackgroundTasksState(host) === state) {
+      const next = new Set(state.taskDetailLoadingIds);
+      next.delete(rowId);
+      state.taskDetailLoadingIds = next;
+    }
+    host.requestUpdate?.();
+  }
+}
+
+function toggleBackgroundTaskDetail(
+  host: BackgroundTasksHost,
+  state: BackgroundTasksState,
+  task: TaskSummary,
+) {
+  state.selectedTaskId = state.selectedTaskId === task.id ? null : task.id;
+  host.requestUpdate?.();
+  if (state.selectedTaskId === task.id) {
+    void loadBackgroundTaskDetail(host, state, task);
+  }
 }
 
 async function cancelBackgroundTask(
@@ -254,7 +352,7 @@ async function cancelBackgroundTask(
   }
 }
 
-export function toggleBackgroundTasks(host: BackgroundTasksHost) {
+function toggleBackgroundTasks(host: BackgroundTasksHost) {
   const state = getBackgroundTasksState(host);
   state.collapsed = !state.collapsed;
   host.requestUpdate?.();
@@ -262,7 +360,7 @@ export function toggleBackgroundTasks(host: BackgroundTasksHost) {
 
 export function createBackgroundTasksProps(
   host: BackgroundTasksHost,
-  opts: { onOpenSession: (sessionKey: string) => void },
+  opts: { narrowLayout?: boolean; onOpenSession: (sessionKey: string) => void },
 ): BackgroundTasksProps {
   const state = getBackgroundTasksState(host);
   if (!host.connected) {
@@ -270,8 +368,9 @@ export function createBackgroundTasksProps(
     // the loaded marker and the next connected render refetches the snapshot.
     state.loadedClient = null;
   }
+  // Load eagerly even while collapsed: the toggle badge is how running work
+  // gets detected at all, so it cannot wait for the rail to be opened first.
   if (
-    !state.collapsed &&
     host.connected &&
     !state.loading &&
     !state.error &&
@@ -281,13 +380,19 @@ export function createBackgroundTasksProps(
   }
   return {
     agentId: state.agentId,
+    statusRowId: state.statusRowId,
     collapsed: state.collapsed,
+    narrowLayout: opts.narrowLayout === true,
     connected: host.connected,
     // tasks.cancel needs operator.write; read-only operators get no button.
     canCancel: host.connected && hasOperatorWriteAccess(host.hello?.auth ?? null),
     loading: state.loading,
     error: state.error,
     tasks: state.tasks,
+    selectedTaskId: state.selectedTaskId,
+    taskDetails: state.taskDetails,
+    taskDetailErrors: state.taskDetailErrors,
+    taskDetailLoadingIds: state.taskDetailLoadingIds,
     cancellingTaskIds: state.cancellingTaskIds,
     finishedCollapsed: state.finishedCollapsed,
     onToggleCollapsed: () => toggleBackgroundTasks(host),
@@ -297,19 +402,19 @@ export function createBackgroundTasksProps(
     },
     onRefresh: () => loadBackgroundTasks(host, state, true),
     onCancel: (taskId) => void cancelBackgroundTask(host, state, taskId),
+    onToggleTask: (task) => toggleBackgroundTaskDetail(host, state, task),
     onOpenSession: opts.onOpenSession,
   };
 }
 
 /** Active-count badge shown on the collapsed-rail toggles; 0 until the task
  * list has loaded for the pane's agent. */
-export function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
+function backgroundTasksActiveCount(props: BackgroundTasksProps | undefined): number {
   return props?.tasks?.filter(isActiveTask).length ?? 0;
 }
 
 export function renderBackgroundTasksToggle(
   backgroundTasks: BackgroundTasksProps | undefined,
-  variant: "pane-header" | "floating",
 ): TemplateResult | typeof nothing {
   if (!backgroundTasks) {
     return nothing;
@@ -320,9 +425,7 @@ export function renderBackgroundTasksToggle(
   return html`
     <openclaw-tooltip .content=${label}>
       <button
-        class="${variant === "pane-header"
-          ? "btn btn--ghost btn--icon"
-          : "btn btn--sm btn--icon chat-tasks-open"} chat-tasks-toggle"
+        class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
         type="button"
         aria-label=${label}
         aria-expanded=${String(expanded)}
@@ -334,64 +437,6 @@ export function renderBackgroundTasksToggle(
           : nothing}
       </button>
     </openclaw-tooltip>
-  `;
-}
-
-function renderTaskRow(task: TaskSummary, props: BackgroundTasksProps): TemplateResult {
-  const active = isActiveTask(task);
-  const title = taskTitle(task);
-  const detail = taskDetail(task);
-  const timestamp = taskTimestampMs(
-    active ? (task.startedAt ?? task.createdAt) : (task.updatedAt ?? task.createdAt),
-  );
-  const transcriptSessionKey = task.childSessionKey ?? task.sessionKey;
-  const cancelling = props.cancellingTaskIds.has(task.id);
-  return html`
-    <div class="chat-tasks-rail__task" role="listitem" data-task-id=${task.id}>
-      <div class="chat-tasks-rail__task-head">
-        <openclaw-tooltip .content=${title}>
-          <span class="chat-tasks-rail__task-title">${title}</span>
-        </openclaw-tooltip>
-        ${active && props.canCancel
-          ? html`
-              <openclaw-tooltip .content=${t("chat.backgroundTasks.stopTask", { title })}>
-                <button
-                  class="chat-tasks-rail__task-stop"
-                  type="button"
-                  aria-label=${t("chat.backgroundTasks.stopTask", { title })}
-                  ?disabled=${cancelling || !props.connected}
-                  @click=${() => props.onCancel(task.taskId)}
-                >
-                  ${cancelling ? icons.loader : icons.stop}
-                </button>
-              </openclaw-tooltip>
-            `
-          : nothing}
-      </div>
-      <div class="chat-tasks-rail__task-meta">
-        <span class="chip ${taskStatusChipClass(task.status)}"
-          >${taskStatusLabel(task.status)}</span
-        >
-        <span class="chip">${taskRuntimeLabel(task)}</span>
-        ${timestamp > 0
-          ? html`<span class="chat-tasks-rail__task-time" title=${formatMs(timestamp)}
-              >${formatRelativeTimestamp(timestamp)}</span
-            >`
-          : nothing}
-      </div>
-      ${detail ? html`<div class="chat-tasks-rail__task-detail">${detail}</div>` : nothing}
-      ${transcriptSessionKey
-        ? html`
-            <button
-              class="chat-tasks-rail__task-transcript"
-              type="button"
-              @click=${() => props.onOpenSession(transcriptSessionKey)}
-            >
-              ${t("chat.backgroundTasks.viewTranscript")}
-            </button>
-          `
-        : nothing}
-    </div>
   `;
 }
 
@@ -449,7 +494,9 @@ export function renderBackgroundTasksRail(
               @click=${backgroundTasks.onToggleCollapsed}
             >
               <span class="nav-collapse-toggle__icon" aria-hidden="true"
-                >${icons.panelRightClose}</span
+                >${backgroundTasks.narrowLayout
+                  ? icons.panelBottomClose
+                  : icons.panelRightClose}</span
               >
             </button>
           </openclaw-tooltip>

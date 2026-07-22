@@ -3,6 +3,41 @@ import OpenClawKit
 import Testing
 
 struct GatewayErrorsTests {
+    @Test func `response error reads structured missing scope`() throws {
+        let error = GatewayResponseError(
+            method: "question.list",
+            code: "FORBIDDEN",
+            message: "permission denied",
+            details: [
+                "code": AnyCodable("MISSING_SCOPE"),
+                "missingScope": AnyCodable("operator.questions"),
+                "requiredScopes": AnyCodable(["operator.read", "operator.questions"]),
+            ])
+
+        let details = try #require(error.missingScopeDetails)
+        #expect(details.missingScope == "operator.questions")
+        #expect(details.requiredScopes == ["operator.read", "operator.questions"])
+        #expect(error.missingScope == "operator.questions")
+    }
+
+    @Test func `response error keeps legacy missing scope compatibility`() {
+        let legacy = GatewayResponseError(
+            method: "question.list",
+            code: "INVALID_REQUEST",
+            message: "missing scope: operator.questions",
+            details: nil)
+        let unrelated = GatewayResponseError(
+            method: "question.list",
+            code: "UNAVAILABLE",
+            message: "missing scope: operator.questions",
+            details: nil)
+
+        #expect(legacy.missingScope == "operator.questions")
+        #expect(unrelated.missingScope == nil)
+        #expect(legacy.isAuthorizationFailure)
+        #expect(!unrelated.isAuthorizationFailure)
+    }
+
     @Test func `bootstrap token invalid is non recoverable`() {
         let error = GatewayConnectAuthError(
             message: "setup code expired",
@@ -45,6 +80,37 @@ struct GatewayErrorsTests {
         #expect(error.clientMaxProtocol == 4)
         #expect(error.expectedProtocol == 5)
         #expect(error.minimumProbeProtocol == 4)
+    }
+
+    @Test func `app owned gateway copy remains localizable`() throws {
+        let error = GatewayConnectAuthError(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            canRetryWithDeviceToken: false,
+            requestId: "req-123")
+
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.titlePresentation.localizationKey == "This device is not approved yet")
+        #expect(problem.messagePresentation
+            .localizationKey == "The gateway received the connection request, but this device must be approved first.")
+        #expect(problem.actionLabelPresentation?.localizationKey == "Approve on gateway")
+    }
+
+    @Test func `gateway supplied copy remains verbatim`() throws {
+        let error = GatewayConnectAuthError(
+            message: "pairing required",
+            detailCode: GatewayConnectAuthDetailCode.pairingRequired.rawValue,
+            canRetryWithDeviceToken: false,
+            titleOverride: "Custom gateway title",
+            userMessageOverride: "Custom gateway instructions",
+            actionLabel: "Custom gateway action")
+
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: error))
+
+        #expect(problem.titlePresentation == .verbatim("Custom gateway title"))
+        #expect(problem.messagePresentation == .verbatim("Custom gateway instructions"))
+        #expect(problem.actionLabelPresentation == .verbatim("Custom gateway action"))
     }
 
     @Test func `protocol mismatch maps older app to update problem`() {
@@ -210,6 +276,10 @@ struct GatewayErrorsTests {
         #expect(problem?.tlsStoreKey == "gateway.example.ts.net:443")
         #expect(problem?.tlsExpectedFingerprint == "old")
         #expect(problem?.tlsObservedFingerprint == "new")
+        #expect(problem?.messagePresentation == .localizedFormat(
+            "The saved TLS certificate pin for %@ no longer matches the gateway certificate. "
+                + "The new certificate is trusted by this device; this is commonly caused by certificate rotation.",
+            ["gateway.example.ts.net"]))
     }
 
     @Test func `untrusted TLS certificate pauses reconnect`() {
@@ -245,5 +315,12 @@ struct GatewayErrorsTests {
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+}
+
+extension GatewayConnectionProblem.PresentationText {
+    fileprivate var localizationKey: String? {
+        guard case let .localized(key) = self else { return nil }
+        return key
     }
 }

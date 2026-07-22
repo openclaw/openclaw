@@ -22,10 +22,12 @@ import {
   type Tool as BedrockTool,
   type ToolChoice,
   type ToolConfiguration,
+  type ToolResultContentBlock,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { DocumentType } from "@smithy/types";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   adjustMaxTokensForThinking,
   AssistantMessageEventStream,
@@ -52,6 +54,7 @@ import {
   type ToolCall,
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
@@ -66,6 +69,8 @@ import {
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import { describeToolResultMediaPlaceholder } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
@@ -122,7 +127,7 @@ function resolveAdaptiveBedrockMaxTokens(
 }
 
 /** Stream a Bedrock Converse request using Bedrock-specific options. */
-export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
+const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
   context: Context,
   options: BedrockOptions = {},
@@ -163,11 +168,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       profile: options.profile,
     };
     const configuredRegion = getConfiguredBedrockRegion(options);
+    const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
     const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
     const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
     const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
       model.baseUrl,
-      configuredRegion,
+      requestRegion,
       hasConfiguredProfile,
     );
 
@@ -184,11 +190,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
     // in Node.js/Bun environment only
     if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      // Region resolution: explicit option > env vars > SDK default chain.
-      // When AWS_PROFILE is set, we leave region undefined so the SDK can
-      // resovle it from aws profile configs. Otherwise fall back to us-east-1.
-      if (configuredRegion) {
-        config.region = configuredRegion;
+      // Region resolution: explicit option > model ARN > env vars > SDK default chain.
+      // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
+      if (requestRegion) {
+        config.region = requestRegion;
       } else if (endpointRegion && useExplicitEndpoint) {
         config.region = endpointRegion;
       } else if (!hasConfiguredProfile) {
@@ -217,7 +222,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       // Non-Node environment (browser): fall back to us-east-1 since
       // there's no config file resolution available.
       config.region =
-        configuredRegion ||
+        requestRegion ||
         (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
         "us-east-1";
     }
@@ -300,7 +305,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
               model.provider,
             );
           } else {
-            output.stopReason = mapStopReason(item.messageStop.stopReason);
+            const mappedStop = mapStopReason(item.messageStop.stopReason);
+            output.stopReason = mappedStop.stopReason;
+            if (mappedStop.errorMessage) {
+              output.errorMessage = mappedStop.errorMessage;
+            }
           }
         } else if (item.metadata) {
           handleMetadata(item.metadata, model, output);
@@ -392,7 +401,11 @@ function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
   options?: SimpleStreamOptions,
 ): BedrockOptions {
-  const base = buildBaseOptions(model, options, undefined);
+  const bedrockOptions = options as BedrockOptions | undefined;
+  const base = {
+    ...bedrockOptions,
+    ...buildBaseOptions(model, options, undefined),
+  };
   if (requiresMandatoryAdaptiveThinking(model)) {
     return {
       ...base,
@@ -504,7 +517,7 @@ function handleContentBlockDelta(
       const newBlock: Block = { type: "text", text: "", index: contentBlockIndex };
       output.content.push(newBlock);
       index = blocks.length - 1;
-      block = blocks[index];
+      block = newBlock;
       stream.push({ type: "text_start", contentIndex: index, partial: output });
     }
     if (block.type === "text") {
@@ -596,7 +609,6 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
-      block.arguments = parseStreamingJson(block.partialJson);
       // Finalize in-place and strip the scratch buffer so replay only
       // carries parsed arguments.
       delete (block as Block).partialJson;
@@ -785,6 +797,27 @@ function normalizeToolCallId(id: string): string {
   return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
+function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+  const content: ToolResultContentBlock[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") {
+      content.push({ text: sanitizeSurrogates(block.text) });
+      continue;
+    }
+    if (describeToolResultMediaPlaceholder([block])) {
+      content.push({ image: createImageBlock(block.mimeType, block.data) });
+    }
+  }
+
+  return {
+    toolResult: {
+      toolUseId: message.toolCallId,
+      content: content.length > 0 ? content : [{ text: "(no output)" }],
+      status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
+    },
+  };
+}
+
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
@@ -794,7 +827,7 @@ function convertMessages(
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
   for (let i = 0; i < transformedMessages.length; i++) {
-    const m = transformedMessages[i];
+    const m = expectDefined(transformedMessages[i], "message conversion index is in bounds");
 
     switch (m.role) {
       case "user": {
@@ -903,33 +936,16 @@ function convertMessages(
         const toolResults: ContentBlock.ToolResultMember[] = [];
 
         // Add current tool result with all content blocks combined
-        toolResults.push({
-          toolResult: {
-            toolUseId: m.toolCallId,
-            content: m.content.map((c) =>
-              c.type === "image"
-                ? { image: createImageBlock(c.mimeType, c.data) }
-                : { text: sanitizeSurrogates(c.text) },
-            ),
-            status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-          },
-        });
+        toolResults.push(createBedrockToolResult(m));
 
         // Look ahead for consecutive toolResult messages
         let j = i + 1;
-        while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-          const nextMsg = transformedMessages[j] as ToolResultMessage;
-          toolResults.push({
-            toolResult: {
-              toolUseId: nextMsg.toolCallId,
-              content: nextMsg.content.map((c) =>
-                c.type === "image"
-                  ? { image: createImageBlock(c.mimeType, c.data) }
-                  : { text: sanitizeSurrogates(c.text) },
-              ),
-              status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-            },
-          });
+        while (true) {
+          const nextMsg = transformedMessages.at(j);
+          if (nextMsg?.role !== "toolResult") {
+            break;
+          }
+          toolResults.push(createBedrockToolResult(nextMsg));
           j++;
         }
 
@@ -949,7 +965,7 @@ function convertMessages(
 
   // Add cache point to the last user message for supported Claude models when caching is enabled
   if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
-    const lastMessage = result[result.length - 1];
+    const lastMessage = expectDefined(result.at(-1), "non-empty converted message list");
     if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
       lastMessage.content.push({
         cachePoint: {
@@ -996,19 +1012,31 @@ function convertToolConfig(
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
 }
 
-function mapStopReason(reason: string | undefined): StopReason {
+function mapStopReason(reason: string | undefined): {
+  stopReason: StopReason;
+  errorMessage?: string;
+} {
   switch (reason) {
     case BedrockStopReason.END_TURN:
     case BedrockStopReason.STOP_SEQUENCE:
-      return "stop";
+      return { stopReason: "stop" };
     case BedrockStopReason.MAX_TOKENS:
     case BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED:
-      return "length";
+      return { stopReason: "length" };
     case BedrockStopReason.TOOL_USE:
-      return "toolUse";
+      return { stopReason: "toolUse" };
+    case BedrockStopReason.CONTENT_FILTERED:
+    case BedrockStopReason.GUARDRAIL_INTERVENED:
+    case BedrockStopReason.MALFORMED_MODEL_OUTPUT:
+    case BedrockStopReason.MALFORMED_TOOL_USE:
+      return { stopReason: "error", errorMessage: reason };
     default:
-      return "error";
+      return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
   }
+}
+
+function getBedrockModelArnRegion(modelId: string): string | undefined {
+  return /^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/.exec(modelId)?.[1];
 }
 
 function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined {
@@ -1016,7 +1044,11 @@ function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined
     return options.region;
   }
 
-  return options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || undefined;
+  return (
+    options.region ||
+    normalizeOptionalString(process.env.AWS_REGION) ||
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION)
+  );
 }
 
 function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {
@@ -1161,7 +1193,12 @@ function createImageBlock(mimeType: string, data: string) {
       throw new Error(`Unknown image type: ${mimeType}`);
   }
 
-  const binaryString = atob(data);
+  // Validate before portable decoding so browser runtimes keep working without leaking atob errors.
+  const canonicalBase64 = canonicalizeBase64(data);
+  if (!canonicalBase64) {
+    throw new Error("Amazon Bedrock image content has malformed base64");
+  }
+  const binaryString = atob(canonicalBase64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
@@ -1171,7 +1208,7 @@ function createImageBlock(mimeType: string, data: string) {
 }
 
 /** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
-export const testing = {
+const testing = {
   buildAdditionalModelRequestFields,
   convertMessages,
   getConfiguredBedrockRegion,
@@ -1180,3 +1217,8 @@ export const testing = {
   resolveSimpleBedrockOptions,
   shouldUseExplicitBedrockEndpoint,
 };
+
+if (process.env.VITEST === "true") {
+  Reflect.set(globalThis, Symbol.for("openclaw.amazonBedrockStreamTestApi"), testing);
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

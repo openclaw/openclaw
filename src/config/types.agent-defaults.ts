@@ -24,6 +24,17 @@ export type EmbeddedAgentExecutionContract = "default" | "strict-agentic";
 export type SubagentDelegationMode = "suggest" | "prefer";
 /** Image compression/detail preference used before sending image inputs to models. */
 export type AgentImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
+/** Canonical thinking levels accepted by agent defaults and compaction overrides. */
+export type AgentThinkingLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max"
+  | "ultra";
 
 export type Gpt5PromptOverlayConfig = {
   /** Friendly interaction-style layer for GPT-5-family models (default: friendly). */
@@ -46,6 +57,11 @@ export type AgentModelEntryConfig = {
   streaming?: boolean;
 };
 
+export type AgentModelPolicyConfig = {
+  /** Model refs allowed for session/run overrides. Empty or omitted allows any model. */
+  allow?: string[];
+};
+
 export type AgentModelListConfig = {
   /** Primary provider/model ref. */
   primary?: string;
@@ -58,27 +74,11 @@ export type AgentContextPruningConfig = {
   mode?: "off" | "cache-ttl";
   /** TTL to consider cache expired (duration string, default unit: minutes). */
   ttl?: string;
-  /** Number of most recent assistant turns preserved from pruning. */
-  keepLastAssistants?: number;
-  /** Context pressure ratio where soft trimming starts. */
-  softTrimRatio?: number;
-  /** Context pressure ratio where hard clearing starts. */
-  hardClearRatio?: number;
-  /** Minimum tool-result size before pruning considers it worthwhile. */
-  minPrunableToolChars?: number;
   tools?: {
     /** Tool names eligible for context pruning. */
     allow?: string[];
     /** Tool names excluded from context pruning. */
     deny?: string[];
-  };
-  softTrim?: {
-    /** Maximum retained characters for softly trimmed tool results. */
-    maxChars?: number;
-    /** Leading characters retained during soft trim. */
-    headChars?: number;
-    /** Trailing characters retained during soft trim. */
-    tailChars?: number;
   };
   hardClear?: {
     /** Replace oversized old tool results with a placeholder at high pressure. */
@@ -114,17 +114,6 @@ export type AgentContextLimitsConfig = {
   postCompactionMaxChars?: number;
 };
 
-export type AgentRunRetriesConfig = {
-  /** Base number of run retry iterations (default: 24). */
-  base?: number;
-  /** Additional run retry iterations per fallback profile (default: 8). */
-  perProfile?: number;
-  /** Minimum limit for run retry iterations (default: 32). */
-  min?: number;
-  /** Maximum limit for run retry iterations (default: 160). */
-  max?: number;
-};
-
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -156,6 +145,8 @@ export type CliBackendConfig = {
   sessionArgs?: string[];
   /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
   resumeArgs?: string[];
+  /** Argument appended to one explicitly forked resume invocation. */
+  forkArg?: string;
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
@@ -184,19 +175,10 @@ export type CliBackendConfig = {
   reseedFromRawTranscriptWhenUncompacted?: boolean;
   /** Runtime reliability tuning for this backend's process lifecycle. */
   reliability?: {
-    /** Live-session output caps for CLIs that stream JSONL through a long-lived process. */
-    outputLimits?: {
-      /** Max raw JSONL characters retained for one live CLI turn. */
-      maxTurnRawChars?: number;
-      /** Max raw JSONL lines retained for one live CLI turn. */
-      maxTurnLines?: number;
-    };
     /** No-output watchdog tuning (fresh vs resumed runs). */
     watchdog?: {
       /** Fresh/new sessions (non-resume). */
       fresh?: {
-        /** Fixed watchdog timeout in ms (overrides ratio when set). */
-        noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
         /** Lower bound for computed watchdog timeout. */
@@ -206,8 +188,6 @@ export type CliBackendConfig = {
       };
       /** Resume sessions. */
       resume?: {
-        /** Fixed watchdog timeout in ms (overrides ratio when set). */
-        noOutputTimeoutMs?: number;
         /** Fraction of overall timeout used when fixed timeout is not set. */
         noOutputTimeoutRatio?: number;
         /** Lower bound for computed watchdog timeout. */
@@ -256,6 +236,8 @@ export type AgentDefaultsConfig = {
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;
+  /** Explicit model override policy. Empty or omitted allow permits any model. */
+  modelPolicy?: AgentModelPolicyConfig;
   /** Agent working directory (preferred). Used as the default cwd for agent runs. */
   workspace?: string;
   /** Optional default allowlist of skills for agents that do not set agents.list[].skills. */
@@ -331,8 +313,6 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
-  /** Outer run loop retry iteration boundaries. */
-  runRetries?: AgentRunRetriesConfig;
   /** Embedded OpenClaw runner hardening and compatibility controls. */
   embeddedAgent?: {
     /**
@@ -352,16 +332,7 @@ export type AgentDefaultsConfig = {
   /** Vector memory search configuration (per-agent overrides supported). */
   memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
-  thinkingDefault?:
-    | "off"
-    | "minimal"
-    | "low"
-    | "medium"
-    | "high"
-    | "xhigh"
-    | "adaptive"
-    | "max"
-    | "ultra";
+  thinkingDefault?: AgentThinkingLevel;
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
   /**
@@ -519,14 +490,10 @@ export type AgentCompactionMidTurnPrecheckConfig = {
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
-  /** Embedded OpenClaw reserve target before floor and context-window caps. */
-  reserveTokens?: number;
+  /** Override the session thinking level for embedded OpenClaw compaction summaries. */
+  thinkingLevel?: AgentThinkingLevel;
   /** Embedded OpenClaw keepRecentTokens budget used for cut-point selection. */
   keepRecentTokens?: number;
-  /** Minimum reserve tokens enforced for embedded OpenClaw compaction (0 disables the floor). */
-  reserveTokensFloor?: number;
-  /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */
-  maxHistoryShare?: number;
   /** Additional compaction-summary instructions that can preserve language or persona continuity. */
   customInstructions?: string;
   /** Preserve this many most-recent user/assistant turns verbatim in compaction summary context. */
@@ -562,14 +529,14 @@ export type AgentCompactionConfig = {
    */
   provider?: string;
   /**
-   * Rotate the active session JSONL file after compaction so the next turn
+   * Rotate the active session transcript after compaction so the next turn
    * starts from the compaction summary and unsummarized tail while the old
    * transcript stays archived.
    * Default: false (existing behavior preserved).
    */
   truncateAfterCompaction?: boolean;
   /**
-   * Trigger a normal local compaction when the active session JSONL reaches
+   * Trigger a normal local compaction when the active session transcript reaches
    * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
    * disable. Requires truncateAfterCompaction so successful compaction can
    * rotate to a smaller successor transcript. This does not split raw

@@ -22,8 +22,8 @@ import {
   normalizeWhatsAppOutboundPayload,
   normalizeWhatsAppPayloadTextPreservingIndentation,
   prepareWhatsAppOutboundMedia,
-  sendWhatsAppOutboundWithRetry,
 } from "../outbound-media-contract.js";
+import { sendWhatsAppOutboundWithRetry } from "../outbound-retry.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
@@ -156,14 +156,14 @@ export async function deliverWebReply(params: {
       participant:
         cached?.participant ?? (isGroupConversation ? msg.platform.senderJid : undefined),
       messageText: cached?.body ?? "",
+      media: cached?.media,
     });
   };
 
-  const sendWithRetry = async <T>(fn: () => Promise<T>, label: string, maxAttempts = 3) => {
+  const sendWithRetry = async <T>(fn: () => Promise<T>, label: string) => {
     try {
       return await sendWhatsAppOutboundWithRetry({
         send: fn,
-        maxAttempts,
         onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
           logVerbose(
             `Retrying ${label} to ${conversationId} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,

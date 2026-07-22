@@ -24,8 +24,8 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
+import { listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -36,10 +36,12 @@ import {
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { resolveSessionIdMatchSelection } from "../../sessions/session-id-resolution.js";
 import { listAgentIds, resolveDefaultAgentId } from "../agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
+import { transitionMainSessionRecovery } from "../main-session-recovery-state.js";
 
 /** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
@@ -49,6 +51,7 @@ type SessionResolution = {
   sessionStore?: Record<string, SessionEntry>;
   storePath: string;
   isNewSession: boolean;
+  previousSessionId?: string;
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
 };
@@ -68,9 +71,28 @@ export function clearRotatedSessionMetadata(entry: SessionEntry): SessionEntry {
     endedAt: undefined,
     runtimeMs: undefined,
     abortedLastRun: undefined,
+    restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
+    restartRecoveryDeliveryRequestFingerprint: undefined,
+    restartRecoveryDeliveryRunId: undefined,
+    restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoveryBeforeAgentReplyState: undefined,
+    restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
+    restartRecoveryRequesterAccountId: undefined,
+    restartRecoveryRequesterSenderId: undefined,
+    restartRecoverySameChannelThreadRequired: undefined,
+    restartRecoverySourceIngress: undefined,
+    restartRecoverySourceReplyDeliveryMode: undefined,
+    restartRecoveryTerminalDeliveryEvidence: undefined,
+    restartRecoveryTerminalRunIds: undefined,
     sessionStartedAt: undefined,
     lastInteractionAt: undefined,
   };
+  transitionMainSessionRecovery(next, { kind: "clear" });
   clearAllCliSessions(next);
   return next;
 }
@@ -80,6 +102,20 @@ type SessionIdMatchSet = {
   primaryStoreMatches: Array<[string, SessionEntry]>;
   storeByKey: Map<string, SessionKeyResolution>;
 };
+
+function loadCommandSessionStore(params: {
+  agentId?: string;
+  clone?: boolean;
+  storePath: string;
+}): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({
+      storePath: params.storePath,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.clone === false ? { clone: false } : {}),
+    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+}
 
 /** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
@@ -131,10 +167,11 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
     }
     return undefined;
   }
-  const legacyStore = loadSessionStore(
-    legacyStorePath,
-    opts.cloneOnWrite ? { clone: false } : undefined,
-  );
+  const legacyStore = loadCommandSessionStore({
+    agentId: DEFAULT_AGENT_ID,
+    storePath: legacyStorePath,
+    ...(opts.cloneOnWrite ? { clone: false } : {}),
+  });
   for (const legacyKey of legacyKeys) {
     const legacyEntry = legacyStore[legacyKey];
     if (legacyEntry) {
@@ -195,7 +232,11 @@ function collectSessionIdMatchesForRequest(opts: {
     }
     const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
     addMatches(
-      loadSessionStore(candidateStorePath, opts.clone === false ? { clone: false } : undefined),
+      loadCommandSessionStore({
+        agentId,
+        storePath: candidateStorePath,
+        ...(opts.clone === false ? { clone: false } : {}),
+      }),
       candidateStorePath,
     );
   }
@@ -218,7 +259,10 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   const storePath = resolveStorePath(opts.cfg.session?.store, {
     agentId: storeAgentId,
   });
-  const sessionStore = loadSessionStore(storePath);
+  const sessionStore = loadCommandSessionStore({
+    storePath,
+    ...(storeAgentId ? { agentId: storeAgentId } : {}),
+  });
   if (!sessionId) {
     return { sessionKey: undefined, sessionStore, storePath };
   }
@@ -272,7 +316,11 @@ export function resolveSessionKeyForRequest(opts: {
     agentId: storeAgentId,
   });
   const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
-  const sessionStore = loadSessionStore(storePath, loadOptions);
+  const sessionStore = loadCommandSessionStore({
+    storePath,
+    agentId: storeAgentId,
+    ...(loadOptions ? { clone: false } : {}),
+  });
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
@@ -382,42 +430,43 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const lockedModelSelection = isModelSelectionLocked(sessionEntry);
   const skipImplicitExpiry =
     resetPolicy.configured !== true && hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
-    ? !terminalMainTranscriptNewerThanRegistry &&
-      (skipImplicitExpiry ||
-        evaluateSessionFreshness({
-          updatedAt: sessionEntry.updatedAt,
-          ...resolveSessionLifecycleTimestamps({
-            entry: sessionEntry,
-            agentId: sessionAgentId,
-            storePath,
-          }),
-          now,
-          policy: resetPolicy,
-        }).fresh)
+    ? lockedModelSelection ||
+      (!terminalMainTranscriptNewerThanRegistry &&
+        (skipImplicitExpiry ||
+          evaluateSessionFreshness({
+            updatedAt: sessionEntry.updatedAt,
+            ...resolveSessionLifecycleTimestamps({
+              entry: sessionEntry,
+              agentId: sessionAgentId,
+              storePath,
+            }),
+            now,
+            policy: resetPolicy,
+          }).fresh))
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !requestedSessionId;
-  const resolvedSessionEntry = isNewSession && sessionEntry
-    ? clearRotatedSessionMetadata(sessionEntry)
-    : sessionEntry;
+  const resolvedSessionEntry =
+    isNewSession && sessionEntry ? clearRotatedSessionMetadata(sessionEntry) : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
     previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
   });
 
-  const persistedThinking =
-    fresh && sessionEntry?.thinkingLevel
-      ? normalizeThinkLevel(sessionEntry.thinkingLevel)
-      : undefined;
-  const persistedVerbose =
-    fresh && sessionEntry?.verboseLevel
-      ? normalizeVerboseLevel(sessionEntry.verboseLevel)
-      : undefined;
+  // Behavior overrides belong to the logical session, not one transcript id.
+  // Carry them across every rollover; explicit `default` directives clear them.
+  const persistedThinking = sessionEntry?.thinkingLevel
+    ? normalizeThinkLevel(sessionEntry.thinkingLevel)
+    : undefined;
+  const persistedVerbose = sessionEntry?.verboseLevel
+    ? normalizeVerboseLevel(sessionEntry.verboseLevel)
+    : undefined;
 
   return {
     sessionId,
@@ -426,6 +475,7 @@ export function resolveSession(opts: {
     sessionStore,
     storePath,
     isNewSession,
+    previousSessionId: isNewSession ? sessionEntry?.sessionId : undefined,
     persistedThinking,
     persistedVerbose,
   };

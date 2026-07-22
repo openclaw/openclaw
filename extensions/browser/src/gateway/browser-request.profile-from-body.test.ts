@@ -1,13 +1,26 @@
 // Browser tests cover browser request.profile from body plugin behavior.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { loadConfigMock, isNodeCommandAllowedMock, resolveNodeCommandAllowlistMock } = vi.hoisted(
-  () => ({
-    loadConfigMock: vi.fn(),
-    isNodeCommandAllowedMock: vi.fn(),
-    resolveNodeCommandAllowlistMock: vi.fn(),
-  }),
-);
+const {
+  loadConfigMock,
+  isNodeCommandAllowedMock,
+  resolveNodeCommandAllowlistMock,
+  startBrowserControlServiceFromConfigMock,
+} = vi.hoisted(() => ({
+  loadConfigMock: vi.fn(),
+  isNodeCommandAllowedMock: vi.fn(),
+  resolveNodeCommandAllowlistMock: vi.fn(),
+  startBrowserControlServiceFromConfigMock: vi.fn(async () => false),
+}));
+
+vi.mock("../core-api.js", async () => {
+  const actual = await vi.importActual<typeof import("../core-api.js")>("../core-api.js");
+  return {
+    ...actual,
+    startBrowserControlServiceFromConfig: startBrowserControlServiceFromConfigMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
   const actual = await vi.importActual<
@@ -70,7 +83,10 @@ async function runBrowserRequest(
 ) {
   const respond = vi.fn();
   const nodeRegistry = createContext(invokeResult, connectedNodes);
-  await browserHandlers["browser.request"]({
+  await expectDefined(
+    browserHandlers["browser.request"],
+    "browser request handler",
+  )({
     params,
     respond: respond as never,
     context: { nodeRegistry } as never,
@@ -104,6 +120,24 @@ describe("browser.request profile selection", () => {
     });
     resolveNodeCommandAllowlistMock.mockReturnValue([]);
     isNodeCommandAllowedMock.mockReturnValue({ ok: true });
+    startBrowserControlServiceFromConfigMock.mockClear();
+  });
+
+  it("forces system-profile import host-local even when a browser node is connected", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest({
+      method: "POST",
+      path: "/profiles/import",
+      body: { browser: "chrome", systemProfile: "Default", into: "imported" },
+    });
+
+    // Never routed to the browser node...
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    // ...and reached host-local dispatch instead of the node-proxy block.
+    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalled();
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error?.message).toBe("browser control is disabled");
   });
 
   it("uses profile from request body when query profile is missing", async () => {
@@ -208,8 +242,32 @@ describe("browser.request profile selection", () => {
     const [ok, payload, error] = firstRespondCall(respond);
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
-    expect(error?.message).toBe("browser.request cannot mutate persistent browser profiles");
+    expect(error?.message).toBe(
+      "browser.request cannot mutate persistent browser profiles over a node proxy",
+    );
   });
+
+  it.each([
+    { method: "POST", path: "/profiles/create", body: { name: "poc" } },
+    { method: "DELETE", path: "/profiles/poc", body: undefined },
+    { method: "POST", path: "/reset-profile", body: { profile: "poc", name: "poc" } },
+  ])(
+    "dispatches host-local admin mutations for $method $path when no node handles the request",
+    async ({ method, path, body }) => {
+      const { respond, nodeRegistry } = await runBrowserRequest(
+        { method, path, body },
+        undefined,
+        [],
+      );
+
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+      expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
+      const [ok, payload, error] = firstRespondCall(respond);
+      expect(ok).toBe(false);
+      expect(payload).toBeUndefined();
+      expect(error?.message).toBe("browser control is disabled");
+    },
+  );
 
   it("allows non-mutating profile reads", async () => {
     const { respond, nodeRegistry } = await runBrowserRequest({
@@ -222,6 +280,57 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.method).toBe("GET");
     expect(invoke.params?.path).toBe("/profiles");
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("falls back to host dispatch when an auto-selected node has no browser host", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
+      },
+    );
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+    expect(startBrowserControlServiceFromConfigMock).toHaveBeenCalledOnce();
+    expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
+  });
+
+  it("preserves a configured node failure instead of falling back to the host", async () => {
+    loadConfigMock.mockReturnValue({
+      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
+    });
+    const { respond } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
+      },
+    );
+
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      "Browser control host is not reachable",
+    );
+  });
+
+  it("preserves ambiguous auto-selected node failures", async () => {
+    const { respond } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      {
+        ok: false,
+        error: { code: "UNAVAILABLE", message: "node invoke timed out" },
+      },
+    );
+
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)[2]?.message).toBe("UNAVAILABLE: node invoke timed out");
   });
 
   it("maps validated node-proxy route failures like local route failures", async () => {

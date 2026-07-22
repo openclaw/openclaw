@@ -3,11 +3,13 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = join(process.cwd(), "scripts/github/find-reusable-release-validation.sh");
 const tempDirs = createTempDirTracker();
+const sharedTempDirs = createTempDirTracker();
 
 const REPOSITORY = "openclaw/openclaw";
 const PRODUCER_SHA = "0".repeat(40);
@@ -15,6 +17,7 @@ const VERIFIER_SHA = "c".repeat(40);
 const DEFAULT_INPUTS = {
   provider: "openai",
   mode: "both",
+  targetContextRef: "",
   liveSuiteFilter: "",
   crossOsSuiteFilter: "",
   releasePackageSpec: "",
@@ -110,6 +113,10 @@ afterEach(() => {
   tempDirs.cleanup();
 });
 
+afterAll(() => {
+  sharedTempDirs.cleanup();
+});
+
 function git(cwd: string, args: string[]): string {
   return execFileSync("git", args, {
     cwd,
@@ -140,8 +147,8 @@ function plistFor(shortVersion: string, buildVersion: string): string {
   ].join("\n");
 }
 
-function createRepo(options: { plistBuildVersion?: string } = {}) {
-  const origin = tempDirs.make("evidence-reuse-origin-");
+function createRepo(options: { plistBuildVersion?: string } = {}, dirs = tempDirs) {
+  const origin = dirs.make("evidence-reuse-origin-");
   git(origin, ["init", "-q", "-b", "main"]);
   git(origin, ["config", "user.email", "test-user@example.invalid"]);
   git(origin, ["config", "user.name", "Test User"]);
@@ -164,10 +171,21 @@ function createRepo(options: { plistBuildVersion?: string } = {}) {
   return { origin, priorSha: git(origin, ["rev-parse", "HEAD"]) };
 }
 
-function cloneHead(origin: string): string {
-  const clone = tempDirs.make("evidence-reuse-clone-");
+function cloneHead(origin: string, dirs = tempDirs): string {
+  const clone = dirs.make("evidence-reuse-clone-");
   execFileSync("git", ["clone", "-q", "--depth=1", origin, clone], { encoding: "utf8" });
   return clone;
+}
+
+let sharedRepo: { clone: string; priorSha: string } | undefined;
+
+function getSharedRepo(): { clone: string; priorSha: string } {
+  if (!sharedRepo) {
+    // The resolver only reads its target checkout, so policy cases can share one immutable clone.
+    const { origin, priorSha } = createRepo({}, sharedTempDirs);
+    sharedRepo = { clone: cloneHead(origin, sharedTempDirs), priorSha };
+  }
+  return sharedRepo;
 }
 
 function normalizedEvidence(options: {
@@ -178,17 +196,24 @@ function normalizedEvidence(options: {
   targetSha: string;
   validationInputs?: Record<string, string> | null;
   verifierSha?: string | null;
+  workflowRef?: string;
 }): NormalizedEvidence {
   const runId = options.runId ?? "111";
   const producerSha = options.producerSha ?? PRODUCER_SHA;
   const releaseProfile = options.releaseProfile ?? "full";
   const soak = options.soak ?? true;
+  const workflowRef = options.workflowRef ?? "main";
+  const workflowFullRef = `refs/heads/${workflowRef}`;
+  const shaPinned = workflowRef.startsWith("release-ci/");
   const validationInputs =
     options.validationInputs === undefined ? DEFAULT_INPUTS : options.validationInputs;
   const manifest = {
-    version: 2,
+    version: shaPinned ? 3 : 2,
     workflowName: "Full Release Validation",
-    workflowRef: "main",
+    workflowRef,
+    workflowSha: producerSha,
+    workflowFullRef,
+    workflowRefType: "branch",
     runId,
     runAttempt: "2",
     targetRef: "release/2026.7.1",
@@ -224,20 +249,24 @@ function normalizedEvidence(options: {
     },
     conclusion: "success",
     manifest,
-    manifestVersion: 2,
+    manifestVersion: shaPinned ? 3 : 2,
     runAttempt: 2,
     runId,
     status: "completed",
     targetSha: options.targetSha,
     url: `https://example.test/runs/${runId}`,
     producerOnTrustedMainLineage: true,
-    workflowFullRef: "refs/heads/main",
+    workflowFullRef,
     workflowPath: ".github/workflows/full-release-validation.yml",
-    workflowQualifiedPath: ".github/workflows/full-release-validation.yml@refs/heads/main",
-    workflowRef: "main",
-    workflowRefProof: "legacy-v2-main-ancestry",
+    workflowQualifiedPath: `.github/workflows/full-release-validation.yml@${workflowFullRef}`,
+    workflowRef,
+    workflowRefProof: shaPinned
+      ? "manifest-v3-sha-pinned-main-ancestry"
+      : "legacy-v2-main-ancestry",
     workflowRefType: "branch",
-    workflowRunPath: ".github/workflows/full-release-validation.yml",
+    workflowRunPath: shaPinned
+      ? `.github/workflows/full-release-validation.yml@${workflowFullRef}`
+      : ".github/workflows/full-release-validation.yml",
     workflowSha: producerSha,
   };
   const roles = [
@@ -268,7 +297,7 @@ function normalizedEvidence(options: {
       dispatchNonce: `full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
       displayTitle: `${name} full-release-validation-${runId}-${sourceParentAttempt}${suffix}`,
       event: "workflow_dispatch",
-      headBranch: "main",
+      headBranch: workflowRef,
       parentJobId: `job-${role}`,
       path: `.github/workflows/${workflow}`,
       role,
@@ -310,7 +339,7 @@ function normalizedEvidence(options: {
     validationInputs,
     verifier: {
       schemaVersion: 3,
-      script: ".agents/skills/release-openclaw-ci/scripts/release-ci-summary.mjs",
+      script: "scripts/release-ci-summary.mjs",
       scriptSha256: "b".repeat(64),
       sourceSha: options.verifierSha === undefined ? VERIFIER_SHA : options.verifierSha,
     },
@@ -402,6 +431,10 @@ function setUpFixtures(runs: RunFixture[]): {
 
 function runResolver(args: {
   binDir: string;
+  compareBaseSha?: string;
+  compareFiles?: string[];
+  compareRenamed?: boolean;
+  compareStatus?: string;
   fixtures: string;
   inputs?: unknown;
   releaseProfile?: string;
@@ -409,8 +442,35 @@ function runResolver(args: {
   runReleaseSoak?: string;
   targetSha: string;
   validatorPath: string;
+  verifierOnMain?: boolean;
   verifierSha?: string;
+  workflowRef?: string;
 }) {
+  const verifierSha = args.verifierSha ?? VERIFIER_SHA;
+  writeFileSync(
+    fixtureName(args.fixtures, `repos/${REPOSITORY}/compare/${verifierSha}...main`),
+    JSON.stringify({
+      merge_base_commit: { sha: args.verifierOnMain === false ? "f".repeat(40) : verifierSha },
+      status: args.verifierOnMain === false ? "diverged" : "ahead",
+    }),
+  );
+  if (args.compareBaseSha) {
+    writeFileSync(
+      fixtureName(
+        args.fixtures,
+        `repos/${REPOSITORY}/compare/${args.compareBaseSha}...${args.targetSha}`,
+      ),
+      JSON.stringify({
+        files: (args.compareFiles ?? ["CHANGELOG.md"]).map((filename, index) => ({
+          filename,
+          status: args.compareRenamed && index === 0 ? "renamed" : "modified",
+          ...(args.compareRenamed && index === 0 ? { previous_filename: "src/index.ts" } : {}),
+        })),
+        merge_base_commit: { sha: args.compareBaseSha },
+        status: args.compareStatus ?? "ahead",
+      }),
+    );
+  }
   return spawnSync(
     "bash",
     [
@@ -418,7 +478,9 @@ function runResolver(args: {
       "--target-sha",
       args.targetSha,
       "--workflow-sha",
-      args.verifierSha ?? VERIFIER_SHA,
+      verifierSha,
+      "--workflow-ref",
+      args.workflowRef ?? "main",
       "--release-profile",
       args.releaseProfile ?? "full",
       "--run-release-soak",
@@ -459,9 +521,62 @@ function parseOutput(output: string): Record<string, string> {
 }
 
 describe("scripts/github/find-reusable-release-validation.sh", () => {
+  it("reuses strict direct-root evidence produced by a canonical SHA-pinned run", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const producerSha = "d".repeat(40);
+    const producerRef = `release-ci/${producerSha.slice(0, 12)}-122`;
+    const record = normalizedEvidence({
+      producerSha,
+      targetSha: priorSha,
+      workflowRef: producerRef,
+    });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      evidence_run_id: "111",
+      reuse: "true",
+    });
+  });
+
+  it("rejects noncanonical release refs and workflow SHAs outside trusted main", () => {
+    const { clone, priorSha } = getSharedRepo();
+    const record = normalizedEvidence({ targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const forgedRef = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+      workflowRef: "release-ci/not-trusted",
+    });
+    expect(parseOutput(forgedRef.stdout)).toMatchObject({ reuse: "false" });
+
+    const untrustedSha = runResolver({
+      binDir,
+      fixtures,
+      repoDir: clone,
+      targetSha: priorSha,
+      validatorPath,
+      verifierOnMain: false,
+      workflowRef: `release-ci/${VERIFIER_SHA.slice(0, 12)}-123`,
+    });
+    expect(parseOutput(untrustedSha.stdout)).toMatchObject({ reuse: "false" });
+  });
+
   it("reuses pre-tooling trusted-main evidence for the exact target", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
     const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
@@ -490,8 +605,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("accepts exact-target trusted-main evidence without a compare request", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({
       producerSha: priorSha,
       targetSha: priorSha,
@@ -521,8 +635,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     ["stable", "stable"],
     ["full", "full"],
   ] as const)("accepts exact profile identity %s -> %s", (priorProfile, requestedProfile) => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({
       releaseProfile: priorProfile,
       targetSha: priorSha,
@@ -543,8 +656,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("skips validator rejection and selects the next strict record", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ runId: "111", targetSha: priorSha });
     const { binDir, fixtures, validatorPath } = setUpFixtures([
       { exitCode: 1, runId: "222" },
@@ -628,20 +740,22 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     {
       label: "duplicate child run id",
       mutate(record: NormalizedEvidence) {
-        record.children[1].runId = record.children[0].runId;
+        const firstChild = expectDefined(record.children[0], "first reusable release child");
+        const secondChild = expectDefined(record.children[1], "second reusable release child");
+        secondChild.runId = firstChild.runId;
       },
     },
     {
       label: "failed child",
       mutate(record: NormalizedEvidence) {
-        record.children[0].conclusion = "failure";
+        expectDefined(record.children[0], "failed reusable release child").conclusion = "failure";
       },
     },
     {
       label: "extra child role",
       mutate(record: NormalizedEvidence) {
         record.children.push({
-          ...record.children[0],
+          ...expectDefined(record.children[0], "base reusable release child"),
           role: "npmTelegram",
           runId: "205",
         });
@@ -655,8 +769,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
       },
     },
   ])("rejects normalized evidence that is not reusable: $label", ({ mutate }) => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const record = normalizedEvidence({ targetSha: priorSha });
     mutate(record);
     const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
@@ -726,8 +839,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   ])(
     "rejects evidence with incompatible policy coverage: $label",
     ({ expected, recordOptions, resolverOptions }) => {
-      const { origin, priorSha } = createRepo();
-      const clone = cloneHead(origin);
+      const { clone, priorSha } = getSharedRepo();
       const record = normalizedEvidence({ targetSha: priorSha, ...recordOptions });
       const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
 
@@ -746,7 +858,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     },
   );
 
-  it("rejects cross-SHA reuse even for a changelog-only delta", () => {
+  it("reuses product validation for a changelog-only release delta", () => {
     const { origin, priorSha } = createRepo();
     const targetSha = commitFile(
       origin,
@@ -760,6 +872,34 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     const result = runResolver({
       binDir,
+      compareBaseSha: priorSha,
+      fixtures,
+      repoDir: clone,
+      targetSha,
+      validatorPath,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({
+      changed_path_count: "1",
+      changed_paths: '["CHANGELOG.md"]',
+      evidence_policy: "changelog-only-release-v1",
+      evidence_sha: priorSha,
+      reuse: "true",
+    });
+  });
+
+  it("rejects cross-SHA reuse when the release delta includes code", () => {
+    const { origin, priorSha } = createRepo();
+    const targetSha = commitFile(origin, "index.ts", "export const value = 2;\n", "fix: code");
+    const clone = cloneHead(origin);
+    const record = normalizedEvidence({ targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      compareBaseSha: priorSha,
+      compareFiles: ["index.ts"],
       fixtures,
       repoDir: clone,
       targetSha,
@@ -768,7 +908,29 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
 
     expect(result.status).toBe(0);
     expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
-    expect(result.stderr).toContain("cross-SHA reuse requires granular artifact evidence");
+    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
+  });
+
+  it("rejects a source-file rename to CHANGELOG.md", () => {
+    const { origin, priorSha } = createRepo();
+    const targetSha = commitFile(origin, "CHANGELOG.md", "renamed source\n", "docs: rename");
+    const clone = cloneHead(origin);
+    const record = normalizedEvidence({ targetSha: priorSha });
+    const { binDir, fixtures, validatorPath } = setUpFixtures([{ record, runId: "111" }]);
+
+    const result = runResolver({
+      binDir,
+      compareBaseSha: priorSha,
+      compareRenamed: true,
+      fixtures,
+      repoDir: clone,
+      targetSha,
+      validatorPath,
+    });
+
+    expect(result.status).toBe(0);
+    expect(parseOutput(result.stdout)).toMatchObject({ reuse: "false" });
+    expect(result.stderr).toContain("is not a CHANGELOG.md-only descendant");
   });
 
   it("rejects target version metadata that is internally inconsistent", () => {
@@ -797,8 +959,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     { inputs: null, label: "null inputs", runReleaseSoak: "true" },
     { inputs: DEFAULT_INPUTS, label: "invalid soak flag", runReleaseSoak: "yes" },
   ])("rejects invalid resolver arguments: $label", ({ inputs, runReleaseSoak }) => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const { binDir, fixtures, validatorPath } = setUpFixtures([]);
 
     const result = runResolver({
@@ -815,8 +976,7 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
   });
 
   it("reports no reuse when no prior successful runs exist", () => {
-    const { origin, priorSha } = createRepo();
-    const clone = cloneHead(origin);
+    const { clone, priorSha } = getSharedRepo();
     const { binDir, fixtures, validatorPath } = setUpFixtures([]);
 
     const result = runResolver({

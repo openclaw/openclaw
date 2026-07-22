@@ -170,7 +170,7 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
-export type SessionResetMode = "daily" | "idle";
+export type SessionResetMode = "none" | "daily" | "idle";
 export type SessionResetConfig = {
   mode?: SessionResetMode;
   /** Local hour (0-23) for the daily reset boundary. */
@@ -180,8 +180,6 @@ export type SessionResetConfig = {
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;
-  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-  dm?: SessionResetConfig;
   group?: SessionResetConfig;
   thread?: SessionResetConfig;
 };
@@ -228,55 +226,37 @@ export type SessionConfig = {
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
-  typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
-  /** Session transcript write-lock acquisition policy. */
-  writeLock?: SessionWriteLockConfig;
-  agentToAgent?: {
-    /** Max ping-pong turns between requester/target (0-20). Default: 5. */
-    maxPingPongTurns?: number;
-  };
   /** Shared defaults for thread-bound session routing across channels/providers. */
   threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, archive retention, disk budget). */
   maintenance?: SessionMaintenanceConfig;
 };
 
-export type SessionWriteLockConfig = {
-  /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
-  acquireTimeoutMs?: number;
-  /** When an existing lock can be treated as stale and reclaimed. Default: 1800000. */
-  staleMs?: number;
-  /** Maximum in-process hold time before the watchdog releases the lock. Default: 300000. */
-  maxHoldMs?: number;
-};
-
 export type SessionMaintenanceMode = "enforce" | "warn";
 
 /** Session-store cleanup policy for transcript count, age, archives, and disk budget. */
 export type SessionMaintenanceConfig = {
-  /** Whether to enforce maintenance or warn only. Default: "warn". */
+  /** Whether to enforce maintenance or warn only. Default: "enforce". */
   mode?: SessionMaintenanceMode;
   /** Remove session entries older than this duration (e.g. "30d", "12h"). Default: "30d". */
   pruneAfter?: string | number;
-  /** @deprecated Use pruneAfter instead. */
-  pruneDays?: number;
   /** Maximum number of session entries to keep. Default: 500. */
   maxEntries?: number;
-  /** @deprecated Ignored. Run `openclaw doctor --fix` to remove. */
-  rotateBytes?: number | string;
   /**
-   * Retention for archived reset transcripts (`*.reset.<timestamp>`).
-   * Set `false` to disable reset-archive cleanup. Default: same as `pruneAfter` (30d).
+   * Age-based retention for archived transcripts (`*.reset.<timestamp>` and
+   * `*.deleted.<timestamp>`). Default and `false`: keep archives until the
+   * disk budget evicts them oldest-first; a duration opts into deletion.
    */
   resetArchiveRetention?: string | number | false;
   /**
-   * Optional per-agent sessions-directory disk budget (e.g. "500mb").
-   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup (mode=enforce).
+   * Per-agent sessions-directory disk budget (e.g. "500mb"). Default: "10gb".
+   * When exceeded, warn (mode=warn) or enforce oldest-first cleanup
+   * (mode=enforce). Set `false` to disable the budget entirely.
    */
-  maxDiskBytes?: number | string;
+  maxDiskBytes?: number | string | false;
   /**
    * Target size after disk-budget cleanup (high-water mark), e.g. "400mb".
    * Default: 80% of maxDiskBytes.
@@ -348,50 +328,31 @@ export type DiagnosticsCacheTraceConfig = {
 
 export type AuditConfig = {
   /**
-   * Record metadata-only audit events (agent runs and tool actions) into the
-   * shared state database. Content is never stored. Default: true. Disabling
-   * stops new writes; existing records stay readable until they expire.
+   * Record metadata-only run, tool, and enabled message lifecycle events into
+   * the shared state database. Content is never stored. Default: true. This is
+   * startup-scoped; disabling stops new event inserts after restart while retained
+   * records stay readable until they expire.
    */
   enabled?: boolean;
+  /**
+   * Record content-free message lifecycle metadata. `direct` records only
+   * known direct conversations; `all` also records group, channel, and
+   * unknown conversation kinds. Default: `off`.
+   */
+  messages?: "off" | "direct" | "all";
 };
 
 export type DiagnosticsConfig = {
   enabled?: boolean;
   /** Optional ad-hoc diagnostics flags (e.g. "telegram.http"). */
   flags?: string[];
-  /** Threshold in ms before a processing session with no observed progress logs diagnostics. */
-  stuckSessionWarnMs?: number;
-  /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
-  stuckSessionAbortMs?: number;
-  /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
-  memoryPressureSnapshot?: boolean;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
-};
-
-export type WebReconnectConfig = {
-  initialMs?: number;
-  maxMs?: number;
-  factor?: number;
-  jitter?: number;
-  maxAttempts?: number; // 0 = unlimited
-};
-
-export type WebWhatsAppConfig = {
-  /** Baileys application ping interval in milliseconds. Default: 25000. */
-  keepAliveIntervalMs?: number;
-  /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
-  connectTimeoutMs?: number;
-  /** Baileys query and WhatsApp outbound/read-receipt operation timeout in milliseconds. Default: 60000. */
-  defaultQueryTimeoutMs?: number;
 };
 
 export type WebConfig = {
   /** If false, do not start the WhatsApp web provider. Default: true. */
   enabled?: boolean;
-  heartbeatSeconds?: number;
-  reconnect?: WebReconnectConfig;
-  whatsapp?: WebWhatsAppConfig;
 };
 
 // Provider docking: allowlists keyed by provider id (and internal "webchat").

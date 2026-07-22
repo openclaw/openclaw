@@ -4,17 +4,20 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  asObjectRecord,
-  hasLegacyAccountStreamingAliases,
-  hasLegacyStreamingAliases,
-  normalizeLegacyChannelAliases,
-} from "openclaw/plugin-sdk/runtime-doctor";
+import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
-function hasLegacySlackStreamingAliases(value: unknown): boolean {
-  return hasLegacyStreamingAliases(value, { includeNativeTransport: true });
-}
+const streamingAliasMigration = defineChannelAliasMigration({
+  channelId: "slack",
+  streaming: {
+    // Slack maps its legacy draft stream modes (replace/status_final/append)
+    // through its own resolver instead of the generic mode parser.
+    defaultMode: "partial",
+    resolveMode: resolveSlackStreamingMode,
+    resolveNativeTransport: resolveSlackNativeStreaming,
+  },
+  dm: { root: true, accounts: true },
+});
 
 function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
   const channels = asObjectRecord(asObjectRecord(value)?.channels);
@@ -24,6 +27,80 @@ function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
   return Object.values(channels).some((channel) =>
     Object.hasOwn(asObjectRecord(channel) ?? {}, "allow"),
   );
+}
+
+function hasLegacySlackThreadMentionPolicy(value: unknown): boolean {
+  const thread = asObjectRecord(asObjectRecord(value)?.thread);
+  return Boolean(thread && Object.hasOwn(thread, "requireExplicitMention"));
+}
+
+function hasLegacyDmReplyMode(value: unknown): boolean {
+  return Object.hasOwn(asObjectRecord(asObjectRecord(value)?.dm) ?? {}, "replyToMode");
+}
+
+function migrateDmReplyMode(
+  entry: Record<string, unknown>,
+  path: string,
+  changes: string[],
+): boolean {
+  const dm = asObjectRecord(entry.dm);
+  if (!dm || !Object.hasOwn(dm, "replyToMode")) {
+    return false;
+  }
+  const byType = asObjectRecord(entry.replyToModeByChatType) ?? {};
+  if (byType.direct === undefined) {
+    byType.direct = dm.replyToMode;
+    entry.replyToModeByChatType = byType;
+    changes.push(`Moved ${path}.dm.replyToMode → ${path}.replyToModeByChatType.direct.`);
+  } else {
+    changes.push(`Removed ${path}.dm.replyToMode (replyToModeByChatType.direct already set).`);
+  }
+  delete dm.replyToMode;
+  return true;
+}
+
+function normalizeSlackThreadMentionPolicy(params: {
+  value: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { value: Record<string, unknown>; changed: boolean } {
+  const thread = asObjectRecord(params.value.thread);
+  if (!thread || !Object.hasOwn(thread, "requireExplicitMention")) {
+    return { value: params.value, changed: false };
+  }
+
+  const next = { ...params.value };
+  const nextThread = { ...thread };
+  const implicitMentions = asObjectRecord(params.value.implicitMentions) ?? {};
+  const nextImplicitMentions = { ...implicitMentions };
+  const legacyValue = thread.requireExplicitMention;
+  const targetPath = `${params.pathPrefix}.implicitMentions.threadParticipation`;
+  if (nextImplicitMentions.threadParticipation !== undefined) {
+    params.changes.push(
+      `Removed ${params.pathPrefix}.thread.requireExplicitMention (${targetPath} already set).`,
+    );
+  } else if (typeof legacyValue === "boolean") {
+    // The retired key maps only the participated-thread fact. Replies to the bot
+    // remain independently governed by the canonical replyToBot policy.
+    nextImplicitMentions.threadParticipation = !legacyValue;
+    params.changes.push(
+      `Moved ${params.pathPrefix}.thread.requireExplicitMention → ${targetPath} (${String(!legacyValue)}).`,
+    );
+  } else {
+    params.changes.push(
+      `Removed invalid ${params.pathPrefix}.thread.requireExplicitMention value.`,
+    );
+  }
+  delete nextThread.requireExplicitMention;
+  if (Object.keys(nextThread).length > 0) {
+    next.thread = nextThread;
+  } else {
+    delete next.thread;
+  }
+  if (Object.keys(nextImplicitMentions).length > 0) {
+    next.implicitMentions = nextImplicitMentions;
+  }
+  return { value: next, changed: true };
 }
 
 function normalizeSlackChannelAllowAliases(params: {
@@ -57,17 +134,37 @@ function normalizeSlackChannelAllowAliases(params: {
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...streamingAliasMigration.legacyConfigRules,
   {
     path: ["channels", "slack"],
     message:
-      "channels.slack.streamMode, channels.slack.streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
-    match: hasLegacySlackStreamingAliases,
+      'channels.slack.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
+    match: hasLegacyDmReplyMode,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
-      "channels.slack.accounts.<id>.streamMode, streaming (scalar), chunkMode, blockStreaming, blockStreamingCoalesce, and nativeStreaming are legacy; use channels.slack.accounts.<id>.streaming.{mode,chunkMode,block.enabled,block.coalesce,nativeTransport}.",
-    match: (value) => hasLegacyAccountStreamingAliases(value, hasLegacySlackStreamingAliases),
+      'channels.slack.accounts.<id>.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
+    match: (value) =>
+      Object.values(asObjectRecord(value) ?? {}).some((account) => hasLegacyDmReplyMode(account)),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
+      'channels.slack.thread.requireExplicitMention is legacy; use channels.slack.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
+    match: hasLegacySlackThreadMentionPolicy,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.thread.requireExplicitMention is legacy; use channels.slack.accounts.<id>.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
+    match: (value) => {
+      const accounts = asObjectRecord(value);
+      return Boolean(
+        accounts &&
+        Object.values(accounts).some((account) => hasLegacySlackThreadMentionPolicy(account)),
+      );
+    },
   },
   {
     path: ["channels", "slack"],
@@ -94,28 +191,27 @@ export function normalizeCompatibilityConfig({
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
-  const rawEntry = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.slack);
+  const changes: string[] = [];
+  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
+  const rawEntry = asObjectRecord(
+    (aliases.config.channels as Record<string, unknown> | undefined)?.slack,
+  );
   if (!rawEntry) {
     return { config: cfg, changes: [] };
   }
+  let updated = rawEntry;
+  let changed = aliases.config !== cfg;
+  changed = migrateDmReplyMode(updated, "channels.slack", changes) || changed;
 
-  const changes: string[] = [];
-  let updated;
-  let changed;
-
-  const aliases = normalizeLegacyChannelAliases({
-    entry: rawEntry,
+  const normalizedThreadPolicy = normalizeSlackThreadMentionPolicy({
+    value: updated,
     pathPrefix: "channels.slack",
     changes,
-    normalizeDm: true,
-    normalizeAccountDm: true,
-    resolveStreamingOptions: (entry) => ({
-      resolvedMode: resolveSlackStreamingMode(entry),
-      resolvedNativeTransport: resolveSlackNativeStreaming(entry),
-    }),
   });
-  updated = aliases.entry;
-  changed = aliases.changed;
+  if (normalizedThreadPolicy.changed) {
+    updated = normalizedThreadPolicy.value;
+    changed = true;
+  }
 
   const channels = asObjectRecord(updated.channels);
   if (channels) {
@@ -135,21 +231,36 @@ export function normalizeCompatibilityConfig({
     let accountsChanged = false;
     const nextAccounts = { ...accounts };
     for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountValue);
-      const channelEntries = asObjectRecord(account?.channels);
-      if (!account || !channelEntries) {
+      let account = asObjectRecord(accountValue);
+      if (!account) {
         continue;
       }
-      const normalized = normalizeSlackChannelAllowAliases({
-        channels: channelEntries,
-        pathPrefix: `channels.slack.accounts.${accountId}.channels`,
+      if (migrateDmReplyMode(account, `channels.slack.accounts.${accountId}`, changes)) {
+        nextAccounts[accountId] = account;
+        accountsChanged = true;
+      }
+      const normalizedAccountThreadPolicy = normalizeSlackThreadMentionPolicy({
+        value: account,
+        pathPrefix: `channels.slack.accounts.${accountId}`,
         changes,
       });
-      if (!normalized.changed) {
-        continue;
+      if (normalizedAccountThreadPolicy.changed) {
+        account = normalizedAccountThreadPolicy.value;
+        nextAccounts[accountId] = account;
+        accountsChanged = true;
       }
-      nextAccounts[accountId] = { ...account, channels: normalized.channels };
-      accountsChanged = true;
+      const channelEntries = asObjectRecord(account.channels);
+      if (channelEntries) {
+        const normalized = normalizeSlackChannelAllowAliases({
+          channels: channelEntries,
+          pathPrefix: `channels.slack.accounts.${accountId}.channels`,
+          changes,
+        });
+        if (normalized.changed) {
+          nextAccounts[accountId] = { ...account, channels: normalized.channels };
+          accountsChanged = true;
+        }
+      }
     }
     if (accountsChanged) {
       updated = { ...updated, accounts: nextAccounts };
@@ -162,9 +273,9 @@ export function normalizeCompatibilityConfig({
   }
   return {
     config: {
-      ...cfg,
+      ...aliases.config,
       channels: {
-        ...cfg.channels,
+        ...aliases.config.channels,
         slack: updated as unknown as NonNullable<OpenClawConfig["channels"]>["slack"],
       } as OpenClawConfig["channels"],
     },

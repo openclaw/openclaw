@@ -28,6 +28,7 @@ import type {
   PromptAccountId,
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 const loadProviderAuthInput = createLazyRuntimeModule(
   () => import("../../plugins/provider-auth-ref.js"),
@@ -255,6 +256,7 @@ export function setAccountAllowFromForChannel(params: {
   channel: string;
   accountId: string;
   allowFrom: string[];
+  setupSurface?: ChannelSetupAdapter;
 }): OpenClawConfig {
   const { cfg, channel, accountId, allowFrom } = params;
   return patchConfigForScopedAccount({
@@ -262,6 +264,7 @@ export function setAccountAllowFromForChannel(params: {
     channel,
     accountId,
     patch: { allowFrom },
+    setupSurface: params.setupSurface,
     ensureEnabled: false,
   });
 }
@@ -885,8 +888,9 @@ function patchConfigForScopedAccount(params: {
   accountId: string;
   patch: Record<string, unknown>;
   ensureEnabled: boolean;
+  setupSurface?: ChannelSetupAdapter;
 }): OpenClawConfig {
-  const { cfg, channel, accountId, patch, ensureEnabled } = params;
+  const { cfg, channel, accountId, patch, ensureEnabled, setupSurface } = params;
   const channelConfig = cfg.channels?.[channel] as
     | { accounts?: Record<string, unknown> }
     | undefined;
@@ -899,6 +903,7 @@ function patchConfigForScopedAccount(params: {
       : moveSingleAccountChannelSectionToDefaultAccount({
           cfg,
           channelKey: channel,
+          setupSurface,
         });
   return patchScopedAccountConfig({
     cfg: seededCfg,
@@ -915,41 +920,12 @@ export function patchChannelConfigForAccount(params: {
   channel: AccountScopedChannel;
   accountId: string;
   patch: Record<string, unknown>;
+  setupSurface?: ChannelSetupAdapter;
 }): OpenClawConfig {
   return patchConfigForScopedAccount({
     ...params,
     ensureEnabled: true,
   });
-}
-
-export function applySingleTokenPromptResult(params: {
-  cfg: OpenClawConfig;
-  channel: string;
-  accountId: string;
-  tokenPatchKey: string;
-  tokenResult: {
-    useEnv: boolean;
-    token: SecretInput | null;
-  };
-}): OpenClawConfig {
-  let next = params.cfg;
-  if (params.tokenResult.useEnv) {
-    next = patchChannelConfigForAccount({
-      cfg: next,
-      channel: params.channel,
-      accountId: params.accountId,
-      patch: {},
-    });
-  }
-  if (params.tokenResult.token) {
-    next = patchChannelConfigForAccount({
-      cfg: next,
-      channel: params.channel,
-      accountId: params.accountId,
-      patch: { [params.tokenPatchKey]: params.tokenResult.token },
-    });
-  }
-  return next;
 }
 
 export function buildSingleChannelSecretPromptState(params: {
@@ -969,7 +945,7 @@ export function buildSingleChannelSecretPromptState(params: {
   };
 }
 
-export async function promptSingleChannelToken(params: {
+async function promptSingleChannelToken(params: {
   prompter: Pick<WizardPrompter, "confirm" | "text">;
   accountConfigured: boolean;
   canUseEnv: boolean;
@@ -982,7 +958,7 @@ export async function promptSingleChannelToken(params: {
     (
       await params.prompter.text({
         message: params.inputPrompt,
-        // Credential input: masked in terminal prompts, and the Crestodian
+        // Credential input: masked in terminal prompts, and the OpenClaw
         // chat bridge relies on this flag to refuse plain-text secret entry.
         sensitive: true,
         validate: (value) => (value?.trim() ? undefined : "Required"),
@@ -1013,7 +989,7 @@ export async function promptSingleChannelToken(params: {
   return { useEnv: false, token: await promptToken() };
 }
 
-export type SingleChannelSecretInputPromptResult =
+type SingleChannelSecretInputPromptResult =
   | { action: "keep" }
   | { action: "use-env" }
   | { action: "set"; value: SecretInput; resolvedValue: string };
@@ -1617,7 +1593,6 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
 }
 
 // Backwards-compatible aliases for existing setup SDK consumers.
-export const patchLegacyDmChannelConfig = patchCompatDmChannelConfig;
 export const setLegacyChannelDmPolicyWithAllowFrom = setCompatChannelDmPolicyWithAllowFrom;
-export const setLegacyChannelAllowFrom = setCompatChannelAllowFrom;
 export const createLegacyCompatChannelDmPolicy = createCompatChannelDmPolicy;
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

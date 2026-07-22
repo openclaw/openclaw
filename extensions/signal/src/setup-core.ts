@@ -62,7 +62,7 @@ function isUuidLike(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-export function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
+function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: string } {
   return parseSetupEntriesAllowingWildcard(raw, (entry) => {
     if (normalizeLowercaseStringOrEmpty(entry).startsWith("uuid:")) {
       const id = entry.slice("uuid:".length).trim();
@@ -128,6 +128,7 @@ async function promptSignalAllowFrom(params: {
         channel,
         accountId,
         allowFrom,
+        setupSurface: signalSetupAdapter,
       }),
   });
 }
@@ -172,6 +173,7 @@ export const signalDmPolicy = {
               ),
             }
           : { dmPolicy: policy },
+      setupSurface: signalSetupAdapter,
     }),
   promptAllowFrom: promptSignalAllowFrom,
 };
@@ -224,24 +226,34 @@ export const signalCompletionNote = {
   ],
 };
 
-export const signalSetupAdapter: ChannelSetupAdapter = createPatchedAccountSetupAdapter({
-  channelKey: channel,
-  validateInput: createSetupInputPresenceValidator({
-    validate: ({ input }) => {
-      if (
-        !input.signalNumber &&
-        !input.httpUrl &&
-        !input.httpHost &&
-        !input.httpPort &&
-        !input.cliPath
-      ) {
-        return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
-      }
-      return null;
-    },
+export const signalSetupAdapter: ChannelSetupAdapter = {
+  ...createPatchedAccountSetupAdapter({
+    channelKey: channel,
+    validateInput: createSetupInputPresenceValidator({
+      validate: ({ input }) => {
+        if (
+          !input.signalNumber &&
+          !input.httpUrl &&
+          !input.httpHost &&
+          !input.httpPort &&
+          !input.cliPath
+        ) {
+          return "Signal requires --signal-number or --http-url/--http-host/--http-port/--cli-path.";
+        }
+        return null;
+      },
+    }),
+    buildPatch: (input) => buildSignalSetupPatch(input),
   }),
-  buildPatch: (input) => buildSignalSetupPatch(input),
-});
+  singleAccountKeysToMove: [
+    "signalNumber",
+    "account",
+    "cliPath",
+    "httpUrl",
+    "httpHost",
+    "httpPort",
+  ],
+};
 
 export function createSignalSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {
   return createDelegatedSetupWizardProxy({

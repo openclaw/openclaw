@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for `openclaw channels` (accounts, status, capabilities, resolve, logs, login/logout)"
+summary: "CLI reference for `openclaw channels` (accounts, status, dead letters, capabilities, resolve, logs, login/logout)"
 read_when:
   - You want to add or remove channel accounts (Discord, Google Chat, iMessage, Matrix, Signal, Slack, Telegram, WhatsApp, and more)
   - You want to check channel status or tail channel logs
+  - You need to inspect or resubmit a failed inbound channel event
 title: "Channels"
 ---
 
@@ -25,6 +26,7 @@ openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
+openclaw channels dead-letters list --channel telegram --account default
 ```
 
 `channels list` shows chat channels only: configured accounts by default, with `installed`, `configured`, and `enabled` status tags per account (`--json` for machine output). Pass `--all` to also surface bundled channels that have no configured account yet and installable catalog channels that are not yet on disk. Provider auth and model usage live elsewhere: `openclaw models auth list` for provider auth profiles, `openclaw status` or `openclaw models list` for usage/quota.
@@ -43,6 +45,27 @@ With `--json`, every channel entry includes `label` alongside its accounts, inst
 state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit failed`.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
+
+## Inbound dead letters
+
+Inbound events that exhaust their retry policy remain in the shared state database for the queue's existing failed-entry retention period. Inspect one channel account with:
+
+```bash
+openclaw channels dead-letters list --channel telegram --account default
+openclaw channels dead-letters list --channel telegram --account default --json
+```
+
+The text view shows event ids, failure reasons, attempt counts, and failure ages. JSON output also includes the retained payload, metadata, lane, and attempt timestamps for diagnostics.
+
+After correcting the underlying problem, re-enqueue one event with its original event id:
+
+```bash
+openclaw channels dead-letters resubmit <event-id> --channel telegram --account default
+```
+
+Run these commands on the Gateway host so they access the same shared state database as the channel runtime. Resubmission preserves the payload, metadata, and lane, but resets the attempt counter and queue age. It atomically replaces that event's failed marker, so repeating the command while the event is pending or claimed refuses instead of creating a second dispatch. The running channel picks it up on its next ingress drain. Completed events remain terminal and cannot be resubmitted. Failed rows created before payload retention was added can still appear in the list, but resubmission refuses them because their payload is unavailable.
+
+`openclaw health` reports dead-letter counts and oldest failure age per channel account. `openclaw doctor` names affected accounts and points back to the inspection command.
 
 Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 `sessions_list` tool as a channel socket-health signal. Those surfaces report
@@ -65,7 +88,7 @@ openclaw channels remove --channel telegram --delete
 `channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels. Without `--delete` it asks to disable the account and keeps its config; `--delete` removes the config entries without prompting.
 For runtime-backed channel plugins, `channels remove` also asks the running Gateway to stop the selected account before it updates config, so disabling or deleting an account does not leave the old listener active until restart.
 
-Non-interactive add flags shared across channels: `--account <id>`, `--name <name>`, `--token`, `--token-file`, `--bot-token`, `--app-token`, `--secret`, `--secret-file`, `--password`, `--cli-path`, `--url`, `--base-url`, `--http-url`, `--auth-dir`, and `--use-env` (env-backed auth, default account only, where supported). Channel-specific flags include:
+Core-owned non-interactive add flags are `--account <id>`, `--name <name>`, `--token`, `--token-file`, and `--use-env` (env-backed auth, default account only, where supported). Channel plugins contribute their own setup flags, including `--bot-token`, `--app-token`, `--secret`, `--secret-file`, `--password`, `--cli-path`, `--url`, `--base-url`, `--workspace`, `--http-url`, and `--auth-dir`. Channel-specific flags include:
 
 | Channel     | Flags                                                                                                |
 | ----------- | ---------------------------------------------------------------------------------------------------- |
@@ -79,7 +102,14 @@ Non-interactive add flags shared across channels: `--account <id>`, `--name <nam
 
 If a channel plugin needs to be installed during a flag-driven add command, OpenClaw uses the channel's default install source without opening the interactive plugin install prompt.
 
-When you run `openclaw channels add` without flags, the interactive wizard can prompt:
+When you run `openclaw channels add` with no direct account, credential, or channel-config flags, the interactive wizard can prompt. A positional channel id and `--channel <id>` both preselect that channel without bypassing guidance:
+
+```bash
+openclaw channels add telegram
+openclaw channels add --channel telegram
+```
+
+The wizard can prompt for:
 
 - account ids per selected channel
 - optional display names for those accounts

@@ -2,6 +2,7 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
+import { DEFAULT_SESSION_LIST_QUERY } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import type { SessionsRouteData } from "./sessions-page.ts";
 
@@ -20,16 +21,16 @@ async function loadSessionsRoute(
   const gatewaySnapshot = gateway.snapshot;
   const options = routeOptions(location);
   const checkpointAgentId = parseAgentSessionKey(options.expandedSessionKey)?.agentId;
+  const scopeAgentId = checkpointAgentId ?? context.agentSelection.state.scopeId;
   const [sessions] = await Promise.all([
     context.sessions
       .list({
-        activeMinutes: options.expandedSessionKey || options.showArchived ? 0 : 60,
-        limit: 50,
+        ...DEFAULT_SESSION_LIST_QUERY,
         search: options.expandedSessionKey ?? undefined,
         includeGlobal: true,
         includeUnknown: Boolean(options.expandedSessionKey),
         showArchived: options.showArchived,
-        ...(checkpointAgentId ? { agentId: checkpointAgentId } : {}),
+        ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
       })
       .then(
         (result) => ({ result, error: null }),
@@ -49,9 +50,10 @@ async function loadSessionsRoute(
 export const page = definePage({
   id: "sessions",
   path: "/sessions",
-  loaderDeps: (_context: ApplicationContext, location: RouteLocation) => {
+  aliases: ["/settings/sessions"],
+  loaderDeps: (context: ApplicationContext, location: RouteLocation) => {
     const options = routeOptions(location);
-    return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}`;
+    return `${options.expandedSessionKey ?? ""}\u0000${options.showArchived ? "1" : "0"}\u0000${context.agentSelection.state.scopeId ?? "all"}`;
   },
   loader: (context: ApplicationContext, { location }) => loadSessionsRoute(context, location),
   component: () =>

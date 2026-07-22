@@ -312,6 +312,31 @@ describe("subscribeEmbeddedAgentSession", () => {
       cacheWrite: undefined,
       total: 120,
     });
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 100,
+      output: 20,
+      total: 120,
+    });
+  });
+
+  it("retains the last nonzero call when a later aborted message reports zero usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+    const usage = { input: 38_333, output: 66, cacheRead: 120_320, totalTokens: 158_719 };
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({ type: "message_end", message: { role: "assistant", usage } });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: { role: "assistant", stopReason: "aborted", usage: makeZeroUsageSnapshot() },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 38_333,
+      output: 66,
+      cacheRead: 120_320,
+      total: 158_719,
+    });
   });
 
   it.each(THINKING_TAG_CASES)(
@@ -1318,6 +1343,47 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
+  it("preserves distinct mutation failures through compaction until each action recovers", () => {
+    const { emit, subscription } = createToolErrorHarness("run-tools-compaction-retry");
+
+    for (const [toolCallId, filePath] of [
+      ["write-a-failed", "/tmp/a.txt"],
+      ["write-b-failed", "/tmp/b.txt"],
+    ] as const) {
+      emitToolRun({
+        emit,
+        toolName: "write",
+        toolCallId,
+        args: { path: filePath, content: "next" },
+        isError: true,
+        result: { error: "disk full" },
+      });
+    }
+
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emitToolRun({
+      emit,
+      toolName: "write",
+      toolCallId: "write-b-recovered",
+      args: { path: "/tmp/b.txt", content: "retry" },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()?.actionFingerprint).toContain("path=/tmp/a.txt");
+
+    emitToolRun({
+      emit,
+      toolName: "write",
+      toolCallId: "write-a-recovered",
+      args: { path: "/tmp/a.txt", content: "retry" },
+      isError: false,
+      result: { ok: true },
+    });
+
+    expect(subscription.getLastToolError()).toBeUndefined();
+  });
+
   it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
@@ -1593,3 +1659,4 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

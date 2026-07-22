@@ -14,6 +14,13 @@ scenario:
     - src/auto-reply/reply/commands-core.ts
     - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
   execution:
+    profiles:
+      {
+        "telegram:adapter": 4,
+        "telegram:all": 3,
+        "telegram:mock-release": 3,
+        "telegram:release": 3,
+      }
     kind: flow
     channel: telegram
     summary: Request the Telegram command catalog and verify representative entries.
@@ -29,13 +36,13 @@ flow:
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-command-room, kind: group }
             senderId: qa-command-operator
             senderName: QA Command Operator
             text:
               expr: "transport.id === 'telegram' ? '/commands@openclaw' : '/commands'"
         - waitForOutbound:
-            conversation: { id: telegram-command-room, kind: channel }
+            conversation: { id: telegram-command-room, kind: group }
             sinceIndex: { ref: startIndex }
             timeoutMs: 60000
         - call: sleep

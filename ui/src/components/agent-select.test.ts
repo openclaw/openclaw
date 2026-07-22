@@ -3,15 +3,12 @@
 import { expect, it, vi } from "vitest";
 import type { AgentIdentityResult, GatewayAgentRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import { AgentSelect } from "./agent-select.ts";
 
-const AGENT_SELECT_TEST_TAG = "test-openclaw-agent-select";
+const AGENT_SELECT_TEST_TAG = `test-openclaw-agent-select-${crypto.randomUUID()}`;
 
-// The shared jsdom registry outlives Vitest's per-file module reset. Use the
-// freshly imported class so locale state and the element controller stay paired.
-if (!customElements.get(AGENT_SELECT_TEST_TAG)) {
-  customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
-}
+customElements.define(AGENT_SELECT_TEST_TAG, class extends AgentSelect {});
 
 type AgentSelectElement = HTMLElement & {
   agents: GatewayAgentRow[];
@@ -21,6 +18,7 @@ type AgentSelectElement = HTMLElement & {
   authToken: string | null;
   disabled: boolean;
   onSelect: (agentId: string) => void;
+  onCreateAgent: () => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -118,9 +116,10 @@ it("fetches local avatars with the bearer credential when token auth is active",
     expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
     expect(fetchMock).toHaveBeenCalledWith("/avatar/alpha", {
       headers: { Authorization: "Bearer tok" },
+      signal: expect.any(AbortSignal),
     });
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(
         element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
       ).toBe("blob:agent-avatar");
@@ -155,15 +154,16 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
   });
 
   try {
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     expect(element.querySelector("img.agent-select__avatar")).toBeNull();
 
     element.authToken = "tok2";
     await element.updateComplete;
 
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       expect(fetchMock).toHaveBeenLastCalledWith("/avatar/alpha", {
         headers: { Authorization: "Bearer tok2" },
+        signal: expect.any(AbortSignal),
       });
       expect(
         element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
@@ -171,6 +171,161 @@ it("refetches a failed local avatar after the auth credential rotates", async ()
     });
   } finally {
     element.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("aborts the stale request on auth rotation without duplicating the current fetch", async () => {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:rotated-avatar");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const pending: Array<{
+    resolve: (response: Response) => void;
+    signal: AbortSignal;
+  }> = [];
+  const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("missing agent avatar fetch signal");
+    }
+    return new Promise<Response>((resolve, reject) => {
+      pending.push({ resolve, signal });
+      signal.addEventListener("abort", () => reject(new Error("avatar fetch aborted")), {
+        once: true,
+      });
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const element = await createAgentSelect({
+    authToken: "tok",
+    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+  });
+
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    element.authToken = "tok2";
+    await element.updateComplete;
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+    expect(pending[0]?.signal.aborted).toBe(true);
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer tok", "Bearer tok2"]);
+
+    // Let the canceled request's rejection settle, then force another render while
+    // the replacement is pending. It must not clear the replacement's route claim.
+    await Promise.resolve();
+    element.identityById = { ...element.identityById };
+    await element.updateComplete;
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    pending[1]?.resolve({
+      ok: true,
+      blob: async () => new Blob(["avatar"]),
+    } as Response);
+    await waitForFast(() => {
+      expect(
+        element.querySelector<HTMLImageElement>("img.agent-select__avatar")?.getAttribute("src"),
+      ).toBe("blob:rotated-avatar");
+    });
+  } finally {
+    element.remove();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("aborts a stalled local avatar fetch after the request deadline", async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("missing agent avatar fetch signal");
+    }
+    return await new Promise<Response>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(signal.reason as Error);
+        },
+        { once: true },
+      );
+    });
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const element = await createAgentSelect({
+    authToken: "tok",
+    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+  });
+
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(fetchInit?.signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+
+    await waitForFast(() => {
+      expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+      expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    element.remove();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("aborts a stalled local avatar body after the request deadline", async () => {
+  vi.useFakeTimers();
+  const blob = vi.fn<() => Promise<Blob>>();
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+    const signal = init?.signal;
+    if (!signal) {
+      throw new Error("missing agent avatar fetch signal");
+    }
+    blob.mockImplementation(
+      () =>
+        new Promise<Blob>((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(new Error("avatar body read aborted")), {
+            once: true,
+          });
+        }),
+    );
+    return { ok: true, blob } as unknown as Response;
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+  const element = await createAgentSelect({
+    authToken: "tok",
+    identityById: { alpha: createIdentity("alpha", { avatar: "/avatar/alpha" }) },
+  });
+
+  try {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await waitForFast(() => expect(blob).toHaveBeenCalledTimes(1));
+    const [, fetchInit] = fetchMock.mock.calls[0] ?? [];
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(fetchInit?.signal?.aborted).toBe(true);
+    await waitForFast(() => {
+      expect(element.querySelector("img.agent-select__avatar")).toBeNull();
+      expect(element.querySelector(".agent-select__avatar--text")?.textContent?.trim()).toBe("A");
+    });
+    expect(vi.getTimerCount()).toBe(0);
+  } finally {
+    element.remove();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   }
 });
@@ -190,79 +345,44 @@ it("renders a local avatar image when token auth is not active", async () => {
   }
 });
 
-it("opens a listbox with selection state and a default badge", async () => {
+it("renders the agent picker as a Web Awesome dropdown", async () => {
   const element = await createAgentSelect({ defaultId: "beta" });
 
   try {
-    element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.click();
-    await element.updateComplete;
-
-    const listbox = element.querySelector('[role="listbox"]');
+    const dropdown = element.querySelector<HTMLElement & { open: boolean }>("wa-dropdown");
     const options = Array.from(
-      element.querySelectorAll<HTMLButtonElement>('.agent-select__option[role="option"]'),
+      element.querySelectorAll<HTMLElement & { checked: boolean; value: string }>(
+        "wa-dropdown-item[data-agent-id]",
+      ),
     );
-    expect(listbox).not.toBeNull();
+    expect(dropdown).not.toBeNull();
     expect(options).toHaveLength(2);
-    expect(options[0]?.getAttribute("aria-selected")).toBe("true");
-    expect(options[1]?.getAttribute("aria-selected")).toBe("false");
+    expect(options[0]?.checked).toBe(true);
+    expect(options[1]?.checked).toBe(false);
+    expect(options[0]?.value).toBe("alpha");
+    expect(options[1]?.value).toBe("beta");
     expect(options[1]?.querySelector(".agent-select__badge")?.textContent?.trim()).toBe("default");
-    expect(document.activeElement).toBe(options[0]);
+    expect(dropdown?.shadowRoot?.querySelector('[role="menu"]')).not.toBeNull();
   } finally {
     element.remove();
   }
 });
 
-it("supports trigger and listbox keyboard navigation", async () => {
+it("uses Web Awesome to open and dismiss the dropdown", async () => {
   const element = await createAgentSelect();
 
   try {
     const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    trigger?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    await element.updateComplete;
+    const dropdown = element.querySelector<
+      HTMLElement & { open: boolean; updateComplete: Promise<boolean> }
+    >("wa-dropdown");
+    trigger?.click();
+    await dropdown?.updateComplete;
+    expect(dropdown?.open).toBe(true);
 
-    const options = Array.from(
-      element.querySelectorAll<HTMLButtonElement>(".agent-select__option"),
-    );
-    // Options are focused programmatically, never sequential tab stops.
-    expect(options.every((option) => option.tabIndex === -1)).toBe(true);
-    expect(document.activeElement).toBe(options[0]);
-
-    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
-
-    options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
-    expect(document.activeElement).toBe(options[0]);
-
-    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
-
-    options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
-    await element.updateComplete;
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
-    // Tab hands focus back to the trigger so sequential navigation continues.
-    expect(document.activeElement).toBe(trigger);
-  } finally {
-    element.remove();
-  }
-});
-
-it("jumps focus to a matching agent via printable-key type-ahead", async () => {
-  const element = await createAgentSelect();
-
-  try {
-    element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.click();
-    await element.updateComplete;
-    const options = Array.from(
-      element.querySelectorAll<HTMLButtonElement>(".agent-select__option"),
-    );
-    expect(document.activeElement).toBe(options[0]);
-
-    options[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "b", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
-
-    // Accumulated prefix keeps matching the same agent instead of cycling.
-    options[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true }));
-    expect(document.activeElement).toBe(options[1]);
+    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
+    await dropdown?.updateComplete;
+    expect(dropdown?.open).toBe(false);
   } finally {
     element.remove();
   }
@@ -273,60 +393,55 @@ it("selects a different agent and ignores the already-selected agent", async () 
   const element = await createAgentSelect({ onSelect });
 
   try {
-    const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    trigger?.click();
-    await element.updateComplete;
-    element.querySelector<HTMLButtonElement>('[data-agent-id="beta"]')?.click();
-    await element.updateComplete;
+    const beta = element.querySelector('[data-agent-id="beta"]');
+    const dropdown = element.querySelector("wa-dropdown");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: beta }, bubbles: true }),
+    );
 
     expect(onSelect).toHaveBeenCalledOnce();
     expect(onSelect).toHaveBeenCalledWith("beta");
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
 
-    trigger?.click();
-    await element.updateComplete;
-    element.querySelector<HTMLButtonElement>('[data-agent-id="alpha"]')?.click();
-    await element.updateComplete;
+    const alpha = element.querySelector('[data-agent-id="alpha"]');
+    const repeatedSelection = new CustomEvent("wa-select", {
+      detail: { item: alpha },
+      bubbles: true,
+      cancelable: true,
+    });
+    (alpha as HTMLElement).focus();
+    dropdown?.dispatchEvent(repeatedSelection);
 
     expect(onSelect).toHaveBeenCalledOnce();
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
+    expect(repeatedSelection.defaultPrevented).toBe(true);
+    expect((alpha as HTMLElement & { checked: boolean }).checked).toBe(true);
+    expect(document.activeElement).toBe(element.querySelector(".agent-select__trigger"));
   } finally {
     element.remove();
   }
 });
 
-it("closes on Escape or outside pointerdown and refocuses the trigger on Escape", async () => {
-  const element = await createAgentSelect();
+it("opens the new-agent flow from the footer item", async () => {
+  const onCreateAgent = vi.fn();
+  const element = await createAgentSelect({ onCreateAgent });
 
   try {
-    const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    trigger?.click();
-    await element.updateComplete;
+    const item = element.querySelector("[data-create-agent]");
     element
-      .querySelector(".agent-select__list")
-      ?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    await element.updateComplete;
+      .querySelector("wa-dropdown")
+      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item }, bubbles: true }));
 
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
-    expect(document.activeElement).toBe(trigger);
-
-    trigger?.click();
-    await element.updateComplete;
-    document.body.dispatchEvent(new Event("pointerdown", { bubbles: true, composed: true }));
-    await element.updateComplete;
-
-    expect(element.querySelector('[role="listbox"]')).toBeNull();
+    expect(onCreateAgent).toHaveBeenCalledOnce();
   } finally {
     element.remove();
   }
 });
 
-it("renders a disabled trigger with the empty-state label", async () => {
+it("keeps the new-agent footer reachable with an empty roster", async () => {
   const element = await createAgentSelect({ agents: [], selectedId: null });
 
   try {
     const trigger = element.querySelector<HTMLButtonElement>(".agent-select__trigger");
-    expect(trigger?.disabled).toBe(true);
+    expect(trigger?.disabled).toBe(false);
     expect(element.querySelector(".agent-select__label")?.textContent?.trim()).toBe("No agents");
   } finally {
     element.remove();

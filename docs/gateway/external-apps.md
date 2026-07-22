@@ -6,6 +6,7 @@ read_when:
   - You are building an external app, script, dashboard, CI job, or IDE extension that talks to OpenClaw
   - You are choosing between Gateway RPC and the Plugin SDK
   - You are integrating with Gateway agent runs, sessions, events, approvals, models, or tools
+  - You are pairing a hosting controller with an external wake scheduler
 ---
 
 External apps talk to OpenClaw through the Gateway protocol: WebSocket
@@ -13,11 +14,15 @@ transport plus RPC methods. Use it when a script, dashboard, CI job, IDE
 extension, or another process wants to start agent runs, stream events, wait
 for results, cancel work, or inspect Gateway resources.
 
-<Warning>
-  There is no public npm client package yet. Do not add OpenClaw client package
-  names as application dependencies until release notes announce a published
-  package and this page includes install instructions.
-</Warning>
+<Note>
+  For npm packages, device pairing, reconnect recovery, history, subscriptions,
+  and approvals, start with
+  [Building a Gateway client](https://docs.openclaw.ai/gateway/clients). If your
+  app supervises the Gateway as a child process, also read
+  [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding). During the
+  initial package rollout, npm may return `E404` until the first package-bearing
+  OpenClaw release is published.
+</Note>
 
 <Note>
   This page is for code outside the OpenClaw process. Plugin code that runs
@@ -26,16 +31,14 @@ for results, cancel work, or inspect Gateway resources.
 
 ## What is available today
 
-| Surface                                 | Status | Use it for                                                                                    |
-| --------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
-| [Gateway protocol](/gateway/protocol)   | Ready  | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
-| [Gateway RPC reference](/reference/rpc) | Ready  | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
-| [`openclaw agent`](/cli/agent)          | Ready  | One-shot script integration when shelling out to the CLI is enough.                           |
-| [`openclaw message`](/cli/message)      | Ready  | Sending messages or channel actions from scripts.                                             |
-
-A future client library package is in progress internally, but it is not a
-public install surface yet. Treat it as preview implementation detail until a
-release announces a published, versioned package.
+| Surface                                                          | Status        | Use it for                                                                                    |
+| ---------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
+| [Gateway client guide](https://docs.openclaw.ai/gateway/clients) | Release train | npm packages, auth, reconnect, history, events, approvals, and version policy.                |
+| [Embedding guide](https://docs.openclaw.ai/gateway/embedding)    | Release train | Child-process environment, readiness, lifecycle, recovery, RPC ownership, and packaging.      |
+| [Gateway protocol](/gateway/protocol)                            | Ready         | WebSocket transport, connect handshake, auth scopes, protocol versioning, and events.         |
+| [Gateway RPC reference](/reference/rpc)                          | Ready         | Current Gateway methods for agents, sessions, tasks, models, tools, artifacts, and approvals. |
+| [`openclaw agent`](/cli/agent)                                   | Ready         | One-shot script integration when shelling out to the CLI is enough.                           |
+| [`openclaw message`](/cli/message)                               | Ready         | Sending messages or channel actions from scripts.                                             |
 
 ## Recommended path
 
@@ -123,20 +126,33 @@ authenticated readiness responses include `gateway-draining`; unauthenticated
 remote probes receive only `{ "ready": false }`. The HTTP health probe,
 suspension methods on existing WebSocket connections, and an already-enabled
 Admin HTTP RPC route remain available. Other RPCs return retryable
-`UNAVAILABLE`. Built-in HTTP user-work routes, including OpenAI-compatible
-APIs, tool/session operations, node watches, and configured hooks, return
-`503` with `error.code: "gateway_unavailable"`.
+`UNAVAILABLE`. Built-in HTTP user-work routes and ordinary plugin HTTP routes,
+including OpenAI-compatible APIs, tool/session operations, node watches, and
+configured hooks, return `503` with `error.code: "gateway_unavailable"`. New
+plugin-owned WebSocket upgrades also return `503`; this covers upgrade
+ownership, not work performed later over an established plugin socket.
 
 This handshake does not persist incoming messages, stop third-party channel
 transports, or control the hosting platform. The host must fence its ingress
 before preparation and remains responsible for wake, snapshot/freeze, and
 stop. `activeCount` is the aggregate tracked-work count, while `blockers`
 contains the non-zero category counts and bounded task details. This is not a
-general process-quiescence barrier. Channel health, maintenance, cache refresh,
-plugin-owned HTTP routes, and plugin-owned background work can remain active.
+general process-quiescence barrier. A `background-exec` blocker is aggregate
+only: command text, process IDs, output, and session or scope identifiers never
+cross the protocol. Channel health, maintenance, cache refresh, established
+plugin WebSocket sessions, and unregistered plugin-owned background work can
+remain active.
 The hosting platform must freeze or snapshot the full process tree and its
 filesystem consistently; unregistered work cannot be proven idle by this first
 contract.
+
+<Tip>
+  For host wake scheduling, keep the OpenClaw-facing part in an in-process
+  plugin and project idempotent full snapshots to the external host adapter.
+  The hosting controller should not import the Plugin SDK or reconstruct cron
+  state from event deltas. See [Safe external cron
+  projection](/plugins/hooks#safe-external-cron-projection).
+</Tip>
 
 ## App code vs plugin code
 
@@ -162,6 +178,8 @@ plugins loaded by OpenClaw.
 
 ## Related
 
+- [Building a Gateway client](https://docs.openclaw.ai/gateway/clients)
+- [Embedding OpenClaw](https://docs.openclaw.ai/gateway/embedding)
 - [Gateway protocol](/gateway/protocol)
 - [Gateway RPC reference](/reference/rpc)
 - [CLI agent command](/cli/agent)

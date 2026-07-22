@@ -11,19 +11,23 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
   maybeRecoverSuspiciousConfigRead,
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood,
   recoverConfigFromLastKnownGood,
-  resolveLastKnownGoodConfigPath,
-  type ObserveRecoveryDeps,
 } from "./io.observe-recovery.js";
 import type { ConfigFileSnapshot } from "./types.js";
 
 const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+type ObserveRecoveryDeps = Parameters<typeof maybeRecoverSuspiciousConfigRead>[0]["deps"];
+
+function resolveLastKnownGoodConfigPath(configPath: string): string {
+  return `${configPath}.last-good`;
+}
 
 describe("config observe recovery", () => {
   let fixtureRoot = "";
@@ -98,17 +102,11 @@ describe("config observe recovery", () => {
   }
 
   async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
-    const events: Record<string, unknown>[] = [];
-    for (const line of (await fsp.readFile(auditPath, "utf-8")).trim().split("\n")) {
-      if (!line) {
-        continue;
-      }
-      const parsed = JSON.parse(line) as Record<string, unknown>;
-      if (parsed.event === "config.observe") {
-        events.push(parsed);
-      }
-    }
-    return events;
+    const stateDir = path.dirname(path.dirname(auditPath));
+    return listConfigAuditRecordsForTests({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      homedir: () => stateDir,
+    }).filter((event) => event.event === "config.observe");
   }
 
   async function listClobberFiles(configPath: string): Promise<string[]> {
@@ -1297,3 +1295,4 @@ describe("config observe recovery", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

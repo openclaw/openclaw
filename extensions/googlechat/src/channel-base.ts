@@ -62,7 +62,7 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
     "botUser",
     "name",
   ],
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
@@ -96,8 +96,9 @@ export function createGoogleChatPluginBase(
     setupWizard: googlechatSetupWizard,
     capabilities: {
       chatTypes: ["direct", "group", "thread"],
-      reactions: true,
       threads: true,
+      // Inbound attachment download remains supported even though service-account
+      // authentication cannot use Google Chat's user-auth-only upload endpoint.
       media: true,
       nativeCommands: false,
       blockStreaming: true,
@@ -116,6 +117,7 @@ export function createGoogleChatPluginBase(
           configured: account.credentialSource !== "none",
           extra: {
             credentialSource: account.credentialSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },

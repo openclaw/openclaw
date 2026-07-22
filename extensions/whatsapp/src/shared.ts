@@ -41,10 +41,6 @@ import {
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
 
-export async function loadWhatsAppChannelRuntime() {
-  return await import("./channel.runtime.js");
-}
-
 async function loadWhatsAppSetupSurface() {
   return await import("./setup-surface.js");
 }
@@ -158,7 +154,7 @@ export function createWhatsAppPluginBase(params: {
       docsLabel: "whatsapp",
       blurb: "works with your own number; recommend a separate phone + eSIM.",
       systemImage: "message",
-      showConfigured: false,
+      exposure: { configured: false },
       quickstartAllowFrom: true,
       forceAccountBinding: true,
       preferSessionLookupForAnnounceTarget: true,

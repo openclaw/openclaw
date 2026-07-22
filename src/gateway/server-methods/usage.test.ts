@@ -3,6 +3,7 @@
  */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
@@ -160,13 +161,19 @@ describe("gateway usage helpers", () => {
 
   it("usage.cost rejects an explicitly provided invalid date with INVALID_REQUEST", async () => {
     const respond = vi.fn();
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: { startDate: 0 },
       context: { getRuntimeConfig: () => ({}) },
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
     expect(respond).toHaveBeenCalledTimes(1);
-    const [ok, payload, error] = respond.mock.calls[0];
+    const [ok, payload, error] = expectDefined(
+      respond.mock.calls[0],
+      "respond.mock.calls[0] test invariant",
+    );
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
     expect(JSON.stringify(error)).toContain("startDate");
@@ -178,7 +185,10 @@ describe("gateway usage helpers", () => {
     "%s rejects an invalid IANA timezone with INVALID_REQUEST",
     async (method) => {
       const respond = vi.fn();
-      await usageHandlers[method]({
+      await expectDefined(
+        usageHandlers[method],
+        "usageHandlers[method] test invariant",
+      )({
         respond,
         params: { mode: "specific", timeZone: "Invalid/Timezone" },
         context: { getRuntimeConfig: vi.fn(() => ({})) },
@@ -193,7 +203,10 @@ describe("gateway usage helpers", () => {
 
   it("falls back to the legacy offset when Gateway ICU does not recognize the browser timezone", async () => {
     const respond = vi.fn();
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: { mode: "specific", timeZone: "Newer/BrowserZone", utcOffset: "UTC+1" },
       context: { getRuntimeConfig: vi.fn(() => ({})) },
@@ -211,14 +224,20 @@ describe("gateway usage helpers", () => {
     "%s rejects startDate after endDate with INVALID_REQUEST",
     async (method) => {
       const respond = vi.fn();
-      await usageHandlers[method]({
+      await expectDefined(
+        usageHandlers[method],
+        "usageHandlers[method] test invariant",
+      )({
         respond,
         params: { startDate: "2026-02-03", endDate: "2026-02-02" },
         context: { getRuntimeConfig: vi.fn(() => ({})) },
       } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
 
       expect(respond).toHaveBeenCalledTimes(1);
-      const [ok, payload, error] = respond.mock.calls[0];
+      const [ok, payload, error] = expectDefined(
+        respond.mock.calls[0],
+        "respond.mock.calls[0] test invariant",
+      );
       expect(ok).toBe(false);
       expect(payload).toBeUndefined();
       expect(JSON.stringify(error)).toContain("startDate must not be after endDate");
@@ -245,6 +264,13 @@ describe("gateway usage helpers", () => {
     expect(testApi.parseDays("30")).toBe(30);
     expect(testApi.parseDays("")).toBeUndefined();
     expect(testApi.parseDays("nope")).toBeUndefined();
+  });
+
+  it("parseDays caps day counts before Date arithmetic can overflow", () => {
+    expect(testApi.parseDays(1e300)).toBe(36600);
+    expect(testApi.parseDays("1e300")).toBe(36600);
+    expect(testApi.parseDays(Number.MAX_SAFE_INTEGER)).toBe(36600);
+    expect(testApi.parseDays(366 * 100)).toBe(36600);
   });
 
   it("resolveDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
@@ -394,12 +420,16 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {
+  it("resolveDateRange clamps days to its supported bounds and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
     const oneDay = expectDateRange(testApi.resolveDateRange({ days: 0 }));
     expect(oneDay.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(oneDay.startMs).toBe(Date.UTC(2026, 1, 5));
+
+    const maxDays = expectDateRange(testApi.resolveDateRange({ days: Number.MAX_SAFE_INTEGER }));
+    expect(maxDays.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
+    expect(maxDays.startMs).toBe(Date.UTC(2026, 1, 5) - (36600 - 1) * dayMs);
 
     const def = expectDateRange(testApi.resolveDateRange({}));
     expect(def.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
@@ -428,6 +458,34 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(0)?.[0]?.refreshMode).toBe(
       "background",
     );
+  });
+
+  it("keeps refreshing cost summaries fresh for the TTL window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+    vi.mocked(loadCostUsageSummaryFromCache).mockResolvedValueOnce({
+      ...costSummary({ totalTokens: 1, totalCost: 0 }),
+      cacheStatus: {
+        status: "refreshing",
+        cachedFiles: 1,
+        pendingFiles: 1,
+        staleFiles: 1,
+      },
+    });
+
+    const config = {} as OpenClawConfig;
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+
+    const entry = testApi.costUsageCache.get("agent:__default__:1-2:gateway");
+    expect(entry?.updatedAt).toBe(Date.now());
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
   });
 
   it("keeps cost usage cache entries scoped by agentId", async () => {
@@ -501,7 +559,10 @@ describe("gateway usage helpers", () => {
   it("passes usage.cost agentId through to the cost summary loader", async () => {
     const respond = vi.fn();
 
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: { startDate: "2026-02-01", endDate: "2026-02-02", agentId: "research" },
       context: { getRuntimeConfig: () => ({}) },
@@ -516,7 +577,10 @@ describe("gateway usage helpers", () => {
   it("buckets usage.cost daily rows with the requested UTC offset", async () => {
     const respond = vi.fn();
 
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: {
         startDate: "2026-02-01",
@@ -537,7 +601,10 @@ describe("gateway usage helpers", () => {
   it("uses an IANA timezone for usage.cost range boundaries and day buckets", async () => {
     const respond = vi.fn();
 
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: {
         startDate: "2026-10-25",
@@ -561,7 +628,10 @@ describe("gateway usage helpers", () => {
   it("passes usage.cost all-agent scope through to all configured agent loaders", async () => {
     const respond = vi.fn();
 
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
       context: {
@@ -596,12 +666,18 @@ describe("gateway usage helpers", () => {
       };
       const readSync = vi.spyOn(fsSync, "readSync");
       try {
-        await usageHandlers["usage.cost"]({
+        await expectDefined(
+          usageHandlers["usage.cost"],
+          'usageHandlers["usage.cost"] test invariant',
+        )({
           respond: vi.fn(),
           params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
           context: { getRuntimeConfig: () => config },
         } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
-        await usageHandlers["sessions.usage"]({
+        await expectDefined(
+          usageHandlers["sessions.usage"],
+          'usageHandlers["sessions.usage"] test invariant',
+        )({
           respond: vi.fn(),
           params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
           context: { getRuntimeConfig: () => config },
@@ -629,7 +705,10 @@ describe("gateway usage helpers", () => {
     const params = { startDate: "2026-02-01", endDate: "2026-02-01", mode: "utc" };
 
     const defaultRespond = vi.fn();
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond: defaultRespond,
       params,
       context,
@@ -642,7 +721,10 @@ describe("gateway usage helpers", () => {
     });
 
     const aggregateRespond = vi.fn();
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond: aggregateRespond,
       params: { ...params, agentScope: "all" },
       context,
@@ -662,7 +744,10 @@ describe("gateway usage helpers", () => {
     });
 
     const mainRespond = vi.fn();
-    await usageHandlers["usage.cost"]({
+    await expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond: mainRespond,
       params: { ...params, agentId: "main" },
       context,
@@ -703,7 +788,10 @@ describe("gateway usage helpers", () => {
     });
 
     const respond = vi.fn();
-    const request = usageHandlers["usage.cost"]({
+    const request = expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
       context: {
@@ -739,7 +827,10 @@ describe("gateway usage helpers", () => {
       .mockRejectedValueOnce(failure);
 
     const respond = vi.fn();
-    const request = usageHandlers["usage.cost"]({
+    const request = expectDefined(
+      usageHandlers["usage.cost"],
+      'usageHandlers["usage.cost"] test invariant',
+    )({
       respond,
       params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
       context: {
@@ -781,7 +872,10 @@ describe("gateway usage helpers", () => {
     });
 
     const respond = vi.fn();
-    const request = usageHandlers["sessions.usage"]({
+    const request = expectDefined(
+      usageHandlers["sessions.usage"],
+      'usageHandlers["sessions.usage"] test invariant',
+    )({
       respond,
       params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
       context: {

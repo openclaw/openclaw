@@ -6,7 +6,7 @@ import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
-import type { CronJob, CronJobState, CronSchedule, CronStoreFile } from "../types.js";
+import type { CronJob, CronJobState, CronPacing, CronSchedule, CronStoreFile } from "../types.js";
 import { bindDeliveryColumns, deliveryFromRow } from "./delivery-codec.js";
 import { bindFailureAlertColumns, failureAlertFromRow } from "./failure-alert-codec.js";
 import { bindPayloadColumns, payloadFromRow } from "./payload-codec.js";
@@ -22,7 +22,7 @@ import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import { bindTriggerColumns, triggerFromRow } from "./trigger-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
-export function bindScheduleColumns(
+function bindScheduleColumns(
   schedule: CronSchedule,
 ): Pick<
   CronJobInsert,
@@ -62,6 +62,19 @@ export function bindScheduleColumns(
       anchor_ms: null,
       schedule_expr: schedule.command,
       schedule_tz: schedule.cwd ?? null,
+      stagger_ms: null,
+    };
+  }
+  if (schedule.kind === "stream") {
+    // argv-shaped stream schedules live in the existing additive job_json
+    // envelope; normalized columns retain only the discriminant (no DDL).
+    return {
+      schedule_kind: "stream",
+      at: null,
+      every_ms: null,
+      anchor_ms: null,
+      schedule_expr: null,
+      schedule_tz: null,
       stagger_ms: null,
     };
   }
@@ -210,7 +223,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
   }
@@ -236,7 +249,25 @@ export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
       ...(row.schedule_tz ? { cwd: row.schedule_tz } : {}),
     };
   }
+  if (row.schedule_kind === "stream") {
+    const schedule = parseJsonObject<Record<string, unknown>>(row.job_json, {}).schedule;
+    if (!isRecord(schedule) || schedule.kind !== "stream" || !Array.isArray(schedule.command)) {
+      return null;
+    }
+    return structuredClone(schedule) as CronSchedule;
+  }
   return null;
+}
+
+function pacingFromRow(row: CronJobRow): CronPacing | undefined {
+  const pacing = parseJsonObject<Record<string, unknown>>(row.job_json, {}).pacing;
+  if (!isRecord(pacing) || Array.isArray(pacing)) {
+    return undefined;
+  }
+  return {
+    ...(typeof pacing.min === "string" ? { min: pacing.min } : {}),
+    ...(typeof pacing.max === "string" ? { max: pacing.max } : {}),
+  };
 }
 
 function rowToCronJob(row: CronJobRow): CronJob | null {
@@ -245,6 +276,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
   const delivery = deliveryFromRow(row);
   const failureAlert = failureAlertFromRow(row);
   const trigger = triggerFromRow(row);
+  const pacing = pacingFromRow(row);
   if (!schedule || !payload) {
     return null;
   }
@@ -273,6 +305,7 @@ function rowToCronJob(row: CronJobRow): CronJob | null {
     ...(row.agent_id ? { agentId: row.agent_id } : {}),
     ...(row.session_key ? { sessionKey: row.session_key } : {}),
     schedule,
+    ...(pacing !== undefined ? { pacing } : {}),
     sessionTarget: row.session_target as CronJob["sessionTarget"],
     wakeMode: row.wake_mode as CronJob["wakeMode"],
     ...(trigger ? { trigger } : {}),

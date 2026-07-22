@@ -14,7 +14,7 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { resolveClosestSize } from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { canonicalizeBase64, MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
 import {
   ensureAuthProfileStore,
   hasConfiguredSecretInput,
@@ -43,7 +43,7 @@ import { resolveConfiguredOpenAIBaseUrl } from "./shared.js";
 
 const DEFAULT_OPENAI_IMAGE_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_OPENAI_CODEX_IMAGE_BASE_URL = OPENAI_CODEX_RESPONSES_BASE_URL;
-const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.5";
+const DEFAULT_OPENAI_CODEX_IMAGE_RESPONSES_MODEL = "gpt-5.6-sol";
 const OPENAI_CODEX_IMAGE_INSTRUCTIONS = "You are an image generation assistant.";
 const OPENAI_TRANSPARENT_BACKGROUND_IMAGE_MODEL = "gpt-image-1.5";
 const DEFAULT_OPENAI_IMAGE_TIMEOUT_MS = 180_000;
@@ -66,6 +66,7 @@ const OPENAI_MAX_IMAGE_RESULTS = 4;
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
+const STANDARD_BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -265,6 +266,14 @@ function resolveNativeOpenAIImageSizesForModel(model: string): readonly string[]
   }
 }
 
+function resolveConfiguredOpenAIImageBaseUrl(cfg: OpenClawConfig | undefined, model: string) {
+  const modelId = model.trim().replace(/^openai\//u, "");
+  const modelBaseUrl = cfg?.models?.providers?.openai?.models
+    ?.find((candidate) => candidate.id.trim().replace(/^openai\//u, "") === modelId)
+    ?.baseUrl?.trim();
+  return modelBaseUrl || resolveConfiguredOpenAIBaseUrl(cfg);
+}
+
 function resolveOpenAIImageRequestSize(params: {
   model: string;
   requestedSize?: string;
@@ -297,6 +306,7 @@ function resolveOpenAIImageRequestSize(params: {
 
 function shouldAllowPrivateImageEndpoint(req: {
   provider: string;
+  model: string;
   cfg: OpenClawConfig | undefined;
 }) {
   if (req.provider === MOCK_OPENAI_PROVIDER_ID) {
@@ -305,7 +315,7 @@ function shouldAllowPrivateImageEndpoint(req: {
   if (isPrivateNetworkOptInEnabled(req.cfg?.browser?.ssrfPolicy)) {
     return true;
   }
-  const baseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+  const baseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
   if (!baseUrl.startsWith("http://127.0.0.1:") && !baseUrl.startsWith("http://localhost:")) {
     return false;
   }
@@ -568,7 +578,22 @@ function decodeCodexImagePayload(payload: string): Buffer {
   if (payload.length > MAX_CODEX_IMAGE_BASE64_CHARS) {
     throw new Error("OpenAI Codex image generation result exceeded size limit");
   }
-  return Buffer.from(payload, "base64");
+  // Rust's str::trim follows Unicode White_Space (including U+0085), while
+  // JavaScript's trim does not. Match Codex before enforcing canonical Base64.
+  const trimmedPayload = payload.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "");
+  const canonicalPayload = canonicalizeBase64(trimmedPayload);
+  const padding = canonicalPayload?.endsWith("==") ? 2 : canonicalPayload?.endsWith("=") ? 1 : 0;
+  const trailingBitsMask = padding === 2 ? 0x0f : padding === 1 ? 0x03 : 0;
+  const trailingValue =
+    padding > 0 ? STANDARD_BASE64_ALPHABET.indexOf(canonicalPayload?.at(-(padding + 1)) ?? "") : 0;
+  if (
+    !canonicalPayload ||
+    canonicalPayload !== trimmedPayload ||
+    (trailingValue & trailingBitsMask) !== 0
+  ) {
+    throw new Error("OpenAI Codex image generation returned malformed base64 image data");
+  }
+  return Buffer.from(canonicalPayload, "base64");
 }
 
 function toCodexImage(
@@ -860,7 +885,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     async generateImage(req) {
       const inputImages = req.inputImages ?? [];
       const isEdit = inputImages.length > 0;
-      const rawBaseUrl = resolveConfiguredOpenAIBaseUrl(req.cfg);
+      const rawBaseUrl = resolveConfiguredOpenAIImageBaseUrl(req.cfg, req.model);
       const publicOpenAIBaseUrl = isPublicOpenAIImageBaseUrl(rawBaseUrl);
       const chatGPTBaseUrl = isOpenAICodexBaseUrl(rawBaseUrl);
       const codexResponsesConfigured =
@@ -1068,3 +1093,4 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

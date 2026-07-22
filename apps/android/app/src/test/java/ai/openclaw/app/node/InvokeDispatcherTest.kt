@@ -1,7 +1,7 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.DeviceIdentityStore
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCanvasCommand
@@ -14,7 +14,6 @@ import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
 import android.webkit.WebView
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -374,7 +373,7 @@ class InvokeDispatcherTest {
           canvas = canvas,
           json = Json { ignoreUnknownKeys = true },
         ),
-      debugHandler = DebugHandler(appContext, DeviceIdentityStore(appContext)),
+      debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
       callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
       isForeground = { isForeground },
       cameraEnabled = { cameraEnabled },
@@ -398,7 +397,7 @@ class InvokeDispatcherTest {
     CameraHandler(
       appContext = appContext,
       camera = CameraCaptureManager(appContext),
-      externalAudioCaptureActive = MutableStateFlow(false),
+      setCameraAudioCaptureActive = { true },
       showCameraHud = { _, _, _ -> },
       invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
     )

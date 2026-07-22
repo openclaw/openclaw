@@ -425,6 +425,8 @@ export const buildTelegramMessageContext = async ({
     cfg,
   });
   const baseRequireMention = resolveGroupRequireMention(chatId, cfg);
+  // Persisted session activation intentionally interleaves topic and group config.
+  // ScopeTree resolves config only, so this precedence remains session-owned here.
   const groupRequireMention = firstDefined(
     topicConfig?.requireMention,
     activationOverride,
@@ -608,7 +610,6 @@ export const buildTelegramMessageContext = async ({
           },
           initialEmoji: ackReaction,
           emojis: resolvedStatusReactionEmojis ?? undefined,
-          timing: statusReactionsConfig?.timing,
           onError: (err) => {
             logVerbose(`telegram status-reaction error for chat ${chatId}: ${String(err)}`);
           },

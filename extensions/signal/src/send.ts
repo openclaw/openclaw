@@ -1,3 +1,4 @@
+import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 // Signal plugin module implements send behavior.
 import {
   createMessageReceiptFromOutboundResults,
@@ -21,6 +22,8 @@ import {
 } from "./approval-reactions.js";
 import { signalRpcRequest } from "./client-adapter.js";
 import { markdownToSignalText, type SignalTextStyleRange } from "./format.js";
+import { normalizeSignalMessagingTarget } from "./normalize.js";
+import { registerSignalReplyContext } from "./reply-authors.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
 
 export type SignalSendOpts = {
@@ -79,13 +82,9 @@ async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
 }
 
 function parseTarget(raw: string): SignalTarget {
-  let value = raw.trim();
+  const value = normalizeSignalMessagingTarget(raw);
   if (!value) {
     throw new Error("Signal recipient is required");
-  }
-  const lower = normalizeLowercaseStringOrEmpty(value);
-  if (lower.startsWith("signal:")) {
-    value = value.slice("signal:".length).trim();
   }
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (normalized.startsWith("group:")) {
@@ -96,9 +95,6 @@ function parseTarget(raw: string): SignalTarget {
       type: "username",
       username: value.slice("username:".length).trim(),
     };
-  }
-  if (normalized.startsWith("u:")) {
-    return { type: "username", username: value.trim() };
   }
   return { type: "recipient", recipient: value };
 }
@@ -260,7 +256,7 @@ export async function sendMessageSignal(
     targetAuthorUuid,
   });
   let message = outboundText;
-  let messageFromPlaceholder = false;
+  let outboundMedia: MediaPlaceholderTextFact | undefined;
   let textStyles: SignalTextStyleRange[] = [];
   const textMode = opts.textMode ?? "markdown";
   const maxBytes = (() => {
@@ -284,15 +280,13 @@ export async function sendMessageSignal(
       readFile: opts.mediaReadFile,
     });
     attachments = [resolved.path];
-    const kind = kindFromMime(resolved.contentType ?? undefined);
-    if (!message && kind) {
-      // Avoid sending an empty body when only attachments exist.
-      message = kind === "image" ? "<media:image>" : `<media:${kind}>`;
-      messageFromPlaceholder = true;
-    }
+    outboundMedia = {
+      contentType: resolved.contentType,
+      kind: kindFromMime(resolved.contentType ?? undefined) ?? "unknown",
+    };
   }
 
-  if (message.trim() && !messageFromPlaceholder) {
+  if (message.trim()) {
     if (textMode === "plain") {
       textStyles = opts.textStyles ?? [];
     } else {
@@ -363,6 +357,18 @@ export async function sendMessageSignal(
   }
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
+  const replyAuthor = targetAuthor ?? targetAuthorUuid;
+  if (timestamp && replyAuthor) {
+    await registerSignalReplyContext({
+      accountId: accountInfo.accountId,
+      to,
+      replyToId: messageId,
+      author: replyAuthor,
+      body: message,
+      media: outboundMedia ? [outboundMedia] : undefined,
+      sourceTimestamp: timestamp,
+    });
+  }
   registerSignalApprovalReactionTargetForOutboundMessage({
     cfg,
     accountId: accountInfo.accountId,

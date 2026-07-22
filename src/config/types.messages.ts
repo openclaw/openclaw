@@ -19,9 +19,10 @@ export type GroupChatConfig = {
    */
   unmentionedInbound?: "user_request" | "room_event";
   /**
-   * Controls how group/channel inbound events produce visible room replies. The
-   * message-tool mode requires explicit message sends for visible room output;
-   * final text stays private when the model misses the tool.
+   * Controls how group/channel inbound events produce model-authored room replies.
+   * The message-tool mode requires explicit message sends for normal assistant
+   * output; explicitly host-owned runtime output remains deliverable except for
+   * ambient room events.
    * Default: "automatic".
    */
   visibleReplies?: "automatic" | "message_tool";
@@ -34,7 +35,6 @@ export type DmConfig = {
 export type QueueConfig = {
   mode?: QueueMode;
   byChannel?: QueueModeByProvider;
-  debounceMs?: number;
   /** Per-channel debounce overrides (ms). */
   debounceMsByChannel?: InboundDebounceByProvider;
   cap?: number;
@@ -61,15 +61,6 @@ export type BroadcastConfig = {
   [peerId: string]: string[] | BroadcastStrategy | undefined;
 };
 
-export type AudioConfig = {
-  /** @deprecated Use tools.media.audio.models instead. */
-  transcription?: {
-    // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
-    command: string[];
-    timeoutSeconds?: number;
-  };
-};
-
 export type StatusReactionsEmojiConfig = {
   queued?: string;
   thinking?: string;
@@ -86,38 +77,22 @@ export type StatusReactionsEmojiConfig = {
   compacting?: string;
 };
 
-export type StatusReactionsTimingConfig = {
-  /** Debounce interval for intermediate states (ms). Default: 700. */
-  debounceMs?: number;
-  /** Soft stall warning timeout (ms). Default: 10000. */
-  stallSoftMs?: number;
-  /** Hard stall warning timeout (ms). Default: 30000. */
-  stallHardMs?: number;
-  /** How long to hold done emoji before cleanup (ms). Default: 1500. */
-  doneHoldMs?: number;
-  /** How long to hold error emoji before cleanup (ms). Default: 2500. */
-  errorHoldMs?: number;
-};
-
 export type StatusReactionsConfig = {
   /** Enable lifecycle status reactions (default: false). */
   enabled?: boolean;
   /** Override default emojis. */
   emojis?: StatusReactionsEmojiConfig;
-  /** Override default timing. */
-  timing?: StatusReactionsTimingConfig;
 };
 
 export type MessagesConfig = {
-  /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
-  messagePrefix?: string;
   /**
    * Controls how source inbound events produce visible replies across direct,
    * group, and channel conversations. Group/channel events still default to
    * `groupChat.visibleReplies` when it is set.
    *
-   * Default: "automatic". In group/channel rooms, "message_tool" keeps final
-   * text private unless the model sends visibly through the message tool.
+   * Default: "automatic". In group/channel rooms, "message_tool" keeps normal
+   * assistant output private unless the model sends visibly through the message
+   * tool; explicitly host-owned runtime output remains deliverable.
    */
   visibleReplies?: "automatic" | "message_tool";
   /**

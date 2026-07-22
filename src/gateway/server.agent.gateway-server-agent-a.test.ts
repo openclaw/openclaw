@@ -1,9 +1,9 @@
 /**
  * Gateway server-agent integration tests for agent startup and session dispatch.
  */
-import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -14,7 +14,7 @@ import {
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
 import { waitForAgentCommandCall } from "./agent-command.test-helpers.js";
-import { resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
+import { resetPreparedModelCatalogForTest } from "./server-model-catalog.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
@@ -88,7 +88,7 @@ async function runMainAgentDeliveryWithSession(params: {
       deliver: true,
       ...params.request,
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
     return await waitForAgentCommandCall(String(params.request.idempotencyKey));
   } finally {
     testState.allowFrom = undefined;
@@ -98,9 +98,16 @@ async function runMainAgentDeliveryWithSession(params: {
 async function setGatewayModelCatalogForTest(
   models: typeof agentDiscoveryMock.models,
 ): Promise<void> {
+  testState.sessionStorePath = gatewaySuite.sessionStorePath;
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = models;
-  await resetGatewayModelCatalogCacheForTest();
+  await resetPreparedModelCatalogForTest();
+  const [
+    { refreshPreparedModelRuntimeSnapshots },
+    { clearRuntimeConfigSnapshot, getRuntimeConfig },
+  ] = await Promise.all([import("../agents/prepared-model-runtime.js"), import("../config/io.js")]);
+  clearRuntimeConfigSnapshot();
+  await refreshPreparedModelRuntimeSnapshots(getRuntimeConfig(), { gatewayLifecycle: true });
 }
 
 const baseImageAttachment = () => ({
@@ -128,6 +135,7 @@ async function runAgentImageRequest(params: {
 
   const res = await rpcReq(gatewaySuite.ws, "agent", {
     message: "what is in the image?",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey ?? "main",
     attachments: [baseImageAttachment()],
     idempotencyKey: params.idempotencyKey,
@@ -275,7 +283,7 @@ describe("gateway server agent", () => {
       deliver: true,
       idempotencyKey: "idem-agent-last-stale",
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
 
     const call = await waitForAgentCommandCall("idem-agent-last-stale");
     expectChannels(call, "whatsapp");
@@ -342,16 +350,16 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
     await waitForAgentCommandCall("idem-agent-subdepth");
 
-    const raw = await fs.readFile(gatewaySuite.sessionStorePath, "utf-8");
-    const persisted = JSON.parse(raw) as Record<
-      string,
-      { spawnDepth?: number; spawnedBy?: string }
-    >;
-    expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
-    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
+    const persisted = loadSessionEntry({
+      sessionKey: "agent:main:subagent:depth",
+      storePath: gatewaySuite.sessionStorePath,
+    }) as { spawnDepth?: number; spawnedBy?: string } | undefined;
+    expect(persisted?.spawnDepth).toBe(2);
+    expect(persisted?.spawnedBy).toBe("agent:main:main");
   });
 
   test("agent derives sessionKey from agentId", async () => {
+    testState.agentsConfig = { list: [{ id: "ops" }] };
     await setTestSessionStore({
       agentId: "ops",
       entries: {
@@ -361,13 +369,12 @@ describe("gateway server agent", () => {
         },
       },
     });
-    testState.agentsConfig = { list: [{ id: "ops" }] };
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
       agentId: "ops",
       idempotencyKey: "idem-agent-id",
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok, JSON.stringify(res)).toBe(true);
 
     const call = await waitForAgentCommandCall("idem-agent-id");
     expect(call.sessionKey).toBe("agent:ops:main");

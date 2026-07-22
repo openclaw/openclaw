@@ -12,9 +12,14 @@ export type {
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
+  CliBackendResolveRuntimeToolAvailability,
+  CliBackendResolveRuntimeToolAvailabilityContext,
+  CliBackendRuntimeToolAvailability,
   CliBackendSideQuestionToolMode,
+  CliBackendToolAvailability,
   CliBackendThinkingLevel,
 } from "../plugins/types.js";
+export type { CliBackendRuntimeArtifactPolicy } from "../plugins/cli-backend.types.js";
 export {
   CLI_FRESH_WATCHDOG_DEFAULTS,
   CLI_RESUME_WATCHDOG_DEFAULTS,

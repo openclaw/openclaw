@@ -2,7 +2,7 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
-import type { Context, Model, SimpleStreamOptions } from "../types.js";
+import type { Context, Model, SimpleStreamOptions, TextContent } from "../types.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
@@ -274,6 +274,52 @@ describe("OpenAI-compatible completions params", () => {
       { type: "text", text: "Requests like this are not allowed." },
     ]);
     expect(result.stopReason).toBe("stop");
+  });
+
+  it("tags pre-tool narration as commentary on tool turns", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Importing ORDER-1234 into the tracker…"),
+      makeToolCallChunk("call_import", "import_order", '{"id":"ORDER-1234"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const result = await streamOpenAICompletions(model, context, { apiKey: "sk-test" }).result();
+    const textBlock = result.content.find((block) => block.type === "text") as
+      | TextContent
+      | undefined;
+
+    expect(result.stopReason).toBe("toolUse");
+    expect(JSON.parse(String(textBlock?.textSignature))).toMatchObject({
+      v: 1,
+      phase: "commentary",
+    });
+  });
+
+  it("rolls back provisional tags when spurious tool calls are stripped", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Here is the answer."),
+      makeToolCallChunk("call_spurious", "noop", "{}"),
+      makeFinishChunk("stop"),
+    ];
+
+    const result = await streamOpenAICompletions(model, context, { apiKey: "sk-test" }).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toStrictEqual([{ type: "text", text: "Here is the answer." }]);
+  });
+
+  it("does not tag ordinary text when a provider emits an empty tool_calls array", async () => {
+    mockChunksRef.chunks = [
+      makeTextChunk("Ordinary answer."),
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { tool_calls: [] }, finish_reason: "stop" }],
+      },
+    ];
+
+    const result = await streamOpenAICompletions(model, context, { apiKey: "sk-test" }).result();
+
+    expect(result.content).toStrictEqual([{ type: "text", text: "Ordinary answer." }]);
   });
 
   it("preserves a valid provider-reported usage cost", async () => {
@@ -565,6 +611,62 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("does not emit image turns or placeholders for payload-less tool media", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      { ...model, input: ["text", "image"] },
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_husk", name: "screenshot", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_husk",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(no output)",
+      tool_call_id: "call_husk",
+    });
+    expect(JSON.stringify(capturedMessages)).not.toContain("image_url");
+    expect(JSON.stringify(capturedMessages)).not.toContain("see attached image");
+  });
+
   it("preserves image-bearing tool results with image placeholders and attachments", async () => {
     let capturedMessages:
       | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
@@ -665,6 +767,54 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedMaxTokens).toBe(32_000);
+  });
+
+  it("uses Z.AI max_tokens and disables thinking by default", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        maxTokens: 1_024,
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      max_tokens: 1_024,
+      thinking: { type: "disabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("max_completion_tokens");
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
+  });
+
+  it("enables Z.AI thinking with the documented payload when requested", async () => {
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        provider: "zai",
+        baseUrl: "https://api.z.ai/api/paas/v4",
+        reasoning: true,
+      },
+      context,
+      {
+        apiKey: "sk-test",
+        reasoningEffort: "high",
+      },
+    );
+
+    await stream.result();
+
+    expect(mockOpenAIOptionsRef.payloads[0]).toMatchObject({
+      thinking: { type: "enabled" },
+    });
+    expect(mockOpenAIOptionsRef.payloads[0]).not.toHaveProperty("enable_thinking");
   });
 
   it("forwards simple stop sequences to request params", async () => {
@@ -1449,7 +1599,11 @@ describe("openai-completions stop-reason tool-call guard", () => {
     });
     const result = await stream.result();
 
-    expect(result.content[0]).toEqual({ type: "text", text: "Use <" });
+    expect(result.content[0]).toEqual({
+      type: "text",
+      text: "Use <",
+      textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+    });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });
 
@@ -1519,3 +1673,4 @@ describe("openai-completions stop-reason tool-call guard", () => {
     );
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
@@ -19,6 +23,34 @@ vi.mock("../config/config.js", async () => {
 });
 
 describe("sandbox explain command", () => {
+  it("reads a missing session without creating or registering an agent database", async () => {
+    await withOpenClawTestState({ label: "sandbox-explain-readonly" }, async (state) => {
+      const agentDatabasePath = state.statePath(
+        "agents",
+        "readonly",
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      mockCfg = {
+        agents: {
+          defaults: { sandbox: { mode: "off" } },
+          list: [{ id: "readonly", workspace: state.workspaceDir }],
+        },
+        session: { store: agentDatabasePath },
+      };
+      const stateDatabase = openOpenClawStateDatabase({ env: state.env });
+
+      await sandboxExplainCommand({ json: true, agent: "readonly" }, {
+        log: () => {},
+        error: () => {},
+        exit: () => {},
+      } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
+
+      expect(stateDatabase.db.prepare("SELECT agent_id FROM agent_databases").all()).toEqual([]);
+      await expect(fs.stat(agentDatabasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("prints JSON shape + fix-it keys", { timeout: SANDBOX_EXPLAIN_TEST_TIMEOUT_MS }, async () => {
     mockCfg = {
       agents: {
@@ -246,18 +278,13 @@ describe("sandbox explain command", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "child-session",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:builder:main",
-          spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
-          spawnedCwd: "/tmp/openclaw-child-workspace/task",
-        },
-      }),
-    );
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:builder:main",
+      spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
+      spawnedCwd: "/tmp/openclaw-child-workspace/task",
+    } as SessionEntry);
     mockCfg = {
       agents: {
         defaults: { sandbox: { mode: "off" } },
@@ -289,17 +316,12 @@ describe("sandbox explain command", () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "child-session",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:builder:main",
-          spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
-        },
-      }),
-    );
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:builder:main",
+      spawnedWorkspaceDir: "/tmp/openclaw-child-workspace",
+    } as SessionEntry);
     mockCfg = {
       agents: {
         defaults: {

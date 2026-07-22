@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 /**
  * Emits diagnostic model-call events around embedded-agent stream functions.
  */
@@ -391,6 +392,7 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
+    observationUnit: "request",
     ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
     ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
     ...(ctx.contextWindowReferenceTokens
@@ -420,8 +422,7 @@ function modelCallUsageField(state: ModelCallObservationState) {
 }
 
 function boundedTimelineAttribute(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized.slice(0, TIMELINE_ATTRIBUTE_MAX_LENGTH) : undefined;
+  return truncateUtf16Safe(value?.trim() ?? "", TIMELINE_ATTRIBUTE_MAX_LENGTH) || undefined;
 }
 
 function emitProviderRequestTimelineEvent(
@@ -892,3 +893,4 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
     }
   }) as StreamFn;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

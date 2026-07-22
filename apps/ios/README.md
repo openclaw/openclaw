@@ -69,6 +69,7 @@ Release behavior:
 - Do not treat `pnpm ios:release:archive`, `asc builds upload`, `asc release stage`, `asc publish appstore`, direct Fastlane lanes, or App Store Connect mutation commands as fallback upload paths after `pnpm ios:release:upload` fails.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
 - App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
+- Before submitting a HealthKit-enabled build, the release owner must update the public privacy policy and App Store Connect privacy details for the Health & Fitness aggregates shared with the user's configured AI provider.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - Release uploads require an explicit CalVer version passed with `--version`.
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
@@ -286,7 +287,7 @@ gateway can only send pushes for iOS devices that paired with that gateway.
 
 - Pairing via QR or setup code flow (`/pair qr` or `/pair`, then `/pair approve` in Telegram).
 - Gateway connection via discovery or manual host/port with TLS fingerprint trust prompt.
-- Chat + Talk surfaces through the operator gateway session.
+- One Chat surface for text, realtime voice, dictation, and voice notes through the operator gateway session.
 - iOS node commands in foreground: camera snap/clip, canvas present/navigate/eval/snapshot, screen record, location, contacts, calendar, reminders, photos, motion, local notifications.
 - Authenticated background `node.presence.alive` beacons that update gateway last-seen metadata when the app moves between foreground and background, without treating suspended sockets as connected.
 - Share extension deep-link forwarding into the connected gateway session.

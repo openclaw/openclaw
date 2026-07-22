@@ -94,6 +94,8 @@ export function isTrustedOfficialPluginInstall(params: {
   }
   if (
     installRecord.source === "npm" &&
+    installRecord.artifactKind === undefined &&
+    installRecord.sourcePath === undefined &&
     officialInstall?.npmSpec === packageName &&
     [
       installRecord.resolvedName,

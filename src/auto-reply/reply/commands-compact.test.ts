@@ -197,6 +197,7 @@ describe("handleCompactCommand", () => {
     expect(call.senderE164).toBe("+15551234567");
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.authProfileId).toBe("github-copilot:work");
+    expect(call.authProfileIdSource).toBe("user");
     expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
     expect(vi.mocked(waitForEmbeddedAgentRunEnd)).not.toHaveBeenCalled();
   });
@@ -455,6 +456,37 @@ describe("handleCompactCommand", () => {
     expect(call.groupSpace).toBe("target-space");
     expect(call.spawnedBy).toBe("agent:target-parent");
     expect(call.skillsSnapshot).toEqual({ prompt: "target", skills: [] });
+  });
+
+  it("carries a model-locked session's persisted native runtime into compaction", async () => {
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "no codex app-server thread binding",
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "locked-session",
+          updatedAt: Date.now(),
+          agentHarnessId: "codex",
+          agentRuntimeOverride: "openclaw",
+          modelSelectionLocked: true,
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(requireCompactEmbeddedAgentSessionCall()).toMatchObject({
+      sessionId: "locked-session",
+      agentHarnessId: "codex",
+      modelSelectionLocked: true,
+    });
   });
 
   it("prefers the target session entry when incrementing compaction count", async () => {

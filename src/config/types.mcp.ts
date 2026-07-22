@@ -42,12 +42,8 @@ export type McpServerConfig = {
   headers?: Record<string, string | number | boolean>;
   /** Optional connection timeout in milliseconds. */
   connectionTimeoutMs?: number;
-  /** Optional connection timeout in seconds. */
-  connectTimeout?: number;
   /** Optional per-request timeout in milliseconds. */
   requestTimeoutMs?: number;
-  /** Optional per-request timeout in seconds. */
-  timeout?: number;
   /** Whether this server can safely handle concurrent tool calls. */
   supportsParallelToolCalls?: boolean;
   /** HTTP OAuth mode. Tokens are stored in OpenClaw state, not in config. */
@@ -82,10 +78,12 @@ export type McpServerConfig = {
 export type McpConfig = {
   /** Named MCP server definitions managed by OpenClaw. */
   servers?: Record<string, McpServerConfig>;
-  /**
-   * Idle TTL for session-scoped bundled MCP runtimes, in milliseconds.
-   *
-   * Defaults to 10 minutes. Set to 0 to disable idle eviction.
-   */
-  sessionIdleTtlMs?: number;
+  /** Opt-in MCP Apps rendering and app-to-server bridge. */
+  apps?: {
+    enabled?: boolean;
+    /** Dedicated public origin that proxies to the sandbox listener. */
+    sandboxOrigin?: string;
+    /** Dedicated listener port. Defaults to the Gateway port plus one. */
+    sandboxPort?: number;
+  };
 };

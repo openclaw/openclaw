@@ -26,6 +26,7 @@ type ReleaseVerifyBetaArgs = {
   pluginSelection: string[];
   clawHubBootstrapPlugins: string[];
   evidenceOut?: string;
+  postpublishVerifier?: string;
   skipPostpublish: boolean;
   skipGitHubRelease: boolean;
   skipClawHub: boolean;
@@ -242,6 +243,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     pluginSelection: [],
     clawHubBootstrapPlugins: [],
     evidenceOut: undefined,
+    postpublishVerifier: undefined,
     skipPostpublish: false,
     skipGitHubRelease: false,
     skipClawHub: false,
@@ -300,6 +302,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--evidence-out":
         parsed.evidenceOut = next();
         break;
+      case "--postpublish-verifier":
+        parsed.postpublishVerifier = next();
+        break;
       case "--full-release-validation-run":
         parsed.workflowRuns.fullReleaseValidation = next();
         break;
@@ -335,6 +340,10 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     }
   }
 
+  if (parsed.skipPostpublish && parsed.postpublishVerifier !== undefined) {
+    throw new Error("--postpublish-verifier cannot be combined with --skip-postpublish.");
+  }
+
   if (parsed.workflowRuns.pluginClawHubBootstrap !== undefined) {
     if (parsed.releaseSha === undefined) {
       throw new Error("--plugin-clawhub-bootstrap-run requires --release-sha.");
@@ -347,6 +356,17 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   }
 
   return parsed;
+}
+
+export function resolveOpenClawNpmPostpublishVerifier(rootDir: string, override?: string): string {
+  if (override === undefined) {
+    return resolve(rootDir, "scripts/openclaw-npm-postpublish-verify.ts");
+  }
+  const verifier = resolve(override);
+  if (verifier !== resolve(TRUSTED_TOOLING_ROOT, "scripts/openclaw-npm-postpublish-verify.ts")) {
+    throw new Error("--postpublish-verifier must select the trusted tooling verifier.");
+  }
+  return verifier;
 }
 
 async function fetchWithRetry(
@@ -843,7 +863,12 @@ function validateBootstrapPackageEvidence(
   }
   const expectedSize = value.expectedSize;
   const registrySize = value.registrySize;
-  if (!Number.isSafeInteger(expectedSize) || expectedSize <= 0 || registrySize !== expectedSize) {
+  if (
+    typeof expectedSize !== "number" ||
+    !Number.isSafeInteger(expectedSize) ||
+    expectedSize <= 0 ||
+    registrySize !== expectedSize
+  ) {
     throw new Error(
       `${params.packageName} registry artifact size differs from the packed artifact.`,
     );
@@ -1269,12 +1294,11 @@ export async function verifyBetaRelease(
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
 
   if (!args.skipPostpublish) {
-    runCommandInherited("node", [
-      "--import",
-      "tsx",
-      "scripts/openclaw-npm-postpublish-verify.ts",
-      args.version,
-    ]);
+    const postpublishVerifier = resolveOpenClawNpmPostpublishVerifier(
+      rootDir,
+      args.postpublishVerifier,
+    );
+    runCommandInherited("node", ["--import", "tsx", postpublishVerifier, args.version]);
     lines.push("openclaw postpublish verifier OK");
   }
 
@@ -1316,6 +1340,9 @@ export async function verifyBetaRelease(
   }
 
   const workflowRuns: WorkflowRunSummary[] = [];
+  const allowedReleaseWorkflowHeadBranches = args.workflowRef
+    ? ["main", args.workflowRef]
+    : ["main"];
   if (args.workflowRuns.fullReleaseValidation !== undefined) {
     workflowRuns.push(
       verifyWorkflowRun({
@@ -1323,7 +1350,7 @@ export async function verifyBetaRelease(
         label: "Full Release Validation",
         repo: args.repo,
         expectedWorkflowName: "Full Release Validation",
-        allowedHeadBranches: ["main", args.workflowRef],
+        allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
         rerunFailed: false,
       }),
     );
@@ -1383,7 +1410,7 @@ export async function verifyBetaRelease(
         label: "NPM Telegram Beta E2E",
         repo: args.repo,
         expectedWorkflowName: "NPM Telegram Beta E2E",
-        allowedHeadBranches: ["main", args.workflowRef],
+        allowedHeadBranches: allowedReleaseWorkflowHeadBranches,
         rerunFailed: false,
       }),
     );

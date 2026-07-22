@@ -2,8 +2,17 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  buildPluginBindingApprovalCustomId,
+  resolvePluginConversationBindingApproval,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
+  clearPluginInteractiveHandlers,
+  registerPluginInteractiveHandler,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
@@ -11,10 +20,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
+
+vi.mock("openclaw/plugin-sdk/conversation-runtime", { spy: true });
+
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
-const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
-const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
 const EYES_EMOJI = "\u{1F440}";
@@ -50,7 +60,6 @@ const {
   setMessageReactionSpy,
   setMyCommandsSpy,
   telegramBotDepsForTest,
-  telegramBotRuntimeForTest,
   throttlerSpy,
   useSpy,
 } = harness;
@@ -59,22 +68,17 @@ type BuildModelsProviderDataMock = ReturnType<
 >;
 const { resolveTelegramFetch } = await import("./fetch.js");
 const messageDispatchDedupe = await import("./message-dispatch-dedupe.js");
-const {
-  createTelegramBotCore: createTelegramBotBase,
-  getTelegramSequentialKey,
-  resolveTelegramScopedGroupConfig,
-  setTelegramBotRuntimeForTest,
-} = await import("./bot-core.js");
+const { createTelegramBotCore: createTelegramBotBase } = await import("./bot-core.js");
+const { getTelegramSequentialKey } = await import("./sequential-key.js");
 const {
   createTelegramSpooledReplayDeferredParticipant,
   recordTelegramMessageProcessingResult,
   runWithTelegramSpooledReplayUpdate,
   TelegramSpooledReplayProcessingError,
-  withTelegramSpooledReplayUpdate,
 } = await import("./bot-processing-outcome.js");
 const { TELEGRAM_RICH_TEXT_LIMIT } = await import("./rich-message.js");
 const { resolveTelegramConversationRoute } = await import("./conversation-route.js");
-const { clearAccountThrottlersForTest } = await import("./account-throttler.js");
+const { resetTelegramAccountThrottlersForTest } = await import("./runtime.test-support.js");
 const {
   buildTelegramGroupFrom,
   buildTelegramThreadParams,
@@ -83,7 +87,8 @@ const {
   resetTelegramForumFlagCacheForTest,
   resolveTelegramThreadSpec,
 } = await import("./bot/helpers.js");
-const { resolveTelegramGroupPromptSettings } = await import("./group-config-helpers.js");
+const { resolveTelegramGroupPromptSettings, resolveTelegramScopedGroupConfig } =
+  await import("./group-config-helpers.js");
 let createTelegramBot: (
   opts: TelegramBotOptions,
 ) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
@@ -152,6 +157,7 @@ function installPerKeySequentializer(): void {
         key,
         current.catch(() => undefined),
       );
+
       try {
         await current;
       } finally {
@@ -161,6 +167,13 @@ function installPerKeySequentializer(): void {
       }
     };
   });
+}
+
+async function withTelegramSpooledReplayUpdate<T>(
+  update: object,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return (await runWithTelegramSpooledReplayUpdate(update, fn)).value;
 }
 
 function mockTelegramConfigWrites() {
@@ -177,6 +190,28 @@ function requireValue<T>(value: T | null | undefined, label: string): T {
     throw new Error(`expected ${label}`);
   }
   return value;
+}
+
+function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
+  const data = "skip nightly build tonight";
+  return {
+    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
+    callbackQuery: {
+      id: params.id,
+      data,
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        message_id: 10,
+        reply_markup: {
+          inline_keyboard: [[{ text: "Skip tonight", callback_data: data }]],
+        },
+      },
+    },
+    me: { username: "openclaw_bot" },
+    getFile: async () => ({ download: async () => new Uint8Array() }),
+  };
 }
 
 function createDeferred<T = void>() {
@@ -235,7 +270,7 @@ describe("createTelegramBot", () => {
   });
   afterEach(() => {
     pluginStateTestRuntime.resetPluginStateStoreForTests();
-    pluginRuntime.clearPluginInteractiveHandlers();
+    clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -249,12 +284,9 @@ describe("createTelegramBot", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
-    pluginRuntime.clearPluginInteractiveHandlers();
-    clearAccountThrottlersForTest();
+    clearPluginInteractiveHandlers();
+    resetTelegramAccountThrottlersForTest();
     throttlerSpy.mockReset();
-    setTelegramBotRuntimeForTest(
-      telegramBotRuntimeForTest as unknown as Parameters<typeof setTelegramBotRuntimeForTest>[0],
-    );
     createTelegramBot = (opts) =>
       createTelegramBotBase({
         ...opts,
@@ -315,14 +347,14 @@ describe("createTelegramBot", () => {
       globalThis.fetch = originalFetch;
     }
   });
-  it("applies global and per-account timeoutSeconds", () => {
+  it("ignores removed global and per-account timeoutSeconds", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 60 },
       },
     });
     createTelegramBot({ token: "tok" });
-    expectBotClientFields({ timeoutSeconds: 60 });
+    expectBotClientFields({ timeoutSeconds: undefined });
     botCtorSpy.mockClear();
 
     loadConfig.mockReturnValue({
@@ -338,7 +370,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok", accountId: "foo" });
-    expectBotClientFields({ timeoutSeconds: 61 });
+    expectBotClientFields({ timeoutSeconds: undefined });
   });
 
   it("keeps low timeoutSeconds above the outbound request guard", () => {
@@ -348,7 +380,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok" });
-    expectBotClientFields({ timeoutSeconds: 60 });
+    expectBotClientFields({ timeoutSeconds: undefined });
   });
 
   it("keeps polling client timeout above the outbound request guard", () => {
@@ -358,7 +390,7 @@ describe("createTelegramBot", () => {
       },
     });
     createTelegramBot({ token: "tok", minimumClientTimeoutSeconds: 45 });
-    expectBotClientFields({ timeoutSeconds: 60 });
+    expectBotClientFields({ timeoutSeconds: undefined });
   });
 
   it("passes startup probe botInfo to grammY", () => {
@@ -478,6 +510,53 @@ describe("createTelegramBot", () => {
     await callbackPromise;
 
     expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("acknowledges question callbacks before their handler completes", async () => {
+    installPerKeySequentializer();
+    loadConfig.mockReturnValue({ channels: { telegram: { dmPolicy: "disabled" } } });
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      getOnHandler("callback_query") as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+    answerCallbackQuerySpy.mockClear();
+    let releaseHandler: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    const callbackQuery = {
+      id: "cbq-question-early-ack",
+      data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
+      from: { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        message_id: 42,
+      },
+    };
+    const pending = runTelegramMiddlewareChain({
+      ctx: {
+        update: { update_id: 403, callback_query: callbackQuery },
+        callbackQuery,
+        me: { username: "openclaw_bot" },
+      },
+      finalHandler: async (ctx) => {
+        await callbackHandler(ctx);
+        await handlerGate;
+      },
+    });
+    await flushTelegramTestMicrotasks();
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-question-early-ack");
+    if (!releaseHandler) {
+      throw new Error("Expected Telegram question callback release callback to be initialized");
+    }
+    releaseHandler();
+    await pending;
     expect(answerCallbackQuerySpy).toHaveBeenCalledTimes(1);
   });
 
@@ -1170,10 +1249,10 @@ describe("createTelegramBot", () => {
     const commitSpy = vi
       .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
       .mockRejectedValueOnce(commitError);
-    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.queuedFollowupLifecycle;
-      queuedLifecycle?.onEnqueued?.();
+      queuedLifecycle = opts?.turnAdoptionLifecycle;
+      queuedLifecycle?.onDeferred?.();
       return undefined;
     });
 
@@ -1232,21 +1311,21 @@ describe("createTelegramBot", () => {
       const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
       flush?.();
       await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
       });
 
-      await expect(queuedLifecycle?.onAdmitted?.()).rejects.toBe(commitError);
+      await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(commitError);
       await flushTelegramTestMicrotasks();
       expect(firstSettled).toBe(false);
       expect(secondSettled).toBe(false);
 
-      await queuedLifecycle?.onAdmitted?.();
+      await queuedLifecycle?.onAdopted?.();
       await expect(Promise.all([firstParticipant.task, secondParticipant.task])).resolves.toEqual([
         { kind: "completed" },
         { kind: "completed" },
       ]);
       expect(commitSpy).toHaveBeenCalledTimes(2);
-      queuedLifecycle?.onComplete?.();
+      queuedLifecycle?.onSettled?.();
     } finally {
       commitSpy.mockRestore();
       setTimeoutSpy.mockRestore();
@@ -1288,21 +1367,21 @@ describe("createTelegramBot", () => {
         await commitGate;
       });
     const releaseSpy = vi.spyOn(messageDispatchDedupe, "releaseTelegramMessageDispatchReplay");
-    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     let queuedAbortSignal: AbortSignal | undefined;
     let runQueuedTurn: (() => Promise<void>) | undefined;
     let modelTurnRan = false;
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedLifecycle = opts?.turnAdoptionLifecycle;
       queuedAbortSignal = opts?.abortSignal;
-      queuedLifecycle?.onEnqueued?.();
+      queuedLifecycle?.onDeferred?.();
       runQueuedTurn = async () => {
-        await queuedLifecycle?.onAdmitted?.();
+        await queuedLifecycle?.onAdopted?.();
         if (queuedAbortSignal?.aborted) {
           throw queuedAbortSignal.reason;
         }
         modelTurnRan = true;
-        queuedLifecycle?.onComplete?.();
+        queuedLifecycle?.onSettled?.();
       };
       return undefined;
     });
@@ -1409,12 +1488,12 @@ describe("createTelegramBot", () => {
     installPerKeySequentializer();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const commitSpy = vi.spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay");
-    let queuedLifecycle: GetReplyOptions["queuedFollowupLifecycle"];
+    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     let queuedAbortSignal: AbortSignal | undefined;
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.queuedFollowupLifecycle;
+      queuedLifecycle = opts?.turnAdoptionLifecycle;
       queuedAbortSignal = opts?.abortSignal;
-      queuedLifecycle?.onEnqueued?.();
+      queuedLifecycle?.onDeferred?.();
       return undefined;
     });
 
@@ -1465,7 +1544,7 @@ describe("createTelegramBot", () => {
       const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
       flush?.();
       await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdmitted).toEqual(expect.any(Function));
+        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
       });
 
       const timeoutError = new Error("spooled replay timed out before admission");
@@ -1477,11 +1556,118 @@ describe("createTelegramBot", () => {
         kind: "failed-retryable",
         error: timeoutError,
       });
-      await expect(queuedLifecycle?.onAdmitted?.()).rejects.toBe(timeoutError);
+      await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(timeoutError);
       expect(commitSpy).not.toHaveBeenCalled();
       expect(replySpy).toHaveBeenCalledTimes(1);
     } finally {
       commitSpy.mockRestore();
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("preserves structured origin for a single forwarded debounce entry", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { envelopeTimezone: "utc" } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+      await messageHandler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "single forwarded note",
+          date: 1736380921,
+          message_id: 121,
+          from: { id: 42, first_name: "Ada" },
+          forward_origin: {
+            type: "hidden_user",
+            date: 621,
+            sender_user_name: "Original A",
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 80);
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      const payload = requireValue(replySpy.mock.calls[0]?.[0], "single forwarded payload");
+      expect(payload.Body).toContain("[Forwarded from Original A");
+      expect(payload.ForwardedFrom).toBe("Original A");
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+  });
+
+  it("preserves distinct origins for forwarded messages in one debounce batch", async () => {
+    loadConfig.mockReturnValue({
+      agents: { defaults: { envelopeTimezone: "utc" } },
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+
+      for (const [messageId, text, origin] of [
+        [121, "first forwarded note", "Original A"],
+        [122, "second forwarded note", "Original B"],
+      ] as const) {
+        await messageHandler({
+          message: {
+            chat: { id: 7, type: "private" },
+            text,
+            date: 1736380800 + messageId,
+            message_id: messageId,
+            from: { id: 42, first_name: "Ada" },
+            forward_origin: {
+              type: "hidden_user",
+              date: 500 + messageId,
+              sender_user_name: origin,
+            },
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
+      }
+
+      const debounceCallIndex = setTimeoutSpy.mock.calls.findLastIndex((call) => call[1] === 80);
+      expect(debounceCallIndex).toBeGreaterThanOrEqual(0);
+      clearTimeout(
+        setTimeoutSpy.mock.results[debounceCallIndex]?.value as ReturnType<typeof setTimeout>,
+      );
+      const flush = setTimeoutSpy.mock.calls[debounceCallIndex]?.[0] as (() => void) | undefined;
+      flush?.();
+
+      await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+      const payload = requireValue(replySpy.mock.calls[0]?.[0], "forwarded batch payload");
+      expect(payload.Body).toContain("[Forwarded from Original A");
+      expect(payload.Body).toContain("[Forwarded from Original B");
+      expect(payload.Body).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
+      );
+      expect(payload.BodyForAgent).toMatch(
+        /\[Forwarded from Original A[^\]]*\]\nfirst forwarded note\n\[Forwarded from Original B[^\]]*\]\nsecond forwarded note/,
+      );
+      expect(payload.BodyForAgent).not.toContain("Conversation info (untrusted metadata)");
+      expect(payload.CommandBody).toBe("first forwarded note\nsecond forwarded note");
+      expect(payload.ForwardedFrom).toBeUndefined();
+    } finally {
       setTimeoutSpy.mockRestore();
     }
   });
@@ -1710,7 +1896,7 @@ describe("createTelegramBot", () => {
       return { handled: true };
     });
     expect(
-      pluginRuntime.registerPluginInteractiveHandler("openclaw-code-agent", {
+      registerPluginInteractiveHandler("openclaw-code-agent", {
         channel: "telegram",
         namespace: "code-agent",
         handler: pluginHandler,
@@ -1781,6 +1967,57 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("/fast status");
     expect(payload.Body).not.toContain("callback_data: /fast status");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-slash-1");
+  });
+
+  it.each([
+    { name: "clears buttons", id: "cbq-generic-clear-1", editError: undefined },
+    {
+      name: "continues after a permanent edit error",
+      id: "cbq-generic-clear-permanent-1",
+      editError: new Error("400: Bad Request: message can't be edited"),
+    },
+  ])("routes generic callback_query payloads and $name", async ({ id, editError }) => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    if (editError) {
+      editMessageReplyMarkupSpy.mockRejectedValueOnce(editError);
+    }
+
+    await callbackHandler(makeGenericCallbackContext({ id }));
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith(id);
+  });
+
+  it("retries generic callback_query button cleanup after transient edit failures", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const ctx = makeGenericCallbackContext({ id: "cbq-generic-clear-retry-1", updateId: 779 });
+
+    editMessageReplyMarkupSpy.mockRejectedValueOnce(new Error("edit boom"));
+
+    await expect(
+      runTelegramMiddlewareChain({
+        ctx,
+        finalHandler: callbackHandler,
+      }),
+    ).rejects.toThrow("edit boom");
+    expect(replySpy).not.toHaveBeenCalled();
+
+    await runTelegramMiddlewareChain({
+      ctx,
+      finalHandler: callbackHandler,
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(2);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
   });
 
   it("does not route opaque callback_query payloads as synthetic commands", async () => {
@@ -2081,7 +2318,7 @@ describe("createTelegramBot", () => {
             Math.min(pairingUpsertCall, testCase.pairingUpsertResults.length - 1)
           ];
         pairingUpsertCall += 1;
-        return result;
+        return expectDefined(result, `pairing upsert result ${pairingUpsertCall}`);
       });
 
       createTelegramBot({ token: "tok" });
@@ -2767,8 +3004,8 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       update: { update_id: 222 },
       callbackQuery: {
-        id: "cb-1",
-        data: "ping",
+        id: "cb-question-duplicate",
+        data: "tgq1:ask_0123456789abcdef0123456789abcdef:1",
         from: { id: 789, username: "testuser" },
         message: {
           chat: { id: 123, type: "private" },
@@ -2780,6 +3017,7 @@ describe("createTelegramBot", () => {
       getFile: async () => ({}),
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cb-question-duplicate");
 
     replySpy.mockClear();
 
@@ -3973,12 +4211,13 @@ describe("createTelegramBot", () => {
           telegram: {
             groupPolicy: "open",
             groups: {
-              "*": { requireMention: true },
-              "123": { requireMention: false },
+              "*": { requireMention: false },
+              "123": {},
             },
           },
         },
       },
+      botRequireMention: true,
       message: {
         chat: { id: 123, type: "group", title: "Dev Chat" },
         text: "hello",
@@ -3994,6 +4233,7 @@ describe("createTelegramBot", () => {
           },
         },
       },
+      botRequireMention: undefined,
       message: {
         chat: { id: 456, type: "group", title: "Ops" },
         text: "hello",
@@ -4009,6 +4249,7 @@ describe("createTelegramBot", () => {
           },
         },
       },
+      botRequireMention: undefined,
       message: {
         chat: { id: 789, type: "group", title: "No Me" },
         text: "hello",
@@ -4022,6 +4263,7 @@ describe("createTelegramBot", () => {
     await dispatchMessage({
       message: testCase.message,
       me: testCase.me,
+      botRequireMention: testCase.botRequireMention,
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
@@ -4259,15 +4501,19 @@ describe("createTelegramBot", () => {
     setMessageReactionSpy.mockClear();
     setMyCommandsSpy.mockClear();
   }
-  function getMessageHandler() {
-    createTelegramBot({ token: "tok" });
+  function getMessageHandler(botRequireMention?: boolean) {
+    createTelegramBot({
+      token: "tok",
+      ...(typeof botRequireMention === "boolean" ? { requireMention: botRequireMention } : {}),
+    });
     return getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
   }
   async function dispatchMessage(params: {
     message: Record<string, unknown>;
     me?: Record<string, unknown>;
+    botRequireMention?: boolean;
   }) {
-    const handler = getMessageHandler();
+    const handler = getMessageHandler(params.botRequireMention);
     await handler({
       message: params.message,
       me: params.me ?? { username: "openclaw_bot" },
@@ -5813,17 +6059,14 @@ describe("createTelegramBot", () => {
       await dispatch(0);
     };
 
-    const resolvePluginBindingApprovalSpy = vi.spyOn(
-      conversationRuntime,
-      "resolvePluginConversationBindingApproval",
-    );
+    const resolvePluginBindingApprovalSpy = vi.mocked(resolvePluginConversationBindingApproval);
     resolvePluginBindingApprovalSpy.mockRejectedValueOnce(new Error("binding boom"));
 
     const ctx = {
       update: { update_id: 888 },
       callbackQuery: {
         id: "cbq-plugin-binding-retry-1",
-        data: conversationRuntime.buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
+        data: buildPluginBindingApprovalCustomId("binding-1", "allow-once"),
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
@@ -5910,7 +6153,13 @@ describe("createTelegramBot", () => {
     await runMiddlewareChain(ctx);
 
     expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(2);
-    expect(editMessageReplyMarkupSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy).toHaveBeenCalledWith(
+      1234,
+      231,
+      expect.stringContaining("Result: Allowed once"),
+      { reply_markup: { inline_keyboard: [] } },
+    );
+    expect(editMessageReplyMarkupSpy).not.toHaveBeenCalled();
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
 
@@ -6039,4 +6288,46 @@ describe("createTelegramBot", () => {
       ),
     ).toBe(false);
   });
+
+  it("shows a permanent rejection when model selection is locked", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    const patchSessionEntrySpy = vi
+      .spyOn(sessionStoreRuntime, "patchSessionEntry")
+      .mockImplementationOnce(async (params) => {
+        const entry = {
+          sessionId: "locked-session",
+          updatedAt: Date.now(),
+          modelSelectionLocked: true,
+        };
+        await params.update(entry, { existingEntry: entry });
+        return entry;
+      });
+    const ctx = {
+      callbackQuery: {
+        id: "cbq-model-select-locked-1",
+        data: "mdl_sel_openai/gpt-5.4",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 25,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    try {
+      await expect(callbackHandler(ctx)).resolves.toBeUndefined();
+    } finally {
+      patchSessionEntrySpy.mockRestore();
+    }
+
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(editMessageTextSpy.mock.calls.at(-1)?.[2]).toBe(
+      "❌ Model selection is locked for this session.",
+    );
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -147,14 +147,19 @@ function loadProfileEnv(homeDir = os.homedir()): void {
           if (!match) {
             return "";
           }
-          let value = match[2].trim();
+          const name = match[1];
+          const rawValue = match[2];
+          if (name === undefined || rawValue === undefined) {
+            return "";
+          }
+          let value = rawValue.trim();
           if (
             (value.startsWith('"') && value.endsWith('"')) ||
             (value.startsWith("'") && value.endsWith("'"))
           ) {
             value = value.slice(1, -1);
           }
-          return `${match[1]}=${value}`;
+          return `${name}=${value}`;
         })
         .filter(Boolean);
       const applied = countAppliedEntries(fallbackEntries);
@@ -366,10 +371,6 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
-    }
-
-    if (parsed.diagnostics && typeof parsed.diagnostics === "object") {
-      delete parsed.diagnostics.memoryPressureSnapshot;
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {

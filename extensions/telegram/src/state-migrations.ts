@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
-import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   type PersistentDedupeLegacyJsonImportEntry,
@@ -12,7 +11,7 @@ import {
   shouldReplacePersistentDedupeEntry,
 } from "openclaw/plugin-sdk/persistent-dedupe";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
-import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
@@ -80,14 +79,6 @@ type TelegramLegacyMessageDispatchDedupeRecord = {
   namespace: string;
   entries: Record<string, number>;
 };
-
-function fileExists(pathValue: string): boolean {
-  try {
-    return !statRegularFileSync(pathValue).missing;
-  } catch {
-    return false;
-  }
-}
 
 function resolveLegacySessionStorePath(params: {
   env: NodeJS.ProcessEnv;
@@ -473,6 +464,7 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
       maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
       scopeKey: "",
       cleanupSource: "rename",
+      cleanupWhenEmpty: true,
       preview: `- Telegram sent-message cache: ${source.sourcePath} → plugin state (${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE})`,
       readEntries: () =>
         listTelegramLegacySentMessageCacheEntries({
@@ -550,6 +542,7 @@ function detectTelegramMessageDispatchLegacyStateMigration(params: {
         defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
         scopeKey: "",
         cleanupSource: "rename",
+        cleanupWhenEmpty: true,
         preview: `- Telegram message dispatch dedupe: ${sourcePath} → plugin state (${namespace})`,
         shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
           shouldReplacePersistentDedupeEntry({ existingValue, incomingValue }),
@@ -666,19 +659,6 @@ export async function detectTelegramLegacyStateMigrations(params: {
   stateDir?: string;
 }): Promise<ChannelLegacyStateMigrationPlan[]> {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
-  const legacyPath = resolveChannelAllowFromPath("telegram", params.env);
-  if (fileExists(legacyPath)) {
-    const accountId = resolveDefaultTelegramAccountId(params.cfg);
-    const targetPath = resolveChannelAllowFromPath("telegram", params.env, accountId);
-    if (!fileExists(targetPath)) {
-      plans.push({
-        kind: "copy",
-        label: "Telegram pairing allowFrom",
-        sourcePath: legacyPath,
-        targetPath,
-      });
-    }
-  }
   plans.push(...detectTelegramUpdateOffsetLegacyStateMigration(params));
   plans.push(...detectTelegramBotInfoCacheLegacyStateMigration(params));
   plans.push(...detectTelegramStickerCacheLegacyStateMigration(params));

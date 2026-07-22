@@ -27,6 +27,10 @@ const providerEndpointPlugins = vi.hoisted(() => [
       { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
       { endpointClass: "cerebras-native", hosts: ["api.cerebras.ai"] },
       { endpointClass: "mistral-public", hosts: ["api.mistral.ai"] },
+      {
+        endpointClass: "minimax-native",
+        hosts: ["api.minimax.io", "api.minimaxi.com"],
+      },
       { endpointClass: "chutes-native", hosts: ["llm.chutes.ai"] },
       { endpointClass: "deepseek-native", hosts: ["api.deepseek.com"] },
       { endpointClass: "github-copilot-native", hostSuffixes: [".githubcopilot.com"] },
@@ -129,14 +133,39 @@ vi.mock("../plugins/manifest-metadata-scan.js", () => ({
 }));
 
 import {
-  listProviderAttributionPolicies,
-  resolveProviderAttributionIdentity,
-  resolveProviderAttributionPolicy,
   resolveProviderEndpoint,
   resolveProviderRequestCapabilities,
   resolveProviderRequestPolicy,
   describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
+
+type ProviderAttributionTestEnv = Parameters<typeof resolveProviderRequestPolicy>[1];
+
+function resolveProviderAttributionPolicy(provider: string, env: ProviderAttributionTestEnv) {
+  return resolveProviderRequestPolicy({ provider }, env).policy;
+}
+
+function resolveProviderAttributionIdentity(env: ProviderAttributionTestEnv) {
+  const policy = resolveProviderAttributionPolicy("openrouter", env);
+  return policy ? { product: policy.product, version: policy.version } : undefined;
+}
+
+function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
+  return [
+    "openrouter",
+    "nvidia",
+    "google",
+    "openai",
+    "xai",
+    "anthropic",
+    "groq",
+    "mistral",
+    "together",
+  ].flatMap((provider) => {
+    const policy = resolveProviderAttributionPolicy(provider, env);
+    return policy ? [policy] : [];
+  });
+}
 
 describe("provider attribution", () => {
   it("resolves the canonical OpenClaw product and runtime version", () => {
@@ -297,7 +326,7 @@ describe("provider attribution", () => {
   });
 
   it("lists the current attribution support matrix", () => {
-    // Matrix order is user-facing evidence for docs/review summaries.
+    // Resolve every supported provider through the production request-policy path.
     expect(
       listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.22" }).map((policy) => [
         policy.provider,
@@ -501,6 +530,27 @@ describe("provider attribution", () => {
         knownProviderFamily: "mistral",
       },
     );
+  });
+
+  it("classifies native MiniMax hosts centrally", () => {
+    for (const hostname of ["api.minimax.io", "api.minimaxi.com"]) {
+      expectRecordFields(resolveProviderEndpoint(`https://${hostname}/v1`), {
+        endpointClass: "minimax-native",
+        hostname,
+      });
+      expectRecordFields(
+        resolveProviderRequestCapabilities({
+          provider: "minimax",
+          baseUrl: `https://${hostname}`,
+          capability: "image",
+          transport: "media-understanding",
+        }),
+        {
+          endpointClass: "minimax-native",
+          isKnownNativeEndpoint: true,
+        },
+      );
+    }
   });
 
   it("classifies native OpenAI-compatible vendor hosts centrally", () => {
@@ -1462,3 +1512,4 @@ describe("provider attribution", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

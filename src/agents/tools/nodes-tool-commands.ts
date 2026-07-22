@@ -10,6 +10,7 @@ import {
   jsonResult,
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
+  readStringArrayParam,
   readStringParam,
 } from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
@@ -33,12 +34,14 @@ export type NodeCommandAction =
   | keyof typeof NODE_READ_ACTION_COMMANDS
   | "notifications_action"
   | "location_get"
+  | "which"
   | "invoke";
 
 export async function executeNodeCommandAction(params: {
   action: NodeCommandAction;
   input: Record<string, unknown>;
   gatewayOpts: GatewayCallOptions;
+  agentSessionKey?: string;
   allowMediaInvokeCommands?: boolean;
   mediaInvokeActions: Record<string, string>;
 }): Promise<
@@ -116,6 +119,17 @@ export async function executeNodeCommandAction(params: {
       });
       return jsonResult(payload);
     }
+    case "which": {
+      const node = readStringParam(params.input, "node", { required: true });
+      const bins = readStringArrayParam(params.input, "bins", { required: true });
+      const payload = await invokeNodeCommandPayload({
+        gatewayOpts: params.gatewayOpts,
+        node,
+        command: "system.which",
+        commandParams: { bins },
+      });
+      return jsonResult(payload);
+    }
     case "invoke": {
       const node = readStringParam(params.input, "node", { required: true });
       const nodeId = await resolveNodeId(params.gatewayOpts, node);
@@ -171,6 +185,7 @@ export async function executeNodeCommandAction(params: {
         params: invokeParams,
         timeoutMs: invokeTimeoutMs,
         idempotencyKey: crypto.randomUUID(),
+        ...(params.agentSessionKey ? { sessionKey: params.agentSessionKey } : {}),
       });
       return jsonResult(raw ?? {});
     }

@@ -37,8 +37,15 @@ vi.mock("../infra/gateway-lock.js", () => ({
   readActiveGatewayLockPort: readActiveGatewayLockPortMock,
 }));
 
-const { GatewayChatClient, resolveGatewayConnection } = await import("./gateway-chat.js");
+const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClientRequestError } = await import("../gateway/client.js");
+
+const resolveBoundGatewayConnection = (
+  opts: Parameters<typeof GatewayChatClient.connectBound>[0],
+) => GatewayChatClient.connectBound(opts).connection;
+
+const resolveGatewayConnection = async (opts: Parameters<typeof GatewayChatClient.connect>[0]) =>
+  (await GatewayChatClient.connect(opts)).connection;
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -146,6 +153,43 @@ describe("resolveGatewayConnection", () => {
     vi.useRealTimers();
   });
 
+  it("keeps a bound auth-free Gateway isolated from global config and env auth", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://global.example/ws", token: "global-token" },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_URL: "wss://env.example/ws",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+      },
+      async () => {
+        const result = resolveBoundGatewayConnection({
+          config: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://selected.example/ws" },
+            },
+          },
+          url: "wss://selected.example/ws",
+          tlsFingerprint: "sha256:selected",
+        });
+
+        expect(result).toEqual({
+          url: "wss://selected.example/ws",
+          token: undefined,
+          password: undefined,
+          tlsFingerprint: "sha256:selected",
+          allowInsecureLocalOperatorUi: false,
+        });
+        expect(loadConfig).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it("throws when url override is missing explicit credentials", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local" } });
 
@@ -181,18 +225,36 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
-  it("carries configured handshake timeout to the TUI client connection", async () => {
+  it("keeps the TLS pin on an explicit Gateway target", async () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local" } });
+
+    const result = await resolveGatewayConnection({
+      url: "wss://override.example/ws",
+      token: "explicit-token",
+      tlsFingerprint: "sha256:11:22:33:44",
+    });
+
+    expect(result.tlsFingerprint).toBe("sha256:11:22:33:44");
+  });
+
+  it.each([
+    { label: "token auth", auth: { mode: "token", token: "config-token" } },
+    { label: "auth none", auth: { mode: "none" } },
+  ])("keeps the TLS pin on a configured local Gateway with $label", async ({ auth }) => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
-        handshakeTimeoutMs: 30_000,
-        auth: { token: "config-token" },
+        tls: { enabled: true },
+        auth,
       },
     });
 
-    const result = await resolveGatewayConnection({});
+    const result = await resolveGatewayConnection({
+      tlsFingerprint: "sha256:local-self-signed-fingerprint",
+    });
 
-    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
+    expect(result.url).toBe("wss://127.0.0.1:18789");
+    expect(result.tlsFingerprint).toBe("sha256:local-self-signed-fingerprint");
   });
 
   it("uses a verified active local Gateway port when no target is explicit", async () => {
@@ -385,6 +447,30 @@ describe("resolveGatewayConnection", () => {
     });
   });
 
+  it("uses configured remote password for setup-launched TUI despite stale gateway env", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: {
+          url: "wss://remote.example/ws",
+          password: "configured-remote-password", // pragma: allowlist secret
+        },
+      },
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_GATEWAY_PASSWORD: "stale-env-password", // pragma: allowlist secret
+        OPENCLAW_TUI_SETUP_AUTH_SOURCE: "config",
+      },
+      async () => {
+        const result = await resolveGatewayConnection({});
+        expect(result.token).toBeUndefined();
+        expect(result.password).toBe("configured-remote-password");
+      },
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "resolves file-backed SecretRef token for local mode",
     async () => {
@@ -551,6 +637,34 @@ describe("GatewayChatClient", () => {
     vi.useRealTimers();
   });
 
+  it("waits for gateway transport teardown on stop", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    let finishStop: (() => void) | undefined;
+    const stopAndWait = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishStop = resolve;
+        }),
+    );
+    (client as unknown as { client: { stopAndWait: typeof stopAndWait } }).client.stopAndWait =
+      stopAndWait;
+
+    let stopped = false;
+    const stopPromise = client.stop().then(() => {
+      stopped = true;
+    });
+
+    expect(stopAndWait).toHaveBeenCalledOnce();
+    expect(stopped).toBe(false);
+    finishStop?.();
+    await stopPromise;
+    expect(stopped).toBe(true);
+  });
+
   it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", async () => {
     const constructedOptions: Array<Record<string, unknown>> = [];
 
@@ -575,6 +689,7 @@ describe("GatewayChatClient", () => {
       const client = new CapturingGatewayChatClient({
         url: "ws://127.0.0.1:18789",
         token: "test-token",
+        tlsFingerprint: "sha256:11:22:33:44",
         preauthHandshakeTimeoutMs: 30_000,
         allowInsecureLocalOperatorUi: true,
       });
@@ -583,9 +698,10 @@ describe("GatewayChatClient", () => {
       expect(constructedOptions).toHaveLength(1);
       expect(constructedOptions[0]).toMatchObject({
         clientName: "openclaw-tui",
-        caps: ["task-suggestions", "tool-events"],
+        caps: ["agent-kind", "plugin-approvals", "task-suggestions", "tool-events"],
         mode: "ui",
         preauthHandshakeTimeoutMs: 30_000,
+        tlsFingerprint: "sha256:11:22:33:44",
         deviceIdentity: null,
       });
     } finally {
@@ -735,6 +851,81 @@ describe("GatewayChatClient", () => {
       preserveSideRuns: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "chat.abort", { sessionKey: "main" });
+  });
+
+  it("retries session creation without disposition on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:tui-next" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.createSession({
+        key: "tui-next",
+        parentSessionKey: "agent:main:main",
+        succeedsParent: true,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:tui-next" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      key: "tui-next",
+      parentSessionKey: "agent:main:main",
+      succeedsParent: true,
+      emitCommandHooks: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.create", {
+      key: "tui-next",
+      parentSessionKey: "agent:main:main",
+      emitCommandHooks: true,
+    });
+  });
+
+  it("retries parallel session creation without parent lifecycle on older Gateways", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
+        }),
+      )
+      .mockResolvedValueOnce({ ok: true, key: "agent:main:tui-parallel" });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.createSession({
+        key: "tui-parallel",
+        agentId: "main",
+        parentSessionKey: "agent:main:main",
+        succeedsParent: false,
+      }),
+    ).resolves.toEqual({ ok: true, key: "agent:main:tui-parallel" });
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.create", {
+      key: "tui-parallel",
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+      succeedsParent: false,
+      emitCommandHooks: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.create", {
+      key: "tui-parallel",
+      agentId: "main",
+    });
   });
 
   it("returns the actual chat send ack status from the gateway", async () => {

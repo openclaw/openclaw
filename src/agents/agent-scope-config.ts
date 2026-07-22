@@ -1,6 +1,7 @@
 /** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
 import type {
   AgentContextLimitsConfig,
@@ -20,6 +21,8 @@ export type ResolvedAgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: AgentEntry["model"];
+  models?: AgentEntry["models"];
+  modelPolicy?: AgentEntry["modelPolicy"];
   utilityModel?: AgentEntry["utilityModel"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
@@ -39,7 +42,6 @@ export type ResolvedAgentConfig = {
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
-  runRetries?: AgentEntry["runRetries"];
   embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
@@ -129,6 +131,8 @@ export function resolveAgentConfig(
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
         : undefined,
+    ...(entry.models ? { models: entry.models } : {}),
+    ...(hasExplicitModelPolicyAllow(entry.modelPolicy) ? { modelPolicy: entry.modelPolicy } : {}),
     utilityModel: readStringValue(entry.utilityModel),
     thinkingDefault: entry.thinkingDefault,
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
@@ -154,10 +158,6 @@ export function resolveAgentConfig(
     identity: entry.identity,
     groupChat: entry.groupChat,
     subagents: typeof entry.subagents === "object" && entry.subagents ? entry.subagents : undefined,
-    runRetries:
-      typeof entry.runRetries === "object" && entry.runRetries
-        ? { ...agentDefaults?.runRetries, ...entry.runRetries }
-        : agentDefaults?.runRetries,
     embeddedAgent:
       typeof entry.embeddedAgent === "object" && entry.embeddedAgent
         ? entry.embeddedAgent

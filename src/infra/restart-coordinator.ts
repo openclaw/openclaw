@@ -1,3 +1,4 @@
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import {
   createGatewayActiveWorkSnapshot,
   type GatewayActiveWorkBlocker,
@@ -7,16 +8,25 @@ import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.
 
 // Safe restart coordination checks active local work before scheduling SIGUSR1
 // restarts, while still allowing explicit deferral bypasses for operators.
-export type SafeGatewayRestartCounts = {
+type SafeGatewayRestartCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;
   cronRuns: number;
+  backgroundExecSessions: number;
+  rootRequests: number;
   activeTasks: number;
   totalActive: number;
 };
-export type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
-  kind: "queue" | "reply" | "embedded-run" | "cron-run" | "task";
+type SafeGatewayRestartBlocker = Omit<GatewayActiveWorkBlocker, "kind"> & {
+  kind:
+    | "queue"
+    | "reply"
+    | "embedded-run"
+    | "cron-run"
+    | "background-exec"
+    | "root-request"
+    | "task";
 };
 
 type SafeRestartInspectors = Pick<
@@ -25,11 +35,13 @@ type SafeRestartInspectors = Pick<
   | "getPendingReplies"
   | "getEmbeddedRuns"
   | "getCronRuns"
+  | "getBackgroundExecSessions"
+  | "getRootRequests"
   | "getActiveTasks"
   | "getTaskBlockers"
 >;
 
-export type SafeGatewayRestartPreflight = {
+type SafeGatewayRestartPreflight = {
   safe: boolean;
   counts: SafeGatewayRestartCounts;
   blockers: SafeGatewayRestartBlocker[];
@@ -48,7 +60,10 @@ export function createSafeGatewayRestartPreflight(
 ): SafeGatewayRestartPreflight {
   const snapshot = createGatewayActiveWorkSnapshot({
     ...inspectors,
-    getRootRequests: () => 0,
+    // Restart RPC preflight itself owns a root. Count every other admitted
+    // handoff so signal emission cannot split spawn from durable ownership.
+    getRootRequests:
+      inspectors.getRootRequests ?? (() => getActiveGatewayRootWorkCount({ excludeCurrent: true })),
     getSessionAdmissions: () => 0,
     getSessionMutations: () => 0,
     getChatRuns: () => 0,
@@ -61,12 +76,16 @@ export function createSafeGatewayRestartPreflight(
     pendingReplies: snapshot.counts.pendingReplies,
     embeddedRuns: snapshot.counts.embeddedRuns,
     cronRuns: snapshot.counts.cronRuns,
+    backgroundExecSessions: snapshot.counts.backgroundExecSessions,
+    rootRequests: snapshot.counts.rootRequests,
     activeTasks: snapshot.counts.activeTasks,
     totalActive:
       snapshot.counts.queueSize +
       snapshot.counts.pendingReplies +
       snapshot.counts.embeddedRuns +
       snapshot.counts.cronRuns +
+      snapshot.counts.backgroundExecSessions +
+      snapshot.counts.rootRequests +
       snapshot.counts.activeTasks,
   };
   const blockers = snapshot.blockers as SafeGatewayRestartBlocker[];
@@ -83,7 +102,7 @@ export function createSafeGatewayRestartPreflight(
   };
 }
 
-/** Schedule a gateway restart after collecting queue/reply/task blockers. */
+/** Schedule a gateway restart after collecting tracked active-work blockers. */
 export function requestSafeGatewayRestart(
   opts: {
     reason?: string;

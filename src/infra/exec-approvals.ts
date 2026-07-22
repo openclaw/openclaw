@@ -2,13 +2,19 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+  isAgentDeletionBlocked,
+} from "../agents/agent-lifecycle-registry.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
@@ -237,6 +243,9 @@ export type ExecApprovalRequestPayload = {
   agentId?: string | null;
   resolvedPath?: string | null;
   sessionKey?: string | null;
+  sessionId?: string | null;
+  runId?: string | null;
+  toolCallId?: string | null;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
@@ -410,34 +419,6 @@ export function resolveExecApprovalsTranscriptPath(): string {
   return process.env.OPENCLAW_STATE_DIR?.trim()
     ? `$OPENCLAW_STATE_DIR/${EXEC_APPROVALS_FILE}`
     : `${DEFAULT_EXEC_APPROVALS_STATE_DIR}/${EXEC_APPROVALS_FILE}`;
-}
-
-function resolveLegacyExecApprovalsPath(): string {
-  return path.join(expandHomePrefix(DEFAULT_EXEC_APPROVALS_STATE_DIR), EXEC_APPROVALS_FILE);
-}
-
-function hasUnmigratedLegacyExecApprovals(filePath: string): boolean {
-  if (!process.env.OPENCLAW_STATE_DIR?.trim()) {
-    return false;
-  }
-  const legacyPath = resolveLegacyExecApprovalsPath();
-  return (
-    path.resolve(legacyPath) !== path.resolve(filePath) &&
-    !fs.existsSync(filePath) &&
-    fs.existsSync(legacyPath)
-  );
-}
-
-function createUnmigratedLegacyExecApprovalsFallback(): ExecApprovalsFile {
-  return normalizeExecApprovals({
-    version: 1,
-    defaults: {
-      security: "deny",
-      ask: "always",
-      askFallback: "deny",
-    },
-    agents: {},
-  });
 }
 
 function createFailClosedExecApprovalsFallback(): ExecApprovalsFile {
@@ -1065,16 +1046,6 @@ function generateToken(): string {
 
 function readExecApprovalsSnapshotUnlocked(): ExecApprovalsSnapshot {
   const filePath = resolveExecApprovalsPath();
-  if (hasUnmigratedLegacyExecApprovals(filePath)) {
-    const file = createUnmigratedLegacyExecApprovalsFallback();
-    return {
-      path: filePath,
-      exists: false,
-      raw: null,
-      file,
-      hash: hashExecApprovalsRaw(null),
-    };
-  }
   return readExecApprovalsSnapshotFromPath(filePath);
 }
 
@@ -1089,9 +1060,6 @@ export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
 
 function loadExecApprovalsUnlocked(): ExecApprovalsFile {
   const filePath = resolveExecApprovalsPath();
-  if (hasUnmigratedLegacyExecApprovals(filePath)) {
-    return createUnmigratedLegacyExecApprovalsFallback();
-  }
   try {
     return readExecApprovalsSnapshotFromPath(filePath).file;
   } catch {
@@ -1105,6 +1073,18 @@ export function loadExecApprovals(): ExecApprovalsFile {
   } catch {
     // A busy, malformed, or unreadable approvals store must never restore the
     // permissive defaults while another process is revoking access.
+    return createFailClosedExecApprovalsFallback();
+  }
+}
+
+export async function loadExecApprovalsAsync(): Promise<ExecApprovalsFile> {
+  try {
+    return await withExecApprovalsReadLock(resolveExecApprovalsPath(), async () =>
+      loadExecApprovalsUnlocked(),
+    );
+  } catch {
+    // Match the synchronous reader's fail-closed contract while allowing
+    // same-process async writers to finish instead of rejecting valid state.
     return createFailClosedExecApprovalsFallback();
   }
 }
@@ -1278,19 +1258,49 @@ type ExecApprovalsUpdate = {
   update: (file: ExecApprovalsFile) => ExecApprovalsFile | null;
 };
 
-function updateExecApprovalsUnlocked(params: ExecApprovalsUpdate): ExecApprovalsSnapshot | null {
-  // Both sync and async entry points hold the sidecar lock across this full CAS transaction.
-  if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
-    throw new Error("Exec approvals must be migrated before they can be updated");
+type InternalExecApprovalsUpdate = ExecApprovalsUpdate & {
+  allowDeletedAgentRemoval?: string;
+};
+
+function assertNoDeletedAgentApprovalChanged(
+  current: ExecApprovalsFile,
+  next: ExecApprovalsFile,
+  allowDeletedAgentRemoval?: string,
+): void {
+  const agentIds = new Set([
+    ...Object.keys(current.agents ?? {}),
+    ...Object.keys(next.agents ?? {}),
+  ]);
+  for (const agentId of agentIds) {
+    const currentPolicy = current.agents?.[agentId];
+    const nextPolicy = next.agents?.[agentId];
+    const allowedRemoval =
+      agentId === allowDeletedAgentRemoval &&
+      currentPolicy !== undefined &&
+      nextPolicy === undefined;
+    if (
+      isAgentDeletionBlocked(agentId) &&
+      !allowedRemoval &&
+      !isDeepStrictEqual(currentPolicy, nextPolicy)
+    ) {
+      throw new Error(`Exec approvals are unavailable while agent ${agentId} is deleted.`);
+    }
   }
+}
+
+function updateExecApprovalsUnlocked(
+  params: InternalExecApprovalsUpdate,
+): ExecApprovalsSnapshot | null {
+  // Both sync and async entry points hold the sidecar lock across this full CAS transaction.
   const current = readExecApprovalsSnapshotUnlocked();
   if (params.baseHash !== undefined && current.hash !== params.baseHash) {
     return null;
   }
-  const next = params.update(current.file);
+  const next = params.update(structuredClone(current.file));
   if (next === null) {
     return current;
   }
+  assertNoDeletedAgentApprovalChanged(current.file, next, params.allowDeletedAgentRemoval);
   if (
     current.exists &&
     current.hash === hashExecApprovalsFile(next) &&
@@ -1351,6 +1361,46 @@ export async function updateExecApprovals(
   params: ExecApprovalsUpdate,
 ): Promise<ExecApprovalsSnapshot | null> {
   return await withExecApprovalsLock(async () => updateExecApprovalsUnlocked(params));
+}
+
+/** Hold the approvals lock across an agent deletion and restore policy if commit fails. */
+export async function withAgentExecApprovalsRemoved<T>(
+  agentId: string,
+  commit: () => Promise<T>,
+): Promise<T> {
+  const key = normalizeAgentId(agentId);
+  return await withExecApprovalsLock(async () => {
+    const snapshot = readExecApprovalsSnapshotUnlocked();
+    try {
+      if (Object.hasOwn(snapshot.file.agents ?? {}, key)) {
+        const agents = { ...snapshot.file.agents };
+        delete agents[key];
+        const updated = updateExecApprovalsUnlocked({
+          baseHash: snapshot.hash,
+          allowDeletedAgentRemoval: key,
+          update: (file) => ({ ...file, agents }),
+        });
+        if (!updated) {
+          throw new Error("Exec approvals changed while deleting agent; retry deletion.");
+        }
+      }
+      return await commit();
+    } catch (error) {
+      if (error instanceof AgentDeletionCommitUncertainError) {
+        throw error;
+      }
+      try {
+        restoreExecApprovalsSnapshotUnlocked(snapshot);
+      } catch (rollbackError) {
+        throw new AgentDeletionAuthorityRollbackError(
+          [error, rollbackError],
+          `Failed to roll back exec approvals deletion for agent ${key}.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+  });
 }
 
 function hardenUnchangedExecApprovals(filePath: string): boolean {
@@ -1452,27 +1502,18 @@ function requireInitializedExecApprovals(
 }
 
 export async function ensureExecApprovalsSnapshot(): Promise<ExecApprovalsSnapshot> {
-  if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
-    return readExecApprovalsSnapshot();
-  }
   return requireInitializedExecApprovals(
     await updateExecApprovals({ update: ensureExecApprovalsSocket }),
   );
 }
 
 export function ensureExecApprovals(): ExecApprovalsFile {
-  if (hasUnmigratedLegacyExecApprovals(resolveExecApprovalsPath())) {
-    return createUnmigratedLegacyExecApprovalsFallback();
-  }
   return requireInitializedExecApprovals(
     updateExecApprovalsSync({ update: ensureExecApprovalsSocket }),
   ).file;
 }
 
 function readExecApprovalsForNoPersistenceUnlocked(filePath: string): ExecApprovalsFile {
-  if (hasUnmigratedLegacyExecApprovals(filePath)) {
-    return createUnmigratedLegacyExecApprovalsFallback();
-  }
   try {
     return readExecApprovalsSnapshotFromPath(filePath).file;
   } catch (err) {
@@ -1657,15 +1698,6 @@ export function resolveExecApprovals(
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
   const filePath = resolveExecApprovalsPath();
-  if (hasUnmigratedLegacyExecApprovals(filePath)) {
-    return shapeResolvedExecApprovals({
-      file: createUnmigratedLegacyExecApprovalsFallback(),
-      filePath,
-      agentId,
-      overrides,
-      socket: "none",
-    });
-  }
   if (!overrides?.requireSocket) {
     const file = withExecApprovalsReadLockSync(filePath, () =>
       readExecApprovalsForNoPersistenceUnlocked(filePath),
@@ -1695,15 +1727,6 @@ export async function resolveExecApprovalsLocked(
   overrides?: ExecApprovalsDefaultOverrides,
 ): Promise<ExecApprovalsResolved> {
   const filePath = resolveExecApprovalsPath();
-  if (hasUnmigratedLegacyExecApprovals(filePath)) {
-    return shapeResolvedExecApprovals({
-      file: createUnmigratedLegacyExecApprovalsFallback(),
-      filePath,
-      agentId,
-      overrides,
-      socket: "none",
-    });
-  }
   if (!overrides?.requireSocket) {
     const file = await withExecApprovalsReadLock(filePath, async () =>
       readExecApprovalsForNoPersistenceUnlocked(filePath),
@@ -1982,7 +2005,7 @@ export function hasExactCommandDurableExecApproval(params: {
   );
 }
 
-export type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
+type DurableExecApprovalRequirement = "exact-command" | "segment-allowlist";
 
 /** Callers pass whether their final, post-gate authorization depends on a durable grant. */
 export function resolveDurableExecApprovalRequirement(params: {
@@ -2325,22 +2348,6 @@ function applyRecordedAllowlistMetadata(params: {
       }
     : null;
 }
-
-export async function recordAllowlistMatchesUseLocked(params: {
-  agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
-  command: string;
-  resolvedPath?: string;
-  authorization?: ExecApprovalUsageAuthorization;
-}): Promise<void> {
-  if (params.matches.length === 0 && !params.authorization) {
-    return;
-  }
-  await updateExecApprovals({
-    update: (file) => applyRecordedAllowlistUse({ ...params, file }),
-  });
-}
-
 export async function commitExecAuthorizationLocked(params: {
   agentId: string | undefined;
   matches: readonly ExecAllowlistEntry[];
@@ -2742,20 +2749,6 @@ function applyAllowAlwaysDecision(params: {
   }
   return changed ? next : null;
 }
-
-export async function persistAllowAlwaysDecisionLocked(params: {
-  agentId: string | undefined;
-  decision: AllowAlwaysPersistenceDecision;
-}): Promise<void> {
-  const decision = params.decision;
-  if (decision.kind === "one-shot") {
-    return;
-  }
-  await updateExecApprovals({
-    update: (file) => applyAllowAlwaysDecision({ file, agentId: params.agentId, decision }),
-  });
-}
-
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
   const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
   return order[a] <= order[b] ? a : b;
@@ -2882,3 +2875,4 @@ export async function requestExecApprovalViaSocket(params: {
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

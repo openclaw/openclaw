@@ -18,6 +18,7 @@ import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
 import {
+  isBrowserHostLocalRoute,
   isPersistentBrowserProfileMutation,
   normalizeBrowserRequestPath,
   resolveRequestedBrowserProfile,
@@ -58,13 +59,6 @@ function resolveBrowserProxyConfig() {
 }
 
 let browserControlReady: Promise<void> | null = null;
-
-// Keep the production singleton but give tests a cheap reset seam so they do
-// not need to reload the entire module graph between cases.
-/** Resets the cached Browser control startup promise for tests. */
-export function resetBrowserProxyCommandStateForTests(): void {
-  browserControlReady = null;
-}
 
 async function ensureBrowserControlService(): Promise<void> {
   if (browserControlReady) {
@@ -249,6 +243,12 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
   const allowedProfiles = proxyConfig.allowProfiles;
   if (isPersistentBrowserProfileMutation(method, path)) {
     throw new Error("INVALID_REQUEST: browser.proxy cannot mutate persistent browser profiles");
+  }
+  // System-profile listing and import read the local Keychain/Chrome; they are
+  // host-local by contract and must never run on a browser node, which would
+  // leak that node's local profile metadata.
+  if (isBrowserHostLocalRoute(method, path)) {
+    throw new Error("INVALID_REQUEST: browser.proxy cannot run host-local browser routes");
   }
   if (allowedProfiles.length > 0) {
     if (path !== "/profiles") {

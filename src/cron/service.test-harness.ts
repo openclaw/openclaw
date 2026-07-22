@@ -4,9 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import type { CronEvent, CronServiceDeps } from "./service.js";
+import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
+import type { CronServiceDeps } from "./service/state.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -238,9 +239,10 @@ export function createMockCronStateForJobs(params: {
     schedulingPaused: false,
     schedulerStarted: false,
     restartRecoveryPending: false,
-    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
+    runAdmission: { active: 0, waiters: [] },
+    queuedRunReservationsByJobId: new Map(),
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),
