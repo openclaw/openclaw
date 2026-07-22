@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
@@ -17,6 +18,7 @@ import {
 } from "./chat-queue.ts";
 import {
   ChatStateController,
+  createPageState,
   handlePageGatewayEvent,
   refreshChatMetadata,
   resetChatStateForRouteSession,
@@ -592,6 +594,52 @@ describe("session pull request refresh", () => {
     });
 
     expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+});
+
+describe("image lightbox lifecycle", () => {
+  it("invalidates immediately when beginning a deferred image open", () => {
+    const invalidate = vi.fn();
+    const context = {
+      agents: {
+        state: { agentsList: null },
+        adoptList: vi.fn(),
+      },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          chatMessageMaxWidth: null,
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      {
+        invalidate,
+        afterCommit: () => () => {},
+      },
+      { querySelector: () => null },
+    );
+    const release = vi.fn();
+    state.imageLightbox = {
+      src: "blob:managed-image",
+      title: "Generated image",
+      release,
+    };
+
+    const requestVersion = state.beginImageOpen();
+
+    expect(requestVersion).toBe(1);
+    expect(state.imageLightbox).toBeNull();
+    expect(release).toHaveBeenCalledOnce();
+    expect(invalidate).toHaveBeenCalledOnce();
   });
 });
 

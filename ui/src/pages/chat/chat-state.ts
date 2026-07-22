@@ -1456,7 +1456,11 @@ export function createPageState(
     state.sidebarOpen = false;
     renderLifecycle.invalidate();
   };
-  state.beginImageOpen = () => invalidateImageLightbox(state);
+  state.beginImageOpen = () => {
+    const requestVersion = invalidateImageLightbox(state);
+    renderLifecycle.invalidate();
+    return requestVersion;
+  };
   state.handleOpenImage = (item, requestVersion) => {
     const activeRequestVersion = requestVersion ?? state.beginImageOpen();
     if (activeRequestVersion !== state.imageLightboxRequestVersion) {
