@@ -11,13 +11,16 @@ vi.mock("./setup-transport.js", async (importOriginal) => {
   return { ...actual, detectSignalTransport: detectSignalTransportMock };
 });
 
-async function prepareInput(input: {
-  signalNumber?: string;
-  signalTransport?: "external-native" | "container";
-  httpUrl?: string;
-}) {
+async function prepareInput(
+  input: {
+    signalNumber?: string;
+    signalTransport?: "external-native" | "container";
+    httpUrl?: string;
+  },
+  cfg: object = {},
+) {
   const prepared = await signalSetupAdapter.prepareAccountConfigInput?.({
-    cfg: {},
+    cfg,
     accountId: "default",
     input,
     runtime: {} as never,
@@ -69,10 +72,35 @@ describe("signalSetupAdapter", () => {
       input,
     });
 
-    expect(input.signalTransport).toBe("external-native");
+    expect(input.signalTransport).toBeUndefined();
     expect(next?.channels?.signal?.transport).toEqual({
       kind: "external-native",
       url: "http://signal:8080",
+    });
+  });
+
+  it("preserves an existing container account when detection is unreachable", async () => {
+    detectSignalTransportMock.mockRejectedValue(new Error("unreachable"));
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15555550123",
+          transport: { kind: "container", url: "http://signal-old:8080" },
+        },
+      },
+    };
+
+    const input = await prepareInput({ httpUrl: "http://signal-new:8080" }, cfg);
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg,
+      accountId: "default",
+      input,
+    });
+
+    expect(input.signalTransport).toBeUndefined();
+    expect(next?.channels?.signal?.transport).toEqual({
+      kind: "container",
+      url: "http://signal-new:8080",
     });
   });
 

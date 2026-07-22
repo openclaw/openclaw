@@ -180,7 +180,10 @@ async function prepareSignalSetupInput(params: {
       signalTransport: detected.kind === "container" ? "container" : "external-native",
     };
   } catch {
-    return { ...params.input, signalTransport: "external-native" };
+    // Leave the kind unset on an inconclusive probe: applyAccountConfig then
+    // preserves an existing container/external kind for URL-only edits, and
+    // buildSignalSetupPatch still defaults fresh accounts to external-native.
+    return params.input;
   }
 }
 
