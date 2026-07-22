@@ -5,11 +5,10 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 
 # OpenClaw Changelog Update
 
-Use this for release changelog rewrites and GitHub release-note source text.
-For regular beta/stable, run it once after the final Code SHA has green Full
-Release Validation. Do not rerun it for same-candidate tooling retries, resumed
-publication, or promotion. For extended-stable, follow the variant below before
-the final exact-head validation and immutable tag.
+Use this for changelog rewrites and GitHub release-note source text. For regular
+beta/stable, run it after the Code SHA passes Full Release Validation. For
+extended-stable, run it before final exact-head validation and tagging. Do not
+rerun it for tooling retries, resumed publication, or promotion.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
 ordering, grouping, and attribution discipline.
 
@@ -257,26 +256,11 @@ every human `Thanks @...` attribution.
 
 ## Extended-Stable Variant
 
-Extended-stable has no regular Code-SHA/Release-SHA evidence-reuse split and no
-GitHub Release body. Its changelog still must describe the exact shipped
-maintenance patch.
-
-1. Complete and approve the backport ledger first. Do not write release notes
-   from an incomplete PR list or from validation failures discovered later.
-2. On the coordinated candidate branch, regenerate the matching `## YYYY.M.P`
-   section after version prep and all approved product backports are present.
-   Use the same complete manifest and original-main-PR provenance rules as a
-   regular release.
-3. Land the changelog through the candidate PR or a dedicated follow-up PR to
-   the canonical extended-stable branch. Do not push it directly.
-4. Run the complete branch-owned Full Release Validation only after the
-   changelog is final. Any later branch change invalidates that exact-head run.
-5. A tooling-only compatibility repair does not need a user-facing changelog
-   bullet, but it still requires fresh exact-head validation. A later product
-   backport requires regenerating the section from the updated ledger before
-   validating again.
-6. Create the immutable tag only after the final changelog tree is green. Never
-   rewrite the tag or changelog for a package version already published.
+Extended-stable has one release commit and no GitHub Release body. After version
+prep and approved backports, regenerate `## YYYY.M.P` with the regular manifest
+and original-main-PR provenance rules. Land it by PR, then validate the final
+branch tip before tagging. Re-audit after a product backport; a tooling-only
+repair needs no changelog entry. Never rewrite a published tag or changelog.
 
 ## Quota / API Outage Rule
 

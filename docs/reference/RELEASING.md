@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Release lanes, operator checklist, validation boxes, version naming, and cadence"
 title: "Release policy"
 read_when:
@@ -15,15 +16,14 @@ OpenClaw exposes four user-facing update channels:
 - beta: prerelease tags on npm `beta`
 - dev: the moving head of `main`
 
-The CLI persists these channel names directly. `stable` and `extended-stable`
-remain separate selectors: publishing the maintenance line never moves
-`latest`, and a regular release never moves `extended-stable`.
+Extended-stable ships the trailing month's Gateway, official npm plugins, and
+Docker images without moving regular `latest` or `main` selectors.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
 ## Version naming
 
-- Monthly extended-stable release version: `YYYY.M.PATCH`, with `PATCH >= 33`, git tag `vYYYY.M.PATCH`
+- Monthly Gateway extended-stable release version: `YYYY.M.PATCH`, with `PATCH >= 33`, git tag `vYYYY.M.PATCH`
 - Daily/regular final release version: `YYYY.M.PATCH`, with `PATCH < 33`, git tag `vYYYY.M.PATCH`
 - Regular fallback correction release version: `YYYY.M.PATCH-N`, git tag `vYYYY.M.PATCH-N`
 - Beta prerelease version: `YYYY.M.PATCH-beta.N`, git tag `vYYYY.M.PATCH-beta.N`
@@ -35,7 +35,8 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - `latest` continues to follow the current regular/daily npm line; `beta` is the current beta install target
 - `extended-stable` means the supported trailing-month Gateway distribution, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
-- The dedicated monthly extended-stable path publishes the core npm package and every npm-publishable official plugin at the same exact version. Its release tag also publishes exact Docker images to GHCR and Docker Hub, then advances only `extended-stable`, `extended-stable-slim`, and `extended-stable-browser`. It does not publish plugins to ClawHub or publish macOS or Windows artifacts, a GitHub Release, private-repository dist-tags, mobile artifacts, or website downloads.
+- Gateway extended-stable publishes core, every npm-publishable official plugin,
+  and its Docker images at one exact version; see the dedicated workflow below.
 - Every regular final release ships the npm package, macOS app, signed standalone Android APK, and signed Windows Hub installers together. Beta releases normally validate and publish the npm/package path first, with native app build/sign/notarize/promote reserved for regular final unless explicitly requested.
 
 ## Release cadence
@@ -45,28 +46,25 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - If a beta tag has been pushed or published and needs a fix, maintainers cut the next `-beta.N` tag instead of deleting or recreating the old one
 - Detailed release procedure, approvals, credentials, and recovery notes are maintainer-only
 
-## Monthly extended-stable publication
+## Monthly Gateway extended-stable publication
 
-This is a dedicated exception to the regular release procedure below. For a
-completed month `YYYY.M`, create `extended-stable/YYYY.M.33`; publish
-`vYYYY.M.33` and later maintenance patches from that same branch. The release
-tag, branch tip, checkout, package version, npm preflight, and Full Release
-Validation run must all identify the same commit. Protected `main` must
-already contain a strictly later calendar month's final version below patch
-`33`; maintenance patches stay eligible after `main` advances by more than one
-month.
+For completed month `YYYY.M`, create `extended-stable/YYYY.M.33` and publish
+`.33+` from that branch. Tag, branch, checkout, package version, preflight, and
+validation must identify one commit. Before `.33`, protected `main` must contain
+a later month's final version below patch `33`; later maintenance patches remain
+eligible.
 
 ### Prepare and stabilize the candidate
 
-Audit the complete unaudited mainline range, reconcile private security work
-with its owner, and obtain approval for the bounded backport set. Land it in one
-coordinated PR; do not push the canonical branch directly.
+Audit the unaudited mainline range, reconcile private security work, approve a
+bounded backport set, and land one coordinated PR. Do not push the canonical
+branch directly.
 
-On `extended-stable/YYYY.M.33`, set the root version to `YYYY.M.P`, run
-`pnpm release:prep`, and require that version in every publishable official
-plugin. Generate and commit a complete `## YYYY.M.P` changelog section with
-`### Highlights`, `### Changes`, and `### Fixes`, citing original merged `main`
-PRs for equivalent backports. Preflight rejects a missing or empty section.
+On the canonical branch, set `YYYY.M.P`, run `pnpm release:prep`, and require
+that version in every publishable official plugin. From the approved ledger,
+generate and commit a complete `## YYYY.M.P` section with `### Highlights`,
+`### Changes`, and `### Fixes`, citing original merged `main` PRs for equivalent
+backports. Preflight rejects a missing or empty section.
 
 Carry the full current-main Docker release-channel unit: workflow, promoter,
 policy, shared classifier, tests, and workflow validation. GitHub loads tag
@@ -121,9 +119,8 @@ gh workflow run plugin-npm-release.yml \
   -f npm_dist_tag=extended-stable
 ```
 
-The workflow covers the complete `all-publishable` inventory, including
-unchanged packages, and verifies every exact version and selector. Reruns reuse
-already-published versions and reconcile selectors.
+The workflow covers all `all-publishable` packages, including unchanged ones,
+and verifies every exact version and selector. Reruns reuse published versions.
 
 Then publish the prepared core tarball with all three saved run identities:
 
@@ -154,12 +151,10 @@ npm view openclaw@YYYY.M.P version --userconfig "$(mktemp)"
 npm view openclaw@extended-stable version --userconfig "$(mktemp)"
 ```
 
-Require registry signatures and npm provenance to bind the root package to the
-canonical workflow branch; bind its bytes to the release SHA with the publish
-run, preflight manifest, and tarball digest. Both commands must return
-`YYYY.M.P`. From the manifest and tag, also verify every prepared core package
-and `all-publishable` official plugin at its exact version and
-`extended-stable` selector.
+Require signatures and npm provenance for the canonical branch, plus publish,
+preflight, and tarball-digest binding to the release SHA. Both commands must
+return `YYYY.M.P`. Verify every prepared core package and `all-publishable`
+official plugin at its exact version and selector.
 
 If only the root selector fails, use the generated
 `npm dist-tag add openclaw@YYYY.M.P extended-stable` repair command printed in
@@ -167,25 +162,20 @@ the workflow summary. Repair existing plugin or other prepared-core selectors
 through approved credential-isolated tooling; the OIDC source cannot mutate
 them. Never republish an immutable version.
 
-Require the tag-triggered `Docker Release` run to publish and verify the exact
-default, slim, browser, and architecture images in both GHCR and Docker Hub. It
-must advance only `extended-stable`, `extended-stable-slim`, and
-`extended-stable-browser`; regular `latest`, `main`, and their variants must
-remain unchanged.
+Require `Docker Release` to verify exact default, slim, browser, and architecture
+images in GHCR and Docker Hub, including attestations and platform versions. It
+must advance only
+`extended-stable`, `extended-stable-slim`, and `extended-stable-browser` by
+digest; regular aliases remain unchanged and automatic rollback is rejected.
 
-If immutable images exist but an alias needs repair, dispatch `Docker Channel
-Promotion` from current `main` with the exact tag. It verifies every source
-image before mutation and never rebuilds immutable images.
+For alias repair, run approval-gated `Docker Channel Promotion` from current
+`main` with the tag. It repeats digest, attestation, and platform checks, allows
+an explicit rollback, and never rebuilds images.
 
-Public support documentation initially designates Slack, Discord, and Codex as
-covered extended-stable plugin surfaces. That list is a support statement, not
-a release-code allowlist: every npm-publishable official plugin follows the
-same exact-version publication path.
-
-The regular checklist below continues to own beta, `latest`, GitHub Release,
-ClawHub plugin, macOS, Windows, and other platform publication. Do not run those
-steps for this extended-stable path; its Docker publication is owned only by the
-tag-triggered workflow and the digest-based channel-repair workflow above.
+Slack, Discord, and Codex are the initial documented support surfaces, not a
+release allowlist: every npm-publishable official plugin ships. The regular
+checklist alone owns beta/`latest`, GitHub Releases, ClawHub, native apps, mobile,
+website, and private dist-tags; do not run those steps for this Gateway path.
 
 ## Regular release operator checklist
 
@@ -495,7 +485,7 @@ For package-candidate Telegram proof, enable `telegram_mode=mock-openai` or `tel
 
 For beta, `latest`, plugin, GitHub Release, and platform publication,
 `OpenClaw Release Publish` is the normal mutating entrypoint. The monthly
-`.33+` extended-stable path does not use this orchestrator. The
+`.33+` Gateway extended-stable path does not use this orchestrator. The
 regular workflow orchestrates the trusted-publisher workflows in the order the
 release needs:
 
@@ -654,7 +644,7 @@ Rules:
 
 ## Regular beta/latest stable release sequence
 
-This legacy sequence is for the regular orchestrated release that also owns plugins, GitHub Release, Windows, and other platform work. It is not the monthly `.33+` extended-stable path documented at the top of this page.
+This legacy sequence is for the regular orchestrated release that also owns plugins, GitHub Release, Windows, and other platform work. It is not the monthly `.33+` Gateway extended-stable path documented at the top of this page.
 
 When cutting a regular orchestrated stable release:
 

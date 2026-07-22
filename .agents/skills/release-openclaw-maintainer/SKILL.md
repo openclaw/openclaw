@@ -222,10 +222,9 @@ maintenance patch, read
 or publication work. Treat backport discovery and preparation as an ability of
 this release skill, not as a separate release workflow.
 
-The backport ability owns the complete mainline inventory, private-security
-reconciliation, candidate decisions, maintainer approval, coordinated staging
-PR, and proof handoff. After that PR lands, use the dedicated extended-stable sequence
-below. Never route `.33+` through the regular beta/stable release sequence.
+The backport flow covers mainline inventory, private-security reconciliation,
+approval, the staging PR, and proof handoff. After it lands, use the sequence
+below. Never route `.33+` through regular beta/stable release steps.
 
 ## Publish Gateway extended-stable releases
 
@@ -238,7 +237,8 @@ on pinned current `main` as the exact command and validation contract.
 
 1. On `extended-stable/YYYY.M.33`, verify the root and every publishable official
    plugin have the intended version. Generate and commit the complete
-   `## YYYY.M.P` changelog section. Carry the full current-main Docker
+   `## YYYY.M.P` changelog section with `### Highlights`, `### Changes`, and
+   `### Fixes`. Carry the full current-main Docker
    release-channel unit: workflow, promoter, policy, shared classifier, tests,
    and workflow validation. Run focused checks and freeze the untagged tip SHA.
 2. From that branch, run npm preflight with the SHA as `tag`,
@@ -255,27 +255,23 @@ on pinned current `main` as the exact command and validation contract.
    `publish_scope=all-publishable`, the full release SHA as `ref`, and
    `npm_dist_tag=extended-stable`. Require complete exact-version and selector
    readback, then save the successful plugin run ID.
-7. Dispatch the real `openclaw-npm-release.yml` publish from the same branch
-   with the intended tag, `npm_dist_tag=extended-stable`, all three saved run
-   IDs, and `full_release_validation_run_attempt=<saved-attempt>`. The workflow
-   must publish the exact prepared core tarball and prove the referenced runs
-   match the canonical branch and release SHA.
-8. From a separate clean checkout of current trusted `main`, run
+7. Publish core from the same branch with the tag, `npm_dist_tag=extended-stable`,
+   all three run IDs, and the saved validation attempt. Require the prepared
+   tarball and every run to match the branch and release SHA.
+8. From a clean current-`main` checkout, run
    `node --import tsx scripts/openclaw-npm-postpublish-verify.ts YYYY.M.P`.
-   Verify registry signatures, provenance, prepared core and official-plugin
-   inventories, and every exact version and `extended-stable` selector. Repair
-   only the root selector with the generated command; repair existing plugin or
-   other prepared-core selectors through approved credential-isolated tooling.
-   Never republish an immutable version.
-9. Require the tag-triggered `Docker Release` run to publish and verify the
-   exact default, slim, browser, and architecture images in GHCR and Docker Hub.
-   It must advance only `extended-stable`, `extended-stable-slim`, and
-   `extended-stable-browser`. If immutable images already exist but channel
-   aliases need repair, dispatch `docker-channel-promote.yml` from current
-   `main` with the exact tag; never rebuild or move the immutable release tag
-   just to repair aliases. The normal release graph remains build-only.
+   Verify signatures, provenance, inventories, exact versions, and selectors.
+   Use the generated repair only for the root selector; repair other selectors
+   with approved credential-isolated tooling. Never republish a version.
+9. Require `Docker Release` to verify default, slim, browser, and architecture
+   images in GHCR and Docker Hub, including attestations and platform versions.
+   It must advance only
+   `extended-stable`, `extended-stable-slim`, and `extended-stable-browser` by
+   digest and refuse automatic rollback. For alias repair, dispatch the
+   approval-gated `docker-channel-promote.yml` from current `main` with the exact
+   tag; never rebuild or move the release tag.
 10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
-     ClawHub, or private dist-tag artifacts from this path.
+    ClawHub, or private dist-tag artifacts from this path.
 
 ## Keep release channel naming aligned
 

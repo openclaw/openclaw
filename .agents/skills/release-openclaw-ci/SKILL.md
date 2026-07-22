@@ -38,9 +38,8 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   commit as the Code SHA. Full product validation and performance evidence bind
   to that SHA. The later Release SHA may reuse those results only when it is a
   descendant whose complete changed path set is exactly `CHANGELOG.md`.
-- Extended-stable uses one exact branch-tip release commit and fresh branch-owned
-  validation. Do not apply the regular Code-SHA/Release-SHA evidence-reuse model
-  to that path.
+- Extended-stable validates one exact branch tip; it does not reuse the regular
+  Code-SHA/Release-SHA evidence model.
 - In a sparse worktree or Testbox source sync, first confirm `package.json`,
   `pnpm-lock.yaml`, and every source path the selected check reads. If any are
   absent, that checkout cannot validate a release dependency or Docker lane:
@@ -175,8 +174,8 @@ publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For the trailing completed month's `.33+` line, dispatch from the canonical
-branch instead of the regular SHA-pinned helper:
+For `.33+`, dispatch from and target the canonical branch; the regular
+SHA-pinned helper would produce a rejected `release-ci/*` identity:
 
 ```bash
 gh workflow run full-release-validation.yml \
@@ -185,42 +184,16 @@ gh workflow run full-release-validation.yml \
   -f release_profile=stable
 ```
 
-Require all of these identities before accepting the run:
+Accept only a complete `rerun_group=all` run whose branch, head/target SHAs,
+manifest `workflowRef`, and package versions identify the same commit. Save its
+successful `run_attempt` and require the final tag to resolve there. Reject
+`release-ci/*`, current-main, narrow, and earlier-attempt evidence.
 
-- the workflow head branch is `extended-stable/YYYY.M.33`;
-- the workflow head SHA, resolved target SHA, branch tip, root version, and
-  every publishable official plugin version identify one release commit;
-- the manifest `workflowRef` is the canonical branch;
-- the parent is a complete `rerun_group=all` run with blocking performance and
-  soak evidence;
-- the saved run id is paired with its exact successful `run_attempt`.
-
-The immutable tag need not exist during candidate stabilization. After npm
-preflight succeeds and the tag is created, require it to resolve to the saved
-validation SHA before using that run as publication evidence.
-
-The direct branch run is fresh and publication-critical. Do not substitute a
-`release-ci/*` run, current-main workflow run, narrow diagnostic rerun, or an
-earlier attempt. The core npm publisher checks these identities.
-
-Treat validation repairs as a separate release-infrastructure stream:
-
-1. Reproduce and classify the first blocking failure before editing.
-2. Product defects require an approved bounded backport and a new exact release
-   commit.
-3. Frozen-target incompatibility requires the smallest trusted workflow,
-   installer, package, QA, or harness repair that preserves the target product.
-   Record the source PR and why the target lacks the newer contract.
-4. Provider 5xx responses, runner capacity, approval delays, and terminal-log
-   races keep the release commit unchanged. Use the retry budget and retain the
-   supersession reason.
-5. Any branch change invalidates the prior exact-head run. Rerun the complete
-   parent and replace all downstream run identity evidence.
-
-Current tooling may omit only scenarios that a frozen target cannot represent,
-and only through the workflow's explicit frozen-target compatibility contract.
-Never use an omission to hide a behavior regression, missing package surface,
-or failed required provider/channel lane.
+Product failures need an approved backport. Frozen-target tooling failures need
+the smallest behavior-preserving repair. Provider, approval, runner, or log
+races keep the candidate unchanged. Record repairs and superseded runs; any
+branch change requires a new complete parent. Omit only an explicitly
+unsupported frozen-target scenario, never a required behavior or package.
 
 ## Watch
 
@@ -289,8 +262,8 @@ include_android=true -f release_gate=true`.
 
 Record:
 
-- regular release: Code SHA and Release SHA; extended-stable: canonical branch,
-  exact release SHA, and immutable tag
+- release identity: Code/Release SHAs for regular releases; canonical branch,
+  exact SHA, and immutable tag for extended-stable
 - evidence-reuse policy and complete changed-path set
 - active full parent run URL, attempt, workflow SHA, and any superseded parent
   with the exact replacement reason
