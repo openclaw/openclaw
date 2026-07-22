@@ -394,6 +394,13 @@ describe("config help copy quality", () => {
     expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
     expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
 
+    const pluginScheduledTurnPolicy = expectDefined(
+      FIELD_HELP["plugins.entries.*.workflow.allowScheduledSessionTurns"],
+      'FIELD_HELP["plugins.entries.*.workflow.allowScheduledSessionTurns"] test invariant',
+    );
+    expect(pluginScheduledTurnPolicy.includes("scheduleSessionTurn")).toBe(true);
+    expect(pluginScheduledTurnPolicy.includes("unscheduleSessionTurnsByTag")).toBe(true);
+
     const pluginHookTimeout = expectDefined(
       FIELD_HELP["plugins.entries.*.hooks.timeoutMs"],
       'FIELD_HELP["plugins.entries.*.hooks.timeoutMs"] test invariant',

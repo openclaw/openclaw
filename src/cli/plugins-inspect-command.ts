@@ -375,6 +375,9 @@ export async function runPluginsInspectCommand(
   if (typeof inspect.policy.allowPromptInjection === "boolean") {
     policyLines.push(`allowPromptInjection: ${inspect.policy.allowPromptInjection}`);
   }
+  if (typeof inspect.policy.allowScheduledSessionTurns === "boolean") {
+    policyLines.push(`allowScheduledSessionTurns: ${inspect.policy.allowScheduledSessionTurns}`);
+  }
   if (typeof inspect.policy.allowConversationAccess === "boolean") {
     policyLines.push(`allowConversationAccess: ${inspect.policy.allowConversationAccess}`);
   }

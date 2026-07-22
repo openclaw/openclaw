@@ -125,6 +125,15 @@ function didCronCleanupJob(value: unknown): boolean {
 
 const PLUGIN_CRON_RESERVED_DELIMITER = ":";
 
+function canManageScheduledSessionTurns(params: {
+  origin?: PluginOrigin;
+  operatorAuthorized?: boolean;
+}): boolean {
+  // Keep operator-derived trust separate from plugin-owned schedule/config payloads so a plugin
+  // cannot self-assert this authority through its public API request.
+  return params.origin === "bundled" || params.operatorAuthorized === true;
+}
+
 function resolvePluginSessionTurnTag(value: unknown): {
   tag?: string;
   invalid: boolean;
@@ -202,12 +211,13 @@ export async function schedulePluginSessionTurn(params: {
   pluginId: string;
   pluginName?: string;
   origin?: PluginOrigin;
+  operatorAuthorized?: boolean;
   schedule: PluginSessionTurnScheduleParams;
   shouldCommit?: () => boolean;
   cron?: CronServiceContract;
   ownerRegistry?: PluginRegistry;
 }): Promise<PluginSessionSchedulerJobHandle | undefined> {
-  if (params.origin !== "bundled") {
+  if (!canManageScheduledSessionTurns(params)) {
     return undefined;
   }
   const sessionKey = normalizeOptionalString(params.schedule.sessionKey);
@@ -356,10 +366,11 @@ export async function schedulePluginSessionTurn(params: {
 export async function unschedulePluginSessionTurnsByTag(params: {
   pluginId: string;
   origin?: PluginOrigin;
+  operatorAuthorized?: boolean;
   cron?: CronServiceContract;
   request: PluginSessionTurnUnscheduleByTagParams;
 }): Promise<PluginSessionTurnUnscheduleByTagResult> {
-  if (params.origin !== "bundled") {
+  if (!canManageScheduledSessionTurns(params)) {
     return { removed: 0, failed: 0 };
   }
   const sessionKey = normalizeOptionalString(params.request.sessionKey);

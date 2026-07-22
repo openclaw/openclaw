@@ -552,6 +552,7 @@ describe("plugins cli list", () => {
       bundleCapabilities: [],
       diagnostics: [],
       policy: {
+        allowScheduledSessionTurns: true,
         allowConversationAccess: true,
         allowedModels: [],
         hasAllowedModelsConfig: false,
@@ -564,6 +565,7 @@ describe("plugins cli list", () => {
 
     expect(buildPluginDiagnosticsReport).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("Policy");
+    expect(runtimeLogs.join("\n")).toContain("allowScheduledSessionTurns: true");
     expect(runtimeLogs.join("\n")).toContain("allowConversationAccess: true");
     expect(runtimeLogs.join("\n")).toContain("ClawHub package: openclaw-mem0");
     expect(runtimeLogs.join("\n")).toContain("Artifact kind: npm-pack");

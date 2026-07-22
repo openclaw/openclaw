@@ -16,6 +16,13 @@ export type PluginEntryConfig = {
     /** Per typed-hook timeout overrides in milliseconds. */
     timeouts?: Record<string, number>;
   };
+  workflow?: {
+    /**
+     * Explicitly allows a non-bundled plugin to create and remove durable,
+     * Cron-backed session turns. Bundled plugins keep their existing access.
+     */
+    allowScheduledSessionTurns?: boolean;
+  };
   subagent?: {
     /** Explicitly allow this plugin to request per-run provider/model overrides for subagent runs. */
     allowModelOverride?: boolean;

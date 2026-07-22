@@ -87,6 +87,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
     config: params.cfg,
     pluginConfig: {},
     hookPolicy: params.entry?.hooks,
+    workflowPolicy: params.entry?.workflow,
     registrationMode: registrationPlan.mode,
   });
   let mergedSetupRegistration = setupRegistration;

@@ -28,6 +28,9 @@ export type NormalizedPluginsConfig = {
         timeoutMs?: number;
         timeouts?: Record<string, number>;
       };
+      workflow?: {
+        allowScheduledSessionTurns?: boolean;
+      };
       subagent?: {
         allowModelOverride?: boolean;
         allowedModels?: string[];
@@ -144,6 +147,18 @@ function normalizePluginEntries(
             ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
           }
         : undefined;
+    const workflowRaw = entry.workflow;
+    const workflow =
+      workflowRaw && typeof workflowRaw === "object" && !Array.isArray(workflowRaw)
+        ? {
+            allowScheduledSessionTurns: (workflowRaw as { allowScheduledSessionTurns?: unknown })
+              .allowScheduledSessionTurns,
+          }
+        : undefined;
+    const normalizedWorkflow =
+      workflow && typeof workflow.allowScheduledSessionTurns === "boolean"
+        ? { allowScheduledSessionTurns: workflow.allowScheduledSessionTurns }
+        : undefined;
     const subagentRaw = entry.subagent;
     const subagent =
       subagentRaw && typeof subagentRaw === "object" && !Array.isArray(subagentRaw)
@@ -216,6 +231,7 @@ function normalizePluginEntries(
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
+      workflow: normalizedWorkflow ?? normalized[normalizedKey]?.workflow,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
       llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,

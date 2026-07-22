@@ -1922,6 +1922,114 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("loads workflow-policy plugins when scheduled turns are explicitly authorized", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              workflow: {
+                allowScheduledSessionTurns: true,
+              },
+            },
+          },
+        },
+      },
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it("keeps workflow-policy plugins behind restrictive allowlists", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          allow: ["browser"],
+          slots: { memory: "none" },
+          entries: {
+            browser: {
+              enabled: false,
+            },
+            "external-hook-policy": {
+              workflow: {
+                allowScheduledSessionTurns: true,
+              },
+            },
+          },
+        },
+      },
+      expected: [],
+    });
+  });
+
+  it("uses authored workflow policy as startup intent", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+          "external-hook-policy": {
+            workflow: {
+              allowScheduledSessionTurns: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: structuredClone(activationSourceConfig),
+      activationSourceConfig,
+      expected: ["external-hook-policy"],
+    });
+  });
+
+  it("does not let effective-only workflow policy bypass authored startup policy", () => {
+    const activationSourceConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser"],
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = {
+      channels: {},
+      plugins: {
+        allow: ["browser", "external-hook-policy"],
+        slots: { memory: "none" },
+        entries: {
+          browser: {
+            enabled: false,
+          },
+          "external-hook-policy": {
+            workflow: {
+              allowScheduledSessionTurns: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: runtimeConfig,
+      activationSourceConfig,
+      expected: [],
+    });
+  });
+
   it("keeps hook-policy plugins behind restrictive allowlists", () => {
     expectStartupPluginIdsCase({
       config: {

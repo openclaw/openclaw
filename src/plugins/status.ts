@@ -95,6 +95,7 @@ export type PluginInspectReport = {
   diagnostics: PluginDiagnostic[];
   policy: {
     allowPromptInjection?: boolean;
+    allowScheduledSessionTurns?: boolean;
     allowConversationAccess?: boolean;
     hookTimeoutMs?: number;
     hookTimeouts?: Record<string, number>;
@@ -460,6 +461,7 @@ export function buildPluginInspectReport(params: {
     diagnostics,
     policy: {
       allowPromptInjection: policyEntry?.hooks?.allowPromptInjection,
+      allowScheduledSessionTurns: policyEntry?.workflow?.allowScheduledSessionTurns,
       allowConversationAccess: policyEntry?.hooks?.allowConversationAccess,
       hookTimeoutMs: policyEntry?.hooks?.timeoutMs,
       hookTimeouts: policyEntry?.hooks?.timeouts ? { ...policyEntry.hooks.timeouts } : undefined,

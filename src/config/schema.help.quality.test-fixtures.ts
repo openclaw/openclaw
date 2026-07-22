@@ -298,6 +298,8 @@ export const TARGET_KEYS = [
   "plugins.entries.*.enabled",
   "plugins.entries.*.hooks",
   "plugins.entries.*.hooks.allowPromptInjection",
+  "plugins.entries.*.workflow",
+  "plugins.entries.*.workflow.allowScheduledSessionTurns",
   "plugins.entries.*.hooks.allowConversationAccess",
   "plugins.entries.*.hooks.timeoutMs",
   "plugins.entries.*.hooks.timeouts",

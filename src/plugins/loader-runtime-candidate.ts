@@ -518,6 +518,7 @@ export function loadRuntimePluginCandidate(params: {
     config: context.cfg,
     pluginConfig: validatedConfig.value,
     hookPolicy: entry?.hooks,
+    workflowPolicy: entry?.workflow,
     registrationMode: registrationPlan.mode,
   });
   const transaction = createPluginRegistrationTransaction({

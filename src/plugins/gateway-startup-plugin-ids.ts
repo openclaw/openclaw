@@ -1732,18 +1732,19 @@ function canStartConfiguredRootPlugin(params: {
   return activationState.enabled && activationState.explicitlyEnabled;
 }
 
-function hasExplicitHookPolicyConfig(
+function hasExplicitRuntimePolicyConfig(
   entry: NormalizedPluginsConfig["entries"][string] | undefined,
 ): boolean {
   return (
     entry?.hooks?.allowConversationAccess === true ||
     entry?.hooks?.allowPromptInjection === true ||
     entry?.hooks?.timeoutMs !== undefined ||
-    (entry?.hooks?.timeouts !== undefined && Object.keys(entry.hooks.timeouts).length > 0)
+    (entry?.hooks?.timeouts !== undefined && Object.keys(entry.hooks.timeouts).length > 0) ||
+    entry?.workflow?.allowScheduledSessionTurns === true
   );
 }
 
-function hasHookRuntimeStartupIntent(params: {
+function hasRuntimePolicyStartupIntent(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   activationSourcePlugins: NormalizedPluginsConfig;
@@ -1751,12 +1752,12 @@ function hasHookRuntimeStartupIntent(params: {
   if (params.manifest?.activation?.onCapabilities?.includes("hook")) {
     return true;
   }
-  return hasExplicitHookPolicyConfig(
+  return hasExplicitRuntimePolicyConfig(
     params.activationSourcePlugins.entries[params.plugin.pluginId],
   );
 }
 
-function canStartExplicitHookPlugin(params: {
+function canStartExplicitRuntimePolicyPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
   config: OpenClawConfig;
@@ -1768,11 +1769,11 @@ function canStartExplicitHookPlugin(params: {
   activationSourcePlugins: NormalizedPluginsConfig;
   platform?: NodeJS.Platform;
 }): boolean {
-  const hasHookPolicyIntent = hasExplicitHookPolicyConfig(
+  const hasRuntimePolicyIntent = hasExplicitRuntimePolicyConfig(
     params.activationSourcePlugins.entries[params.plugin.pluginId],
   );
   if (
-    !hasHookRuntimeStartupIntent({
+    !hasRuntimePolicyStartupIntent({
       plugin: params.plugin,
       manifest: params.manifest,
       activationSourcePlugins: params.activationSourcePlugins,
@@ -1803,7 +1804,7 @@ function canStartExplicitHookPlugin(params: {
     enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
     activationSource: params.activationSource,
   });
-  return activationState.enabled && (activationState.explicitlyEnabled || hasHookPolicyIntent);
+  return activationState.enabled && (activationState.explicitlyEnabled || hasRuntimePolicyIntent);
 }
 
 function canStartTrustedToolPolicyPlugin(params: {
@@ -2237,7 +2238,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       continue;
     }
     if (
-      canStartExplicitHookPlugin({
+      canStartExplicitRuntimePolicyPlugin({
         plugin,
         manifest,
         config: params.config,

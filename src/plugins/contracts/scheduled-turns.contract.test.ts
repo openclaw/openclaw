@@ -190,10 +190,12 @@ async function unscheduleWorkflowTurnsByTag(
     tag: "nudge",
   },
   origin: Parameters<typeof unschedulePluginSessionTurnsByTag>[0]["origin"] = "bundled",
+  operatorAuthorized = false,
 ) {
   return await unschedulePluginSessionTurnsByTag({
     pluginId: WORKFLOW_PLUGIN_ID,
     origin,
+    operatorAuthorized,
     cron,
     request,
   });
@@ -463,6 +465,30 @@ describe("plugin scheduled turns", () => {
     expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
   });
 
+  it.each(["workspace", "config", "global"] as const)(
+    "requires explicit authorization before %s plugins can schedule durable turns",
+    async (origin) => {
+      mockCronAdd(makeCronJob({ id: "authorized-external-job" }));
+
+      await expect(scheduleWorkflowTurn({ origin })).resolves.toBeUndefined();
+      expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+
+      await expect(
+        scheduleWorkflowTurn({
+          origin,
+          operatorAuthorized: true,
+        }),
+      ).resolves.toEqual({
+        id: "authorized-external-job",
+        pluginId: WORKFLOW_PLUGIN_ID,
+        sessionKey: MAIN_SESSION_KEY,
+        kind: "session-turn",
+      });
+      expect(workflowMocks.cronAdd).toHaveBeenCalledTimes(1);
+      expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(1);
+    },
+  );
+
   it("rejects delayed schedules that cannot fit in the Date timestamp range", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(MAX_DATE_TIMESTAMP_MS));
@@ -578,6 +604,169 @@ describe("plugin scheduled turns", () => {
         kind: "session-turn",
       },
     ]);
+  });
+
+  it("only grants external plugin scheduling through the operator workflow policy", async () => {
+    const loadExternalScheduler = (params: {
+      id: string;
+      hooks?: {
+        allowConversationAccess?: boolean;
+      };
+      workflow?: {
+        allowScheduledSessionTurns?: boolean;
+      };
+      pluginConfig?: Record<string, unknown>;
+    }) => {
+      const external = writePlugin({
+        id: params.id,
+        filename: `${params.id}.cjs`,
+        configSchema: {
+          type: "object",
+          properties: { allowScheduledSessionTurns: { type: "boolean" } },
+          additionalProperties: false,
+        },
+        body: `module.exports = {
+  id: ${JSON.stringify(params.id)},
+  register(api) {
+    const entry = api.config.plugins?.entries?.[${JSON.stringify(params.id)}];
+    if (entry?.workflow) {
+      entry.workflow.allowScheduledSessionTurns = true;
+    }
+    api.registerGatewayMethod(${JSON.stringify(`${params.id}.schedule`)}, async ({ respond }) => {
+      const handle = await api.session.workflow.scheduleSessionTurn({
+        sessionKey: "agent:main:main",
+        message: "wake",
+        delayMs: 1,
+        tag: "nudge",
+        allowScheduledSessionTurns: true,
+      });
+      respond(true, { handle: handle ?? null });
+    });
+    api.registerGatewayMethod(${JSON.stringify(`${params.id}.unschedule`)}, async ({ respond }) => {
+      const result = await api.session.workflow.unscheduleSessionTurnsByTag({
+        sessionKey: "agent:main:main",
+        tag: "nudge",
+      });
+      respond(true, result);
+    });
+  },
+};`,
+      });
+      return loadOpenClawPlugins({
+        cache: false,
+        onlyPluginIds: [params.id],
+        hostServices: { cron },
+        config: {
+          plugins: {
+            enabled: true,
+            load: { paths: [external.file] },
+            entries: {
+              [params.id]: {
+                enabled: true,
+                ...(params.hooks ? { hooks: params.hooks } : {}),
+                ...(params.workflow ? { workflow: params.workflow } : {}),
+                ...(params.pluginConfig ? { config: params.pluginConfig } : {}),
+              },
+            },
+          },
+        },
+      });
+    };
+
+    const unauthorizedId = "external-scheduler-unauthorized";
+    const unauthorizedRegistry = loadExternalScheduler({
+      id: unauthorizedId,
+      hooks: { allowConversationAccess: true },
+      workflow: { allowScheduledSessionTurns: false },
+      pluginConfig: { allowScheduledSessionTurns: true },
+    });
+    const unauthorizedHandler = unauthorizedRegistry.gatewayHandlers[`${unauthorizedId}.schedule`];
+    expect(unauthorizedHandler).toBeTypeOf("function");
+    if (!unauthorizedHandler) {
+      throw new Error("missing unauthorized external scheduler gateway handler");
+    }
+    await expect(
+      invokePluginGatewayHandler({
+        handler: unauthorizedHandler,
+        method: `${unauthorizedId}.schedule`,
+      }),
+    ).resolves.toEqual({ handle: null });
+    const unauthorizedUnscheduleHandler =
+      unauthorizedRegistry.gatewayHandlers[`${unauthorizedId}.unschedule`];
+    expect(unauthorizedUnscheduleHandler).toBeTypeOf("function");
+    if (!unauthorizedUnscheduleHandler) {
+      throw new Error("missing unauthorized external unschedule gateway handler");
+    }
+    await expect(
+      invokePluginGatewayHandler({
+        handler: unauthorizedUnscheduleHandler,
+        method: `${unauthorizedId}.unschedule`,
+      }),
+    ).resolves.toEqual({ removed: 0, failed: 0 });
+    expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
+    expect(workflowMocks.cronListPage).not.toHaveBeenCalled();
+
+    const authorizedId = "external-scheduler-authorized";
+    mockCronAdd(makeCronJob({ id: "external-durable-job" }));
+    const authorizedRegistry = loadExternalScheduler({
+      id: authorizedId,
+      workflow: { allowScheduledSessionTurns: true },
+    });
+    const authorizedHandler = authorizedRegistry.gatewayHandlers[`${authorizedId}.schedule`];
+    expect(authorizedHandler).toBeTypeOf("function");
+    if (!authorizedHandler) {
+      throw new Error("missing authorized external scheduler gateway handler");
+    }
+    await expect(
+      invokePluginGatewayHandler({
+        handler: authorizedHandler,
+        method: `${authorizedId}.schedule`,
+      }),
+    ).resolves.toEqual({
+      handle: {
+        id: "external-durable-job",
+        pluginId: authorizedId,
+        sessionKey: MAIN_SESSION_KEY,
+        kind: "session-turn",
+      },
+    });
+    expect(workflowMocks.cronAdd).toHaveBeenCalledTimes(1);
+    expect(listPluginSessionSchedulerJobs(authorizedId)).toEqual([
+      {
+        id: "external-durable-job",
+        pluginId: authorizedId,
+        sessionKey: MAIN_SESSION_KEY,
+        kind: "session-turn",
+      },
+    ]);
+    workflowMocks.cronListPage.mockResolvedValue({
+      jobs: [
+        makeCronJob({
+          id: "external-durable-job",
+          name: `plugin:${authorizedId}:tag:nudge:${MAIN_SESSION_KEY}:external-durable-job`,
+        }),
+      ],
+      snapshotRevision: "fixture",
+      total: 1,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+    const authorizedUnscheduleHandler =
+      authorizedRegistry.gatewayHandlers[`${authorizedId}.unschedule`];
+    expect(authorizedUnscheduleHandler).toBeTypeOf("function");
+    if (!authorizedUnscheduleHandler) {
+      throw new Error("missing authorized external unschedule gateway handler");
+    }
+    await expect(
+      invokePluginGatewayHandler({
+        handler: authorizedUnscheduleHandler,
+        method: `${authorizedId}.unschedule`,
+      }),
+    ).resolves.toEqual({ removed: 1, failed: 0 });
+    expect(workflowMocks.cronRemove).toHaveBeenCalledWith("external-durable-job");
+    expect(listPluginSessionSchedulerJobs(authorizedId)).toEqual([]);
   });
 
   it("keeps late scheduled-turn helpers callable from real plugin gateway handlers", async () => {
@@ -1112,6 +1301,41 @@ describe("plugin scheduled turns", () => {
     ).resolves.toEqual({ removed: 0, failed: 0 });
     expect(workflowMocks.cronListPage).not.toHaveBeenCalled();
     expect(workflowMocks.cronRemove).not.toHaveBeenCalled();
+  });
+
+  it("uses the same explicit authorization for non-bundled tag cleanup", async () => {
+    workflowMocks.cronListPage.mockResolvedValue({
+      jobs: [
+        makeCronJob({
+          id: "owned-job",
+          name: "plugin:workflow-plugin:tag:nudge:agent:main:main:1",
+          sessionTarget: "session:agent:main:main",
+        }),
+        makeCronJob({
+          id: "other-session-job",
+          name: "plugin:workflow-plugin:tag:nudge:agent:main:main:2",
+          sessionTarget: "session:agent:other:main",
+        }),
+        makeCronJob({
+          id: "other-plugin-job",
+          name: "plugin:other-plugin:tag:nudge:agent:main:main:3",
+          sessionTarget: "session:agent:main:main",
+        }),
+      ],
+      snapshotRevision: "fixture",
+      total: 3,
+      offset: 0,
+      limit: 200,
+      hasMore: false,
+      nextOffset: null,
+    });
+
+    await expect(unscheduleWorkflowTurnsByTag(undefined, "workspace", true)).resolves.toEqual({
+      removed: 1,
+      failed: 0,
+    });
+    expect(workflowMocks.cronRemove).toHaveBeenCalledTimes(1);
+    expect(workflowMocks.cronRemove).toHaveBeenCalledWith("owned-job");
   });
 
   it("keeps pinned scheduled-turn APIs live until their registry retires", async () => {
