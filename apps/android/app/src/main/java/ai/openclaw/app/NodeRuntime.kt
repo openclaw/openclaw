@@ -27,6 +27,8 @@ import ai.openclaw.app.chat.MessageSpeechClient
 import ai.openclaw.app.chat.MessageSpeechController
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.OutgoingAttachment
+import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.chat.SystemSpeechSpeaker
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
@@ -782,14 +784,14 @@ class NodeRuntime private constructor(
   )
 
   /**
-   * HTTP(S) page origin of the connected gateway plus the shared credential a
-   * gateway-served page (e.g. the `?view=terminal` Control UI document) can
-   * authenticate with. Derived from the same endpoint/auth the WS sessions use.
+   * HTTP(S) page origin plus shared credentials for gateway-served Control UI pages.
+   * The values come from the same endpoint and auth material that the WS sessions use.
    */
   data class GatewayControlPage(
     val baseUrl: String,
     val token: String?,
     val password: String?,
+    val tlsFingerprintSha256: String?,
   )
 
   private val appContext = context.applicationContext
@@ -2742,9 +2744,13 @@ class NodeRuntime private constructor(
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatPlanSteps: StateFlow<List<ChatPlanStep>> = chat.planSteps
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val chatSessionBranches: StateFlow<List<SessionBranch>> = chat.sessionBranches
+  val chatSessionBranchesLoading: StateFlow<Boolean> = chat.sessionBranchesLoading
+  val chatSessionBranchSwitching: StateFlow<Boolean> = chat.sessionBranchSwitching
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
   val chatCommands: StateFlow<List<ChatCommandEntry>> = chat.commands
   val chatOutboxItems: StateFlow<List<ChatOutboxItem>> = chat.outboxItems
+  val chatOutboxPresentationRestored: StateFlow<Boolean> = chat.outboxPresentationRestored
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = chat.listBackgroundTasks(agentId)
 
@@ -4323,6 +4329,7 @@ class NodeRuntime private constructor(
         baseUrl = gatewayControlPageBaseUrl(endpoint),
         token = pageAuth.token,
         password = pageAuth.password,
+        tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
       )
   }
 
@@ -4381,8 +4388,7 @@ class NodeRuntime private constructor(
 
   private fun prepareGatewayTarget(endpoint: GatewayEndpoint) {
     if (connectedEndpoint?.stableId?.let { it != endpoint.stableId } == true) {
-      // Closing both sockets is synchronous; cleanup callbacks may finish later, but no event can
-      // cross the active-pointer change on the old authenticated transport.
+      // Close both sockets before changing routes so stale callbacks cannot cross the handoff.
       disconnect(retireRunState = true)
     }
     if (prefs.gatewayRegistry.entries.value
@@ -4917,6 +4923,14 @@ class NodeRuntime private constructor(
     parentKey: String,
     ownerAgentId: String? = null,
   ): String? = chat.forkSession(parentKey, ownerAgentId)
+
+  suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chatSessionKey.value, entryId)
+
+  suspend fun forkChatAtEntry(entryId: String): Pair<String, String?>? = chat.forkSessionAtEntry(chatSessionKey.value, entryId)
+
+  suspend fun refreshChatSessionBranches(): Boolean = chat.refreshSessionBranches()
+
+  suspend fun switchChatSessionBranch(leafEntryId: String): Boolean = chat.switchSessionBranch(chatSessionKey.value, leafEntryId)
 
   fun setChatThinkingLevel(level: String) {
     chat.setThinkingLevel(level)
@@ -8858,3 +8872,11 @@ private data class HomeCanvasAgentCard(
   val caption: String,
   val isActive: Boolean,
 )
+
+private fun gatewayControlPageTlsFingerprint(
+  prefs: SecurePrefs,
+  endpoint: GatewayEndpoint,
+): String? =
+  prefs
+    .loadGatewayTlsFingerprint(endpoint.stableId)
+    ?.let(::normalizeGatewayTlsFingerprintInput)
