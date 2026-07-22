@@ -760,6 +760,10 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("uses forced shutdown only when the installed gateway supports it", () => {
+    const installedSource = readFileSync(
+      "scripts/lib/cross-os-release-checks/installed.ts",
+      "utf8",
+    );
     const source = [
       "scripts/lib/cross-os-release-checks/lanes.ts",
       "scripts/lib/cross-os-release-checks/runtime.ts",
@@ -776,6 +780,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       "gateway",
       "stop",
     ]);
+    expect(installedSource).toContain('args: ["gateway", "stop", "--help"]');
+    expect(installedSource).not.toContain("appendGatewayStopHelpProbeFallback");
     expect(source.match(/resolveInstalledGatewayStopArgs\(/g)).toHaveLength(2);
   });
 

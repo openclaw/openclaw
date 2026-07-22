@@ -382,24 +382,15 @@ export async function resolveInstalledGatewayStopArgs(params: {
   env: NodeJS.ProcessEnv;
   logPath: string;
 }) {
-  try {
-    const help = await runInstalledCli({
-      cliPath: params.cliPath,
-      args: ["gateway", "stop", "--help"],
-      cwd: params.cwd,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: 15_000,
-      check: false,
-    });
-    if (help.exitCode !== 0) {
-      throw new Error(`gateway stop --help exited ${help.exitCode}`);
-    }
-    return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
-  } catch (error) {
-    appendGatewayStopHelpProbeFallback(params.logPath, error);
-    return buildGatewayStopArgsFromHelpText("--force");
-  }
+  const help = await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "stop", "--help"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 15_000,
+  });
+  return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
 }
 
 async function readInstalledUpdateStatus(params: {
@@ -609,13 +600,6 @@ export function appendGatewayStatusHelpProbeFallback(logPath: string, error: unk
   appendFileSync(
     logPath,
     `${new Date().toISOString()} gateway status help probe failed; assuming current --require-rpc support: ${formatError(error)}\n`,
-  );
-}
-
-function appendGatewayStopHelpProbeFallback(logPath: string, error: unknown) {
-  appendFileSync(
-    logPath,
-    `${new Date().toISOString()} gateway stop help probe failed; assuming current --force support: ${formatError(error)}\n`,
   );
 }
 
