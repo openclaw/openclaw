@@ -278,7 +278,7 @@ export function noteSessionActivityEvent(
   }
 }
 
-export function readString(value: unknown): string | undefined {
+function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
