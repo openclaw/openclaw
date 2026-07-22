@@ -500,6 +500,87 @@ describe("server-channels auto restart", () => {
 
     await vi.advanceTimersByTimeAsync(200);
     expect(startAccount).toHaveBeenCalledTimes(1);
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    // Stopping during restart-owned backoff must clear restartPending (no silent stuck state).
+    expect(account?.restartPending).toBe(false);
+  });
+
+  it("does not bind auto-restart backoff to the dying run abort signal", async () => {
+    const runSignals: AbortSignal[] = [];
+    const startAccount = vi.fn(async (ctx: ChannelGatewayContext<TestAccount>) => {
+      runSignals.push(ctx.abortSignal);
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => hoisted.sleepWithAbort.mock.calls.length >= 1,
+      "expected restart-owned backoff sleep after channel exit",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    const sleepSignal = hoisted.sleepWithAbort.mock.calls.at(-1)?.[1] as AbortSignal | undefined;
+    expect(runSignals[0]).toBeDefined();
+    expect(sleepSignal).toBeDefined();
+    // Restart delay must use RetrySupervisor's signal, not the exited run's abort.
+    expect(sleepSignal).not.toBe(runSignals[0]);
+
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 2,
+      "expected auto-restart after independent backoff",
+      { stepMs: 10, maxMs: 500 },
+    );
+    expect(startAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("continues the auto-restart chain after a startAccount failure (no silent exit)", async () => {
+    let calls = 0;
+    const startAccount = vi.fn(async () => {
+      calls += 1;
+      // First exit schedules restart; second attempt fails; chain must still schedule a third.
+      if (calls === 2) {
+        throw new Error("startup boom");
+      }
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => startAccount.mock.calls.length >= 3,
+      "expected restart chain to continue after a failed startAccount attempt",
+      { stepMs: 10, maxMs: 1_000 },
+    );
+
+    expect(startAccount.mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("clears restartPending when restart-owned backoff is aborted", async () => {
+    const startAccount = vi.fn(async () => {});
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    await advanceTimersUntil(
+      () => hoisted.sleepWithAbort.mock.calls.length >= 1,
+      "expected restart-owned backoff sleep",
+      { stepMs: 10, maxMs: 500 },
+    );
+
+    // Abort the restart-owned sleep signal (same path as RetrySupervisor.cancel / stop).
+    const sleepSignal = hoisted.sleepWithAbort.mock.calls.at(-1)?.[1] as AbortSignal | undefined;
+    expect(sleepSignal).toBeDefined();
+    // The mock rejects on abort; produce an abort without a full stopChannel when possible.
+    // stopChannel is the product path that cancels the supervisor and must clear pending.
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await flushMicrotasks();
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.restartPending).toBe(false);
+    expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
   it("does not auto-restart a channel task exit marked as terminal disconnect", async () => {

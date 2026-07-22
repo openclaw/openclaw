@@ -6,6 +6,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import { withGatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime-context.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import { startChannelApprovalHandlerBootstrap } from "../infra/approval-handler-bootstrap.js";
@@ -51,6 +52,18 @@ const MAX_RESTARTS = 10;
 const CHANNEL_STABLE_RUN_MS = RESTART_POLICY.maxMs;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
 const CHANNEL_STARTUP_CONCURRENCY = 4;
+
+/** Restart backoff uses sleepWithAbort("aborted") and AbortError names. */
+function isRestartAbortError(error: unknown): boolean {
+  if (isAbortError(error)) {
+    return true;
+  }
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const message = "message" in error && typeof error.message === "string" ? error.message : "";
+  return message === "aborted" || /abort|cancel/i.test(message);
+}
 function waitForChannelStartupHandoff(): Promise<void> {
   return new Promise((resolve) => {
     const handle = setImmediate(resolve);
@@ -813,8 +826,19 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   await startChannelInternal(channelId, id, {
                     preserveManualStop: true,
                   });
-                } catch {
-                  // abort or startup failure — runtime state was recorded by startChannelInternal
+                } catch (error) {
+                  // Startup path records runtime state when handoff never completed.
+                  // Keep a diagnostic when the restart chain still exits here.
+                  if (!manuallyStopped.has(rKey)) {
+                    log.error?.(
+                      `[${id}] auto-restart after timed-out stop failed: ${formatErrorMessage(error)}`,
+                    );
+                    setRuntime(channelId, id, {
+                      accountId: id,
+                      restartPending: false,
+                      lastError: formatErrorMessage(error),
+                    });
+                  }
                 }
                 return;
               }
@@ -829,7 +853,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               const restart =
                 restarts.get(rKey) ?? new RetrySupervisor(RESTART_POLICY, MAX_RESTARTS);
               restarts.set(rKey, restart);
-              const retry = restart.next(abort.signal);
+              // Restart-owned signal only. Do not bind backoff to the dying run abort —
+              // channel teardown can abort that controller and previously swallowed the
+              // rejection in an empty catch, permanently dropping the restart chain.
+              const retry = restart.next();
               if (!retry) {
                 setRuntime(channelId, id, {
                   accountId: id,
@@ -850,6 +877,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               try {
                 await sleepWithAbort(retry.delayMs, retry.signal);
                 if (manuallyStopped.has(rKey)) {
+                  setRuntime(channelId, id, {
+                    accountId: id,
+                    restartPending: false,
+                  });
                   return;
                 }
                 if (store.tasks.get(id) === trackedPromise) {
@@ -865,8 +896,21 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                   preserveRestartAttempts: true,
                   preserveManualStop: true,
                 });
-              } catch {
-                // abort or startup failure — next crash will retry
+              } catch (error) {
+                if (manuallyStopped.has(rKey) || isRestartAbortError(error)) {
+                  // stopChannel cancels the restart-owned supervisor; clear stuck pending.
+                  setRuntime(channelId, id, {
+                    accountId: id,
+                    restartPending: false,
+                  });
+                  return;
+                }
+                log.error?.(`[${id}] auto-restart failed: ${formatErrorMessage(error)}`);
+                setRuntime(channelId, id, {
+                  accountId: id,
+                  restartPending: false,
+                  lastError: formatErrorMessage(error),
+                });
               }
             })
             .finally(() => {
@@ -962,6 +1006,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         if (manual) {
           manuallyStopped.add(rKey);
         }
+        // Cancel restart-owned backoff so intentional stop cannot race a later start.
+        restarts.get(rKey)?.cancel();
         abort?.abort();
         const log = ensureChannelLog(channelId);
         const runtime = ensureChannelRuntime(channelId);
