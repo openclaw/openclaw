@@ -2194,7 +2194,7 @@ describe("package artifact reuse", () => {
     expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=subscription/g)).toHaveLength(2);
     expect(workflow.match(/OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH=api-key/g)).toHaveLength(2);
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
-      "run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'",
+      "run_setup_command bash -o pipefail -lc 'curl -fsSL --show-error --connect-timeout 10 --max-time 120 https://app.factory.ai/cli | sh'",
     );
     expect(readFileSync("scripts/test-live-codex-harness-docker.sh", "utf8")).toContain(
       "OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-$((2100 * CODEX_HARNESS_TARGET_COUNT))s",
@@ -2230,6 +2230,49 @@ describe("package artifact reuse", () => {
       'local scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"',
     );
     expect(stage).toContain('node --import tsx "$scripts_dir/live-docker-normalize-config.ts"');
+  });
+
+  it("propagates curl failures through the Droid CLI install pipeline (pipefail proof)", () => {
+    // ClawSweeper flagged that the script-level `set -euo pipefail` does
+    // NOT govern the nested `bash -lc 'curl ... | sh'` child process, so a
+    // stalled or failed curl could let `sh` exit 0 on empty input and
+    // defer the failure to `droid --version`. PR #111157 added
+    // `bash -o pipefail -lc` to close that gap. This test exercises the
+    // fix with a controlled failing `curl` replacement (a stub that
+    // exits 22 mimicking curl's HTTP-error exit code) and verifies the
+    // nested pipeline returns non-zero instead of letting `sh` exit 0.
+    const fs = require("node:fs") as typeof import("node:fs");
+    const path = require("node:path") as typeof import("node:path");
+    const os = require("node:os") as typeof import("node:os");
+    const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
+
+    const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pipefail-proof-"));
+    const fakeCurl = path.join(stubDir, "curl");
+    // Stub curl that exits 22 (curl's HTTP-error exit) without writing
+    // anything to stdout, simulating a --connect-timeout / --max-time
+    // failure where curl surfaces an error and exits non-zero.
+    fs.writeFileSync(fakeCurl, "#!/bin/sh\nexit 22\n");
+    fs.chmodSync(fakeCurl, 0o755);
+
+    try {
+      // Without -o pipefail: sh exits 0 because it received EOF on stdin
+      // (no input), masking the curl failure. With -o pipefail: the
+      // pipeline inherits curl's non-zero status and the bash exits 22.
+      const withoutPipefail = spawnSync("bash", ["-lc", `'${fakeCurl}' | sh`], {
+        encoding: "utf8",
+        shell: false,
+      });
+      const withPipefail = spawnSync("bash", ["-o", "pipefail", "-lc", `'${fakeCurl}' | sh`], {
+        encoding: "utf8",
+        shell: false,
+      });
+      // Sanity: without pipefail, sh exits 0 (bug)
+      expect(withoutPipefail.status).toBe(0);
+      // Fix: with pipefail, the bash inherits curl's exit 22
+      expect(withPipefail.status).toBe(22);
+    } finally {
+      fs.rmSync(stubDir, { recursive: true, force: true });
+    }
   });
 
   it("fails Droid ACP Docker live proof when Factory auth is missing", () => {
