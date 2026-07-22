@@ -4,6 +4,10 @@ import OpenClawIPC
 import OpenClawKit
 import OSLog
 
+extension Notification.Name {
+    static let openclawLocalNodeDidConnect = Notification.Name("ai.openclaw.local-node.did-connect")
+}
+
 struct MacNodeGatewayTLSSessionCache {
     private struct Key: Equatable {
         let url: URL
@@ -554,6 +558,7 @@ final class MacNodeModeCoordinator: NSObject {
                 await self.nodeHostWorker?.publishInventory(ifCurrentRoute: installedRoute)
                 await self.cancelReconnectProbe()
                 self.logger.info("mac node connected to gateway")
+                NotificationCenter.default.post(name: .openclawLocalNodeDidConnect, object: nil)
                 // The node hello owns this route's session defaults. Reusing the operator
                 // connection here can trigger remote-tunnel recovery while the node connects.
                 let snapshotMainSessionKey = await self.session.waitForCurrentMainSessionKey(

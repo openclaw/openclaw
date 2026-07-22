@@ -45,6 +45,9 @@ struct SkillsSettings: View {
             await Task.yield()
             await self.model.refreshIfNeeded()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .openclawLocalNodeDidConnect)) { _ in
+            Task { await self.model.refreshAfterLocalNodeReconnect() }
+        }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
                 Task {
@@ -744,8 +747,16 @@ final class SkillsSettingsModel {
     var isLoading = false
     var error: String?
     var statusMessage: String?
-    private var hasLoaded = false
+    private(set) var hasLoaded = false
     private var busySkills: Set<String> = []
+    private var pendingForcedRefresh = false
+    private let loadSkillsStatus: @MainActor () async throws -> SkillsStatusReport
+
+    init(loadSkillsStatus: @escaping @MainActor () async throws -> SkillsStatusReport = {
+        try await GatewayConnection.shared.skillsStatus()
+    }) {
+        self.loadSkillsStatus = loadSkillsStatus
+    }
 
     func isBusy(skill: SkillStatus) -> Bool {
         self.busySkills.contains(skill.skillKey)
@@ -756,21 +767,39 @@ final class SkillsSettingsModel {
         await self.refresh()
     }
 
+    func refreshAfterLocalNodeReconnect() async {
+        if self.isLoading {
+            self.pendingForcedRefresh = true
+            return
+        }
+        guard self.hasLoaded else { return }
+        await self.refresh(force: true)
+    }
+
     func refresh(force: Bool = false) async {
-        guard !self.isLoading else { return }
+        if self.isLoading {
+            if force {
+                self.pendingForcedRefresh = true
+            }
+            return
+        }
         if self.hasLoaded, !force {
             return
         }
         self.isLoading = true
         self.error = nil
         do {
-            let report = try await GatewayConnection.shared.skillsStatus()
+            let report = try await self.loadSkillsStatus()
             self.skills = report.skills.sorted { $0.name < $1.name }
             self.hasLoaded = true
         } catch {
             self.error = error.localizedDescription
         }
         self.isLoading = false
+        if self.pendingForcedRefresh {
+            self.pendingForcedRefresh = false
+            await self.refresh(force: true)
+        }
     }
 
     func acceptInstalledSkills(_ skills: [SkillStatus]) {
