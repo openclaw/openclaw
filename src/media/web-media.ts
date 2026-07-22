@@ -1150,13 +1150,19 @@ async function loadWebMediaInternal(
           allowPrivateProxy: true,
         }
       : undefined;
+    // Allow localhost media fetches from the gateway's own HTTP server
+    // (e.g., Feishu-originated images served via /api/chat/media/...).
+    // The SSRF guard would otherwise block localhost as a private address.
+    const gatewaySsrFPolicy: typeof ssrfPolicy = /^https?:\/\/localhost(?:\:\d+)?\//i.test(mediaUrl) || /^https?:\/\/127\.0\.0\.1(?:\:\d+)?\//i.test(mediaUrl)
+      ? { ...ssrfPolicy, allowedHostnames: [...(ssrfPolicy?.allowedHostnames ?? []), "localhost", "127.0.0.1"] }
+      : ssrfPolicy;
     const fetched = await readRemoteMediaBuffer({
       url: mediaUrl,
       fetchImpl,
       requestInit,
       readIdleTimeoutMs,
       maxBytes: fetchCap,
-      ssrfPolicy,
+      ssrfPolicy: gatewaySsrFPolicy,
       dispatcherPolicy,
       trustExplicitProxyDns,
     });
