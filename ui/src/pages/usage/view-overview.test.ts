@@ -139,7 +139,7 @@ describe("renderUsageInsights", () => {
     ).toBe(true);
     expect(
       tooltips.every((tooltip) => {
-        const button = tooltip.querySelector("button.usage-summary-hint");
+        const button = tooltip.querySelector<HTMLButtonElement>("button.usage-summary-hint");
         const content = tooltip.querySelector('[slot="content"]');
         return Boolean(
           button &&
