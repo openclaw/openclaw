@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   rowDemandsVisibility,
   RowVisibilityReason,
@@ -9,13 +9,11 @@ const quietRow = {
   visuallyActive: false,
   containsActiveDescendant: false,
   hasActiveRun: false,
-  status: "done",
   runningChildCount: 0,
   attention: { kind: "none" },
 } as SidebarRecentSession;
 
-type State = [string, Partial<SidebarRecentSession>, boolean, boolean, boolean];
-const states: State[] = [
+const states = [
   ["quiet", {}, false, false, false],
   ["visually active", { visuallyActive: true }, true, false, false],
   ["active descendant", { containsActiveDescendant: true }, true, false, false],
@@ -23,23 +21,17 @@ const states: State[] = [
   ["running status", { status: "running" }, true, false, false],
   ["running descendant", { runningChildCount: 1 }, true, false, false],
   ["attention", { attention: { kind: "question" } }, true, false, true],
-];
+] as const;
 
-describe("sidebar row visibility demand", () => {
-  for (const [name, patch, cap, runningDot, attention] of states) {
-    it(`keeps cap, collapsed-dot, and bubbling decisions aligned for ${name}`, () => {
-      const row = { ...quietRow, ...patch };
-      expect({
-        cap: rowDemandsVisibility(row),
-        runningDot: rowDemandsVisibility(row, RowVisibilityReason.ActiveRun),
-        attentionDot: rowDemandsVisibility(row, RowVisibilityReason.Attention),
-        attentionBubble: rowDemandsVisibility(row, RowVisibilityReason.Attention),
-      }).toEqual({
-        cap,
-        runningDot,
-        attentionDot: attention,
-        attentionBubble: attention,
-      });
-    });
-  }
-});
+it.each(states)(
+  "keeps cap, collapsed-dot, and bubbling decisions aligned for %s",
+  (_name, patch, cap, runningDot, attention) => {
+    const row = { ...quietRow, ...patch };
+    expect([
+      rowDemandsVisibility(row),
+      rowDemandsVisibility(row, RowVisibilityReason.ActiveRun),
+      rowDemandsVisibility(row, RowVisibilityReason.Attention),
+      rowDemandsVisibility(row, RowVisibilityReason.Attention),
+    ]).toEqual([cap, runningDot, attention, attention]);
+  },
+);
