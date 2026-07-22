@@ -10,8 +10,8 @@ struct GatewayTLSPinningTests {
     }
 
     @Test func `TLS authority includes normalized host and effective port`() throws {
-        let route = try #require(GatewayTLSAuthority(
-            url: #require(URL(string: "wss://Gateway.Example.com/path"))))
+        let url = try #require(URL(string: "wss://Gateway.Example.com/path"))
+        let route = try #require(GatewayTLSAuthority(url: url))
 
         #expect(route == GatewayTLSAuthority(host: "gateway.example.com", port: 443))
         #expect(route != GatewayTLSAuthority(host: "redirect.example.com", port: 443))
