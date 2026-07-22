@@ -169,6 +169,11 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
+      name: "skips doctor flow for the gateway call RPC client",
+      commandPath: ["gateway", "call"],
+      expectedDoctorCalls: 0,
+    },
+    {
       name: "skips doctor flow for agent without legacy state",
       commandPath: ["agent"],
       expectedDoctorCalls: 0,
@@ -286,6 +291,15 @@ describe("ensureConfigReady", () => {
       migrateLegacyConfig: false,
       invalidConfigNote: false,
     });
+  });
+
+  it("keeps gateway call away from state migrations even when legacy state exists", async () => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["gateway", "call"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).not.toHaveBeenCalled();
   });
 
   it("runs doctor flow for legacy sessions without task sidecars", async () => {

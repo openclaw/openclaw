@@ -614,6 +614,11 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "health" || primary === "sessions") {
     return false;
   }
+  // `gateway call` is a remote RPC client surface; its CLI bootstrap must not
+  // mutate local state on a host that may not own the gateway's state at all.
+  if (primary === "gateway" && secondary === "call") {
+    return false;
+  }
   if (primary === "update" && secondary === "status") {
     return false;
   }
