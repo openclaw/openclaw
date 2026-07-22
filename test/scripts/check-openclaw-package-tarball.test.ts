@@ -128,7 +128,7 @@ function withTarball(
             "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
             "dist/control-ui/assets/app.js": "console.log('ok');\n",
           };
-    const installGuardFile =
+    const installGuardFile: Record<string, string> =
       options.includeInstallGuard === false
         ? {}
         : {
