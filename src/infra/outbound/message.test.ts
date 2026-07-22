@@ -349,6 +349,7 @@ describe("sendMessage", () => {
       queuePolicy: "required",
       requireUnknownSendReconciliation: false,
       deliveryIntentId: "operation-1",
+      completionRetention: "permanent",
       deliveryCompletion: {
         kind: "conversation",
         agentId: "main",
@@ -361,6 +362,7 @@ describe("sendMessage", () => {
     const deliveryParams = expectDeliveryCallFields({
       queuePolicy: "required",
       deliveryIntentId: "operation-1",
+      completionRetention: "permanent",
       deliveryCompletion: {
         kind: "conversation",
         agentId: "main",

@@ -153,6 +153,7 @@ export type AgentCommandOpts = {
   forceRestartSafeTools?: boolean;
   /** Host-owned exact media set for a scoped automatic recovery delivery. */
   internalDeliveryMediaUrls?: string[];
+  internalDeliveryIdempotencyKey?: string;
   internalDeliverySuppressText?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;

@@ -1085,6 +1085,8 @@ describe("createMediaGenerationTaskLifecycle", () => {
     const announceParams = subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mock
       .calls[0]?.[0] as { triggerMessage?: string; internalEvents?: unknown[] } | undefined;
     expect(announceParams?.triggerMessage).toContain("MEDIA:/tmp/generated-night-drive.mp3");
+    expect(announceParams?.triggerMessage).toContain('call message(action="send")');
+    expect(announceParams?.triggerMessage).toContain("final-reply MEDIA lines");
     expect(announceParams?.internalEvents).toEqual([
       expect.objectContaining({
         mediaUrls: ["/tmp/generated-night-drive.mp3"],

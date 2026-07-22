@@ -2872,12 +2872,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       "delivery params",
     );
     expect(requireRecord(deliveryParams.result, "delivery result").payloads).toEqual([
-      { text: "ready" },
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
+      { text: "ready", mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
     ]);
     expect(deliveryParams.payloads).toEqual([
-      { text: "ready" },
-      { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
+      { text: "ready", mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true },
     ]);
     expect(
       state.persistSessionEntryMock.mock.calls.some((call) => {

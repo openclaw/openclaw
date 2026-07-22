@@ -115,7 +115,22 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
         ],
         [" /tmp/missing.png ", "/tmp/missing.png"],
       ),
-    ).toEqual([{ text: "ready" }, { mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true }]);
+    ).toEqual([{ text: "ready", mediaUrls: ["/tmp/missing.png"], trustedLocalMedia: true }]);
+  });
+
+  it("strips duplicate MEDIA directives before attaching the host-owned media", () => {
+    expect(
+      constrainRestartRecoveryDeliveryPayloads(
+        [{ text: "Fresh from the decks\nMEDIA:/tmp/generated.png" }],
+        ["/tmp/generated.png"],
+      ),
+    ).toEqual([
+      {
+        text: "Fresh from the decks",
+        mediaUrls: ["/tmp/generated.png"],
+        trustedLocalMedia: true,
+      },
+    ]);
   });
 
   it("strips all model media from a text-only notice", () => {

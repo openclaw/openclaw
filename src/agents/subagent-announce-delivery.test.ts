@@ -3461,6 +3461,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "The generated music is ready.",
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
         idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+        deliveryIntentId: "announce-dm-fallback-empty:generated-media-direct",
+        completionRetention: "permanent",
       }),
     );
   });
@@ -3938,6 +3940,46 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         content: "The generated music is ready.",
         mediaUrls: ["/tmp/generated-night-drive.mp3"],
         idempotencyKey: "announce-dm-fallback-empty:generated-media-direct",
+      }),
+    );
+  });
+
+  it("treats a shared generated-media delivery intent as already delivered", async () => {
+    const callGateway = createGatewayMock({
+      result: { payloads: [{ text: "The track is ready." }] },
+    });
+    const sendMessage = vi.fn(async () => {
+      throw new Error(
+        "Stable delivery intent is already queued: announce-dm-fallback-empty:generated-media-direct",
+      );
+    }) as unknown as typeof runtimeSendMessage;
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction: "Deliver the generated music.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(generatedMediaWakeMocks.wakeSessionForGeneratedMediaDirectDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaLabel: "music",
+        contextKey: "announce-dm-fallback-empty:generated-media-direct",
       }),
     );
   });
@@ -4925,7 +4967,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expect.objectContaining({
         kind: "agentTurn",
         sessionKey: "agent:main:slack:channel:C123",
-        message: expect.stringContaining("generated-locked.png"),
+        message: expect.stringMatching(
+          /generated-locked\.png[\s\S]*completion delivery system owns the generated media/,
+        ),
         messageId: "announce-channel-media-handoff-locked:agent-loop",
         route: {
           channel: "slack",
@@ -4938,8 +4982,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           sourceChannel: "webchat",
           sourceTool: "image_generate",
         },
-        sourceReplyDeliveryMode: "message_tool_only",
+        sourceReplyDeliveryMode: "automatic",
         expectedMediaUrls: ["/tmp/generated-locked.png"],
+        deliveryIdempotencyKey: "announce-channel-media-handoff-locked:generated-media-direct",
         idempotencyKey: "announce-channel-media-handoff-locked:agent-loop",
       }),
       expect.any(Number),

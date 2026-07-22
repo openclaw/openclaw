@@ -1163,6 +1163,7 @@ describe("scheduleRestartSentinelWake", () => {
         },
         sourceReplyDeliveryMode: "automatic",
         expectedMediaUrls: ["/tmp/proof.png"],
+        deliveryIdempotencyKey: "image:task-automatic:generated-media-direct",
         suppressTextDelivery: true,
       },
     });
@@ -1178,6 +1179,7 @@ describe("scheduleRestartSentinelWake", () => {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: ["/tmp/proof.png"],
+        internalDeliveryIdempotencyKey: "image:task-automatic:generated-media-direct",
         internalDeliverySuppressText: true,
         onAccepted: expect.any(Function),
       },

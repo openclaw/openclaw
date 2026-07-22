@@ -1836,6 +1836,30 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(outcome?.stage).toBe("platform_send");
   });
 
+  it("accepts an already-owned internal delivery intent during replay", async () => {
+    deliverOutboundPayloadsMock.mockRejectedValueOnce(
+      new Error("Stable delivery intent is already queued: image:task-1:generated-media-direct"),
+    );
+
+    const delivered = await deliverMediaReplyForTest(
+      {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      { internalDeliveryIdempotencyKey: "image:task-1:generated-media-direct" },
+    );
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "suppressed",
+      succeeded: true,
+      reason: "delivery_intent_already_owned",
+      resultCount: 0,
+    });
+  });
+
   it("marks no-payload deliveryStatus as terminal delivery success", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {} as OpenClawConfig,

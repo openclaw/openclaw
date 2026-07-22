@@ -64,6 +64,8 @@ export type QueuedSessionDeliveryPayload =
       inputProvenance?: InputProvenance;
       sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
       expectedMediaUrls?: string[];
+      /** Stable outbound ownership shared with generated-media direct fallback. */
+      deliveryIdempotencyKey?: string;
       suppressTextDelivery?: true;
       idempotencyKey?: string;
     } & SessionDeliveryRetryPolicy);

@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   collectDeliveredMediaUrls,
@@ -47,7 +48,10 @@ export function constrainRestartRecoveryDeliveryPayloads(
   for (const payload of payloads ?? []) {
     const constrainedPayload: ReplyPayload = {};
     if (!suppressText && typeof payload.text === "string") {
-      constrainedPayload.text = payload.text;
+      // The host appends the canonical media set below. Strip model-emitted
+      // MEDIA directives first or the outbound parser re-materializes the same
+      // attachment in both this caption payload and the host-owned payload.
+      constrainedPayload.text = splitMediaFromOutput(payload.text).text;
     }
     if (payload.isError === true) {
       constrainedPayload.isError = true;
@@ -78,7 +82,18 @@ export function constrainRestartRecoveryDeliveryPayloads(
     new Set(mediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
   );
   if (exactMediaUrls.length > 0) {
-    constrained.push({ mediaUrls: exactMediaUrls, trustedLocalMedia: true });
+    const captionIndex = constrained.findIndex(
+      (payload) => payload.isReasoning !== true && Boolean(payload.text?.trim()),
+    );
+    if (captionIndex >= 0) {
+      constrained[captionIndex] = {
+        ...constrained[captionIndex],
+        mediaUrls: exactMediaUrls,
+        trustedLocalMedia: true,
+      };
+    } else {
+      constrained.push({ mediaUrls: exactMediaUrls, trustedLocalMedia: true });
+    }
   }
   return constrained;
 }

@@ -793,6 +793,8 @@ type DeliverOutboundPayloadsCoreParams = {
   deliveryQueueId?: string;
   /** @internal Stable producer id used to make queue creation idempotent across crashes. */
   deliveryIntentId?: string;
+  /** @internal Preserve the completed producer receipt for permanent deduplication. */
+  completionRetention?: "permanent";
   /** @internal Serializable owner state finalized after live or recovered delivery. */
   deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Channel-valid id reserved before a correlated conversation turn is sent. */
@@ -1609,6 +1611,7 @@ export async function deliverOutboundPayloadsInternal(
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
         preparedMessageId: params.preparedMessageId,
+        completionRetention: params.completionRetention,
         deliveryCompletion: params.deliveryCompletion,
       };
       if (params.deliveryIntentId) {

@@ -1062,6 +1062,8 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       content: params.content ?? `The generated ${mediaLabel} is ready.`,
       mediaUrls: Array.from(params.mediaUrls),
       idempotencyKey,
+      deliveryIntentId: idempotencyKey,
+      completionRetention: "permanent",
       mirror: {
         sessionKey: params.requesterSessionKey,
         agentId,
@@ -1088,6 +1090,24 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       path: "direct",
     };
   } catch (err) {
+    if (/Stable delivery intent is already queued:/i.test(summarizeDeliveryError(err))) {
+      if (params.wakeAfterDelivery) {
+        wakeSessionForGeneratedMediaDirectDelivery({
+          cfg: params.cfg,
+          sessionKey: params.requesterSessionKey,
+          mediaLabel,
+          status: params.status ?? "ok",
+          deliveryContext: {
+            channel: params.deliveryTarget.channel,
+            to: params.deliveryTarget.to,
+            accountId: params.deliveryTarget.accountId,
+            threadId: params.deliveryTarget.threadId,
+          },
+          contextKey: idempotencyKey,
+        });
+      }
+      return { delivered: true, path: "direct" };
+    }
     const terminal = hasAnnounceSendEvidence(err);
     return {
       delivered: false,
@@ -2209,36 +2229,26 @@ export async function deliverSubagentAnnouncement(params: {
         directOrigin: params.directOrigin,
         requesterSessionOrigin: params.requesterSessionOrigin,
       });
-      const { requesterSessionOrigin, effectiveDirectOrigin } = resolveCompletionDeliveryOrigins({
-        expectsCompletionMessage: params.expectsCompletionMessage,
-        completionDirectOrigin: params.completionDirectOrigin,
-        directOrigin: params.directOrigin,
-        requesterSessionOrigin: params.requesterSessionOrigin,
-      });
-      const requesterEntry = subagentAnnounceDeliveryDeps.loadRequesterSessionEntry(
-        params.targetRequesterSessionKey,
-      ).entry;
-      // No external route exists for an internal-only handoff. Let the normal
-      // agent final enter the owning transcript instead of requiring a message tool target.
-      const sourceReplyDeliveryMode =
-        queuedRoute.route.channel === INTERNAL_MESSAGE_CHANNEL
-          ? "automatic"
-          : completionRequiresMessageToolDelivery({
-                cfg,
-                requesterSessionKey: params.requesterSessionKey,
-                targetRequesterSessionKey: canonicalSessionKey,
-                requesterEntry,
-                directOrigin: effectiveDirectOrigin,
-                requesterSessionOrigin,
-              })
-            ? "message_tool_only"
-            : "automatic";
+      // Durable generated-media handoffs are host-owned: the model supplies
+      // only caption text while the queue fixes the route and exact attachment.
+      // Replay dispatch also enforces disableMessageTool=true.
+      const sourceReplyDeliveryMode = "automatic";
       const queued = await enqueueClaimedSessionDelivery(
         {
           kind: "agentTurn",
           sessionKey: canonicalSessionKey,
           message:
-            formatAgentInternalEventsForPrompt(params.internalEvents) || params.triggerMessage,
+            formatAgentInternalEventsForPrompt(
+              params.internalEvents?.map((event) =>
+                event.status === "ok" && collectExpectedMediaFromInternalEvents([event]).length > 0
+                  ? {
+                      ...event,
+                      replyInstruction:
+                        "The completion delivery system owns the generated media and will attach it exactly once to this reply. Do not call the message tool and do not include MEDIA lines or otherwise resend the attachment. Write only the short caption or normal conversational reply.",
+                    }
+                  : event,
+              ),
+            ) || params.triggerMessage,
           messageId: `${params.directIdempotencyKey}:agent-loop`,
           route: queuedRoute.route,
           ...(queuedRoute.deliveryContext ? { deliveryContext: queuedRoute.deliveryContext } : {}),
@@ -2250,6 +2260,7 @@ export async function deliverSubagentAnnouncement(params: {
           },
           sourceReplyDeliveryMode,
           expectedMediaUrls: collectExpectedMediaFromInternalEvents(params.internalEvents),
+          deliveryIdempotencyKey: `${params.directIdempotencyKey}:generated-media-direct`,
           idempotencyKey: `${params.directIdempotencyKey}:agent-loop`,
         },
         resolveSubagentAnnounceTimeoutMs(cfg) + 5_000,

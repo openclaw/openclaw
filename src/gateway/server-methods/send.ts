@@ -864,6 +864,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           gatewayClientScopes: client?.connect?.scopes ?? [],
           silent: request.silent,
           formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
+          deliveryIntentId: idem,
           mirror: outboundSessionKey
             ? {
                 sessionKey: outboundSessionKey,

@@ -326,6 +326,7 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
   }
 
   const queuedRunId = resolveQueuedAgentRunId(entry);
+  const deliveryIdempotencyKey = entry.deliveryIdempotencyKey;
   const deliveryMode = resolveDurableCompletionDeliveryMode(entry.sourceReplyDeliveryMode);
   if (deliveryMode === "host_owned" && route.channel === INTERNAL_MESSAGE_CHANNEL) {
     return await deadLetterSessionDelivery(
@@ -448,6 +449,9 @@ export async function deliverQueuedGeneratedMediaAgentTurn(params: {
         expectFinal: true,
         forceSyntheticClient: true,
         internalDeliveryMediaUrls: entry.expectedMediaUrls ?? [],
+        ...(deliveryIdempotencyKey
+          ? { internalDeliveryIdempotencyKey: deliveryIdempotencyKey }
+          : {}),
         ...(entry.suppressTextDelivery === true ? { internalDeliverySuppressText: true } : {}),
         onAccepted: () => {
           accepted = true;

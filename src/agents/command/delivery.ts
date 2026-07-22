@@ -927,6 +927,12 @@ export async function deliverAgentCommandResult(
           threadId: resolvedThreadTarget ?? null,
           bestEffort: bestEffortDeliver,
           durability: bestEffortDeliver ? "best_effort" : "required",
+          ...(opts.internalDeliveryIdempotencyKey
+            ? {
+                deliveryIntentId: opts.internalDeliveryIdempotencyKey,
+                completionRetention: "permanent" as const,
+              }
+            : {}),
           signal: restartAbort.signal,
           onDeliveryIntent: restartAbort.dispose,
           onError: logDeliveryError,
@@ -939,8 +945,25 @@ export async function deliverAgentCommandResult(
       if (restartAbort.signal?.aborted && send.status === "failed") {
         throw restartAbort.signal.reason;
       }
-      deliveryStatus = deliveryStatusFromDurableSend(send);
-      if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
+      const stableIntentAlreadyOwned =
+        send.status === "failed" &&
+        Boolean(opts.internalDeliveryIdempotencyKey) &&
+        /Stable delivery intent is already queued:/i.test(formatErrorMessage(send.error));
+      deliveryStatus = stableIntentAlreadyOwned
+        ? {
+            requested: true,
+            attempted: true,
+            status: "suppressed",
+            succeeded: true,
+            reason: "delivery_intent_already_owned",
+            resultCount: 0,
+          }
+        : deliveryStatusFromDurableSend(send);
+      if (
+        !stableIntentAlreadyOwned &&
+        !bestEffortDeliver &&
+        (send.status === "failed" || send.status === "partial_failed")
+      ) {
         emitJsonEnvelope(deliveryStatus);
         captureDeliveryResult(
           buildDeliveryResult({
@@ -953,7 +976,8 @@ export async function deliverAgentCommandResult(
         );
         throw send.error;
       }
-      deliverySucceeded = send.status === "sent" || send.status === "suppressed";
+      deliverySucceeded =
+        stableIntentAlreadyOwned || send.status === "sent" || send.status === "suppressed";
     }
   }
   if (deliver && !deliveryStatus) {

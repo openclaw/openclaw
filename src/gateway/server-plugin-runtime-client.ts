@@ -17,6 +17,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   agentRunTracking?: "plugin_subagent";
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
+  internalDeliveryIdempotencyKey?: string;
   internalDeliverySuppressText?: boolean;
   pluginRuntimeOwnerId?: string;
   runtimePluginToolGrant?: RuntimePluginToolGrant;
@@ -46,6 +47,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
       ...(params?.internalDeliveryMediaUrls
         ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
+        : {}),
+      ...(params?.internalDeliveryIdempotencyKey
+        ? { internalDeliveryIdempotencyKey: params.internalDeliveryIdempotencyKey }
         : {}),
       ...(params?.internalDeliverySuppressText === true
         ? { internalDeliverySuppressText: true }

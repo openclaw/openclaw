@@ -98,6 +98,8 @@ type MessageSendParams = {
   gatewayOwnedDelivery?: boolean;
   /** @internal Stable producer id for idempotent durable queue creation. */
   deliveryIntentId?: string;
+  /** @internal Preserve the completed producer receipt for permanent deduplication. */
+  completionRetention?: "permanent";
   /** @internal Serializable owner state finalized by live send or recovery. */
   deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Override provider unknown-send reconciliation independently from queue durability. */
@@ -444,6 +446,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       preparedMessageId: params.preparedMessageId,
       deliveryIntentId: params.deliveryIntentId,
+      completionRetention: params.completionRetention,
       deliveryCompletion: params.deliveryCompletion,
       ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
       ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
