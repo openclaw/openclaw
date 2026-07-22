@@ -7,11 +7,10 @@ import {
 } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
+  createChannelApiRetryRunner,
   resolveRetryConfig,
-  retryAsync,
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { RateLimitError } from "./internal/discord.js";
 
 const DISCORD_RETRY_DEFAULTS = {
@@ -45,8 +44,6 @@ const DISCORD_PRECONNECT_ERROR_CODES = new Set([
   "ENOTFOUND",
   "UND_ERR_CONNECT_TIMEOUT",
 ]);
-const log = createSubsystemLogger("discord/retry");
-
 type DiscordRetrySafety = "idempotent" | "nonce-protected-create" | "non-idempotent-create";
 
 export type DiscordRetryRunner = <T>(
@@ -68,7 +65,7 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
   return parseStrictNonNegativeInteger(raw);
 }
 
-export function isRetryableDiscordTransientError(err: unknown): boolean {
+function isRetryableDiscordTransientError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -97,7 +94,7 @@ export function isRetryableDiscordTransientError(err: unknown): boolean {
   return false;
 }
 
-export function isRetryableDiscordPreConnectError(err: unknown): boolean {
+function isRetryableDiscordPreConnectError(err: unknown): boolean {
   if (err instanceof RateLimitError) {
     return true;
   }
@@ -133,14 +130,10 @@ function isRetryableDiscordGatewayTransportError(err: unknown): boolean {
 
 export function createDiscordRetryRunner(params: {
   retry?: RetryConfig;
-  configRetry?: RetryConfig;
   verbose?: boolean;
   isGatewayDisconnected?: () => boolean;
 }): DiscordRetryRunner {
-  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, {
-    ...params.configRetry,
-    ...params.retry,
-  });
+  const retryConfig = resolveRetryConfig(DISCORD_RETRY_DEFAULTS, params.retry);
   // Extend only the per-request runner. A delivery may contain several REST
   // writes, so replaying its outer adapter can duplicate already-sent chunks.
   const attempts =
@@ -160,24 +153,16 @@ export function createDiscordRetryRunner(params: {
         throw err;
       }
     };
-    return retryAsync(runRequest, {
-      ...retryConfig,
-      attempts,
-      label,
+    const runWithRetry = createChannelApiRetryRunner({
+      retry: { ...retryConfig, attempts },
       shouldRetry: (err, attempt) =>
         isRetryable(err) &&
         (attempt < retryConfig.attempts ||
           (observedGatewayDisconnect && isRetryableDiscordGatewayTransportError(err))),
+      strictShouldRetry: true,
       retryAfterMs: (err) => (err instanceof RateLimitError ? err.retryAfter * 1000 : undefined),
-      onRetry: params.verbose
-        ? (info) => {
-            const maxAttempts = observedGatewayDisconnect ? attempts : retryConfig.attempts;
-            const maxRetries = Math.max(1, maxAttempts - 1);
-            log.warn(
-              `discord ${info.label ?? "request"} retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
-            );
-          }
-        : undefined,
+      verbose: params.verbose,
     });
+    return runWithRetry(runRequest, label);
   };
 }

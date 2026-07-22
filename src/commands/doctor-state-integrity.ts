@@ -7,7 +7,11 @@ import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   clearWedgedSubagentRecoveryAbort,
   formatSubagentRecoveryWedgedReason,
@@ -32,14 +36,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
-import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
+import { noteMainSessionRecoveryIntegrity } from "./doctor-main-session-recovery.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import { countLabel, formatFilePreview } from "./doctor-state-integrity-format.js";
 
 const STATE_INTEGRITY_CHECK_ID = "core/doctor/state-integrity";
 
@@ -51,19 +56,6 @@ type DoctorPrompterLike = {
   }) => Promise<boolean>;
   note?: typeof note;
 };
-
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function formatFilePreview(paths: string[], limit = 3): string {
-  const names = paths.slice(0, limit).map((filePath) => path.basename(filePath));
-  const remaining = paths.length - names.length;
-  if (remaining > 0) {
-    return `${names.join(", ")}, and ${remaining} more`;
-  }
-  return names.join(", ");
-}
 
 function existsDir(dir: string): boolean {
   try {
@@ -190,7 +182,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   }
 
   const agentsRoot = path.join(stateDir, "agents");
-  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
+  const liveDefaultAgentDir = resolveDefaultAgentDir(cfg);
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -205,7 +197,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         if (!hasNestedAgentDir) {
           return false;
         }
-        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
+        if (areComparablePathsEqual(nestedAgentDir, liveDefaultAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {
@@ -267,23 +259,38 @@ function addUserRwx(mode: number): number {
 }
 
 function countJsonlLines(filePath: string): number {
+  let fd: number;
   try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
+    fd = fs.openSync(filePath, "r");
+  } catch {
+    return 0;
+  }
+  try {
+    const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    for (const char of raw) {
-      if (char === "\n") {
-        count += 1;
+    let hasBytes = false;
+    let endsWithNewline = false;
+    for (;;) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      hasBytes = true;
+      endsWithNewline = chunk[bytesRead - 1] === 0x0a;
+      for (let index = 0; index < bytesRead; index += 1) {
+        if (chunk[index] === 0x0a) {
+          count += 1;
+        }
       }
     }
-    if (!raw.endsWith("\n")) {
+    if (hasBytes && !endsWithNewline) {
       count += 1;
     }
     return count;
   } catch {
     return 0;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 
@@ -1276,7 +1283,15 @@ export async function noteStateIntegrity(
   const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
-  if (entries.length > 0) {
+  const canonicalEntryCount = await noteMainSessionRecoveryIntegrity({
+    agentId,
+    storePath: absoluteStorePath,
+    warnings,
+    changes,
+    confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
+    countLabel,
+  });
+  if (entries.length > 0 || canonicalEntryCount > 0) {
     const recent = entries
       .slice()
       .toSorted((a, b) => {
@@ -1493,3 +1508,4 @@ export function noteWorkspaceBackupTip(workspaceDir: string) {
     note(tip, "Workspace");
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

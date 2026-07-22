@@ -93,7 +93,7 @@ function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefin
   );
 }
 
-export async function loadCronJobForShow(
+async function loadCronJobForShow(
   opts: GatewayRpcOpts,
   idOrName: string,
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
@@ -143,6 +143,11 @@ function registerCronToggleCommand(params: {
             patch: { enabled: params.enabled },
           });
           printCronJson(res);
+          if (!params.enabled && process.stderr.isTTY) {
+            process.stderr.write(
+              `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
+            );
+          }
           await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           handleCronCliError(err);

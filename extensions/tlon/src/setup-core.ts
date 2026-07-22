@@ -197,7 +197,17 @@ export function applyTlonSetupConfig(params: {
 }
 
 export const tlonSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["url", "code"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: ({ input }) => {
+    const setupInput = input as TlonSetupInput;
+    const url = normalizeOptionalString(setupInput.url);
+    if (!url) {
+      return setupInput;
+    }
+    const validatedUrl = validateUrbitBaseUrl(url);
+    return validatedUrl.ok ? { ...setupInput, url: validatedUrl.baseUrl } : setupInput;
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     prepareScopedSetupConfig({
       cfg,
@@ -207,15 +217,20 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
     }),
   validateInput: createSetupInputPresenceValidator({
     validate: ({ cfg, accountId, input }) => {
+      const setupInput = input as TlonSetupInput;
       const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-      const ship = normalizeOptionalString(input.ship) || resolved.ship;
-      const url = normalizeOptionalString(input.url) || resolved.url;
-      const code = normalizeOptionalString(input.code) || resolved.code;
+      const ship = normalizeOptionalString(setupInput.ship ?? resolved.ship);
+      const url = normalizeOptionalString(setupInput.url ?? resolved.url);
+      const code = normalizeOptionalString(setupInput.code ?? resolved.code);
       if (!ship) {
         return "Tlon requires --ship.";
       }
       if (!url) {
         return "Tlon requires --url.";
+      }
+      const validatedUrl = validateUrbitBaseUrl(url);
+      if (!validatedUrl.ok) {
+        return `Invalid URL: ${validatedUrl.error}`;
       }
       if (!code) {
         return "Tlon requires --code.";

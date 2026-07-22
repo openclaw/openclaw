@@ -11,6 +11,7 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
+import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { VERSION } from "../../../version.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
@@ -74,6 +75,27 @@ const mocks = vi.hoisted(() => ({
   resolveOfficialExternalProviderPluginIds: vi.fn(),
   resolveOfficialExternalProviderPluginIdsForEnv: vi.fn(),
   resolveOfficialExternalWebProviderContractPluginIdsForEnv: vi.fn(),
+  resolveDirectBundledProviderPolicySurface: vi.fn(
+    (pluginId: string): BundledProviderPolicySurface | null =>
+      pluginId === "openai"
+        ? {
+            normalizeModelCatalogId: ({ modelId }) => modelId,
+            resolveModelRoutes: ({ requestTransportOverrides }) => ({
+              kind: "routes",
+              routes: [
+                {
+                  api: "openai-responses",
+                  baseUrl: "https://api.openai.com/v1",
+                  authRequirement: "api-key",
+                  requestTransportOverrides: requestTransportOverrides ?? "none",
+                  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+                },
+              ],
+              defaultRuntimeId: "codex",
+            }),
+          }
+        : null,
+  ),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
   resolvePluginNpmProjectsDir: vi.fn((npmDir = "/tmp/openclaw-npm") =>
@@ -201,6 +223,13 @@ vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
 
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
+}));
+
+vi.mock("../../../plugins/provider-policy-surface.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/provider-policy-surface.js")>()),
+  // This suite owns install repair. Provider artifact loading and route policy
+  // have dedicated tests, so keep the OpenAI runtime-selection seam in memory.
+  resolveDirectBundledProviderPolicySurface: mocks.resolveDirectBundledProviderPolicySurface,
 }));
 
 vi.mock("../../../plugins/doctor-contract-registry.js", async (importOriginal) => {
@@ -531,6 +560,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("installs a missing configured OpenClaw channel plugin from npm by default", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      channels: {
+        matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+      },
+    } satisfies OpenClawConfig;
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "matrix",
@@ -547,11 +582,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
+      cfg,
       env: {},
     });
 
@@ -562,6 +593,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       expectedPluginId: "matrix",
       expectedIntegrity: "sha512-test",
       trustedSourceLinkedOfficialInstall: true,
+      config: cfg,
     });
     const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecords);
     expectRecordFields((records as Record<string, unknown>).matrix, {
@@ -580,6 +612,12 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("uses an explicit ClawHub install spec before npm", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      channels: {
+        matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+      },
+    } satisfies OpenClawConfig;
     const reviewNotice =
       "╭─ REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check ─╮\n" +
       "│ • Status:            security scan is pending                         │\n" +
@@ -626,17 +664,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
-        },
-      },
+      cfg,
       env: {},
     });
 
     const clawHubCall = expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
       spec: "clawhub:@openclaw/plugin-matrix@stable",
       expectedPluginId: "matrix",
+      config: cfg,
     });
     expect(clawHubCall.logger).toEqual(expect.objectContaining({ terminalLinks: false }));
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
@@ -1083,12 +1118,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        agents: {
-          defaults: {
-            memorySearch: {
-              provider: "local",
-            },
+        memory: {
+          search: {
+            provider: "local",
           },
+        },
+
+        agents: {
+          defaults: {},
         },
       },
       env: {},
@@ -1673,6 +1710,14 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   });
 
   it("retries npm repair as an update when the install target appears stale", async () => {
+    const cfg = {
+      security: { installPolicy: { enabled: true } },
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+        },
+      },
+    } satisfies OpenClawConfig;
     const npmRoot = makeTempDir();
     const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "discord");
     mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
@@ -1708,13 +1753,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-          },
-        },
-      },
+      cfg,
       env: {
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
@@ -1725,11 +1764,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       spec: expectedNpmInstallSpec("@openclaw/discord"),
       npmDir: npmRoot,
       mode: "install",
+      config: cfg,
     });
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec, 1), {
       spec: expectedNpmInstallSpec("@openclaw/discord"),
       npmDir: npmRoot,
       mode: "update",
+      config: cfg,
     });
     expect(result.warnings).toEqual([]);
     expect(result.records.discord?.installPath).toBe(packageDir);
@@ -2524,6 +2565,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
 
+    expect(mocks.resolveDirectBundledProviderPolicySurface).toHaveBeenCalledWith("openai");
     expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
     expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
       spec: expectedNpmInstallSpec("@openclaw/codex"),
@@ -4447,12 +4489,10 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        messages: {
-          tts: {
-            provider: "gradium",
-            providers: {
-              inworld: {},
-            },
+        tts: {
+          provider: "gradium",
+          providers: {
+            inworld: {},
           },
         },
         tools: {
@@ -4562,9 +4602,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       cfg: {
         tools: {
           media: {
-            audio: {
-              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
-            },
+            models: [
+              {
+                provider: "groq",
+                model: "whisper-large-v3-turbo",
+                capabilities: ["audio"],
+              },
+            ],
           },
         },
       },
@@ -5013,3 +5057,4 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [], records: {} });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -33,8 +33,21 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "slack",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "SLACK_BOT_TOKEN",
+            "SLACK_APP_TOKEN",
+            "SLACK_USER_TOKEN"
+          ]
+        }
+      },
+      "approvalFlags": ["native"],
       "label": "Slack",
       "selectionLabel": "Slack (Socket Mode)",
       "detailLabel": "Slack Bot",
@@ -47,17 +60,16 @@
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
       },
-      "configuredState": {
-        "env": {
-          "anyOf": [
-            "SLACK_APP_TOKEN",
-            "SLACK_BOT_TOKEN",
-            "SLACK_USER_TOKEN"
-          ]
+      "cliAddOptions": [
+        {
+          "flags": "--bot-token <token>",
+          "description": "Bot token"
         },
-        "specifier": "./configured-state",
-        "exportName": "hasSlackConfiguredState"
-      }
+        {
+          "flags": "--app-token <token>",
+          "description": "App token"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/slack",

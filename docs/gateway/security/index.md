@@ -51,7 +51,7 @@ openclaw security audit --json
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
 - **Plugins** - loading without an explicit allowlist.
-- **Policy drift** - sandbox Docker settings configured but sandbox mode off; `gateway.nodes.denyCommands` entries that look effective but only match exact command IDs (for example `system.run`), not shell text inside the payload; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden per agent; plugin-owned tools reachable under a permissive policy.
+- **Policy drift** - sandbox Docker settings configured but sandbox mode off; `gateway.nodes.commands.deny` entries that look effective but only match exact command IDs (for example `system.run`), not shell text inside the payload; dangerous `gateway.nodes.commands.allow` entries; global `tools.profile="minimal"` overridden per agent; plugin-owned tools reachable under a permissive policy.
 - **Runtime expectation drift** - assuming implicit exec still means `sandbox` when `tools.exec.host` now defaults to `auto`, or setting `tools.exec.host="sandbox"` while sandbox mode is off.
 - **Model hygiene** - warns on legacy configured models (soft warning, not a hard block).
 
@@ -173,7 +173,7 @@ Treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings; prefer
 
 - **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who can DM the bot. When `dmPolicy="pairing"`, approvals write to `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) or `<channel>-<accountId>-allowFrom.json` (non-default accounts), merged with config allowlists.
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot accepts at all.
-  - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, also acts as a group allowlist (include `"*"` to keep allow-all behavior). Customize mention triggers with `agents.list[].groupChat.mentionPatterns` (for example `["@openclaw", "@mybot"]`) so `requireMention` gates on your own bot names.
+  - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, also acts as a group allowlist (include `"*"` to keep allow-all behavior). Customize mention triggers with `agents.entries.*.groupChat.mentionPatterns` (for example `["@openclaw", "@mybot"]`) so `requireMention` gates on your own bot names.
   - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot inside a group session (WhatsApp/Telegram/Signal/iMessage/Microsoft Teams).
   - `channels.discord.guilds` / `channels.slack.channels`: per-surface allowlists + mention defaults.
   - Check order: `groupPolicy`/group allowlists first, then mention/reply activation. Replying to a bot message (implicit mention) does **not** bypass `groupAllowFrom`.
@@ -197,7 +197,7 @@ By default, OpenClaw routes all DMs into the main session for cross-device conti
 | `per-account-channel-peer` | Like above, split further by account (multi-account channels).         |
 | `per-peer`                 | Each sender gets one session across all channels of the same type.     |
 
-Local CLI onboarding writes `session.dmScope: "per-channel-peer"` when unset, and preserves any explicit existing value.
+Local CLI onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default applies: all direct messages across channels share the agent's rolling main session (the personal-agent default). For shared or multi-user inboxes, set `session.dmScope: "per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic.
 
 This is a messaging-context boundary, not a host-admin boundary. If users are mutually adversarial and share the same Gateway host/config, run separate gateways per trust boundary instead.
 
@@ -287,12 +287,12 @@ Slash commands and directives are honored only for authorized senders, derived f
 
 ## Control plane tools
 
-Two built-in tools can make persistent changes:
+Two built-in tools remain control-plane sensitive:
 
-- `gateway` inspects config with `config.schema.lookup` / `config.get`, and mutates with `config.apply`, `config.patch`, and `update.run`.
+- `gateway` reads config with `config.schema.lookup` / `config.get`. It cannot write config, update OpenClaw, or restart the Gateway.
 - `cron` creates scheduled jobs that keep running after the original chat/task ends.
 
-`gateway config.apply`/`config.patch` are fail-closed by default: only a narrow allowlist of low-risk agent runtime tuning (`agents.defaults.model`, `agents.defaults.thinkingDefault`, per-agent model/thinking/reasoning/fast-mode fields), mention-gating (`channels.*.requireMention` at several nesting depths), and visible-reply settings (`messages.visibleReplies`, `messages.groupChat.visibleReplies`, `messages.groupChat.unmentionedInbound`) are agent-tunable. Any other changed config path is rejected. Prompt overlays stay operator-controlled, and new sensitive config trees are protected unless deliberately added to that allowlist. The tool still refuses to rewrite `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the equivalent `tools.exec.*` path before the write is checked.
+The `gateway` tool stays owner-only because config reads can expose secrets and host topology. Agents request persistent config or lifecycle changes through the `openclaw` delegation tool; OpenClaw maps them to typed operations and requires human approval before applying them. See [OpenClaw setup agent](/cli/openclaw#operations-and-approval).
 
 For any agent/surface handling untrusted content, deny these by default:
 
@@ -304,14 +304,14 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` only blocks restart actions - it does not disable `gateway` config/update actions.
+`commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
 
 ## Node execution (`system.run`)
 
 If a macOS node is paired, the Gateway can invoke `system.run` on it - this is remote code execution on that Mac.
 
 - Requires node pairing (approval + token). Pairing establishes node identity/trust and token issuance; it is not a per-command approval surface.
-- The Gateway applies a coarse global node command policy via `gateway.nodes.allowCommands` / `denyCommands`. `denyCommands` matches exact node command names only (for example `system.run`), not shell text inside a command payload - a reconnecting node advertising a different command list is not, by itself, a vulnerability if the gateway global policy and the node's own exec approvals still enforce the boundary.
+- The Gateway applies a coarse global node command policy via `gateway.nodes.commands.allow` / `gateway.nodes.commands.deny`. The deny list matches exact node command names only (for example `system.run`), not shell text inside a command payload - a reconnecting node advertising a different command list is not, by itself, a vulnerability if the gateway global policy and the node's own exec approvals still enforce the boundary.
 - The per-node `system.run` policy is the node's own exec approvals file (`exec.approvals.node.*`), controlled on the Mac via Settings -> Exec approvals (security + ask + allowlist); it can be stricter or looser than the gateway's global command-ID policy.
 - A node running `security="full"` and `ask="off"` follows the default trusted-operator model - expected behavior, not a bug, unless your deployment needs a tighter stance.
 - Approval mode binds exact request context and, when possible, one concrete local script/file operand. If OpenClaw cannot identify exactly one direct local file for an interpreter/runtime command, approval-backed execution is denied rather than promising full semantic coverage.
@@ -327,8 +327,9 @@ OpenClaw can refresh the skills list mid-session: the skills watcher updates the
 Plugins run in-process with the Gateway - treat them as trusted code.
 
 - Only install from sources you trust; prefer explicit `plugins.allow` allowlists; review plugin config before enabling; restart the Gateway after plugin changes.
-- Installing/updating (`openclaw plugins install <package>`, `openclaw plugins update <id>`) runs untrusted code:
+- Installing/updating plugins runs executable code:
   - The install path is the per-plugin directory under the active plugin install root.
+  - ClawHub packages and OpenClaw's bundled/official catalog are trusted sources. A new arbitrary npm, `npm-pack:`, git, local path/archive, or marketplace source warns before install; noninteractive installs require `--force` after you review and trust that source. `--force` confirms provenance and permits overwrite; it does not bypass `security.installPolicy` or remaining install safety checks. Updates reuse the already selected source.
   - OpenClaw does not run built-in local dangerous-code blocking during install/update. Use `security.installPolicy` for operator-owned local allow/block decisions and `openclaw security audit --deep` for diagnostic scanning.
   - npm and git plugin installs run package-manager dependency convergence only during the explicit install/update flow. Local paths and archives are treated as self-contained packages; OpenClaw copies/references them without running `npm install`.
   - Prefer pinned exact versions (`@scope/pkg@1.2.3`) and inspect the unpacked code before enabling.
@@ -359,7 +360,7 @@ Agent workspace access inside the sandbox (`agents.defaults.sandbox.workspaceAcc
 Extra `sandbox.docker.binds` are validated against normalized, canonicalized source paths. A blocked-path denylist covers `/etc`, `/private/etc`, `/proc`, `/sys`, `/dev`, `/root`, `/boot`, and directories that commonly contain or alias the Docker socket (`/run`, `/var/run`, and `docker.sock` under them), plus HOME credential subpaths (`.aws`, `.cargo`, `.config`, `.docker`, `.gnupg`, `.netrc`, `.npm`, `.ssh`). Parent-symlink tricks and canonical home aliases are resolved through existing ancestors and re-checked, so they still fail closed if they resolve into a blocked root.
 
 <Warning>
-`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.list[].tools.elevated`. See [Elevated mode](/tools/elevated).
+`tools.elevated` is the global baseline escape hatch that runs exec outside the sandbox. The effective host is `gateway` by default, or `node` when the exec target is configured to `node`. Keep `tools.elevated.allowFrom` tight and do not enable it for strangers. Further restrict per agent via `agents.entries.*.tools.elevated`. See [Elevated mode](/tools/elevated).
 </Warning>
 
 ### Sub-agent delegation guardrail
@@ -367,7 +368,7 @@ Extra `sandbox.docker.binds` are validated against normalized, canonicalized sou
 If you allow session tools, treat delegated sub-agent runs as another boundary decision:
 
 - Deny `sessions_spawn` unless the agent truly needs delegation.
-- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.list[].subagents.allowAgents` overrides restricted to known-safe target agents.
+- Keep `agents.defaults.subagents.allowAgents` and any per-agent `agents.entries.*.subagents.allowAgents` overrides restricted to known-safe target agents.
 - For workflows that must remain sandboxed, call `sessions_spawn` with `sandbox: "require"` (default is `"inherit"`); `"require"` fails fast when the target child runtime is not sandboxed.
 
 ### Read-only mode
@@ -427,8 +428,9 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {
-          // Session tools can reveal transcript data. Default scope is current session +
-          // spawned subagent sessions; clamp further with tools.sessions.visibility if needed.
+          // Session tools can reveal transcript data. Default scope is current + spawned;
+          // reads also include same-agent groups watched through ambient group awareness.
+          // Use visibility: "self" to exclude those watched sessions.
           sessions: { visibility: "tree" }, // self | tree | agent | all
           allow: [
             "sessions_list",
@@ -721,7 +723,9 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `openclaw.json`                                | Config may include tokens (gateway, remote gateway), provider settings, and allowlists.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `credentials/**`                               | Channel credentials (for example WhatsApp creds), pairing allowlists, legacy OAuth imports.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `agents/<agentId>/agent/auth-profiles.json`    | API keys, token profiles, OAuth tokens, optional `keyRef`/`tokenRef`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `state/openclaw.sqlite`                        | Shared runtime state, including native MCP OAuth access/refresh tokens, dynamic client registration secrets, and discovery state.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `agents/<agentId>/agent/openclaw-agent.sqlite` | Per-agent runtime state, including model auth profiles.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `agents/<agentId>/agent/auth-profiles.json`    | Legacy model-auth migration source; doctor imports supported records into the per-agent SQLite database.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `agents/<agentId>/agent/codex-home/**`         | Per-agent Codex app-server account, config, skills, plugins, native thread state, diagnostics (default).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `$CODEX_HOME/**` or `~/.codex/**`              | Native Codex runtime state. The ordinary harness accesses it only with explicit `plugins.entries.codex.config.appServer.homeScope: "user"`. The separate supervision connection accesses it when its resolved home scope is `"user"`, which is the default for stdio or Unix when unset. Contains the native Codex account, config, plugins, and thread store. Supervision lists source metadata and keeps a continued Chat's canonical native branch and later turns on that connection; branching copies bounded persisted user and assistant history into an authenticated, model-locked OpenClaw Chat. Enable only for an owner-controlled Gateway. See [Codex harness](/plugins/codex-harness#share-threads-with-codex-desktop-and-cli) and [Codex supervision](/plugins/codex-supervision). |
 | `secrets.json` (optional)                      | File-backed secret payload used by `file` SecretRef providers (`secrets.providers`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -740,7 +744,8 @@ Also useful for backup decisions:
 - Discord bot token: config/env or SecretRef (env/file/exec providers)
 - Slack tokens: config/env (`channels.slack.*`)
 - Pairing allowlists: `~/.openclaw/credentials/<channel>-allowFrom.json` (default account) / `<channel>-<accountId>-allowFrom.json` (non-default accounts)
-- Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- Model auth profiles: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`)
+- MCP OAuth sessions: `~/.openclaw/state/openclaw.sqlite` (`mcp_oauth_stores`)
 - Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
 
 Hardening: keep permissions tight (`700` on dirs, `600` on files); use full-disk encryption on the gateway host; prefer a dedicated OS user account if the host is shared.
@@ -758,7 +763,7 @@ OpenClaw loads workspace-local `.env` files for agents and tools, but never lets
 
 - Provider credential environment variables are blocked from untrusted workspace `.env` files - for example `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`, and provider auth keys declared by installed trusted plugins. Put provider credentials in the Gateway process environment, `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`), the config `env` block, or an optional login-shell import instead.
 - Any key starting with `OPENCLAW_` is blocked from untrusted workspace `.env` files, reserving the whole runtime namespace so a future `OPENCLAW_*` control is fail-closed by default rather than silently inheritable from checked-in or attacker-supplied `.env` content.
-- Channel endpoint settings for Matrix, Mattermost, IRC, and Synology Chat are also blocked from workspace `.env` overrides (for example `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`), so a cloned workspace cannot redirect bundled connector traffic through local endpoint config. These must come from the gateway process environment or `env.shellEnv`.
+- Channel and provider endpoint-routing settings are also blocked from workspace `.env` overrides (for example `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`, `AZURE_SPEECH_ENDPOINT`, and other keys ending in `_ENDPOINT`), so a cloned workspace cannot redirect bundled connector traffic through local endpoint config. These must come from the gateway process environment, global runtime dotenv, explicit config, or `env.shellEnv`.
 - Trusted process/OS environment variables, global runtime dotenv, config `env`, and enabled login-shell import still apply - this only constrains workspace `.env` file loading.
 
 Workspace `.env` files frequently live next to agent code, get committed by accident, or get written by tools; blocking provider credentials prevents a cloned workspace from substituting attacker-controlled provider accounts.

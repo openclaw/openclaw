@@ -1,9 +1,16 @@
 // Gateway request context factory.
 // Wires live runtime state into method handlers and client management helpers.
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  hasGatewayClientCap,
+  type GatewayClientId,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
-import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
+import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-generation.js";
+import type { SessionObserverService } from "./session-observer-contract.js";
 
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
@@ -16,12 +23,17 @@ type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState" | "configReloader">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
+  sessionObserver: SessionObserverService;
   getMcpAppSandboxPort?: GatewayRequestContext["getMcpAppSandboxPort"];
+  ensureSandboxHostPort?: GatewayRequestContext["ensureSandboxHostPort"];
   resolveTerminalLaunchPolicy: GatewayRequestContext["resolveTerminalLaunchPolicy"];
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
+  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
+  pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
+  systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
   loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"];
@@ -56,6 +68,7 @@ type GatewayRequestContextParams = {
   chatQueuedTurns: GatewayRequestContext["chatQueuedTurns"];
   chatAbortedRuns: GatewayRequestContext["chatAbortedRuns"];
   chatRunBuffers: GatewayRequestContext["chatRunBuffers"];
+  chatRunPlanSnapshots?: GatewayRequestContext["chatRunPlanSnapshots"];
   chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"];
   chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"];
   chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
@@ -73,7 +86,7 @@ type GatewayRequestContextParams = {
   registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
   dedupe: GatewayRequestContext["dedupe"];
   wizardSessions: GatewayRequestContext["wizardSessions"];
-  crestodianSessions: GatewayRequestContext["crestodianSessions"];
+  systemAgentSessions: GatewayRequestContext["systemAgentSessions"];
   findRunningWizard: GatewayRequestContext["findRunningWizard"];
   purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
   getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
@@ -88,15 +101,54 @@ type GatewayRequestContextParams = {
   unavailableGatewayMethods: ReadonlySet<string>;
 };
 
+const ALL_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
+  GATEWAY_CLIENT_IDS.CONTROL_UI,
+]);
+
+const EXEC_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
+  GATEWAY_CLIENT_IDS.MACOS_APP,
+  GATEWAY_CLIENT_IDS.IOS_APP,
+  GATEWAY_CLIENT_IDS.ANDROID_APP,
+]);
+
+const PLUGIN_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([GATEWAY_CLIENT_IDS.TUI]);
+
+function canDeliverApprovals(
+  gatewayClient: GatewayRequestContextClient,
+  approvalKind: "exec" | "plugin" | "system-agent",
+): boolean {
+  if (gatewayClient.invalidated) {
+    return false;
+  }
+  const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
+  const hasApprovalScope =
+    scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+  if (!hasApprovalScope) {
+    return false;
+  }
+  // Scope grants approval access; it does not prove the client renders this approval kind.
+  // Stable ids preserve shipped clients while explicit caps describe newer non-UI bridges.
+  return (
+    gatewayClient.internal?.approvalRuntime === true ||
+    ALL_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
+    hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.APPROVALS) ||
+    (approvalKind === "exec" &&
+      (EXEC_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
+        hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS))) ||
+    (approvalKind === "plugin" &&
+      (PLUGIN_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
+        hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS)))
+  );
+}
+
+export type GatewayRequestContextWithClientLookup = GatewayRequestContext & {
+  getClientConnIds?: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
+};
+
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
-): GatewayRequestContext {
-  const hasApprovalScope = (gatewayClient: GatewayClient): boolean => {
-    const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
-    return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
-  };
-
-  return {
+): GatewayRequestContextWithClientLookup {
+  const context: GatewayRequestContextWithClientLookup = {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
     // every handler closure that already holds this request context.
@@ -107,12 +159,21 @@ export function createGatewayRequestContext(
       return params.runtimeState.cronState.storePath;
     },
     getRuntimeConfig: params.getRuntimeConfig,
+    sessionObserver: params.sessionObserver,
+    notifyPluginMetadataChanged: () =>
+      params.runtimeState.configReloader.notifyPluginMetadataChanged(),
     getMcpAppSandboxPort: params.getMcpAppSandboxPort,
+    ensureSandboxHostPort: params.ensureSandboxHostPort,
     resolveTerminalLaunchPolicy: params.resolveTerminalLaunchPolicy,
     isTerminalEnabled: params.isTerminalEnabled,
     execApprovalManager: params.execApprovalManager,
+    cancelRunBoundApprovals: params.cancelRunBoundApprovals
+      ? (runId) => params.cancelRunBoundApprovals!(runId, context)
+      : undefined,
     forwardPluginApprovalRequest: params.forwardPluginApprovalRequest,
+    pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
+    systemAgentApprovalManager: params.systemAgentApprovalManager,
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot: params.loadGatewayModelCatalogSnapshot,
@@ -130,12 +191,14 @@ export function createGatewayRequestContext(
     nodeUnsubscribe: params.nodeUnsubscribe,
     nodeUnsubscribeAll: params.nodeUnsubscribeAll,
     hasConnectedTalkNode: params.hasConnectedTalkNode,
+    isConnectionActive: (connId) =>
+      [...params.clients].some((client) => client.connId === connId && !client.invalidated),
     hasExecApprovalClients: (excludeConnId?: string) => {
       for (const gatewayClient of params.clients) {
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
           continue;
         }
-        if (hasApprovalScope(gatewayClient)) {
+        if (canDeliverApprovals(gatewayClient, "exec")) {
           return true;
         }
       }
@@ -150,10 +213,23 @@ export function createGatewayRequestContext(
         if (opts.excludeConnId && gatewayClient.connId === opts.excludeConnId) {
           continue;
         }
-        if (!hasApprovalScope(gatewayClient)) {
+        if (!canDeliverApprovals(gatewayClient, opts.approvalKind ?? "exec")) {
           continue;
         }
         if (opts.filter && !opts.filter(gatewayClient, opts.record)) {
+          continue;
+        }
+        connIds.add(gatewayClient.connId);
+      }
+      return connIds;
+    },
+    getClientConnIds: (filter) => {
+      const connIds = new Set<string>();
+      for (const gatewayClient of params.clients) {
+        if (!gatewayClient.connId || gatewayClient.invalidated) {
+          continue;
+        }
+        if (filter && !filter(gatewayClient)) {
           continue;
         }
         connIds.add(gatewayClient.connId);
@@ -177,8 +253,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
-        // Marking is separate from socket close so already-buffered requests
-        // fail authorization even if transport teardown has not completed.
+        // Retire node-owned projections and pending invokes synchronously; socket
+        // close remains separate so already-buffered requests fail authorization.
+        if (gatewayClient.connId) {
+          params.nodeRegistry.invalidateConnectionForPairingChange(gatewayClient.connId, reason);
+        }
         gatewayClient.invalidated = true;
         gatewayClient.invalidatedReason = reason;
       }
@@ -226,6 +305,7 @@ export function createGatewayRequestContext(
     chatQueuedTurns: params.chatQueuedTurns,
     chatAbortedRuns: params.chatAbortedRuns,
     chatRunBuffers: params.chatRunBuffers,
+    chatRunPlanSnapshots: params.chatRunPlanSnapshots,
     chatDeltaSentAt: params.chatDeltaSentAt,
     chatDeltaLastBroadcastLen: params.chatDeltaLastBroadcastLen,
     chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
@@ -243,7 +323,7 @@ export function createGatewayRequestContext(
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,
     wizardSessions: params.wizardSessions,
-    crestodianSessions: params.crestodianSessions,
+    systemAgentSessions: params.systemAgentSessions,
     findRunningWizard: params.findRunningWizard,
     purgeWizardSession: params.purgeWizardSession,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
@@ -258,4 +338,5 @@ export function createGatewayRequestContext(
     broadcastVoiceWakeRoutingChanged: params.broadcastVoiceWakeRoutingChanged,
     unavailableGatewayMethods: params.unavailableGatewayMethods,
   };
+  return context;
 }

@@ -29,6 +29,10 @@ import type {
   JsonObject,
   JsonValue,
 } from "./protocol.js";
+import {
+  codexDiscoveryConfigSchema,
+  codexSessionCatalogConfigSchema,
+} from "./session-discovery-config.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
@@ -232,8 +236,10 @@ export type CodexAppServerRuntimeOptions = {
   remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
   remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
+  loopDetectionPreToolUseRelay: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  turnAssistantCompletionIdleTimeoutMs?: number;
   postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
@@ -256,10 +262,8 @@ type CodexModelBackedReviewerContext = {
 export type CodexPluginConfig = {
   codexDynamicToolsLoading?: CodexDynamicToolsLoading;
   codexDynamicToolsExclude?: string[];
-  discovery?: {
-    enabled?: boolean;
-    timeoutMs?: number;
-  };
+  sessionCatalog?: z.infer<typeof codexSessionCatalogConfigSchema>;
+  discovery?: z.infer<typeof codexDiscoveryConfigSchema>;
   computerUse?: CodexComputerUseConfig;
   codexPlugins?: CodexPluginsConfig;
   supervision?: CodexSupervisionConfig;
@@ -275,8 +279,10 @@ export type CodexPluginConfig = {
     clearEnv?: string[];
     remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
+    loopDetectionPreToolUseRelay?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    turnAssistantCompletionIdleTimeoutMs?: number;
     postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
@@ -421,13 +427,8 @@ const codexPluginConfigSchema = z
   .object({
     codexDynamicToolsLoading: codexDynamicToolsLoadingSchema.optional(),
     codexDynamicToolsExclude: z.array(z.string()).optional(),
-    discovery: z
-      .object({
-        enabled: z.boolean().optional(),
-        timeoutMs: z.number().positive().optional(),
-      })
-      .strict()
-      .optional(),
+    sessionCatalog: codexSessionCatalogConfigSchema.optional(),
+    discovery: codexDiscoveryConfigSchema.optional(),
     computerUse: z
       .object({
         enabled: z.boolean().optional(),
@@ -463,8 +464,10 @@ const codexPluginConfigSchema = z
         clearEnv: z.array(z.string()).optional(),
         remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
+        loopDetectionPreToolUseRelay: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        turnAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
@@ -783,10 +786,15 @@ export function resolveCodexAppServerRuntimeOptions(
     remoteAppsSubstrate,
     ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
     codeModeOnly: config.codeModeOnly === true,
+    loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
       config.turnCompletionIdleTimeoutMs,
       60_000,
+    ),
+    turnAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+      config.turnAssistantCompletionIdleTimeoutMs,
+      10_000,
     ),
     ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
       ? {
@@ -2490,3 +2498,4 @@ function splitShellWords(value: string): string[] {
   }
   return words;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -13,6 +13,7 @@ import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
   isModelSelectionLocked,
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
@@ -25,16 +26,18 @@ import { isFormattedGoalContinuationPrompt } from "./commands-goal.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandContext } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import {
+  isCompleteReplyConfig,
+  markReplyConfigRuntimeMode,
+  usesFullReplyRuntime,
+} from "./reply-config-runtime-mode.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import type { SessionInitResult } from "./session.js";
 
-// Reply completeness is process-local metadata. Keep it off config objects so
-// frozen runtime snapshots and identity-keyed caches remain valid.
-const replyConfigRuntimeModes = new WeakMap<OpenClawConfig, "fast" | "full">();
-
 function isSlowReplyTestAllowed(env: NodeJS.ProcessEnv = process.env): boolean {
   return (
-    env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1" || env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
+    (isVitestRuntimeEnv(env) && env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS === "1") ||
+    env.OPENCLAW_STRICT_FAST_REPLY_CONFIG === "0"
   );
 }
 
@@ -51,34 +54,8 @@ function resolveFastSessionKey(params: {
   return resolveSessionKey(params.sessionScope, ctx, params.mainKey);
 }
 
-export function markCompleteReplyConfig<T extends OpenClawConfig>(
-  config: T,
-  options?: { runtimeMode?: "fast" | "full" },
-): T {
-  replyConfigRuntimeModes.set(config, options?.runtimeMode ?? "fast");
-  return config;
-}
-
-export function withFastReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markCompleteReplyConfig(config, { runtimeMode: "fast" });
-}
-
 export function withFullRuntimeReplyConfig<T extends OpenClawConfig>(config: T): T {
-  return markCompleteReplyConfig(config, { runtimeMode: "full" });
-}
-
-function isCompleteReplyConfig(config: unknown): config is OpenClawConfig {
-  return Boolean(
-    config && typeof config === "object" && replyConfigRuntimeModes.has(config as OpenClawConfig),
-  );
-}
-
-function usesFullReplyRuntime(config: unknown): boolean {
-  return Boolean(
-    config &&
-    typeof config === "object" &&
-    replyConfigRuntimeModes.get(config as OpenClawConfig) === "full",
-  );
+  return markReplyConfigRuntimeMode(config, "full");
 }
 
 export function resolveGetReplyConfig(params: {
@@ -237,10 +214,14 @@ export function initFastReplySessionState(params: {
   const sessionEntry: SessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
+    ...((resetTriggered || !existingEntry) && ctx.SessionCreator
+      ? { createdBy: { ...ctx.SessionCreator } }
+      : {}),
     sessionFile,
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
+    agentStatus: undefined,
     thinkingLevel: resetTriggered ? existingEntry?.thinkingLevel : existingEntry?.thinkingLevel,
     verboseLevel: resetTriggered ? existingEntry?.verboseLevel : existingEntry?.verboseLevel,
     reasoningLevel: resetTriggered ? existingEntry?.reasoningLevel : existingEntry?.reasoningLevel,

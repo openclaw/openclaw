@@ -1,8 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -12,15 +15,28 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
 } from "../../plugins/session-catalog.js";
 import { bindPluginSessionConversation } from "../../plugins/session-conversation-binding.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { loadSessionEntryReadOnly } from "../session-utils.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+
+function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(search);
+  return normalized
+    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
+}
 
 function catalogError(error: unknown): { code: string; message: string } {
   const record =
@@ -37,9 +53,15 @@ function providers(): SessionCatalogProvider[] {
   return registrations().map((entry) => entry.provider);
 }
 
+export function resolveSessionCatalogProvider(
+  catalogId: string,
+): SessionCatalogProvider | undefined {
+  return providers().find((candidate) => candidate.id === catalogId);
+}
+
 function registrations() {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
+  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).toSorted(
+    (left, right) => left.provider.id.localeCompare(right.provider.id),
   );
 }
 
@@ -90,7 +112,7 @@ function providerOrRespond(
   catalogId: string,
   respond: RespondFn,
 ): SessionCatalogProvider | undefined {
-  const provider = providers().find((candidate) => candidate.id === catalogId);
+  const provider = resolveSessionCatalogProvider(catalogId);
   if (!provider) {
     respond(
       false,
@@ -125,6 +147,7 @@ function catalogResult(
     capabilities: {
       continueSession: Boolean(provider.continueSession),
       archive: Boolean(provider.archive),
+      ...(provider.openTerminal ? { openTerminal: true } : {}),
       ...(createSession ? { createSession } : {}),
     },
     hosts,
@@ -135,8 +158,34 @@ function catalogResult(
   return result;
 }
 
+function projectCatalogHostCreators(
+  host: SessionCatalogHost,
+  agentId: string,
+  creatorBySessionKey: Map<string, SessionCatalogSession["createdBy"]>,
+): SessionCatalogHost {
+  return {
+    ...host,
+    sessions: host.sessions.map(({ createdBy: _providerCreatedBy, ...session }) => {
+      // Catalog providers do not own creator identity; the persisted session entry does.
+      const sessionKey = session.sessionKey;
+      let createdBy: SessionCatalogSession["createdBy"];
+      if (sessionKey && creatorBySessionKey.has(sessionKey)) {
+        createdBy = creatorBySessionKey.get(sessionKey);
+      } else {
+        createdBy = sessionKey
+          ? loadSessionEntryReadOnly(sessionKey, { agentId }).entry?.createdBy
+          : undefined;
+        if (sessionKey) {
+          creatorBySessionKey.set(sessionKey, createdBy);
+        }
+      }
+      return createdBy ? { ...session, createdBy: { ...createdBy } } : session;
+    }),
+  };
+}
+
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond, context }) => {
+  "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -148,6 +197,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogListParams;
+    if (request.cursors !== undefined && request.catalogId === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      );
+      return;
+    }
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
       const provider = providerOrRespond(request.catalogId, respond);
@@ -168,18 +225,51 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     if (!resolvedAgent) {
       return;
     }
+    const search = normalizeSessionCatalogSearch(request.search);
+    const progressId = request.progressId;
+    const progressConnId = progressId && client?.connId ? client.connId : undefined;
+    const creatorBySessionKey = new Map<string, SessionCatalogSession["createdBy"]>();
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+        const onHost = progressConnId
+          ? (host: SessionCatalog["hosts"][number]) => {
+              // Progressive frames are an optimization. The final RPC response remains
+              // authoritative when a slow client drops an intermediate host update.
+              context.broadcastToConnIds(
+                "sessions.catalog.host",
+                {
+                  progressId,
+                  agentId: resolvedAgent.agentId,
+                  catalog: catalogResult(
+                    provider,
+                    [projectCatalogHostCreators(host, resolvedAgent.agentId, creatorBySessionKey)],
+                    undefined,
+                    createSession,
+                  ),
+                },
+                new Set([progressConnId]),
+                { dropIfSlow: true },
+              );
+            }
+          : undefined;
         try {
           const hosts = await provider.list({
-            search: request.search,
+            search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
-            ...("cursors" in request ? { cursors: request.cursors } : {}),
+            ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+            ...(onHost ? { onHost } : {}),
           });
-          return catalogResult(provider, hosts, undefined, createSession);
+          return catalogResult(
+            provider,
+            hosts.map((host) =>
+              projectCatalogHostCreators(host, resolvedAgent.agentId, creatorBySessionKey),
+            ),
+            undefined,
+            createSession,
+          );
         } catch (error) {
           return catalogResult(provider, [], catalogError(error), createSession);
         }
@@ -256,6 +346,35 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
           afterBind: result.afterConversationBound,
         });
       }
+      // Adopted sessions are created under the resolved default store agent, so the
+      // key-derived agent matches the owning agent. Provider-authoritative agent
+      // identity (a `SessionCatalogContinueProviderResult.agentId`) is a follow-up
+      // that would let adapters adopt under non-default agents; see issue tracker.
+      const agentId = resolveAgentIdFromSessionKey(result.sessionKey);
+      if (result.upstream) {
+        // Links exist only for adoptions made on this version: pre-upgrade adopted
+        // sessions are transient linkage with no shipped contract, and re-continuing
+        // from the catalog establishes the link. No doctor backfill by design.
+        upsertSessionUpstreamLink({
+          sessionKey: result.sessionKey,
+          agentId,
+          catalogId: request.catalogId,
+          hostId: request.hostId,
+          threadId: request.threadId,
+          upstreamKind: result.upstream.kind,
+          upstreamRef: result.upstream.ref,
+          marker: result.upstream.marker,
+        });
+      }
+      recordSessionStateEvent({
+        sessionKey: result.sessionKey,
+        agentId,
+        kind: "adopted",
+        actorType: "human",
+        dedupeKey: `adopted:${result.sessionKey}`,
+        summary: `adopted from ${request.catalogId}`,
+        payload: { catalogId: request.catalogId, hostId: request.hostId },
+      });
       respond(true, { sessionKey: result.sessionKey });
     } catch (error) {
       const details = catalogError(error);

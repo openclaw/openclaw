@@ -7,8 +7,10 @@ import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { RuntimePluginToolGrant } from "../../plugins/runtime/tool-grant.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
   UserTurnInput,
@@ -17,6 +19,7 @@ import type {
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/types.js";
+import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery-store.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -24,15 +27,6 @@ export type ImageContent = {
   type: "image";
   data: string;
   mimeType: string;
-};
-
-/** Metadata overrides for trusted internal agent command callers. */
-export type AgentCommandResultMetaOverrides = {
-  transport?: "embedded";
-  fallbackFrom?: "gateway";
-  fallbackReason?: "gateway_timeout";
-  fallbackSessionId?: string;
-  fallbackSessionKey?: string;
 };
 
 /** ACP turn source markers accepted by trusted command callsites. */
@@ -68,6 +62,8 @@ export type AgentCommandOpts = {
   images?: ImageContent[];
   /** Original inline/offloaded attachment order for inbound images. */
   imageOrder?: PromptImageOrderEntry[];
+  /** Ordered facts represented by attachment text in this prompt. */
+  media?: MediaFact[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
   /** Agent id override (must exist in config). */
@@ -113,6 +109,10 @@ export type AgentCommandOpts = {
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
   toolsAllow?: string[];
+  /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
+  trustedInternalHandoff?: boolean;
   /** Internal marker for an auto-applied cap that CLI runtimes must omit. */
   toolsAllowIsDefault?: boolean;
   /** Preserve the originating run's message-tool policy across internal continuation turns. */
@@ -145,8 +145,15 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Collector children fail closed instead of emitting operator approval requests. */
+  swarmCollector?: boolean;
+  /** Synthetic structured_output input schema for collector children. */
+  swarmOutputSchema?: Record<string, unknown>;
   /** Restrict this reconstructed run to restart-safe tools. */
   forceRestartSafeTools?: boolean;
+  /** Host-owned exact media set for a scoped automatic recovery delivery. */
+  internalDeliveryMediaUrls?: string[];
+  internalDeliverySuppressText?: boolean;
   /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
   skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
@@ -167,8 +174,10 @@ export type AgentCommandOpts = {
   oneShotCliRun?: boolean;
   /** Gateway-owned runs can late-bind plugin subagent and node runtime helpers. */
   allowGatewaySubagentBinding?: boolean;
-  /** Internal local CLI callers can annotate result metadata before JSON/text output. */
-  resultMetaOverrides?: AgentCommandResultMetaOverrides;
+  /** Opaque foreground fence transferred by Gateway after atomic session admission. */
+  mainRestartRecoveryOwnerLease?: MainSessionRecoveryOwnerLease;
+  /** Gateway already consumed this automatic recovery run's durable reservation. */
+  mainRestartRecoveryAdmitted?: boolean;
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when compaction rotates the active run onto a successor session. */
@@ -188,7 +197,7 @@ export type AgentCommandOpts = {
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<
   AgentCommandOpts,
-  "senderIsOwner" | "allowModelOverride" | "resultMetaOverrides"
+  "senderIsOwner" | "allowModelOverride"
 > & {
   /** Trusted sender identity bit for command/channel-action auth; defaults false for ingress. */
   senderIsOwner?: boolean;

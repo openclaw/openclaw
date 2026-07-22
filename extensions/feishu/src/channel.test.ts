@@ -499,6 +499,7 @@ describe("feishuPlugin actions", () => {
       },
       cfg: {
         ...cfg,
+        channels: undefined,
         messages: { responsePrefix: "[Nexus]" },
       },
       accountId: undefined,
@@ -677,7 +678,10 @@ describe("feishuPlugin actions", () => {
       },
       cfg: {
         ...cfg,
-        messages: { responsePrefix: "[Nexus]" },
+        channels: {
+          ...cfg.channels,
+          feishu: { ...cfg.channels?.feishu, responsePrefix: "[Nexus]" },
+        },
       },
       accountId: undefined,
       toolContext: {},
@@ -2359,3 +2363,4 @@ describe("looksLikeFeishuId", () => {
     expect(looksLikeFeishuId("channel:oc_456")).toBe(true);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

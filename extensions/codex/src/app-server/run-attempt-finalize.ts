@@ -17,6 +17,7 @@ import {
   isInvalidCodexImagePayloadError,
   resolveCodexAppServerReplayBlockedReason,
 } from "./attempt-results.js";
+import { readCodexRateLimitsRevision, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import type { CodexAttemptActiveTurn } from "./run-attempt-active-turn.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import {
@@ -34,9 +35,16 @@ import {
 } from "./run-attempt-state.js";
 import type { prepareCodexAttemptTurnRequest } from "./run-attempt-turn-request.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { captureCodexSettledTurnFinalizationContext } from "./settled-turn-context.js";
+import { settleCodexSourceReplyFinality } from "./source-reply-finality.js";
 import { normalizeCodexTrajectoryError, recordCodexTrajectoryCompletion } from "./trajectory.js";
 import { codexTranscriptMirrorRuntime } from "./transcript-mirror.js";
-import { refreshCodexUsageLimitPromptError } from "./usage-limit-error.js";
+import {
+  createCodexUsageLimitPromptError,
+  isCodexUsageLimitPromptError,
+  markCodexAuthProfileBlockedFromRateLimits,
+  refreshCodexUsageLimitPromptError,
+} from "./usage-limit-error.js";
 
 export async function finalizeCodexAttempt(
   resources: CodexAttemptResources,
@@ -72,6 +80,7 @@ export async function finalizeCodexAttempt(
     effectiveWorkspace,
     agentDir,
     attemptStartedAt,
+    startupAuthProfileId,
   } = connection;
   const { toolBridge, toolState } = attemptTools;
   const {
@@ -158,9 +167,11 @@ export async function finalizeCodexAttempt(
   const finalPromptErrorMessage =
     typeof finalPromptError === "string"
       ? finalPromptError
-      : finalPromptError
-        ? formatErrorMessage(finalPromptError)
-        : undefined;
+      : finalPromptError instanceof Error
+        ? finalPromptError.message
+        : finalPromptError
+          ? formatErrorMessage(finalPromptError)
+          : undefined;
   if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
     await clearCodexBindingAfterInvalidImagePayload(bindingStore, bindingIdentity, {
       phase: "turn_completed",
@@ -197,7 +208,22 @@ export async function finalizeCodexAttempt(
     signal: runAbortController.signal,
   });
   if (refreshedUsageLimitPromptError) {
-    finalPromptError = refreshedUsageLimitPromptError;
+    await markCodexAuthProfileBlockedFromRateLimits({
+      params,
+      authProfileId: startupAuthProfileId,
+      rateLimits: refreshedUsageLimitPromptError.rateLimitsForProfile,
+    });
+    finalPromptError = createCodexUsageLimitPromptError(refreshedUsageLimitPromptError.message);
+  } else if (
+    isCodexUsageLimitPromptError(finalPromptError) &&
+    state.rateLimitsRevisionBeforeLastTurnStart !== undefined &&
+    readCodexRateLimitsRevision(resourceState.client) > state.rateLimitsRevisionBeforeLastTurnStart
+  ) {
+    await markCodexAuthProfileBlockedFromRateLimits({
+      params,
+      authProfileId: startupAuthProfileId,
+      rateLimits: readRecentCodexRateLimits(resourceState.client),
+    });
   }
   const finalPromptErrorSource =
     effectiveTimedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
@@ -246,14 +272,24 @@ export async function finalizeCodexAttempt(
     !state.terminalTurnNotificationQueued &&
     !state.timedOut &&
     clientClosedPromptErrorForFinal === undefined;
-  const attemptSucceeded =
+  const turnSucceeded =
     !finalAborted &&
     !effectiveTimedOut &&
     (finalPromptError === null || finalPromptError === undefined) &&
-    result.agentHarnessResultClassification === undefined &&
     (completedTurnStatus === "completed" ||
       recoveredTurnWatchTimeout ||
       completedWithoutTerminalNotification);
+  // buildResult retains the bridge's delivery records. Resolve omitted final
+  // intent only after the authoritative turn outcome is known, before any
+  // terminal observer consumes the result.
+  const completedSourceReply = settleCodexSourceReplyFinality(toolBridge.telemetry, turnSucceeded);
+  if (completedSourceReply) {
+    // Harness classification only sees assistant/reasoning/plan projections.
+    // A reply delivered entirely through the source message tool is visible
+    // output, so an empty/reasoning-only classification is stale at this point.
+    result.agentHarnessResultClassification = undefined;
+  }
+  const attemptSucceeded = turnSucceeded && result.agentHarnessResultClassification === undefined;
   terminalState.sharedAbortAllowedAfterTerminalOutcome = shouldKeepCodexSharedAbortOpen({
     trigger: params.trigger,
     result,
@@ -284,7 +320,7 @@ export async function finalizeCodexAttempt(
   } else {
     codexModelCallDiagnostics.emitCompleted(result);
   }
-  const assistantTranscriptOwned = await codexTranscriptMirrorRuntime.mirrorBestEffort({
+  const mirrorOutcome = await codexTranscriptMirrorRuntime.mirrorBestEffort({
     params,
     agentId: sessionAgentId,
     notifyUserMessagePersisted,
@@ -294,6 +330,27 @@ export async function finalizeCodexAttempt(
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
   });
+  const { assistantTranscriptOwned } = mirrorOutcome;
+  const shouldCaptureSettledTurnFinalizationContext =
+    turnSucceeded &&
+    result.assistantTexts.every((text) => !text.trim()) &&
+    result.messagesSnapshot.some((message) => message.role === "toolResult");
+  const settledTurnFinalizationContext = shouldCaptureSettledTurnFinalizationContext
+    ? await captureCodexSettledTurnFinalizationContext({
+        ...activeTranscriptTarget,
+        mirroredMessages: mirrorOutcome.mirroredMessages,
+        settledMessages: result.messagesSnapshot,
+        turnId: activeTurnId,
+      })
+    : undefined;
+  if (shouldCaptureSettledTurnFinalizationContext && !settledTurnFinalizationContext) {
+    // The isolated child must not infer around a partial or drifting transcript.
+    // Omitting this field preserves the existing incomplete-turn failure.
+    embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
+      threadId: resourceState.thread.threadId,
+      turnId: activeTurnId,
+    });
+  }
   if (activeContextEngine) {
     const contextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const isHeartbeat =
@@ -447,7 +504,11 @@ export async function finalizeCodexAttempt(
         }
       : {
           phase: "end",
-          ...buildLifecycleTerminalMeta({ aborted: finalAborted, timedOut: effectiveTimedOut }),
+          ...buildLifecycleTerminalMeta({
+            aborted: finalAborted,
+            timedOut: effectiveTimedOut,
+            yielded: toolState.yieldDetected,
+          }),
         },
   );
   return {
@@ -459,6 +520,7 @@ export async function finalizeCodexAttempt(
     ...(codexAppServerFailure ? { codexAppServerFailure } : {}),
     ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
     ...(assistantTranscriptOwned ? { assistantTranscriptOwned: true } : {}),
+    ...(settledTurnFinalizationContext ? { settledTurnFinalizationContext } : {}),
     ...(resourceState.runtimeArtifact ? { runtimeArtifact: resourceState.runtimeArtifact } : {}),
     ...(!finalAborted && !effectiveTimedOut && !finalPromptError && preparedAuthBinding
       ? { authBindingFingerprint: preparedAuthBinding.fingerprint }

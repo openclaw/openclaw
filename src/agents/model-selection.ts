@@ -379,12 +379,14 @@ export function buildAllowedModelSet(
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
+  automaticFallbackKeys: Set<string>;
 } {
   return buildAllowedModelSetWithFallbacks({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -400,6 +402,7 @@ export function getModelRefStatus(
     ref: ModelRef;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
@@ -408,8 +411,10 @@ export function getModelRefStatus(
     ref: params.ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
+      agentId: params.agentId,
     }),
     manifestPlugins: params.manifestPlugins,
   });
@@ -421,6 +426,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
   ref: ModelRef,
 ): ModelRefStatus {
@@ -430,6 +436,7 @@ function getModelRefStatusForResolve(
     ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
   });
 }
@@ -441,6 +448,7 @@ export function resolveAllowedModelRef(
     raw: string;
     defaultProvider: string;
     defaultModel?: string;
+    agentId?: string;
   } & ModelManifestNormalizationContext,
 ):
   | { ref: ModelRef; key: string }
@@ -455,6 +463,7 @@ export function resolveAllowedModelRef(
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    agentId: params.agentId,
     manifestPlugins: params.manifestPlugins,
   });
 

@@ -7,11 +7,9 @@ read_when:
 title: "`openclaw commitments`"
 ---
 
-List and manage inferred follow-up commitments.
-
-Commitments are opt-in (`commitments.enabled`), short-lived follow-up memories
-created from conversation context and delivered by heartbeat. See
-[Inferred commitments](/concepts/commitments) for the conceptual guide and config.
+Inspect and dismiss records left by the retired inferred commitments experiment.
+OpenClaw no longer creates or delivers new commitments, but keeps the maintenance
+command so upgrades can audit and clean up existing SQLite rows.
 
 With no subcommand, `openclaw commitments` lists pending commitments.
 
@@ -31,8 +29,7 @@ openclaw commitments dismiss <id...> [--json]
   `dismissed`, `snoozed`, or `expired`. Unknown values exit with an error.
 - `--json`: output machine-readable JSON.
 
-`dismiss` marks the given commitment ids as `dismissed` so heartbeat will not
-deliver them.
+`dismiss` marks the given commitment ids as `dismissed`.
 
 ## Examples
 
@@ -74,7 +71,7 @@ openclaw commitments --all --json
 
 ## Output
 
-Text output prints the commitment count, the store path, any active filters,
+Text output prints the commitment count, the shared SQLite database path, any active filters,
 and one row per commitment:
 
 - commitment id
@@ -85,7 +82,7 @@ and one row per commitment:
 - suggested check-in text
 
 JSON output includes the count, the active status and agent filters, the
-commitment store path, and the full stored records.
+shared SQLite database path, and the full stored records.
 
 ## Related
 

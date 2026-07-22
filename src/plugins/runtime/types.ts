@@ -12,9 +12,11 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
-export type SubagentRunParams = {
+type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
+  toolsAlsoAllow?: string[];
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
@@ -31,8 +33,13 @@ type PluginManagedWorktree = {
   branch: string;
 };
 
-export type SubagentRunResult = {
+type SubagentRunResult = {
   runId: string;
+  runtime?: {
+    harness: string;
+    provider: string;
+    model: string;
+  };
 };
 
 type SubagentWaitParams = {
@@ -53,12 +60,6 @@ type SubagentGetSessionMessagesParams = {
 type SubagentGetSessionMessagesResult = {
   messages: unknown[];
 };
-
-/** @deprecated Use SubagentGetSessionMessagesParams. */
-type SubagentGetSessionParams = SubagentGetSessionMessagesParams;
-
-/** @deprecated Use SubagentGetSessionMessagesResult. */
-type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
 
 type SubagentDeleteSessionParams = {
   sessionKey: string;
@@ -117,8 +118,6 @@ export type PluginRuntime = PluginRuntimeCore & {
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
-    /** @deprecated Use getSessionMessages. */
-    getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   nodes: {

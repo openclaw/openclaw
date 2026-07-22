@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictInteger, timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
-import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
+import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
 import { updateMatrixOwnProfile } from "./matrix/actions/profile.js";
@@ -34,10 +34,12 @@ import { formatMatrixErrorMessage } from "./matrix/errors.js";
 import { applyMatrixProfileUpdate, type MatrixProfileUpdateResult } from "./profile-update.js";
 import { formatZonedTimestamp } from "./runtime-api.js";
 import { getMatrixRuntime } from "./runtime.js";
+import type { MatrixSetupInput } from "./setup-config.js";
 import { matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
 let matrixCliExitScheduled = false;
+const MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES = 1024 * 1024;
 
 const loadMatrixActionClientModule = createLazyRuntimeModule(
   () => import("./matrix/actions/client.js"),
@@ -67,11 +69,11 @@ function markCliFailure(): void {
 }
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
-  }
-  const recoveryKey = Buffer.concat(chunks).toString("utf8").trim();
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) => new Error(`Matrix recovery key stdin exceeds ${maxBytes} bytes.`),
+  });
+  const recoveryKey = bytes.toString("utf8").trim();
   if (!recoveryKey) {
     throw new Error("Matrix recovery key was requested from stdin, but stdin was empty.");
   }
@@ -299,7 +301,7 @@ async function addMatrixAccount(params: {
     throw new Error("Matrix account setup is unavailable.");
   }
 
-  const input: ChannelSetupInput = {
+  const input: MatrixSetupInput = {
     name: params.name,
     avatarUrl: params.avatarUrl,
     homeserver: params.homeserver,
@@ -1634,7 +1636,11 @@ export function registerMatrixCli(params: { program: Command }): void {
     .command("setup")
     .description("Enable Matrix E2EE, bootstrap verification, and print next steps")
     .option("--account <id>", "Account ID (for multi-account setups)")
-    .option("--recovery-key <key>", "Recovery key to apply before bootstrap")
+    .option(
+      "--recovery-key <key>",
+      "Recovery key to apply before bootstrap (prefer --recovery-key-stdin)",
+    )
+    .option("--recovery-key-stdin", "Read the Matrix recovery key from stdin")
     .option(
       "--force-reset-cross-signing",
       "Force reset cross-signing identity before bootstrap (requires active recovery key)",
@@ -1645,6 +1651,7 @@ export function registerMatrixCli(params: { program: Command }): void {
       async (options: {
         account?: string;
         recoveryKey?: string;
+        recoveryKeyStdin?: boolean;
         forceResetCrossSigning?: boolean;
         verbose?: boolean;
         json?: boolean;
@@ -1655,7 +1662,10 @@ export function registerMatrixCli(params: { program: Command }): void {
           run: async () =>
             await setupMatrixEncryption({
               account: options.account,
-              recoveryKey: options.recoveryKey,
+              recoveryKey: await resolveMatrixCliRecoveryKeyInput({
+                recoveryKey: options.recoveryKey,
+                recoveryKeyStdin: options.recoveryKeyStdin,
+              }),
               forceResetCrossSigning: options.forceResetCrossSigning === true,
             }),
           onText: (result, verbose) => {
@@ -2312,3 +2322,4 @@ export function registerMatrixCli(params: { program: Command }): void {
       });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

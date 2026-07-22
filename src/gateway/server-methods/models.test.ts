@@ -50,7 +50,9 @@ function requestModelsList(params: {
   respond?: ReturnType<typeof vi.fn>;
   runtimeConfig?: OpenClawConfig;
   loadGatewayModelCatalog: (params?: {
+    agentDir?: string;
     readOnly?: boolean;
+    workspaceDir?: string;
   }) => Promise<Array<Record<string, unknown>>>;
   reqId?: string;
   includeProviderCapabilities?: boolean;
@@ -211,7 +213,10 @@ describe("models.list", () => {
         },
         undefined,
       );
-      expect(loadGatewayModelCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+      expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
+      expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: true }),
+      );
     } finally {
       clearRuntimeConfigSnapshot();
     }
@@ -313,13 +318,16 @@ describe("models.list", () => {
                 id: "gpt-test",
                 name: "GPT Test",
                 provider: "openai",
+                agentRuntime: { id: "openclaw", source: "implicit" },
                 available: false,
               },
             ],
           },
           undefined,
         );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: true });
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ readOnly: true }),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -409,11 +417,21 @@ describe("models.list", () => {
         expect(respond).toHaveBeenCalledWith(
           true,
           {
-            models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }],
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                provider: "openai",
+                agentRuntime: { id: "codex", source: "implicit" },
+                available: false,
+              },
+            ],
           },
           undefined,
         );
-        expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
+        expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
+          expect.objectContaining({ readOnly: false }),
+        );
       } finally {
         vi.useRealTimers();
       }
@@ -489,15 +507,29 @@ describe("models.list", () => {
         true,
         {
           models: [
-            { id: "gpt-5.4", name: "GPT-5.4 Codex", provider: "openai", available: true },
-            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4 Codex",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
+            {
+              id: "gpt-codex-test",
+              name: "GPT Codex Test",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
             { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
           ],
         },
         undefined,
       );
-      expect(loadConfiguredCatalog).toHaveBeenCalledWith({ readOnly: false });
+      expect(loadConfiguredCatalog).toHaveBeenCalledWith(
+        expect.objectContaining({ readOnly: false }),
+      );
 
       const { request: allRequest, respond: allRespond } = requestModelsList({
         view: "all",
@@ -517,8 +549,20 @@ describe("models.list", () => {
               provider: "anthropic",
               available: false,
             },
-            { id: "gpt-5.4", name: "GPT-5.4 Codex", provider: "openai", available: true },
-            { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+            {
+              id: "gpt-5.4",
+              name: "GPT-5.4 Codex",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
+            {
+              id: "gpt-codex-test",
+              name: "GPT Codex Test",
+              provider: "openai",
+              agentRuntime: { id: "codex", source: "implicit" },
+              available: true,
+            },
             { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
             { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
           ],
@@ -645,6 +689,7 @@ describe("models.list", () => {
                   id: "gpt-5.4",
                   name: "GPT-5.4 Codex",
                   provider: "openai",
+                  agentRuntime: { id: "codex", source: "implicit" },
                   available: true,
                 },
               ],
@@ -713,6 +758,7 @@ describe("models.list", () => {
                   id: "claude-opus-4-8",
                   name: "Claude Opus 4.8",
                   provider: "anthropic",
+                  agentRuntime: { id: "claude-cli", source: "model" },
                   available: true,
                 },
               ],
@@ -1347,3 +1393,4 @@ describe("models.list", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

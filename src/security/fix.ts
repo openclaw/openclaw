@@ -240,11 +240,6 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   const next = structuredClone(params.cfg ?? {});
   const changes: string[] = [];
 
-  if (next.logging?.redactSensitive === "off") {
-    next.logging = { ...next.logging, redactSensitive: "tools" };
-    changes.push('logging.redactSensitive=off -> "tools"');
-  }
-
   for (const channel of Object.keys(next.channels ?? {})) {
     setGroupPolicyAllowlist({ cfg: next, channel, changes });
   }
@@ -252,7 +247,7 @@ function applyConfigFixes(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv 
   return { cfg: next, changes };
 }
 
-export async function applySecurityFixConfigMutations(params: {
+async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   channelPlugins?: ChannelPlugin[];
@@ -310,7 +305,7 @@ async function collectChannelSecurityConfigFixMutation(params: {
   return { cfg: nextCfg, changes };
 }
 
-export async function collectSecurityPermissionTargets(params: {
+async function collectSecurityPermissionTargets(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   configPath: string;

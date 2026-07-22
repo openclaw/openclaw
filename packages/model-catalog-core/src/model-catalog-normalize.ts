@@ -390,8 +390,6 @@ function normalizeModelCatalogCompat(value: unknown): ModelCatalogCompatConfig |
     "sendSessionIdHeader",
     "supportsEagerToolInputStreaming",
     "supportsLongCacheRetention",
-    "nativeWebSearchTool",
-    "requiresMistralToolIds",
     "requiresOpenAiAnthropicToolPayload",
   ] as const;
   for (const field of booleanFields) {
@@ -763,3 +761,4 @@ export function normalizeModelCatalogProviderRows(params: {
 
   return rows.toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -28,8 +28,16 @@
     "extensions": [
       "./index.ts"
     ],
+    "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "clickclack",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "CLICKCLACK_BOT_TOKEN"
+          ]
+        }
+      },
       "label": "ClickClack",
       "selectionLabel": "ClickClack",
       "detailLabel": "ClickClack Bot",
@@ -43,7 +51,21 @@
       "commands": {
         "nativeCommandsAutoEnabled": false,
         "nativeSkillsAutoEnabled": false
-      }
+      },
+      "cliAddOptions": [
+        {
+          "flags": "--base-url <url>",
+          "description": "Channel base URL"
+        },
+        {
+          "flags": "--code <code>",
+          "description": "ClickClack one-time setup code or setup URL"
+        },
+        {
+          "flags": "--workspace <workspace>",
+          "description": "ClickClack workspace id, slug, or name"
+        }
+      ]
     },
     "install": {
       "clawhubSpec": "clawhub:@openclaw/clickclack",

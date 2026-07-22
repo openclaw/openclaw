@@ -28,8 +28,14 @@ type NextcloudSetupInput = ChannelSetupInput & {
   baseUrl?: string;
   secret?: string;
   secretFile?: string;
+  url?: string;
+  password?: string;
 };
 type NextcloudTalkSection = NonNullable<CoreConfig["channels"]>["nextcloud-talk"];
+
+function readOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
 
 function addWildcardAllowFrom(allowFrom?: Array<string | number> | null): string[] {
   return mergeAllowFromEntries(allowFrom, ["*"]);
@@ -203,7 +209,20 @@ export const nextcloudTalkDmPolicy: ChannelSetupDmPolicy = {
 };
 
 export const nextcloudTalkSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["rooms"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: ({ input }) => {
+    const setupInput = input as NextcloudSetupInput;
+    return {
+      ...setupInput,
+      baseUrl: setupInput.baseUrl ?? readOptionalString(setupInput.url),
+      secret:
+        setupInput.secret ??
+        readOptionalString(setupInput.token) ??
+        readOptionalString(setupInput.password),
+      secretFile: setupInput.secretFile ?? readOptionalString(setupInput.tokenFile),
+    };
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     applyAccountNameToChannelSection({
       cfg,

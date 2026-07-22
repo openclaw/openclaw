@@ -31,17 +31,20 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
 };
 
 import {
-  DEFAULT_SIDEBAR_PINNED_ROUTES,
-  normalizeSidebarPinnedRoutes,
-  type SidebarNavRoute,
+  DEFAULT_SIDEBAR_ENTRIES,
+  normalizeSidebarEntries,
+  SIDEBAR_NAV_ROUTES,
+  serializeSidebarEntry,
 } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
+import { normalizeBoardSessionViews, type BoardSessionViews } from "../lib/board/settings.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { normalizeChatSplitLayout, type ChatSplitLayout } from "../pages/chat/split-layout.ts";
 import { resolveControlUiBasePath } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
 import { normalizeGatewayTokenScope } from "./gateway-scope.ts";
+import { normalizePinnedAgentIds } from "./settings-normalizers.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeLocalUserIdentity, type LocalUserIdentity } from "./user-identity.ts";
 
@@ -51,39 +54,35 @@ export type TextScaleStop = (typeof TEXT_SCALE_STOPS)[number];
 const CHAT_SEND_SHORTCUTS = ["enter", "modifier-enter"] as const;
 export type ChatSendShortcut = (typeof CHAT_SEND_SHORTCUTS)[number];
 
-export function normalizeChatSendShortcut(value: unknown): ChatSendShortcut {
-  return CHAT_SEND_SHORTCUTS.includes(value as ChatSendShortcut)
-    ? (value as ChatSendShortcut)
-    : "enter";
+function normalizeChoice<T extends string>(
+  values: readonly T[],
+  fallback: T,
+): (value: unknown) => T {
+  return (value) => (values.includes(value as T) ? (value as T) : fallback);
 }
+
+export const normalizeChatSendShortcut = normalizeChoice(CHAT_SEND_SHORTCUTS, "enter");
+
+const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
+export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
+
+export const normalizeChatFollowUpMode = normalizeChoice(CHAT_FOLLOW_UP_MODES, "steer");
+
+export function normalizeChatFollowUpModeOverride(value: unknown): ChatFollowUpMode | undefined {
+  return CHAT_FOLLOW_UP_MODES.includes(value as ChatFollowUpMode)
+    ? (value as ChatFollowUpMode)
+    : undefined;
+}
+
+const CATALOG_OPEN_TARGETS = ["viewer", "terminal"] as const;
+export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
+
+export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
 const CHAT_WORKSPACE_DOCKS = ["right", "bottom"] as const;
 export type ChatWorkspaceDock = (typeof CHAT_WORKSPACE_DOCKS)[number];
 
-export function normalizeChatWorkspaceDock(value: unknown): ChatWorkspaceDock {
-  return CHAT_WORKSPACE_DOCKS.includes(value as ChatWorkspaceDock)
-    ? (value as ChatWorkspaceDock)
-    : "right";
-}
-
-/** Normalize a persisted pinned-agent list; unknown shapes fall back to []
-    and stale/duplicate ids are dropped without a migration. */
-function normalizePinnedAgentIds(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const pinned: string[] = [];
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const agentId = entry.trim();
-    if (agentId && !pinned.includes(agentId)) {
-      pinned.push(agentId);
-    }
-  }
-  return pinned;
-}
+export const normalizeChatWorkspaceDock = normalizeChoice(CHAT_WORKSPACE_DOCKS, "right");
 
 export function normalizeTextScale(value: unknown, fallback: TextScaleStop = 100): TextScaleStop {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -112,13 +111,22 @@ export type UiSettings = {
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
   chatSendShortcut?: ChatSendShortcut;
+  chatFollowUpMode?: ChatFollowUpMode; // Default handling for messages sent while a run is active
+  catalogOpenTarget?: CatalogOpenTarget;
   realtimeTalkInputDeviceId?: string;
+  realtimeTalkVideoDeviceId?: string;
+  composerHoldToRecord?: boolean;
+  // Camera intent is device-local, not per-agent or synced through config ui.prefs.
+  talkCameraAutoEnable?: boolean;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   chatSplitLayout?: ChatSplitLayout;
   chatWorkspaceDock?: ChatWorkspaceDock; // Session workspace rail dock edge (default "right")
+  boardSessionViews?: BoardSessionViews; // Last face and active dashboard tab per session
   navCollapsed: boolean; // Collapsible sidebar state
   navWidth: number; // Sidebar width when expanded (240–400px)
-  sidebarPinnedRoutes: SidebarNavRoute[]; // Nav routes shown above the "More" menu row
+  sidebarEntries: string[]; // Ordered routes, Workboard boards, and pinned sessions below Home
+  sidebarLiveActivity?: boolean; // Latest activity under running sidebar sessions (default true)
+  showAdvancedSettings?: boolean; // Expand advanced schema settings (default false)
   pinnedAgentIds?: string[]; // Agents surfaced first in the agent-chip quick switcher
   textScale?: TextScaleStop; // Browser-local text scale percentage
   customTheme?: ImportedCustomTheme;
@@ -344,14 +352,18 @@ export function loadSettings(): UiSettings {
     themeMode: "system",
     chatShowThinking: true,
     chatShowToolCalls: true,
-    chatPersistCommentary: false,
+    chatPersistCommentary: true,
     chatSendShortcut: "enter",
+    catalogOpenTarget: "viewer",
     splitRatio: 0.6,
     navCollapsed: false,
     navWidth: NAV_WIDTH_DEFAULT,
-    sidebarPinnedRoutes: [...DEFAULT_SIDEBAR_PINNED_ROUTES],
+    sidebarEntries: [...DEFAULT_SIDEBAR_ENTRIES],
+    sidebarLiveActivity: true,
+    showAdvancedSettings: false,
     pinnedAgentIds: [],
     textScale: 100,
+    composerHoldToRecord: true,
   };
 
   try {
@@ -375,6 +387,25 @@ export function loadSettings(): UiSettings {
       (parsed as { theme?: unknown }).theme,
       (parsed as { themeMode?: unknown }).themeMode,
     );
+    const parsedRecord = parsed as unknown as Record<string, unknown>;
+    const hasSidebarEntries = Object.hasOwn(parsedRecord, "sidebarEntries");
+    // One-time read of the retired route-only shape; all writes use sidebarEntries.
+    const migratedSidebarEntries = hasSidebarEntries
+      ? null
+      : Array.isArray(parsedRecord.sidebarPinnedRoutes)
+        ? normalizeSidebarEntries(
+            parsedRecord.sidebarPinnedRoutes.flatMap((value) =>
+              typeof value === "string" && SIDEBAR_NAV_ROUTES.some((route) => route === value)
+                ? [
+                    serializeSidebarEntry({
+                      type: "route",
+                      route: value as (typeof SIDEBAR_NAV_ROUTES)[number],
+                    }),
+                  ]
+                : [],
+            ),
+          )
+        : null;
     const settings: UiSettings = {
       gatewayUrl,
       // Gateway auth is intentionally in-memory only; scrub any legacy persisted token on load.
@@ -396,7 +427,16 @@ export function loadSettings(): UiSettings {
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
+      chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
+      catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
+      realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
+      composerHoldToRecord:
+        typeof parsed.composerHoldToRecord === "boolean"
+          ? parsed.composerHoldToRecord
+          : defaults.composerHoldToRecord,
+      talkCameraAutoEnable:
+        typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
@@ -405,6 +445,7 @@ export function loadSettings(): UiSettings {
           : defaults.splitRatio,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
+      boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
       navCollapsed:
         typeof parsed.navCollapsed === "boolean" ? parsed.navCollapsed : defaults.navCollapsed,
       navWidth:
@@ -413,8 +454,18 @@ export function loadSettings(): UiSettings {
         parsed.navWidth <= NAV_WIDTH_MAX
           ? parsed.navWidth
           : defaults.navWidth,
-      sidebarPinnedRoutes:
-        normalizeSidebarPinnedRoutes(parsed.sidebarPinnedRoutes) ?? defaults.sidebarPinnedRoutes,
+      sidebarEntries:
+        normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
+        migratedSidebarEntries ??
+        defaults.sidebarEntries,
+      sidebarLiveActivity:
+        typeof parsed.sidebarLiveActivity === "boolean"
+          ? parsed.sidebarLiveActivity
+          : defaults.sidebarLiveActivity,
+      showAdvancedSettings:
+        typeof parsed.showAdvancedSettings === "boolean"
+          ? parsed.showAdvancedSettings
+          : defaults.showAdvancedSettings,
       pinnedAgentIds: normalizePinnedAgentIds(parsed.pinnedAgentIds),
       textScale: normalizeTextScale(parsed.textScale, defaults.textScale),
       customTheme: customTheme ?? undefined,
@@ -424,7 +475,7 @@ export function loadSettings(): UiSettings {
     };
     // Scoped blobs from builds that persisted tokens durably get rewritten once
     // so the plaintext token leaves localStorage.
-    if ("token" in parsed) {
+    if ("token" in parsed || migratedSidebarEntries !== null) {
       persistSettings(settings, { selectGateway: true });
     }
     return settings;
@@ -437,14 +488,26 @@ export function saveSettings(next: UiSettings) {
   persistSettings(next);
 }
 
+// Single change seam over the one write channel every settings mutation uses;
+// the server-prefs sync (app/server-prefs.ts) listens here to write synced
+// prefs through to config ui.prefs without each call site knowing about it.
+type SettingsChangeListener = (previous: UiSettings, next: UiSettings) => void;
+let settingsChangeListener: SettingsChangeListener | null = null;
+
+export function setSettingsChangeListener(listener: SettingsChangeListener | null) {
+  settingsChangeListener = listener;
+}
+
 export function patchSettings(
   patch: Partial<UiSettings>,
   options: { selectGateway?: boolean } = {},
 ): UiSettings {
-  const next = { ...loadSettings(), ...patch };
+  const previous = loadSettings();
+  const next = { ...previous, ...patch };
   persistSettings(next, {
     selectGateway: options.selectGateway ?? patch.gatewayUrl !== undefined,
   });
+  settingsChangeListener?.(previous, next);
   return next;
 }
 
@@ -466,6 +529,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
   const storage = getSafeLocalStorage();
   const scope = normalizeGatewayTokenScope(next.gatewayUrl);
   const scopedKey = settingsKeyForGateway(next.gatewayUrl);
+  const chatFollowUpMode = normalizeChatFollowUpModeOverride(next.chatFollowUpMode);
   let existingSessionsByGateway: Record<string, ScopedSessionSelection> = {};
   try {
     const source = readSettingsForGateway(storage, next.gatewayUrl);
@@ -496,20 +560,36 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     themeMode: next.themeMode,
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
-    chatPersistCommentary: next.chatPersistCommentary ?? false,
+    chatPersistCommentary: next.chatPersistCommentary ?? true,
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }
       : {}),
+    ...(chatFollowUpMode ? { chatFollowUpMode } : {}),
+    ...(normalizeCatalogOpenTarget(next.catalogOpenTarget) === "terminal"
+      ? { catalogOpenTarget: "terminal" as const }
+      : {}),
     ...(normalizeOptionalString(next.realtimeTalkInputDeviceId)
       ? { realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId) }
+      : {}),
+    ...(normalizeOptionalString(next.realtimeTalkVideoDeviceId)
+      ? { realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId) }
+      : {}),
+    ...(next.composerHoldToRecord === false ? { composerHoldToRecord: false } : {}),
+    ...(typeof next.talkCameraAutoEnable === "boolean"
+      ? { talkCameraAutoEnable: next.talkCameraAutoEnable }
       : {}),
     splitRatio: next.splitRatio,
     ...(next.chatSplitLayout ? { chatSplitLayout: next.chatSplitLayout } : {}),
     // Right dock is the default; only the opt-in bottom dock persists.
     ...(next.chatWorkspaceDock === "bottom" ? { chatWorkspaceDock: "bottom" as const } : {}),
+    ...(next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
+      ? { boardSessionViews: normalizeBoardSessionViews(next.boardSessionViews) }
+      : {}),
     navCollapsed: next.navCollapsed,
     navWidth: next.navWidth,
-    sidebarPinnedRoutes: next.sidebarPinnedRoutes,
+    sidebarEntries: next.sidebarEntries,
+    ...(next.sidebarLiveActivity === false ? { sidebarLiveActivity: false } : {}),
+    ...(next.showAdvancedSettings === true ? { showAdvancedSettings: true } : {}),
     // Empty pin list is the default; only real pins persist.
     ...(next.pinnedAgentIds && next.pinnedAgentIds.length > 0
       ? { pinnedAgentIds: next.pinnedAgentIds }

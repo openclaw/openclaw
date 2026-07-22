@@ -63,6 +63,7 @@ import {
   type PluginHookBeforeToolCallResult,
   type PluginHookToolInputKind,
   type PluginHookToolKind,
+  type PluginHookToolRequesterContext,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import {
@@ -71,16 +72,25 @@ import {
 } from "../skills/loading/source.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
 import { resolveSkillWorkshopToolApproval } from "../skills/workshop/policy.js";
+import { resolveClientVoiceToolConfirmationPolicy } from "../talk/client-voice-confirmation.js";
+import {
+  isClientVoiceSessionConfirmable,
+  resolveClientVoiceRunBinding,
+} from "../talk/client-voice-session.js";
 import { isPlainObject, truncateUtf16Safe } from "../utils.js";
 import {
   adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
+  clearTrackedToolExecution,
   preExecutionBlockedToolCallIds,
+  recordToolExecutionTracked,
+  recordToolExecutionStarted,
   recordStructuredReplaySafeToolCall,
   structuredReplaySafeToolCallIds,
 } from "./agent-tools.before-tool-call.state.js";
 import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { buildToolMutationState } from "./tool-mutation.js";
 export {
   consumeAdjustedParamsForToolCall,
   consumePreExecutionBlockedToolCall,
@@ -146,6 +156,8 @@ export type HookContext = {
   approvalReviewerDeviceId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Host-derived message requester for sender-aware tool hooks. */
+  requester?: PluginHookToolRequesterContext;
   /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
   turnSourceChannel?: string;
   turnSourceTo?: string;
@@ -216,7 +228,7 @@ export type DeferredPluginToolApproval = {
 };
 
 type BeforeToolCallWrapperOptions = {
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   emitDiagnostics: boolean;
 };
 type BeforeToolCallPreparingTool = AnyAgentTool & {
@@ -366,11 +378,21 @@ export function finalizeToolTerminalPresentation(params: {
 /**
  * Error used when before_tool_call intentionally vetoes a tool call.
  */
-export class BeforeToolCallBlockedError extends Error {
+class BeforeToolCallBlockedError extends Error {
   constructor(readonly reason: string) {
     super(reason);
     this.name = "BeforeToolCallBlockedError";
   }
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.beforeToolCallBlockedErrorTestApi")
+  ] = {
+    create(message: string): Error {
+      return new BeforeToolCallBlockedError(message);
+    },
+  };
 }
 
 class BeforeToolCallFailureError extends Error {
@@ -1202,7 +1224,7 @@ export function cancelDeferredPluginToolApproval(
 
 async function resolveBeforeToolCallApprovalOutcome(params: {
   result: PluginHookBeforeToolCallResult | undefined;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   toolName: string;
   toolCallId?: string;
   ctx?: HookContext;
@@ -1239,6 +1261,16 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
       params: params.baseParams,
     };
   }
+  if (params.approvalMode === "deny") {
+    notifyPluginApprovalResolution(approval, PluginApprovalResolutions.DENY);
+    return {
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-approval",
+      reason: "approval_required",
+      params: params.baseParams,
+    };
+  }
   return await requestPluginToolApproval({
     approval,
     toolName: params.toolName,
@@ -1253,7 +1285,7 @@ async function resolveBeforeToolCallApprovalOutcome(params: {
 async function resolveSkillWorkshopApprovalForFinalParams(params: {
   toolName: string;
   params: unknown;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
@@ -1275,6 +1307,16 @@ async function resolveSkillWorkshopApprovalForFinalParams(params: {
   });
 }
 
+// Success output schemas do not describe policy-layer terminal results. Track
+// identity so catalog boundaries can reject them without trusting spoofable status fields.
+const preExecutionBlockedToolResults = new WeakSet<object>();
+
+export function isPreExecutionBlockedToolResult(result: unknown): boolean {
+  return (
+    result !== null && typeof result === "object" && preExecutionBlockedToolResults.has(result)
+  );
+}
+
 /** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
@@ -1283,7 +1325,7 @@ export function buildBlockedToolResult(params: {
   runId?: string;
 }) {
   recordPreExecutionBlockedToolCall(params.toolCallId, params.runId);
-  return {
+  const result = {
     content: [{ type: "text" as const, text: params.reason }],
     details: {
       status: "blocked",
@@ -1291,6 +1333,8 @@ export function buildBlockedToolResult(params: {
       reason: params.reason,
     },
   };
+  preExecutionBlockedToolResults.add(result);
+  return result;
 }
 
 // Build the private (trusted-listener-only) tool content payload for a tool
@@ -1412,7 +1456,7 @@ export async function runBeforeToolCallHook(args: {
   toolCallId?: string;
   ctx?: HookContext;
   signal?: AbortSignal;
-  approvalMode?: "request" | "report" | "defer";
+  approvalMode?: "request" | "report" | "deny" | "defer";
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
@@ -1498,6 +1542,24 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
     });
+    const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
+    const voiceConfirmation = resolveClientVoiceToolConfirmationPolicy({
+      agentId: voiceRun?.agentId,
+      voiceSessionId: voiceRun?.voiceSessionId,
+      runId: args.ctx?.runId,
+      toolName,
+      toolParams: normalizedParams,
+      ...(voiceRun ? { isConfirmable: () => isClientVoiceSessionConfirmable(voiceRun) } : {}),
+    });
+    if (!voiceConfirmation.allowed) {
+      return {
+        blocked: true,
+        kind: "veto",
+        deniedReason: "plugin-before-tool-call",
+        reason: voiceConfirmation.reason,
+        params,
+      };
+    }
     if (!initialCorePolicyResult && !shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
       return { blocked: false, params };
     }
@@ -1527,6 +1589,7 @@ export async function runBeforeToolCallHook(args: {
       ...(args.ctx?.trace && { trace: freezeDiagnosticTraceContext(args.ctx.trace) }),
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
+      ...(args.ctx?.requester ? { requester: args.ctx.requester } : {}),
     });
     const toolContext = buildToolContext(toolIdentity);
     const trustedPolicyResult = shouldRunTrustedPolicies
@@ -1722,11 +1785,10 @@ export async function runBeforeToolCallHook(args: {
   }
 }
 
-/** Wrap a tool execute function with before_tool_call hooks and diagnostics. */
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -1738,14 +1800,10 @@ export function wrapToolWithBeforeToolCallHook(
     ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
     emitDiagnostics: options.emitDiagnostics !== false,
   };
-  // Resolved once per wrap from the same opt-in config gate the model-content
-  // path uses; controls whether tool input/output rides the trusted private channel.
   const toolContentPolicy = resolveDiagnosticModelContentCapturePolicy(ctx?.config);
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
-      // Allocate before any async preparation so parallel completions retain
-      // the assistant message's tool-call order.
       const toolCallOrdinal = ctx?.allocateToolOutcomeOrdinal?.(toolCallId);
       const preExecutionStartedAt = Date.now();
       const normalizedToolName = normalizeToolName(toolName || "tool");
@@ -1763,6 +1821,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...diagnosticIdentity,
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(toolParams),
+        mutatingAction: buildToolMutationState(normalizedToolName, toolParams).mutatingAction,
       });
       const recordPreExecutionError = (
         error: unknown,
@@ -1885,6 +1944,8 @@ export function wrapToolWithBeforeToolCallHook(
       }
       let executeParams: unknown;
       try {
+        // Stop cancellation-ignoring hooks before the synchronous mutation boundary.
+        signal?.throwIfAborted();
         executeParams = reconcileCodeModeExecBeforeHookParams({
           tool,
           originalParams: preparedParams,
@@ -1902,6 +1963,7 @@ export function wrapToolWithBeforeToolCallHook(
       }
       recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
       const eventBase = buildEventBase(executeParams);
+      recordToolExecutionStarted(toolCallId, ctx?.runId);
       if (hookOptions.emitDiagnostics) {
         emitTrustedDiagnosticEvent({
           type: "tool.execution.started",
@@ -1988,6 +2050,18 @@ export function wrapToolWithBeforeToolCallHook(
       }
     },
   };
+  const executeWithHooks = wrappedTool.execute;
+  wrappedTool.execute = async (toolCallId, params, signal, onUpdate) => {
+    recordToolExecutionTracked(toolCallId, ctx?.runId);
+    try {
+      return await executeWithHooks(toolCallId, params, signal, onUpdate);
+    } finally {
+      // Timeout observers may consume this while the call is still pending. The
+      // wrapper owns final cleanup; every pre-body settle records the separate
+      // blocked fact, so direct callers cannot retain settled ids.
+      clearTrackedToolExecution(toolCallId, ctx?.runId);
+    }
+  };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
   copyToolTerminalPresentation(tool, wrappedTool);
@@ -2014,7 +2088,7 @@ export function wrapToolWithBeforeToolCallHook(
 export function rewrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report" | "deny"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const taggedTool = tool as unknown as Record<symbol, unknown>;
   const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
@@ -2027,8 +2101,7 @@ export function rewrapToolWithBeforeToolCallHook(
   if (sourceTool === tool) {
     return wrapToolWithBeforeToolCallHook(tool, ctx ?? preservedContext, options);
   }
-  // Keep schema and metadata replacements applied after the original wrap while
-  // restoring the unwrapped execute function for the new hook context.
+  // Preserve post-wrap schema/metadata while restoring the source execute function.
   const rewrapSource: AnyAgentTool = {
     ...tool,
     execute: sourceTool.execute,
@@ -2054,21 +2127,6 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
   }
 }
 
-/** Test-only access to before_tool_call internals. */
-export const testing = {
-  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
-  BEFORE_TOOL_CALL_HOOK_CONTEXT,
-  BEFORE_TOOL_CALL_SOURCE_TOOL,
-  BEFORE_TOOL_CALL_WRAPPED,
-  buildAdjustedParamsKey,
-  adjustedParamsByToolCallId,
-  preExecutionBlockedToolCallIds,
-  structuredReplaySafeToolCallIds,
-  runBeforeToolCallHook,
-  mergeParamsWithApprovalOverrides,
-  isPlainObject,
-};
-
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -2082,3 +2140,4 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   }
   return error;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

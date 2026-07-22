@@ -63,6 +63,7 @@ import {
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "./setup-wizard-helpers.js";
+import type { ChannelSetupAdapter } from "./types.adapters.js";
 
 const matrixSingleAccountKeysToMove = [
   "allowBots",
@@ -81,7 +82,11 @@ const matrixNamedAccountPromotionKeys = [
   "homeserver",
   "userId",
 ] as const;
-const telegramSingleAccountKeysToMove = ["streaming"] as const;
+const telegramSingleAccountKeysToMove = ["streaming", "webhookSecret"] as const;
+const telegramSetupSurface = {
+  applyAccountConfig: ({ cfg }) => cfg,
+  singleAccountKeysToMove: telegramSingleAccountKeysToMove,
+} as ChannelSetupAdapter;
 
 function collectNamedAccountIds(accounts: Record<string, unknown>): string[] {
   const ids: string[] = [];
@@ -764,7 +769,7 @@ describe("parsed allowFrom prompt builders", () => {
 
   it("builds a nested parsed allowFrom prompt", async () => {
     const promptAllowFrom = createNestedChannelParsedAllowFromPrompt({
-      channel: "googlechat",
+      channel: "matrix",
       section: "dm",
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       enabled: true,
@@ -778,8 +783,8 @@ describe("parsed allowFrom prompt builders", () => {
       prompter: createPrompter(["users/123"]),
     });
 
-    expect(next.channels?.googlechat?.enabled).toBe(true);
-    expect(next.channels?.googlechat?.dm?.allowFrom).toEqual(["users/123"]);
+    expect(next.channels?.matrix?.enabled).toBe(true);
+    expect(next.channels?.matrix?.dm?.allowFrom).toEqual(["users/123"]);
   });
 });
 
@@ -937,6 +942,7 @@ describe("patchChannelConfigForAccount", () => {
           allowFrom: ["100"],
           groupPolicy: "allowlist",
           streaming: { mode: "partial" },
+          webhookSecret: "legacy-webhook-secret",
         },
       },
     };
@@ -946,6 +952,7 @@ describe("patchChannelConfigForAccount", () => {
       channel: "telegram",
       accountId: "work",
       patch: { botToken: "work-token" },
+      setupSurface: telegramSetupSurface,
     });
 
     expect(next.channels?.telegram?.accounts?.default).toEqual({
@@ -953,11 +960,13 @@ describe("patchChannelConfigForAccount", () => {
       allowFrom: ["100"],
       groupPolicy: "allowlist",
       streaming: { mode: "partial" },
+      webhookSecret: "legacy-webhook-secret",
     });
     expect(next.channels?.telegram?.botToken).toBeUndefined();
     expect(next.channels?.telegram?.allowFrom).toBeUndefined();
     expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
     expect(next.channels?.telegram?.streaming).toBeUndefined();
+    expect(next.channels?.telegram?.webhookSecret).toBeUndefined();
     expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
   });
 
@@ -1019,7 +1028,7 @@ describe("setSetupChannelEnabled", () => {
 
 describe("setLegacyChannelDmPolicyWithAllowFrom", () => {
   it("adds wildcard allowFrom for open policy using legacy dm allowFrom fallback", () => {
-    const cfg: OpenClawConfig = {
+    const cfg = {
       channels: {
         discord: {
           dm: {
@@ -1028,7 +1037,7 @@ describe("setLegacyChannelDmPolicyWithAllowFrom", () => {
           },
         },
       },
-    };
+    } as unknown as OpenClawConfig;
 
     const next = setLegacyChannelDmPolicyWithAllowFrom({
       cfg,
@@ -1319,14 +1328,14 @@ describe("setNestedChannelAllowFrom", () => {
   it("writes nested allowFrom and can force enabled state", () => {
     const next = setNestedChannelAllowFrom({
       cfg: {},
-      channel: "googlechat",
+      channel: "matrix",
       section: "dm",
       allowFrom: ["users/123"],
       enabled: true,
     });
 
-    expect(next.channels?.googlechat?.enabled).toBe(true);
-    expect(next.channels?.googlechat?.dm?.allowFrom).toEqual(["users/123"]);
+    expect(next.channels?.matrix?.enabled).toBe(true);
+    expect(next.channels?.matrix?.dm?.allowFrom).toEqual(["users/123"]);
   });
 });
 
@@ -1394,28 +1403,28 @@ describe("createNestedChannelDmPolicy", () => {
 describe("createNestedChannelDmPolicySetter", () => {
   it("reuses the shared nested dmPolicy writer", () => {
     const setPolicy = createNestedChannelDmPolicySetter({
-      channel: "googlechat",
+      channel: "matrix",
       section: "dm",
       enabled: true,
     });
     const next = setPolicy({}, "disabled");
 
-    expect(next.channels?.googlechat?.enabled).toBe(true);
-    expect(next.channels?.googlechat?.dm?.policy).toBe("disabled");
+    expect(next.channels?.matrix?.enabled).toBe(true);
+    expect(next.channels?.matrix?.dm?.policy).toBe("disabled");
   });
 });
 
 describe("createNestedChannelAllowFromSetter", () => {
   it("reuses the shared nested allowFrom writer", () => {
     const setAllowFrom = createNestedChannelAllowFromSetter({
-      channel: "googlechat",
+      channel: "matrix",
       section: "dm",
       enabled: true,
     });
     const next = setAllowFrom({}, ["users/123"]);
 
-    expect(next.channels?.googlechat?.enabled).toBe(true);
-    expect(next.channels?.googlechat?.dm?.allowFrom).toEqual(["users/123"]);
+    expect(next.channels?.matrix?.enabled).toBe(true);
+    expect(next.channels?.matrix?.dm?.allowFrom).toEqual(["users/123"]);
   });
 });
 
@@ -1448,7 +1457,7 @@ describe("createLegacyCompatChannelDmPolicy", () => {
             },
           },
         },
-      }),
+      } as unknown as OpenClawConfig),
     ).toBe("open");
 
     const next = dmPolicy.setPolicy(
@@ -1460,7 +1469,7 @@ describe("createLegacyCompatChannelDmPolicy", () => {
             },
           },
         },
-      },
+      } as unknown as OpenClawConfig,
       "open",
     );
 
@@ -1974,3 +1983,4 @@ describe("resolveAccountIdForConfigure", () => {
     expect(prompter.text).not.toHaveBeenCalled();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

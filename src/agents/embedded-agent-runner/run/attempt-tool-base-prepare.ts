@@ -8,7 +8,6 @@ import { getChannelAgentToolMeta } from "../../channel-tools.js";
 import { resolveCodeModeConfig } from "../../code-mode.js";
 import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
 import {
-  applyLocalModelLeanToolSearchDefaults,
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "../../local-model-lean.js";
@@ -16,6 +15,7 @@ import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import type { SandboxContext } from "../../sandbox/types.js";
 import { isAgentToolRestartSafe } from "../../tool-replay-safety.js";
+import { resolveAgentToolSearchRuntimeConfig } from "../../tool-search-runtime-config.js";
 import {
   createToolSearchCatalogRef,
   resolveToolSearchConfig,
@@ -63,6 +63,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
     attempt.toolsAllow,
     {
       forceMessageTool: forceDirectMessageTool,
+      forceToolNames:
+        attempt.swarmCollector && attempt.swarmOutputSchema ? ["structured_output"] : undefined,
     },
   );
   const toolsEnabled = supportsModelTools(attempt.model);
@@ -75,13 +77,12 @@ export function prepareEmbeddedAttemptToolBase(params: {
     toolsAllow: toolsAllowWithForcedRuntimeTools,
   });
   const codeModeConfig = resolveCodeModeConfig(attempt.config, params.sessionAgentId);
-  const toolSearchRuntimeConfig = forceDirectMessageTool
-    ? attempt.config
-    : applyLocalModelLeanToolSearchDefaults({
-        config: attempt.config,
-        agentId: params.sessionAgentId,
-        sessionKey: params.sandboxSessionKey,
-      });
+  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+    config: attempt.config,
+    agentId: params.sessionAgentId,
+    sessionKey: params.sandboxSessionKey,
+    forceDirectMessageTool,
+  });
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const codeModeControlsEnabledForRun =
     toolsEnabled &&
@@ -168,6 +169,10 @@ export function prepareEmbeddedAttemptToolBase(params: {
     skillsSnapshot: params.skillsSnapshot,
     sandboxToolPolicy: params.sandbox?.tools,
     runtimeToolAllowlist: effectiveToolsAllow,
+    inheritRuntimeToolAllowlist: true,
+    runtimePluginToolGrant: attempt.runtimePluginToolGrant,
+    inputProvenance: attempt.inputProvenance,
+    trustedInternalHandoff: attempt.trustedInternalHandoff,
   });
   const localModelLeanEnabled = isLocalModelLeanEnabled({
     config: attempt.config,
@@ -205,6 +210,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           ...buildEmbeddedAttemptToolRunContext({ ...attempt, trace: params.runTrace }),
           messageChannel: attempt.messageChannel,
           clientCaps: attempt.clientCaps,
+          toolBindings: attempt.toolBindings,
           chatType: attempt.chatType,
           exec: {
             ...attempt.execOverrides,
@@ -237,10 +243,12 @@ export function prepareEmbeddedAttemptToolBase(params: {
               : undefined,
           sessionId: attempt.sessionId,
           runId: attempt.runId,
+          conversationRecall: attempt.conversationRecall,
           approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
           oneShotCliRun: attempt.oneShotCliRun,
           toolSearchCatalogRef,
           agentDir: params.agentDir,
+          preparedModelRuntime: attempt.preparedModelRuntime,
           cwd: params.effectiveCwd,
           workspaceDir: params.effectiveWorkspace,
           spawnWorkspaceDir,
@@ -258,6 +266,7 @@ export function prepareEmbeddedAttemptToolBase(params: {
           modelCompat: extractModelCompat(attempt.model),
           modelApi: attempt.model.api,
           modelContextWindowTokens: attempt.model.contextWindow,
+          delegationCapability: attempt.delegationCapability,
           modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
             workspaceDir: params.effectiveWorkspace,
           }),
@@ -287,6 +296,8 @@ export function prepareEmbeddedAttemptToolBase(params: {
           taskSuggestionDeliveryMode: attempt.taskSuggestionDeliveryMode,
           inboundEventKind: attempt.currentInboundEventKind,
           disableMessageTool: attempt.disableMessageTool,
+          swarmCollector: attempt.swarmCollector,
+          swarmOutputSchema: attempt.swarmOutputSchema,
           forceMessageTool: attempt.forceMessageTool,
           enableHeartbeatTool: attempt.enableHeartbeatTool,
           forceHeartbeatTool: attempt.forceHeartbeatTool,

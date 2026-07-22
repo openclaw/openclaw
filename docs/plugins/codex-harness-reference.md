@@ -46,12 +46,13 @@ Top-level fields:
 | `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                                    |
 | `codexPlugins`             | disabled                 | Native Codex plugin/app support, including opt-in access to connected account apps. See [Native Codex plugins](/plugins/codex-native-plugins). |
 | `computerUse`              | disabled                 | Codex Computer Use setup. See [Codex Computer Use](/plugins/codex-computer-use).                                                               |
-| `supervision`              | disabled                 | Non-archived native-session catalog, local branch continuation, and agent-tool policy. See [Codex supervision](/plugins/codex-supervision).    |
+| `sessionCatalog`           | enabled                  | Native Codex session discovery for the sidebar. Set `enabled: false` to disable discovery without disabling the provider or harness.           |
+| `supervision`              | disabled                 | Agent-facing native-session transcript and write-control policy. See [Codex supervision](/plugins/codex-supervision).                          |
 
 ## Supervision
 
-Supervision lists non-archived Codex sessions from the Gateway computer and
-opted-in paired nodes. Enable it independently from the agent harness:
+Native session discovery lists non-archived Codex sessions from the Gateway
+computer and opted-in paired nodes by default. Disable only that catalog with:
 
 ```json5
 {
@@ -60,8 +61,8 @@ opted-in paired nodes. Enable it independently from the agent harness:
       codex: {
         enabled: true,
         config: {
-          supervision: {
-            enabled: true,
+          sessionCatalog: {
+            enabled: false,
           },
         },
       },
@@ -70,11 +71,11 @@ opted-in paired nodes. Enable it independently from the agent harness:
 }
 ```
 
-`supervision` fields:
+`supervision` separately controls agent-facing tools:
 
 | Field                 | Default                 | Meaning                                                                                                                                                                                                                                   |
 | --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`             | `false`                 | Advertise the local session catalog and, on the Gateway, aggregate opted-in paired-node catalogs for the Codex Sessions page.                                                                                                             |
+| `enabled`             | `false`                 | Enable agent-facing Codex supervision tools. This does not control the authenticated operator session catalog.                                                                                                                            |
 | `endpoints`           | built-in local endpoint | Compatibility and advanced endpoint targets for the retained Codex supervision agent and standalone MCP tools. The human catalog and branch flow ignore these targets and use the supervision App Server resolved from `appServer`.       |
 | `allowRawTranscripts` | `false`                 | With supervision enabled, allow autonomous agent or standalone MCP transcript reads and transcript-derived list fields. `codex_threads` metadata-only reads remain available. Does not control authenticated Control UI continuation.     |
 | `allowWriteControls`  | `false`                 | With supervision enabled, allow autonomous `codex_threads` fork, rename, archive, and unarchive mutations plus standalone MCP send, steer, and interrupt operations. Does not bypass other binding, host, status, or confirmation checks. |
@@ -130,7 +131,7 @@ flags, and plugin allow/deny references into this block. Explicit canonical
 ## App-server transport
 
 For ordinary harness turns, OpenClaw starts the managed Codex binary shipped
-with the official plugin (currently `@openai/codex` `0.144.3`):
+with the official plugin (currently `@openai/codex` `0.144.6`):
 
 ```bash
 codex app-server --listen stdio://
@@ -161,7 +162,8 @@ with native clients. A private supervised binding uses the supervision
 connection regardless of the ordinary harness default. Independent App Server
 processes retain separate live status and approval state.
 
-For an already-running app-server, use WebSocket transport:
+For non-production testing against an already-running app-server, WebSocket
+transport is available:
 
 ```json5
 {
@@ -183,6 +185,9 @@ For an already-running app-server, use WebSocket transport:
 }
 ```
 
+Codex classifies WebSocket transport as experimental and unsupported. Prefer
+managed stdio or the local Unix control socket for production workloads.
+
 `appServer` fields:
 
 | Field                                         | Default                                                | Meaning                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -196,8 +201,10 @@ For an already-running app-server, use WebSocket transport:
 | `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                             |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
+| `loopDetectionPreToolUseRelay`                | `true`                                                 | Install the Codex `PreToolUse` subprocess used only for OpenClaw loop detection and its explicit no-policy marker. Set `false` to reduce per-tool process fan-out. Before-tool plugin hooks and trusted-tool policy still install their required relay.                                                                                                                                         |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
 | `turnCompletionIdleTimeoutMs`                 | `60000`                                                | Quiet window after Codex accepts a turn or after a turn-scoped app-server request while OpenClaw waits for `turn/completed`.                                                                                                                                                                                                                                                                    |
+| `turnAssistantCompletionIdleTimeoutMs`        | `10000`                                                | Quiet window after a final/non-commentary assistant item or pre-tool raw assistant completion arms the assistant-output release while OpenClaw still waits for `turn/completed`. Raising it gives Codex more time to emit `turn/completed` before OpenClaw interrupts and releases the session lane.                                                                                            |
 | `postToolRawAssistantCompletionIdleTimeoutMs` | `300000`                                               | Completion-idle and progress guard used after a tool handoff, native tool completion, post-tool raw assistant progress, raw reasoning completion, or reasoning progress while OpenClaw waits for `turn/completed`. Use this for trusted or heavy workloads where post-tool synthesis can legitimately stay quiet longer than the final assistant release budget.                                |
 | `mode`                                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                 |
 | `approvalPolicy`                              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                            |
@@ -246,8 +253,9 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin blocks older or unversioned app-server handshakes: Codex app-server
-must report stable version `0.143.0` or newer.
+The plugin blocks older, newer-unvalidated, prerelease, build-suffixed, or
+unversioned app-server handshakes. Codex app-server must report a stable version
+from `0.143.0` through the bundled `0.144.6`.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
@@ -466,9 +474,9 @@ and `HOME` stays inherited so subprocesses can use normal user-home state.
 ## Dynamic tools
 
 Codex dynamic tools default to `searchable` loading, exposed under the
-`openclaw` namespace with `deferLoading: true`. OpenClaw does not expose
-dynamic tools that duplicate Codex-native workspace operations or Codex's own
-tool-search surface:
+`openclaw` namespace with `deferLoading: true`. OpenClaw normally does not
+expose dynamic tools that duplicate Codex-native workspace operations or
+Codex's own tool-search surface:
 
 - `read`
 - `write`
@@ -481,6 +489,11 @@ tool-search surface:
 - `tool_describe`
 - `tool_search`
 - `tool_search_code`
+
+When a finite runtime allowlist disables native Code Mode, OpenClaw sends an
+empty execution-environment selection. In that direct, unsandboxed case,
+OpenClaw keeps its policy-filtered `exec` and `process` tools as the shell
+fallback. Runtime allowlists and `codexDynamicToolsExclude` still apply.
 
 Most remaining OpenClaw integration tools, such as messaging, media, cron,
 browser, nodes, gateway, `heartbeat_respond`, and `web_search`, are available
@@ -514,10 +527,10 @@ OpenClaw-owned dynamic tool calls are bounded independently from
 first available timeout in this order:
 
 - A positive per-call `timeoutMs` argument.
-- For `image_generate`, `agents.defaults.imageGenerationModel.timeoutMs`.
+- For `image_generate`, `agents.defaults.mediaModels.image.timeoutMs`.
 - For `image_generate` without a configured timeout, the 120 second
   image-generation default.
-- For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
+- For the media-understanding `image` tool, the selected image-capable `tools.media.models[]` entry's `timeoutSeconds`
   converted to milliseconds, or the 60 second media default. For image
   understanding, this applies to the request itself and is not reduced by
   earlier preparation work.
@@ -586,7 +599,7 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog:
 | `gpt-5.4-mini` | GPT-5.4-Mini | low, medium, high, xhigh |
 
 <Note>
-The current bundled harness is `@openai/codex` `0.144.3`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.144.6`. A `model/list` probe
 against that bundled app-server returned these public picker rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |

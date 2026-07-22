@@ -1,4 +1,9 @@
-import { setActiveEmbeddedRun } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
+  embeddedAgentLog,
+  setActiveEmbeddedRun,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   interruptCodexTurnBestEffort,
   retireCodexAppServerClientAfterTimedOutTurn,
@@ -87,6 +92,7 @@ export async function activateCodexAttemptTurn(
       runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+      upstreamUserText: turnState.codexTurnPromptText,
       onContextCompacted: () => {
         computerContextEpoch.value += 1;
         delete computerContextEpoch.frameToolCallId;
@@ -138,21 +144,44 @@ export async function activateCodexAttemptTurn(
     client: resourceState.client,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
-    answerPendingUserInput: (text) =>
-      userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
+    claimPendingUserInput: () => userInputBridgeRef.current?.claimPendingRequest(),
     signal: runAbortController.signal,
   });
   steeringQueueRef.current = activeSteeringQueue;
   const handle = {
     kind: "embedded" as const,
     runId: params.runId,
-    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
-      activeSteeringQueue.queue(text, optionsLocal),
+    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) => {
+      const isInboundUserMessage = optionsLocal?.isInboundUserMessage === true;
+      if (isInboundUserMessage && !optionsLocal?.images?.length) {
+        const claimed = await claimPendingAgentQuestionAnswer({
+          sessionKey: params.sessionKey ?? params.sessionId,
+          text,
+        });
+        if (claimed) {
+          return;
+        }
+      } else if (isInboundUserMessage) {
+        try {
+          await cancelPendingAgentQuestionForSession({
+            sessionKey: params.sessionKey ?? params.sessionId,
+            resolvedBy: "image-reply",
+          });
+        } catch (error) {
+          // Cleanup failure must not drop the user's image turn.
+          embeddedAgentLog.warn("failed to cancel codex gateway question before image steering", {
+            error,
+          });
+        }
+      }
+      await activeSteeringQueue.queue(text, optionsLocal);
+    },
     isStreaming: () => !state.completed && !runAbortController.signal.aborted,
     isStopped: () => state.completed || state.timedOut || runAbortController.signal.aborted,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+    supportsQueueMessageImages: true,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => abortExplicitly("cancelled"),
     abort: () => abortExplicitly("aborted"),
@@ -175,6 +204,7 @@ export async function activateCodexAttemptTurn(
     cwd: effectiveCwd,
     threadId: resourceState.thread.threadId,
     turnId: activeTurnId,
+    upstreamUserText: turnState.codexTurnPromptText,
   });
   const abortListener = () => {
     if (state.timedOut) {

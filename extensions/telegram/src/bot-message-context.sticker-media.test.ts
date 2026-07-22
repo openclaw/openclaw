@@ -20,7 +20,6 @@ const inboundBodyMock = vi.hoisted(() =>
       wasMentioned: false,
       effectiveWasMentioned: false,
       requireMention: false,
-      shouldSkip: false,
     },
     canDetectMention: true,
     shouldBypassMention: false,
@@ -62,6 +61,7 @@ describe("buildTelegramMessageContext sticker media", () => {
         {
           path: stickerPath,
           contentType: "image/webp",
+          kind: "sticker",
           stickerMetadata: {
             emoji: "🔥",
             setName: "NewSet",

@@ -6,7 +6,9 @@ import {
 import {
   ErrorCodes,
   type ErrorShape,
+  type SessionCreatorIdentity,
   errorShape,
+  missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import {
@@ -16,6 +18,10 @@ import {
 } from "../agents/agent-scope.js";
 import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import {
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import {
   forkSessionFromParent,
@@ -28,6 +34,7 @@ import {
   createSessionEntryWithTranscript,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
+import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createInternalHookEvent,
@@ -35,6 +42,7 @@ import {
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import {
+  isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
@@ -51,9 +59,12 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
+import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
-import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -68,6 +79,94 @@ const loadSessionLifecycleRuntime = createLazyRuntimeModule(
 type RequestedSessionAgentIdResolution =
   | { ok: true; agentId?: string }
   | { ok: false; error: ErrorShape };
+
+async function existingModelSelectionWouldChange(params: {
+  cfg: OpenClawConfig;
+  catalogModel?: string;
+  defaultModel: string;
+  defaultProvider: string;
+  existingEntry: SessionEntry;
+  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  requestedModel?: string;
+  requestedThinkingLevel?: string;
+  subagentModelHint?: string;
+}): Promise<boolean> {
+  if (params.catalogModel) {
+    // Public catalog creates cannot include a key, and the service rejects
+    // catalog targets for existing rows. If a trusted caller reaches this,
+    // keep catalog-owned model/runtime adoption fail-closed.
+    return true;
+  }
+  const requestedThinkingLevel = normalizeOptionalString(params.requestedThinkingLevel);
+  if (
+    requestedThinkingLevel &&
+    requestedThinkingLevel !== normalizeOptionalString(params.existingEntry.thinkingLevel)
+  ) {
+    return true;
+  }
+  const requestedModel = normalizeOptionalString(params.requestedModel);
+  if (!requestedModel) {
+    return false;
+  }
+  if (!params.loadGatewayModelCatalog) {
+    // Public/TUI model selection paths provide the catalog loader used by the
+    // patch resolver. Without it, an existing-row model request cannot prove
+    // it is a no-op, so non-admin callers must not reach the mutation path.
+    return true;
+  }
+  const catalog = await params.loadGatewayModelCatalog();
+  const resolved = resolveSessionPatchModelSelection({
+    cfg: params.cfg,
+    catalog,
+    raw: requestedModel,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+    subagentModelHint: params.subagentModelHint,
+  });
+  if (!resolved.ok) {
+    // Admin callers still receive the precise model error from sessions.patch.
+    // Non-admin existing-row creates fail closed before that mutation path.
+    return true;
+  }
+  let existingProvider =
+    normalizeOptionalString(params.existingEntry.providerOverride) ?? params.defaultProvider;
+  let existingModel =
+    normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
+  if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
+    const resolvedSubagentDefault = resolveSessionPatchModelSelection({
+      cfg: params.cfg,
+      catalog,
+      raw: params.subagentModelHint,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.defaultModel,
+    });
+    if (!resolvedSubagentDefault.ok) {
+      return true;
+    }
+    if (!normalizeOptionalString(params.existingEntry.providerOverride)) {
+      existingProvider = resolvedSubagentDefault.provider;
+    }
+    existingModel = resolvedSubagentDefault.model;
+  }
+  const existingProfile = normalizeOptionalString(params.existingEntry.authProfileOverride);
+  const requestedProfile = normalizeOptionalString(resolved.profile);
+  const profileWouldChange =
+    requestedProfile !== undefined
+      ? requestedProfile !== existingProfile
+      : existingProfile !== undefined &&
+        !shouldPreserveSessionAuthProfileOverride({
+          cfg: params.cfg,
+          currentProvider:
+            params.existingEntry.providerOverride ??
+            params.existingEntry.modelProvider ??
+            params.defaultProvider,
+          entry: params.existingEntry,
+          provider: resolved.provider,
+        });
+  return (
+    resolved.provider !== existingProvider || resolved.model !== existingModel || profileWouldChange
+  );
+}
 
 export function resolveRequestedSessionAgentId(
   cfg: OpenClawConfig,
@@ -124,34 +223,6 @@ export function buildDashboardSessionKey(agentId: string): string {
   return `agent:${agentId}:dashboard:${randomUUID()}`;
 }
 
-function inheritSessionSelection(parentEntry: SessionEntry | undefined): Partial<SessionEntry> {
-  if (!parentEntry) {
-    return {};
-  }
-  return {
-    ...(parentEntry.providerOverride ? { providerOverride: parentEntry.providerOverride } : {}),
-    ...(parentEntry.modelOverride ? { modelOverride: parentEntry.modelOverride } : {}),
-    ...(parentEntry.modelOverrideSource
-      ? { modelOverrideSource: parentEntry.modelOverrideSource }
-      : {}),
-    ...(parentEntry.agentRuntimeOverride
-      ? { agentRuntimeOverride: parentEntry.agentRuntimeOverride }
-      : {}),
-    ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
-    ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
-    ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
-    ...(parentEntry.traceLevel ? { traceLevel: parentEntry.traceLevel } : {}),
-    ...(parentEntry.reasoningLevel ? { reasoningLevel: parentEntry.reasoningLevel } : {}),
-    ...(parentEntry.elevatedLevel ? { elevatedLevel: parentEntry.elevatedLevel } : {}),
-    ...(parentEntry.authProfileOverride
-      ? { authProfileOverride: parentEntry.authProfileOverride }
-      : {}),
-    ...(parentEntry.authProfileOverrideSource
-      ? { authProfileOverrideSource: parentEntry.authProfileOverrideSource }
-      : {}),
-  };
-}
-
 type CreatedGatewaySession = {
   key: string;
   agentId: string;
@@ -187,9 +258,17 @@ export async function createGatewaySession(params: {
   agentId?: string;
   label?: string;
   model?: string;
+  thinkingLevel?: string;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
+  createdBy?: SessionCreatorIdentity;
   parentSessionKey?: string;
+  /**
+   * Spawn-lineage depth declared by spawn-owned creations (visible subagent
+   * sessions). Requires parentSessionKey. Omitted creations persist depth 0 so
+   * operator sessions and forks stay spawn-capable roots.
+   */
+  spawnDepth?: number;
   spawnedCwd?: string;
   /** Managed worktree bound to the new session; persisted alongside spawnedCwd. */
   worktree?: { id: string; branch: string; repoRoot: string };
@@ -201,12 +280,19 @@ export async function createGatewaySession(params: {
   clearExecBinding?: boolean;
   clearSpawnedCwd?: boolean;
   fork?: boolean;
+  /**
+   * Controls whether a distinct child terminates its parent. Omission preserves
+   * the legacy rollover; callers use `false` for a parallel child.
+   */
+  succeedsParent?: boolean;
   emitCommandHooks?: boolean;
   resetMainWhenUnspecified?: boolean;
   commandSource: string;
   loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Public callers need admin before reconfiguring an adopted keyed session. */
+  allowExistingModelSelection?: boolean;
   /** Exact harness namespace authorized by the scoped plugin runtime. */
   authorizedAgentHarnessId?: string;
   /** Exact plugin namespace authorized by the scoped plugin runtime. */
@@ -214,6 +300,7 @@ export async function createGatewaySession(params: {
   afterCreate?: (created: CreatedGatewaySession) => Promise<void>;
 }): Promise<CreateGatewaySessionResult> {
   const requestedKey = normalizeOptionalString(params.key);
+  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   const agentId = normalizeAgentId(
     normalizeOptionalString(params.agentId) ?? resolveDefaultAgentId(params.cfg),
   );
@@ -225,6 +312,29 @@ export async function createGatewaySession(params: {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "invalid catalog session target"),
     };
+  }
+  if (params.succeedsParent !== undefined) {
+    if (!parentSessionKey) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires parentSessionKey"),
+      };
+    }
+    if (params.emitCommandHooks !== true) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "succeedsParent requires emitCommandHooks"),
+      };
+    }
+    if (params.succeedsParent && params.fork === true) {
+      return {
+        ok: false,
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "succeedsParent conflicts with fork: a fork runs in parallel to its parent",
+        ),
+      };
+    }
   }
   if (requestedKey) {
     const requestedAgentId = parseAgentSessionKey(requestedKey)?.agentId;
@@ -303,13 +413,38 @@ export async function createGatewaySession(params: {
     };
   }
 
-  const parentSessionKey = normalizeOptionalString(params.parentSessionKey);
   if (params.fork === true && !parentSessionKey) {
     return {
       ok: false,
       error: errorShape(ErrorCodes.INVALID_REQUEST, "fork requires parentSessionKey"),
     };
   }
+  if (params.spawnDepth !== undefined) {
+    if (!Number.isInteger(params.spawnDepth) || params.spawnDepth < 1) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "spawnDepth must be an integer >= 1"),
+      };
+    }
+    if (!parentSessionKey) {
+      return {
+        ok: false,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, "spawnDepth requires parentSessionKey"),
+      };
+    }
+  }
+  const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId);
+  const agentMainSessionKey = resolveAgentMainSessionKey({ cfg: params.cfg, agentId });
+  // Dashboard sessions parent to main for flow-up notices and sidebar threads.
+  // Isolated DM scopes lack the shared watcher; global scope lacks a per-agent main.
+  const dashboardParentSessionKey =
+    !parentSessionKey &&
+    params.fork !== true &&
+    (params.cfg.session?.dmScope ?? "main") === "main" &&
+    params.cfg.session?.scope !== "global" &&
+    targetSessionKey !== agentMainSessionKey
+      ? agentMainSessionKey
+      : undefined;
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
@@ -330,7 +465,7 @@ export async function createGatewaySession(params: {
       }
       parentSelectedAgentId = parentRequestedAgent.agentId;
     }
-    const parent = loadSessionEntry(
+    const parent = loadSessionEntryReadOnly(
       parentSessionKey,
       parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
     );
@@ -402,6 +537,7 @@ export async function createGatewaySession(params: {
           : {}),
         reason: "new",
         commandSource: params.commandSource,
+        createdBy: params.createdBy,
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.worktree ? { worktree: params.worktree } : {}),
         ...(params.execNode ? { execNode: params.execNode } : {}),
@@ -431,7 +567,7 @@ export async function createGatewaySession(params: {
       parentSessionTarget &&
       (params.emitCommandHooks === true || params.fork === true)
     ) {
-      const currentParent = loadSessionEntry(
+      const currentParent = loadSessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
       );
@@ -502,7 +638,7 @@ export async function createGatewaySession(params: {
       });
     }
 
-    const key = explicitTargetKey ?? buildDashboardSessionKey(agentId);
+    const key = targetSessionKey;
     const target = resolveGatewaySessionStoreTarget({ cfg: params.cfg, key, agentId });
     const created = await createSessionEntryWithTranscript<ErrorShape>(
       {
@@ -551,6 +687,39 @@ export async function createGatewaySession(params: {
             ),
           };
         }
+        const requestedModel = normalizeOptionalString(params.model);
+        const requestedThinkingLevel = normalizeOptionalString(params.thinkingLevel);
+        if (existingEntry?.sessionId && params.allowExistingModelSelection !== true) {
+          const gateDefaultModel = resolveDefaultModelForAgent({
+            cfg: params.cfg,
+            agentId: target.agentId,
+          });
+          const modelSelectionWouldChange = await existingModelSelectionWouldChange({
+            cfg: params.cfg,
+            catalogModel,
+            defaultModel: gateDefaultModel.model,
+            defaultProvider: gateDefaultModel.provider,
+            existingEntry,
+            loadGatewayModelCatalog: params.loadGatewayModelCatalog,
+            requestedModel,
+            requestedThinkingLevel,
+            subagentModelHint: isSubagentSessionKey(target.canonicalKey)
+              ? resolveSubagentConfiguredModelSelection({
+                  cfg: params.cfg,
+                  agentId: target.agentId,
+                })
+              : undefined,
+          });
+          if (modelSelectionWouldChange) {
+            return {
+              ok: false,
+              error: missingScopeErrorShape({
+                missingScope: ADMIN_SCOPE,
+                requiredScopes: [ADMIN_SCOPE],
+              }),
+            };
+          }
+        }
         const patched = await applySessionsPatchToStore({
           cfg: params.cfg,
           store: sessionEntries,
@@ -559,7 +728,8 @@ export async function createGatewaySession(params: {
           patch: {
             key: target.canonicalKey,
             label: normalizeOptionalString(params.label),
-            model: catalogModel ?? normalizeOptionalString(params.model),
+            model: catalogModel ?? requestedModel,
+            thinkingLevel: requestedThinkingLevel,
           },
           loadGatewayModelCatalog: params.loadGatewayModelCatalog,
           authorizedAgentHarnessId: params.authorizedAgentHarnessId,
@@ -601,6 +771,9 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          ...(existingEntry === undefined && params.createdBy
+            ? { createdBy: { ...params.createdBy } }
+            : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
@@ -640,25 +813,34 @@ export async function createGatewaySession(params: {
           ...(params.initialEntry?.pluginExtensions !== undefined
             ? { pluginExtensions: structuredClone(params.initialEntry.pluginExtensions) }
             : {}),
+          // Spawn lineage is declared, never inferred: spawn-owned creations pass
+          // spawnDepth explicitly; everything else (operator chats, forks, harness
+          // and plugin sessions) persists as a depth-0 root. Reused entries keep
+          // their stored depth.
+          ...(existingEntry === undefined ? { spawnDepth: params.spawnDepth ?? 0 } : {}),
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
-        if (!canonicalParentSessionKey) {
+        const explicitParentSessionKey =
+          canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const storedParentSessionKey = explicitParentSessionKey ?? dashboardParentSessionKey;
+        if (!storedParentSessionKey) {
           return initialized;
         }
         const inheritedSelection =
-          catalogModel || normalizeOptionalString(params.model)
+          !canonicalParentSessionKey || catalogModel || normalizeOptionalString(params.model)
             ? {}
             : inheritSessionSelection(currentParentSessionEntry);
         const entry: SessionEntry = {
           ...initializedEntry,
           ...inheritedSelection,
-          parentSessionKey: canonicalParentSessionKey,
+          parentSessionKey: storedParentSessionKey,
         };
         if (params.fork !== true) {
           return { ...initialized, entry };
         }
-        if (!currentParentSessionEntry || !parentSessionTarget) {
+        const forkParentSessionKey = canonicalParentSessionKey;
+        if (!forkParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return {
             ok: false,
             error: errorShape(ErrorCodes.UNAVAILABLE, "failed to resolve parent session for fork"),
@@ -684,7 +866,7 @@ export async function createGatewaySession(params: {
         const fork = await forkSessionFromParent({
           parentEntry: currentParentSessionEntry,
           agentId: parentSessionTarget.agentId,
-          parentSessionKey: canonicalParentSessionKey,
+          parentSessionKey: forkParentSessionKey,
           sessionKey: target.canonicalKey,
           storePath: parentSessionTarget.storePath,
           // Keep the fork transcript owned by the child store across agent boundaries.
@@ -698,14 +880,7 @@ export async function createGatewaySession(params: {
         }
         return {
           ...initialized,
-          entry: {
-            ...entry,
-            sessionId: fork.sessionId,
-            sessionFile: fork.sessionFile,
-            forkedFromParent: true,
-            totalTokens: undefined,
-            totalTokensFresh: false,
-          },
+          entry: buildForkedGatewaySessionEntry(entry, fork),
         };
       },
       params.initialEntry
@@ -739,17 +914,21 @@ export async function createGatewaySession(params: {
       const parentEntry = currentParentSessionEntry;
       const { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook } =
         await loadSessionLifecycleRuntime();
-      emitGatewaySessionEndPluginHook({
-        cfg: params.cfg,
-        sessionKey: canonicalParentSessionKey,
-        sessionId: parentEntry?.sessionId,
-        storePath: parentSessionTarget.storePath,
-        sessionFile: parentEntry?.sessionFile,
-        agentId: parentSessionTarget.agentId,
-        reason: "new",
-        nextSessionId: created.entry.sessionId,
-        nextSessionKey: target.canonicalKey,
-      });
+      // Child key shape does not establish lifecycle ownership. The caller owns
+      // that fact; omission keeps the shipped rollover for out-of-tree clients.
+      if (params.succeedsParent !== false) {
+        emitGatewaySessionEndPluginHook({
+          cfg: params.cfg,
+          sessionKey: canonicalParentSessionKey,
+          sessionId: parentEntry?.sessionId,
+          storePath: parentSessionTarget.storePath,
+          sessionFile: parentEntry?.sessionFile,
+          agentId: parentSessionTarget.agentId,
+          reason: "new",
+          nextSessionId: created.entry.sessionId,
+          nextSessionKey: target.canonicalKey,
+        });
+      }
       emitGatewaySessionStartPluginHook({
         cfg: params.cfg,
         sessionKey: target.canonicalKey,
@@ -798,3 +977,4 @@ export async function createGatewaySession(params: {
   }
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

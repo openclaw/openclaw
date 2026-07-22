@@ -1,6 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type {
+  WorkboardArtifact,
+  WorkboardCard,
+  WorkboardClaim,
+  WorkboardNotification,
+  WorkboardRunAttempt,
+} from "@openclaw/workboard-contract";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import {
   appendEvent,
   assertCanMutateClaimedCard,
@@ -18,7 +26,6 @@ import {
   MAX_CARD_ARTIFACTS,
   MAX_CARD_COMMENTS,
   MAX_CARD_NOTIFICATIONS,
-  MAX_CARD_PROOF,
   secondsToDurationMs,
 } from "./store-constants.js";
 import type {
@@ -36,6 +43,7 @@ import type {
   WorkboardSpecifyInput,
 } from "./store-inputs.js";
 import {
+  appendCompletionProof,
   clearDiagnostics,
   deriveChildIdempotencyKey,
   normalizeArtifact,
@@ -48,12 +56,17 @@ import {
   removeUndefinedMetadataFields,
 } from "./store-normalizers.js";
 import { WorkboardPromoteStore } from "./store-promote.js";
-import type {
-  WorkboardArtifact,
-  WorkboardCard,
-  WorkboardNotification,
-  WorkboardRunAttempt,
-} from "./types.js";
+
+function assertClaimIdentity(claim: WorkboardClaim, input: WorkboardHeartbeatInput): void {
+  const token = normalizeOptionalString(input.token);
+  const ownerId = normalizeOptionalString(input.ownerId);
+  if (token && !safeEqualSecret(token, claim.token)) {
+    throw new Error("claim token does not match.");
+  }
+  if (!token && ownerId && ownerId !== claim.ownerId) {
+    throw new Error("claim owner does not match.");
+  }
+}
 
 export class WorkboardWorkflowStore extends WorkboardPromoteStore {
   async claim(
@@ -140,14 +153,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         throw new Error("card is not claimed.");
       }
       const now = Math.max(Date.now(), claim.lastHeartbeatAt + 1);
-      const token = normalizeOptionalString(input.token);
-      const ownerId = normalizeOptionalString(input.ownerId);
-      if (token && token !== claim.token) {
-        throw new Error("claim token does not match.");
-      }
-      if (!token && ownerId && ownerId !== claim.ownerId) {
-        throw new Error("claim owner does not match.");
-      }
+      assertClaimIdentity(claim, input);
       const nextClaim = {
         ...claim,
         lastHeartbeatAt: now,
@@ -192,14 +198,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           : normalizeStatus(input.status, existing.status);
       const claim = existing.metadata?.claim;
       if (claim) {
-        const token = normalizeOptionalString(input.token);
-        const ownerId = normalizeOptionalString(input.ownerId);
-        if (token && token !== claim.token) {
-          throw new Error("claim token does not match.");
-        }
-        if (!token && ownerId && ownerId !== claim.ownerId) {
-          throw new Error("claim owner does not match.");
-        }
+        assertClaimIdentity(claim, input);
       }
       return await this.updateCard(
         id,
@@ -249,6 +248,13 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
         ? (input.proof as WorkboardProofInput)
         : undefined;
+    const proofId = normalizeBoundedString(input.proofId, undefined, 120, "proof id");
+    if (input.proofId !== undefined && !proofId) {
+      throw new Error("proofId must be a non-empty string.");
+    }
+    if (proofId && !proofInput) {
+      throw new Error("proof is required when proofId is provided.");
+    }
     const proof = proofInput ? normalizeProofInput(proofInput, now) : undefined;
     const artifacts = Array.isArray(input.artifacts)
       ? input.artifacts
@@ -294,7 +300,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 { id: randomUUID(), body: summary, createdAt: now },
               ].slice(-MAX_CARD_COMMENTS)
             : metadata.comments,
-          proof: proof ? [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF) : metadata.proof,
+          proof: proof ? appendCompletionProof(metadata.proof, proof, proofId) : metadata.proof,
           artifacts: artifacts.length
             ? [...(metadata.artifacts ?? []), ...artifacts].slice(-MAX_CARD_ARTIFACTS)
             : metadata.artifacts,
@@ -303,7 +309,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           ),
         },
       },
-      { enforceStatusHolds: true },
+      {
+        enforceStatusHolds: true,
+        ...(proof ? { preserveProofId: proofId ?? proof.id } : {}),
+      },
     );
   }
 

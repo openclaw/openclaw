@@ -1,9 +1,10 @@
 // Discord tests cover manager plugin behavior.
 import { PassThrough, type Readable } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
+import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import type {
   RealtimeVoiceAgentControlResult,
-  RealtimeVoiceForcedConsultCoordinator,
+  RealtimeVoiceSessionHarness,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
@@ -21,6 +22,7 @@ const {
   agentCommandMock,
   resolveRealtimeBootstrapContextInstructionsMock,
   transcribeAudioFileMock,
+  prepareTtsRequestMock,
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
@@ -148,6 +150,15 @@ const {
       (...args: unknown[]) => Promise<string | undefined>
     >(async () => undefined),
     transcribeAudioFileMock: vi.fn(async () => ({ text: "hello from voice" })),
+    prepareTtsRequestMock: vi.fn(async ({ cfg, text }: { cfg: unknown; text: string }) => ({
+      cfg,
+      directives: {
+        cleanedText: text,
+        hasDirective: false,
+        overrides: {},
+        warnings: [],
+      },
+    })),
     textToSpeechStreamMock: vi.fn(
       async (): Promise<unknown> => ({ success: false, error: "stream unavailable" }),
     ),
@@ -218,13 +229,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async () => {
   return {
     ...actual,
     agentCommandFromIngress: agentCommandMock,
-    getTtsProvider: vi.fn(() => "openai"),
     resolveAgentDir: vi.fn(() => "/tmp/openclaw-agent"),
-    resolveTtsConfig: vi.fn(() => ({
-      modelOverrides: {},
-      providerConfigs: {},
-    })),
-    resolveTtsPrefsPath: vi.fn(() => "/tmp/openclaw-tts.json"),
   };
 });
 
@@ -259,6 +264,26 @@ vi.mock("openclaw/plugin-sdk/realtime-voice", async () => {
   return {
     ...actual,
     createRealtimeVoiceBridgeSession: createRealtimeVoiceBridgeSessionMock,
+    createRealtimeVoiceSessionHarness: (
+      params: Parameters<typeof actual.createRealtimeVoiceSessionHarness>[0],
+    ) => {
+      const harness = actual.createRealtimeVoiceSessionHarness(params);
+      return {
+        ...harness,
+        createBridge: (bridgeParams: Parameters<typeof harness.createBridge>[0]) =>
+          createRealtimeVoiceBridgeSessionMock(bridgeParams),
+        flushOutput: (flush: () => void) => flush(),
+        handleBargeIn: (
+          options: Parameters<typeof harness.handleBargeIn>[0],
+          fallbackFlush: () => void,
+        ) => {
+          realtimeSessionMock.handleBargeIn(options);
+          // The mock provider never clears audio, so exercise the harness fallback directly.
+          // Discord passes a no-op for normal truncation and a real clear for forced paths.
+          fallbackFlush();
+        },
+      };
+    },
     controlRealtimeVoiceAgentRun: controlRealtimeVoiceAgentRunMock,
     resolveConfiguredRealtimeVoiceProvider: resolveConfiguredRealtimeVoiceProviderMock,
   };
@@ -285,6 +310,7 @@ vi.mock("../runtime.js", () => ({
       transcribeAudioFile: transcribeAudioFileMock,
     },
     tts: {
+      prepareTtsRequest: prepareTtsRequestMock,
       textToSpeechStream: textToSpeechStreamMock,
       textToSpeech: textToSpeechMock,
     },
@@ -370,6 +396,18 @@ describe("DiscordVoiceManager", () => {
     resolveRealtimeBootstrapContextInstructionsMock.mockResolvedValue(undefined);
     transcribeAudioFileMock.mockReset();
     transcribeAudioFileMock.mockResolvedValue({ text: "hello from voice" });
+    prepareTtsRequestMock.mockReset();
+    prepareTtsRequestMock.mockImplementation(
+      async ({ cfg, text }: { cfg: unknown; text: string }) => ({
+        cfg,
+        directives: {
+          cleanedText: text,
+          hasDirective: false,
+          overrides: {},
+          warnings: [],
+        },
+      }),
+    );
     textToSpeechStreamMock.mockReset();
     textToSpeechStreamMock.mockResolvedValue({ success: false, error: "stream unavailable" });
     textToSpeechMock.mockReset();
@@ -511,6 +549,20 @@ describe("DiscordVoiceManager", () => {
       lastMockCall(agentCommandMock as unknown as MockCallSource, "agent command")[0],
       "agent command args",
     );
+
+  const lastAgentCommandToolNames = () => {
+    const args = lastAgentCommandArgs();
+    if (typeof args.senderIsOwner !== "boolean") {
+      throw new Error("expected agent command owner identity");
+    }
+    return createOpenClawCodingTools({
+      config: {},
+      senderIsOwner: args.senderIsOwner,
+      messageProvider: "discord",
+      workspaceDir: "/tmp/openclaw-discord-voice-tools",
+      agentDir: "/tmp/openclaw-discord-voice-agent",
+    }).map((tool) => tool.name);
+  };
 
   const agentCommandArgsAt = (index: number) =>
     requireRecord(
@@ -3639,6 +3691,115 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("normal answer");
   });
 
+  it("defaults to wake names only while multiple people share agent-proxy voice", async () => {
+    const client = createClient();
+    const ownerState = {
+      guild_id: "g1",
+      user_id: "u-owner",
+      channel_id: "1001",
+      member: { user: { id: "u-owner", username: "owner", bot: false } },
+    };
+    const agentState = {
+      guild_id: "g1",
+      user_id: "bot-user",
+      channel_id: "1001",
+      member: { user: { id: "bot-user", username: "molty", bot: true } },
+    };
+    const helperBotState = {
+      guild_id: "g1",
+      user_id: "helper-bot",
+      channel_id: "1001",
+      member: { user: { id: "helper-bot", username: "helper", bot: true } },
+    };
+    let voiceStates: Array<Record<string, unknown>> = [ownerState, agentState, helperBotState];
+    client.getPlugin.mockImplementation((id?: string) => {
+      if (id === "gateway") {
+        return { listVoiceChannelStates: vi.fn(() => voiceStates) };
+      }
+      return {
+        getGatewayAdapterCreator: vi.fn(() => vi.fn()),
+        getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+      };
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto" },
+        },
+      },
+      client,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+    manager.setBotUserId("bot-user");
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as {
+      autoRespondToAudio?: boolean;
+      interruptResponseOnInputAudio?: boolean;
+      onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+    };
+    const beginOwnerTurn = () => {
+      const turn = entry.realtime?.beginSpeakerTurn(
+        { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+        "u-owner",
+      );
+      turn?.sendInputAudio(Buffer.alloc(8));
+    };
+
+    expect(bridgeParams.autoRespondToAudio).toBe(false);
+    expect(bridgeParams.interruptResponseOnInputAudio).toBe(false);
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "How is it going?");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(lastAgentCommandArgs().message).toContain("How is it going?");
+
+    const friendState = {
+      guild_id: "g1",
+      user_id: "u-friend",
+      channel_id: "1001",
+      member: { user: { id: "u-friend", username: "friend", bot: false } },
+    };
+    voiceStates = [...voiceStates, friendState];
+    await manager.handleVoiceStateUpdate(friendState as never, null);
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "What is the plan?");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Molty, what is the plan?");
+    expect(agentCommandMock).toHaveBeenCalledTimes(2);
+    expect(lastAgentCommandArgs().message).toContain("what is the plan?");
+    expect(lastAgentCommandArgs().message).not.toContain("Molty");
+
+    voiceStates = voiceStates.filter((state) => state.user_id !== "u-friend");
+    await manager.handleVoiceStateUpdate(
+      { ...friendState, channel_id: null } as never,
+      friendState as never,
+    );
+
+    beginOwnerTurn();
+    await emitFinalRealtimeUserTranscript(bridgeParams, "Continue without a wake name.");
+    expect(agentCommandMock).toHaveBeenCalledTimes(3);
+    expect(lastAgentCommandArgs().message).toContain("Continue without a wake name.");
+  });
+
   it("requires the agent wake name before realtime agent-proxy consults", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
     const manager = createManager(
@@ -4943,14 +5104,14 @@ describe("DiscordVoiceManager", () => {
       realtime?: unknown;
     };
     const realtime = entry.realtime as {
-      forcedConsults: RealtimeVoiceForcedConsultCoordinator;
+      harness: RealtimeVoiceSessionHarness;
     };
-    const cancelled = realtime.forcedConsults.prepare("cancelled question");
+    const cancelled = realtime.harness.forcedConsults.prepare("cancelled question");
     if (!cancelled) {
       throw new Error("expected forced consult handle");
     }
-    realtime.forcedConsults.markStarted(cancelled);
-    realtime.forcedConsults.markCancelled(cancelled);
+    realtime.harness.forcedConsults.markStarted(cancelled);
+    realtime.harness.forcedConsults.markCancelled(cancelled);
     const bridgeParams = lastRealtimeBridgeParams() as
       | {
           onToolCall?: (
@@ -5376,7 +5537,7 @@ describe("DiscordVoiceManager", () => {
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
           requireWakeName: true,
@@ -6167,7 +6328,7 @@ describe("DiscordVoiceManager", () => {
     }
   });
 
-  it("accepts allowlisted voice speakers", async () => {
+  it("withholds owner-only tools from account allowlisted voice speakers", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Owner Nick",
@@ -6182,12 +6343,65 @@ describe("DiscordVoiceManager", () => {
     await processVoiceSegment(manager, "u-owner");
 
     expect(agentCommandMock).toHaveBeenCalledWith(
-      expect.objectContaining({ senderIsOwner: true }),
+      expect.objectContaining({ senderIsOwner: false }),
+      expect.anything(),
+    );
+    const toolNames = lastAgentCommandToolNames();
+    expect(toolNames).toContain("exec");
+    expect(toolNames).not.toContain("gateway");
+    expect(toolNames).not.toContain("nodes");
+    expect(toolNames).not.toContain("openclaw");
+  });
+
+  it("admits account wildcard voice speakers without granting owner authority", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      { groupPolicy: "allowlist", allowFrom: ["*"], guilds: { g1: {} } },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
       expect.anything(),
     );
   });
 
-  it("uses commands.ownerAllowFrom for voice speakers when Discord DMs are disabled", async () => {
+  it("normalizes account wildcard voice admission without granting owner authority", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      { groupPolicy: "allowlist", allowFrom: [" * "], guilds: { g1: {} } },
+      client,
+    );
+
+    await processVoiceSegment(manager, "u-guest");
+
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ senderIsOwner: false }),
+      expect.anything(),
+    );
+  });
+
+  it("keeps owner-only tools for commands.ownerAllowFrom voice speakers", async () => {
     const ownerId = "100000000000000001";
     const client = createClient();
     client.fetchMember.mockResolvedValue({
@@ -6208,6 +6422,9 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).toHaveBeenCalledWith(
       expect.objectContaining({ senderIsOwner: true }),
       expect.anything(),
+    );
+    expect(lastAgentCommandToolNames()).toEqual(
+      expect.arrayContaining(["gateway", "nodes", "openclaw"]),
     );
   });
 
@@ -6290,9 +6507,11 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ groupPolicy: "open", allowFrom: ["discord:u-owner"] }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager(
+      { groupPolicy: "open", allowFrom: ["discord:u-owner"] },
+      client,
+      {},
+    );
     await processVoiceSegment(manager, "u-guest");
   });
 
@@ -6355,7 +6574,7 @@ describe("DiscordVoiceManager", () => {
       durationSeconds: 1.2,
       cfg: {},
       discordConfig,
-      ownerAllowFrom: ["discord:u-owner"],
+      admissionAllowFrom: ["discord:u-owner"],
       runtime: createRuntime(),
       fetchGuildName: async () => "Guild One",
       speakerContext,
@@ -6390,9 +6609,7 @@ describe("DiscordVoiceManager", () => {
         },
       },
       client,
-      {
-        commands: { useAccessGroups: false },
-      },
+      {},
     );
     await processVoiceSegment(manager, "u-guest");
 
@@ -6419,9 +6636,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager({ groupPolicy: "open" }, client, {});
     await processVoiceSegment(manager, "u-guest");
 
     const commandArgs = lastAgentCommandArgs() as
@@ -6432,6 +6647,9 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs?.messageProvider).toBe("discord-voice");
     expect(commandArgs?.message).toContain("Do not call the tts tool");
     expect(commandArgs?.message).toContain("repair obvious transcription artifacts");
+    expect(prepareTtsRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "hello back" }),
+    );
     expect(lastTtsArgs().channel).toBe("discord");
     expect(lastTtsArgs().text).toBe("hello back");
   });
@@ -6450,9 +6668,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "0001",
       },
     });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager({ groupPolicy: "open" }, client, {});
 
     await processVoiceSegment(manager, "u-debug");
 
@@ -6490,9 +6706,7 @@ describe("DiscordVoiceManager", () => {
         discriminator: "4321",
       },
     });
-    const manager = createManager({ groupPolicy: "open" }, client, {
-      commands: { useAccessGroups: false },
-    });
+    const manager = createManager({ groupPolicy: "open" }, client, {});
     await processVoiceSegment(manager, "u-guest");
 
     expect(lastTtsStreamArgs().channel).toBe("discord");
@@ -6534,9 +6748,7 @@ describe("DiscordVoiceManager", () => {
         },
       },
       client,
-      {
-        commands: { useAccessGroups: false },
-      },
+      {},
     );
     await processVoiceSegment(manager, "u-guest");
 
@@ -6608,7 +6820,7 @@ describe("DiscordVoiceManager", () => {
         },
       },
       client,
-      { commands: { useAccessGroups: false } },
+      {},
     );
     manager.setBotUserId("bot-user");
 
@@ -6825,3 +7037,4 @@ describe("DiscordVoiceManager", () => {
     expect(autoJoinSpy).toHaveBeenCalledTimes(1);
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

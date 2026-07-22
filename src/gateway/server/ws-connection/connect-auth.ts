@@ -80,6 +80,7 @@ export async function authenticateGatewayConnect(
     sendHandshakeErrorResponse,
   } = context;
   const resolvedAuth = getResolvedAuth();
+  const hasRequestedScopes = Array.isArray(connectParams.scopes);
   const admission = await admitGatewayConnect(context);
   if (!admission) {
     return undefined;
@@ -195,6 +196,14 @@ export async function authenticateGatewayConnect(
       client: connectParams.client,
     });
     sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, authMessage, {
+      ...(failedAuth.rateLimited === true
+        ? {
+            retryable: true,
+            ...(failedAuth.retryAfterMs !== undefined
+              ? { retryAfterMs: failedAuth.retryAfterMs }
+              : {}),
+          }
+        : {}),
       details: {
         code: resolveAuthConnectErrorDetailCode(failedAuth.reason),
         authReason: failedAuth.reason,
@@ -243,11 +252,7 @@ export async function authenticateGatewayConnect(
       authOk,
       authMethod,
     });
-    const preserveInsecureLocalControlUiScopes =
-      isControlUi &&
-      controlUiAuthPolicy.allowInsecureAuthConfigured &&
-      isLocalClient &&
-      (authMethod === "token" || authMethod === "password");
+    const preserveInsecureLocalControlUiScopes = false;
     const decision = evaluateMissingDeviceIdentity({
       hasDeviceIdentity: Boolean(device),
       role,
@@ -285,7 +290,7 @@ export async function authenticateGatewayConnect(
       const errorMessage =
         "control ui requires device identity (use HTTPS or localhost secure context)";
       markHandshakeFailure("control-ui-insecure-auth", {
-        insecureAuthConfigured: controlUiAuthPolicy.allowInsecureAuthConfigured,
+        insecureAuthConfigured: false,
       });
       sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, errorMessage, {
         details: { code: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED },
@@ -449,6 +454,7 @@ export async function authenticateGatewayConnect(
     usesLegacyNodeProtocol,
     role,
     scopes,
+    hasRequestedScopes,
     isControlUi,
     isBrowserOperatorUi,
     isWebchat,

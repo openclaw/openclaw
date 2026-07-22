@@ -1,12 +1,20 @@
 // Control UI view renders config screen content.
+import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import JSON5 from "json5";
-import { html, nothing, type TemplateResult } from "lit";
-import type { ConfigUiHints } from "../../api/types.ts";
+import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
+import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
+import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import {
+  normalizeChatFollowUpMode,
   normalizeChatSendShortcut,
+  normalizeCatalogOpenTarget,
   TEXT_SCALE_STOPS,
+  type ChatFollowUpMode,
   type ChatSendShortcut,
+  type CatalogOpenTarget,
   type TextScaleStop,
 } from "../../app/settings.ts";
 import type { ThemeTransitionContext } from "../../app/theme-transition.ts";
@@ -20,25 +28,43 @@ import {
   schemaType,
   type JsonSchema,
 } from "../../components/config-form.shared.ts";
-import "../../components/tooltip.ts";
 import {
   analyzeConfigSchema,
   renderConfigForm,
   type ConfigSchemaAnalysis,
 } from "../../components/config-form.ts";
+import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/web-awesome-tabs.ts";
+import { getLobsterdex, getLobsterdexEntries } from "../../components/lobster-dex.ts";
+import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
+import {
+  LOBSTER_PET_PALETTES,
+  canonicalLobsterLook,
+  renderLobsterSvg,
+} from "../../components/lobster-pet.ts";
+import { highlightJsonHtml } from "../../components/markdown.ts";
 import {
   renderSettingsRow,
+  renderSettingsSegmented,
   renderSettingsStatus,
+  renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
+import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
+import { renderNotificationsSection, type WebPushUiState } from "./notifications-section.ts";
 import {
-  APPEARANCE_SETTINGS_TARGET_IDS,
-  COMMUNICATION_SETTINGS_TARGET_IDS,
-} from "./settings-targets.ts";
+  renderSessionObserverSettings,
+  type SessionObserverModelSelection,
+} from "./session-observer-settings.ts";
+import { renderSettingsSelectRow } from "./settings-select-row.ts";
+import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
+
+// The config editor is where JSON5 text first appears; warm the parser with
+// the page instead of racing the first raw-draft keystroke.
+void warmJson5().catch(() => undefined);
 
 const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   90: "configView.textSizes.small",
@@ -48,20 +74,9 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "configView.textSizes.xxl",
 };
 
-function configSectionTabId(key: string | null): string {
-  return `config-section-tab-${encodeURIComponent(key ?? "root").replaceAll("%", "-")}`;
-}
-
-type WebPushUiState = {
-  supported: boolean;
-  permission: NotificationPermission | "unsupported";
-  subscribed: boolean;
-  loading: boolean;
-  error?: string | null;
-};
-
-type SettingsMicrophoneState = {
+type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -89,6 +104,7 @@ export type ConfigViewState = {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
+  expandedAdvancedSections: Set<string>;
   lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
   schemaAnalysisCache?: SchemaAnalysisCache;
@@ -103,6 +119,7 @@ export function createConfigViewState(): ConfigViewState {
     envRevealed: false,
     validityDismissed: false,
     revealedSensitivePaths: new Set(),
+    expandedAdvancedSections: new Set(),
     lastCustomThemeImportFocusToken: null,
     lastConfigContextKey: null,
     lastFormModeForScroll: null,
@@ -117,32 +134,36 @@ export type ConfigProps = {
   loading: boolean;
   saving: boolean;
   applying: boolean;
+  /** App updater running; config writes and restarts are interlocked. */
   updating: boolean;
+  autoSaveStatus: ConfigAutoSaveStatus;
+  needsApply: boolean;
   connected: boolean;
   schema: unknown;
   schemaLoading: boolean;
   uiHints: ConfigUiHints;
   formMode: ConfigFormMode;
+  /** Capability-authoritative unsaved raw draft, independent of the display toggle. */
+  rawDraftPending?: boolean;
   viewState: ConfigViewState;
   rawAvailable?: boolean;
   showModeToggle?: boolean;
+  /** Set when the form renders under a composite page's custom rows; an empty
+   *  schema section stays silent instead of claiming the page is empty. */
+  embeddedEditor?: boolean;
   formValue: Record<string, unknown> | null;
   originalValue: Record<string, unknown> | null;
-  searchQuery: string;
   activeSection: string | null;
   activeSubsection: string | null;
   onRawChange: (next: string) => void;
   onFormModeChange: (mode: ConfigFormMode) => void;
   onViewStateChange: () => void;
   onFormPatch: (path: Array<string | number>, value: unknown) => void;
-  onSearchChange: (query: string) => void;
   onSectionChange: (section: string | null) => void;
   onSubsectionChange: (section: string | null) => void;
-  onReload: () => void;
-  onReset: () => void;
   onSave: () => void;
   onApply: () => void;
-  onUpdate: () => void;
+  onRawDiscard: () => void;
   onOpenFile?: () => void;
   version: string;
   theme: ThemeName;
@@ -163,11 +184,38 @@ export type ConfigProps = {
   onOpenCustomThemeImport?: () => void;
   textScale: number;
   setTextScale: (value: number) => void;
+  sidebarLiveActivity: boolean;
+  setSidebarLiveActivity: (enabled: boolean) => void;
+  showAdvancedSettings: boolean;
+  setShowAdvancedSettings: (enabled: boolean) => void;
+  forceAdvancedSection?: string | null;
+  sessionObserverEnabled?: boolean;
+  sessionObserverUtilityModel?: string;
+  sessionObserverResolvedModel?: SystemInfoResult["defaultAgentUtilityModel"];
+  sessionObserverModels?: readonly ModelCatalogEntry[];
+  sessionObserverModelsUnavailable?: boolean;
+  sessionObserverDisabled?: boolean;
+  setSessionObserverEnabled?: (enabled: boolean) => void;
+  setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
+  lobsterPetVisits?: boolean;
+  setLobsterPetVisits?: (enabled: boolean) => void;
+  lobsterPetSounds?: boolean;
+  setLobsterPetSounds?: (enabled: boolean) => void;
   chatSendShortcut: ChatSendShortcut;
   setChatSendShortcut: (value: ChatSendShortcut) => void;
-  microphone?: SettingsMicrophoneState;
+  chatFollowUpMode: ChatFollowUpMode | undefined;
+  serverQueueMode: QueueMode | undefined;
+  setChatFollowUpMode: (value: ChatFollowUpMode | undefined) => void;
+  catalogOpenTarget: CatalogOpenTarget;
+  setCatalogOpenTarget: (value: CatalogOpenTarget) => void;
+  microphone?: SettingsMediaDeviceState;
   onMicrophoneRefresh?: () => void;
   onMicrophoneSelect?: (deviceId: string) => void;
+  camera?: SettingsMediaDeviceState;
+  onCameraRefresh?: () => void;
+  onCameraSelect?: (deviceId: string) => void;
+  composerHoldToRecord?: boolean;
+  setComposerHoldToRecord?: (enabled: boolean) => void;
   gatewayUrl: string;
   assistantName: string;
   configPath?: string | null;
@@ -178,6 +226,9 @@ export type ConfigProps = {
   includeVirtualSections?: boolean;
   /** Layout mode: "tabs" (default flat scroll) or "accordion" (grouped collapsible). */
   settingsLayout?: "tabs" | "accordion";
+  nativeNotifications?: { permission: NativeNotificationsPermission | "unknown" };
+  onNativeNotificationsRequestPermission?: () => void;
+  onNativeNotificationsSendTest?: () => void;
   webPush?: WebPushUiState;
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
@@ -491,8 +542,12 @@ const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     sections: ["channels", "messages", "broadcast", "__notifications__", "talk", "audio"],
   },
   {
+    id: "security",
+    sections: ["security", "approvals"],
+  },
+  {
     id: "automation",
-    sections: ["commands", "hooks", "bindings", "cron", "approvals", "plugins"],
+    sections: ["commands", "hooks", "bindings", "cron", "plugins"],
   },
   {
     id: "infrastructure",
@@ -722,8 +777,8 @@ function computeRawDiff(
     return viewState.rawDiffCache.diff;
   }
   try {
-    const originalValue = JSON5.parse(original) as unknown;
-    const currentValue = JSON5.parse(current) as unknown;
+    const originalValue = parseJson5Text(original);
+    const currentValue = parseJson5Text(current);
     if (
       !originalValue ||
       !currentValue ||
@@ -742,7 +797,12 @@ function computeRawDiff(
     viewState.rawDiffCache = { original, current, diff };
     return diff;
   } catch {
-    viewState.rawDiffCache = { original, current, diff: [] };
+    // While the lazy JSON5 parser is still loading, a parse failure may be
+    // transient; skip the cache so the next render retries instead of pinning
+    // an empty diff for this text pair.
+    if (isJson5Warm()) {
+      viewState.rawDiffCache = { original, current, diff: [] };
+    }
     return [];
   }
 }
@@ -764,17 +824,6 @@ function truncateValue(value: unknown, maxLen = 40): string {
     return str;
   }
   return truncateUtf16Safe(str, maxLen - 3) + "...";
-}
-
-function renderDiffValue(path: ConfigDiffPath, value: unknown, _uiHints: ConfigUiHints): string {
-  if (
-    isSensitiveConfigPath(formatConfigDiffPath(path)) &&
-    value != null &&
-    truncateValue(value).trim() !== ""
-  ) {
-    return REDACTED_PLACEHOLDER;
-  }
-  return truncateValue(value);
 }
 
 function hintKeyMatchesPathPrefix(hintKey: string, path: ConfigDiffPath): boolean {
@@ -823,28 +872,43 @@ type ThemeOption = {
   id: ThemeName;
   labelKey: string;
   descriptionKey: string;
-  icon: TemplateResult;
 };
 const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
   {
     id: "claw",
     labelKey: "configView.themes.claw.label",
     descriptionKey: "configView.themes.claw.description",
-    icon: icons.zap,
   },
   {
     id: "knot",
     labelKey: "configView.themes.knot.label",
     descriptionKey: "configView.themes.knot.description",
-    icon: icons.link,
   },
   {
     id: "dash",
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
-    icon: icons.barChart,
   },
 ];
+
+/* Builtin cards preview their real palette (chip colors live in config.css,
+   mirrored from the base.css theme blocks). The custom card only has real
+   colors while active — its chips read the live CSS variables — so it falls
+   back to the spark icon otherwise. */
+function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
+  if (id === "custom" && activeTheme !== "custom") {
+    return html`<span class="settings-theme-card__icon" aria-hidden="true"
+      >${icons.download}</span
+    >`;
+  }
+  return html`
+    <span class="settings-theme-card__palette" aria-hidden="true">
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--accent-2"></span>
+      <span class="settings-theme-card__chip settings-theme-card__chip--bg"></span>
+    </span>
+  `;
+}
 
 function importedThemeName(props: Pick<ConfigProps, "hasCustomTheme" | "customThemeLabel">) {
   return props.hasCustomTheme && props.customThemeLabel
@@ -872,200 +936,76 @@ function focusCustomThemeImportInput() {
   });
 }
 
-function renderNotificationsSection(props: ConfigProps) {
-  const push = props.webPush;
-  if (!push) {
-    return html`
-      <div class="settings-page">
-        <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-          <div class="settings-section__header">
-            <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-            <div class="settings-section__actions">
-              ${renderSettingsStatus({
-                kind: "muted",
-                label: t("configView.notifications.unavailable"),
-              })}
-            </div>
-          </div>
-          <div class="settings-group">
-            <div class="settings-row">
-              <div class="settings-row__text">
-                <span class="settings-row__desc">
-                  ${t("configView.notifications.unavailableHint")}
-                </span>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    `;
-  }
-
-  const permissionLabel =
-    push.permission === "granted"
-      ? t("configView.notifications.granted")
-      : push.permission === "denied"
-        ? t("configView.notifications.denied")
-        : push.permission === "default"
-          ? t("configView.notifications.notRequested")
-          : t("configView.notifications.unsupported");
-  const subscriptionLabel = push.subscribed
-    ? t("configView.notifications.subscribed")
-    : t("configView.notifications.notSubscribed");
-  const statusLabel = !push.supported
-    ? t("configView.notifications.unsupported")
-    : push.permission === "denied"
-      ? t("configView.notifications.blocked")
-      : push.subscribed
-        ? t("configView.notifications.subscribed")
-        : t("configView.notifications.ready");
-  const statusKind = !push.supported
-    ? ("muted" as const)
-    : push.permission === "denied"
-      ? ("danger" as const)
-      : push.subscribed
-        ? ("ok" as const)
-        : ("accent" as const);
-
-  const actionButtons =
-    push.supported && push.permission !== "denied"
-      ? push.subscribed
-        ? html`
-            <button
-              class="btn"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushUnsubscribe?.()}
-            >
-              ${icons.x} ${t("configView.notifications.unsubscribe")}
-            </button>
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushTest?.()}
-            >
-              ${icons.send} ${t("configView.notifications.sendTest")}
-            </button>
-          `
-        : html`
-            <button
-              class="btn primary"
-              ?disabled=${push.loading || !props.connected}
-              @click=${() => props.onWebPushSubscribe?.()}
-            >
-              ${push.loading ? icons.loader : nothing}
-              ${push.loading
-                ? t("configView.notifications.subscribing")
-                : t("configView.notifications.enable")}
-            </button>
-          `
-      : nothing;
-
-  return html`
-    <div class="settings-page">
-      <section class="settings-section" id=${COMMUNICATION_SETTINGS_TARGET_IDS.notifications}>
-        <div class="settings-section__header">
-          <h2 class="settings-section__heading">${t("configView.notifications.title")}</h2>
-          <div class="settings-section__actions">
-            ${renderSettingsStatus({ kind: statusKind, label: statusLabel })}
-          </div>
-        </div>
-        <p class="settings-section__desc">${t("configView.notifications.hint")}</p>
-        <div class="settings-group">
-          ${renderSettingsRow({
-            title: t("configView.notifications.browserSupport"),
-            control: renderSettingsValue(
-              push.supported
-                ? t("configView.notifications.available")
-                : t("configView.notifications.notSupported"),
-            ),
-          })}
-          ${renderSettingsRow({
-            title: t("configView.notifications.permission"),
-            control: renderSettingsValue(permissionLabel),
-          })}
-          ${renderSettingsRow({
-            title: t("configView.notifications.status"),
-            control: renderSettingsStatus({
-              kind: push.subscribed ? "ok" : "muted",
-              label: subscriptionLabel,
-            }),
-          })}
-          ${actionButtons !== nothing
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__control">${actionButtons}</div>
-                </div>
-              `
-            : nothing}
-          ${push.permission === "denied"
-            ? renderSettingsRow({
-                title: t("configView.notifications.blocked"),
-                description: t("configView.notifications.blockedHint"),
-                control: renderSettingsStatus({
-                  kind: "danger",
-                  label: t("configView.notifications.denied"),
-                }),
-              })
-            : nothing}
-          ${push.error
-            ? html`
-                <div class="settings-row">
-                  <div class="settings-row__text">
-                    <span class="cfg-field__error">${push.error}</span>
-                  </div>
-                </div>
-              `
-            : nothing}
-        </div>
-      </section>
-    </div>
-  `;
-}
-
-function renderSettingsMicrophoneField(props: ConfigProps) {
-  const microphone = props.microphone;
-  if (!microphone || !props.onMicrophoneSelect) {
+function renderSettingsMediaDeviceField(options: {
+  state: SettingsMediaDeviceState | undefined;
+  title: string;
+  systemDefaultLabel: string;
+  emptyLabel: string;
+  fallbackLabel: (number: number) => string;
+  dataAttribute: "microphone" | "camera";
+  onRefresh: (() => void) | undefined;
+  onSelect: ((deviceId: string) => void) | undefined;
+}) {
+  const state = options.state;
+  if (!state || !options.onSelect) {
     return nothing;
   }
-  const selectedDeviceId = microphone.selectedDeviceId.trim();
-  const selectedDeviceKnown = microphone.devices.some(
-    (device) => device.deviceId === selectedDeviceId,
-  );
-  const options = [
-    { label: t("chat.composer.systemDefaultMicrophone"), value: "" },
-    ...microphone.devices.map((device) => ({ label: device.label, value: device.deviceId })),
+  const selectedDeviceId = state.selectedDeviceId.trim();
+  const selectedDeviceKnown = state.devices.some((device) => device.deviceId === selectedDeviceId);
+  const selectOptions = [
+    { label: options.systemDefaultLabel, value: "" },
+    ...state.devices.map((device) => ({ label: device.label, value: device.deviceId })),
     // A remembered device that is unplugged right now stays selectable so the
     // choice survives until the user picks something else.
     ...(selectedDeviceId && !selectedDeviceKnown
       ? [
           {
-            label: t("chat.composer.microphoneFallback", {
-              number: String(microphone.devices.length + 1),
-            }),
+            label: options.fallbackLabel(state.devices.length + 1),
             value: selectedDeviceId,
           },
         ]
       : []),
   ];
-  const refreshLabel = `${t("common.refresh")}: ${t("chat.composer.microphoneInput")}`;
-  const note = microphone.error
-    ? html`<span role="alert">${microphone.error}</span>`
-    : !microphone.loading && microphone.devices.length === 0
-      ? t("chat.composer.noMicrophones")
+  const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
+  const note = state.error
+    ? html`<span role="alert">${state.error}</span>`
+    : !state.loading && state.devices.length === 0
+      ? options.emptyLabel
       : undefined;
   return renderSettingsRow({
-    title: t("chat.composer.microphoneInput"),
+    title: options.title,
     description: note,
     control: html`
       <select
-        class="settings-select"
-        data-settings-microphone
-        aria-label=${t("chat.composer.microphoneInput")}
+        class="settings-select settings-select--media-device"
+        data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
+        data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
+        aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
-          props.onMicrophoneSelect?.((event.currentTarget as HTMLSelectElement).value)}
+          options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
-        ${options.map(
+        ${selectOptions.map(
           (option) => html`
             <option value=${option.value} ?selected=${option.value === selectedDeviceId}>
               ${option.label}
@@ -1077,50 +1017,240 @@ function renderSettingsMicrophoneField(props: ConfigProps) {
         type="button"
         class="btn btn--sm btn--icon"
         aria-label=${refreshLabel}
-        ?disabled=${microphone.loading}
-        @click=${() => props.onMicrophoneRefresh?.()}
+        ?disabled=${state.loading}
+        @click=${() => options.onRefresh?.()}
       >
-        ${microphone.loading ? icons.loader : icons.refresh}
+        ${state.loading ? icons.loader : icons.refresh}
       </button>
     `,
   });
 }
 
+function renderSettingsMicrophoneField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.microphone,
+    title: t("chat.composer.microphoneInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultMicrophone"),
+    emptyLabel: t("chat.composer.noMicrophones"),
+    fallbackLabel: (number) => t("chat.composer.microphoneFallback", { number: String(number) }),
+    dataAttribute: "microphone",
+    onRefresh: props.onMicrophoneRefresh,
+    onSelect: props.onMicrophoneSelect,
+  });
+}
+
+function renderSettingsCameraField(props: ConfigProps) {
+  return renderSettingsMediaDeviceField({
+    state: props.camera,
+    title: t("chat.composer.cameraInput"),
+    systemDefaultLabel: t("chat.composer.systemDefaultCamera"),
+    emptyLabel: t("chat.composer.noCameras"),
+    fallbackLabel: (number) => t("chat.composer.cameraFallback", { number: String(number) }),
+    dataAttribute: "camera",
+    onRefresh: props.onCameraRefresh,
+    onSelect: props.onCameraSelect,
+  });
+}
+
 function renderChatPreferencesSection(props: ConfigProps) {
+  const followUpSelection = props.chatFollowUpMode ?? "server";
+  const serverQueueMode = props.serverQueueMode ?? t("chat.followUpModeLoading");
+  const followUpDescription = props.chatFollowUpMode
+    ? t("chat.followUpModeOverriding", { mode: serverQueueMode })
+    : t("chat.followUpModeUsingServer", { mode: serverQueueMode });
   return html`
     <section id=${APPEARANCE_SETTINGS_TARGET_IDS.chat} class="settings-section">
       <div class="settings-section__header">
         <h2 class="settings-section__heading">${t("configView.chatPrefs.title")}</h2>
       </div>
-      <p class="settings-section__desc">${t("configView.chatPrefs.hint")}</p>
+      <p class="settings-section__desc">
+        ${t("configView.chatPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
       <div class="settings-group">
-        ${renderSettingsRow({
+        ${renderSettingsSelectRow({
           title: t("chat.sendShortcut"),
+          value: props.chatSendShortcut,
+          setting: "send-shortcut",
+          options: [
+            { value: "enter", label: t("chat.sendShortcutEnter") },
+            { value: "modifier-enter", label: t("chat.sendShortcutModifierEnter") },
+          ],
+          onChange: (value) => props.setChatSendShortcut(normalizeChatSendShortcut(value)),
+        })}
+        ${renderSettingsRow({
+          title: t("chat.followUpMode"),
+          description: followUpDescription,
           control: html`
             <select
               class="settings-select"
-              data-settings-send-shortcut
-              aria-label=${t("chat.sendShortcut")}
-              .value=${props.chatSendShortcut}
-              @change=${(event: Event) =>
-                props.setChatSendShortcut(
-                  normalizeChatSendShortcut((event.currentTarget as HTMLSelectElement).value),
-                )}
+              data-settings-follow-up-mode
+              aria-label=${t("chat.followUpMode")}
+              .value=${followUpSelection}
+              @change=${(event: Event) => {
+                const value = (event.currentTarget as HTMLSelectElement).value;
+                props.setChatFollowUpMode(
+                  value === "server" ? undefined : normalizeChatFollowUpMode(value),
+                );
+              }}
             >
-              <option value="enter" ?selected=${props.chatSendShortcut === "enter"}>
-                ${t("chat.sendShortcutEnter")}
+              <option value="server" ?selected=${followUpSelection === "server"}>
+                ${t("chat.followUpModeServer", { mode: serverQueueMode })}
               </option>
-              <option
-                value="modifier-enter"
-                ?selected=${props.chatSendShortcut === "modifier-enter"}
-              >
-                ${t("chat.sendShortcutModifierEnter")}
+              <option value="steer" ?selected=${followUpSelection === "steer"}>
+                ${t("chat.followUpModeSteer")}
+              </option>
+              <option value="queue" ?selected=${followUpSelection === "queue"}>
+                ${t("chat.followUpModeQueue")}
               </option>
             </select>
+            ${props.chatFollowUpMode
+              ? html`
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    @click=${() => props.setChatFollowUpMode(undefined)}
+                  >
+                    ${t("chat.followUpModeReset")}
+                  </button>
+                `
+              : nothing}
           `,
         })}
-        ${renderSettingsMicrophoneField(props)}
+        ${renderSettingsSelectRow({
+          title: t("chat.catalogOpenTarget"),
+          value: props.catalogOpenTarget,
+          setting: "catalog-open-target",
+          options: [
+            { value: "viewer", label: t("chat.catalogOpenTargetViewer") },
+            { value: "terminal", label: t("chat.catalogOpenTargetTerminal") },
+          ],
+          onChange: (value) => props.setCatalogOpenTarget(normalizeCatalogOpenTarget(value)),
+        })}
+        ${renderSettingsMicrophoneField(props)} ${renderSettingsCameraField(props)}
+        ${props.setComposerHoldToRecord
+          ? renderSettingsToggleRow({
+              title: t("chat.composer.holdToRecordSetting"),
+              description: t("chat.composer.holdToRecordSettingDescription"),
+              checked: props.composerHoldToRecord !== false,
+              onChange: props.setComposerHoldToRecord,
+            })
+          : nothing}
       </div>
+    </section>
+  `;
+}
+
+// Lobster pet toggles and the Lobsterdex live with the rest of the appearance
+// prefs; the toggles are browser-local (ui/src/app/settings.ts), so hosts that
+// do not wire them (embedded editors) simply omit the section.
+function renderLobsterPetSection(props: ConfigProps) {
+  if (!props.setLobsterPetVisits || !props.setLobsterPetSounds) {
+    return nothing;
+  }
+  const lobsterPetVisits = props.lobsterPetVisits === true;
+  const lobsterPetSounds = props.lobsterPetSounds === true;
+  return html`
+    <section class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("quickSettings.appearance.lobsterdex")}</h2>
+      </div>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterVisits"),
+          description: lobsterPetVisits
+            ? t("quickSettings.appearance.lobsterVisitsOn")
+            : t("quickSettings.appearance.lobsterVisitsOff"),
+          checked: lobsterPetVisits,
+          onChange: (enabled) => props.setLobsterPetVisits?.(enabled),
+        })}
+        ${renderSettingsToggleRow({
+          title: t("quickSettings.appearance.lobsterSounds"),
+          description: lobsterPetSounds
+            ? t("quickSettings.appearance.lobsterSoundsOn")
+            : t("quickSettings.appearance.lobsterSoundsOff"),
+          checked: lobsterPetSounds,
+          onChange: (enabled) => props.setLobsterPetSounds?.(enabled),
+          onAct: (enabled) => {
+            if (enabled) {
+              previewLobsterChirp();
+            }
+          },
+        })}
+        ${renderSettingsRow({
+          title: t("quickSettings.appearance.lobsterdex"),
+          description: t("quickSettings.appearance.lobsterdexSeen", {
+            seen: String(LOBSTER_PET_PALETTES.filter((p) => getLobsterdex().has(p.id)).length),
+            total: String(LOBSTER_PET_PALETTES.length),
+          }),
+          stacked: true,
+          control: html`
+            <div class="lobsterdex">
+              ${LOBSTER_PET_PALETTES.map((palette) => {
+                const entry = getLobsterdexEntries().get(palette.id);
+                const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
+                const title = !seen
+                  ? "?"
+                  : entry.firstSeenAt !== null
+                    ? t("quickSettings.appearance.lobsterdexFirstVisited", {
+                        name: entry.name ?? palette.id,
+                        date: new Date(entry.firstSeenAt).toLocaleDateString(),
+                      })
+                    : (entry.name ?? palette.id);
+                return html`
+                  <span
+                    class="lobsterdex__mini lobster-pet--palette-${palette.id} ${seen
+                      ? ""
+                      : "lobsterdex__mini--unseen"}"
+                    style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
+                    title=${shinySeen ? `${title} ✦` : title}
+                  >
+                    ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
+                  </span>
+                `;
+              })}
+            </div>
+          `,
+        })}
+      </div>
+    </section>
+  `;
+}
+
+function renderSidebarPreferencesSection(props: ConfigProps) {
+  return html`
+    <section id=${APPEARANCE_SETTINGS_TARGET_IDS.sidebar} class="settings-section">
+      <div class="settings-section__header">
+        <h2 class="settings-section__heading">${t("configView.sidebarPrefs.title")}</h2>
+      </div>
+      <p class="settings-section__desc">
+        ${t("configView.sidebarPrefs.hint")} ${t("configView.syncedHint")}
+      </p>
+      <div class="settings-group">
+        ${renderSettingsToggleRow({
+          title: t("configView.sidebarPrefs.liveActivity"),
+          description: t("configView.sidebarPrefs.liveActivityHint"),
+          checked: props.sidebarLiveActivity,
+          onChange: props.setSidebarLiveActivity,
+        })}
+      </div>
+      <div class="settings-section__header settings-section__header--subsection">
+        <h3 class="settings-section__heading">${t("configView.sessionObserver.title")}</h3>
+      </div>
+      <p class="settings-section__desc">${t("configView.sessionObserver.hint")}</p>
+      ${renderSessionObserverSettings({
+        enabled: props.sessionObserverEnabled !== false,
+        utilityModel: props.sessionObserverUtilityModel,
+        resolvedUtilityModel: props.sessionObserverResolvedModel,
+        models: props.sessionObserverModels ?? [],
+        modelsUnavailable: props.sessionObserverModelsUnavailable === true,
+        disabled: props.sessionObserverDisabled === true,
+        onEnabledChange: (enabled) => props.setSessionObserverEnabled?.(enabled),
+        onUtilityModelChange: (selection) => props.setSessionObserverUtilityModel?.(selection),
+      })}
     </section>
   `;
 }
@@ -1141,13 +1271,11 @@ function renderAppearanceSection(props: ConfigProps) {
     id: ThemeName;
     label: string;
     description: string;
-    icon: TemplateResult;
   }> = [
     ...BUILTIN_THEME_OPTIONS.map((option) => ({
       id: option.id,
       label: t(option.labelKey),
       description: t(option.descriptionKey),
-      icon: option.icon,
     })),
     {
       id: "custom",
@@ -1155,7 +1283,6 @@ function renderAppearanceSection(props: ConfigProps) {
       description: props.hasCustomTheme
         ? t("configView.appearance.importedFrom", { name: importedName })
         : t("configView.appearance.importHint"),
-      icon: icons.spark,
     },
   ];
   return html`
@@ -1164,14 +1291,17 @@ function renderAppearanceSection(props: ConfigProps) {
         <div class="settings-section__header">
           <h2 class="settings-section__heading">${t("configView.appearance.theme")}</h2>
         </div>
-        <p class="settings-section__desc">${t("configView.appearance.chooseTheme")}</p>
+        <p class="settings-section__desc">
+          ${t("configView.appearance.chooseTheme")} ${t("configView.syncedHint")}
+        </p>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               ${themeOptions.map(
                 (opt) => html`
                   <button
-                    class="settings-theme-card ${opt.id === props.theme
+                    class="settings-theme-card settings-theme-card--${opt.id} ${opt.id ===
+                    props.theme
                       ? "settings-theme-card--active"
                       : ""}"
                     title=${opt.description}
@@ -1188,7 +1318,7 @@ function renderAppearanceSection(props: ConfigProps) {
                       }
                     }}
                   >
-                    <span class="settings-theme-card__icon" aria-hidden="true">${opt.icon}</span>
+                    ${renderThemeCardVisual(opt.id, props.theme)}
                     <span class="settings-theme-card__label">${opt.label}</span>
                     ${opt.id === props.theme
                       ? html`<span class="settings-theme-card__check" aria-hidden="true"
@@ -1319,6 +1449,7 @@ function renderAppearanceSection(props: ConfigProps) {
         </div>
       </section>
 
+      ${renderSidebarPreferencesSection(props)} ${renderLobsterPetSection(props)}
       ${renderChatPreferencesSection(props)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.connection} class="settings-section">
@@ -1349,12 +1480,84 @@ function renderAppearanceSection(props: ConfigProps) {
   `;
 }
 
+const renderBusyButtonContent = (busy: boolean, label: string, busyLabel: string) =>
+  busy
+    ? html`<span class="config-action-spinner" aria-hidden="true">${icons.loader}</span
+        >${busyLabel}`
+    : label;
+
+type ConfigApplyBannerProps = {
+  needsApply: boolean;
+  applying: boolean;
+  /** Any config write in flight or config load pending; gates the action. */
+  busy: boolean;
+  connected: boolean;
+  onApply: () => void;
+};
+
+/** Slim restart affordance shown after config.set until config.apply runs. */
+export function renderConfigApplyBanner(props: ConfigApplyBannerProps) {
+  if (!props.needsApply) {
+    return nothing;
+  }
+  return html`
+    <div class="config-apply-banner" role="status">
+      <span class="config-apply-banner__text">${t("configView.applyBannerText")}</span>
+      <button
+        class="btn btn--sm"
+        ?disabled=${props.busy || props.applying || !props.connected}
+        aria-busy=${props.applying ? "true" : "false"}
+        @click=${props.onApply}
+      >
+        ${renderBusyButtonContent(
+          props.applying,
+          t("configView.applyBannerAction"),
+          t("configView.applying"),
+        )}
+      </button>
+    </div>
+  `;
+}
+
+/**
+ * Inline autosave status shared by the schema editor and Quick Settings:
+ * Saving…/Saved plus the failure recoveries (Retry re-submits, conflict only
+ * offers a discarding reload so the draft cannot clobber another writer).
+ */
+export function renderConfigAutoSaveStatus(props: {
+  status: ConfigAutoSaveStatus;
+  onRetry: () => void;
+  onReload: () => void;
+}) {
+  switch (props.status) {
+    case "saving":
+      return renderSettingsStatus({ kind: "accent", label: t("configView.autoSaveSaving") });
+    case "saved":
+      return renderSettingsStatus({ kind: "ok", label: t("configView.autoSaveSaved") });
+    case "error":
+      return html`
+        ${renderSettingsStatus({ kind: "danger", label: t("configView.autoSaveFailed") })}
+        <button class="btn btn--sm" @click=${props.onRetry}>${t("configView.retry")}</button>
+      `;
+    case "conflict":
+      // Another writer changed openclaw.json; retrying this whole-form draft
+      // would clobber their edit, so the only offered recovery is a reload.
+      return html`
+        ${renderSettingsStatus({ kind: "danger", label: t("configView.autoSaveConflict") })}
+        <button class="btn btn--sm" @click=${props.onReload}>${t("common.reload")}</button>
+      `;
+    default:
+      return nothing;
+  }
+}
+
 function resetConfigEphemeralState(viewState: ConfigViewState) {
   viewState.rawRevealed = false;
   viewState.rawDiffOpen = false;
   viewState.envRevealed = false;
   viewState.validityDismissed = false;
   viewState.revealedSensitivePaths.clear();
+  viewState.expandedAdvancedSections.clear();
   viewState.lastCustomThemeImportFocusToken = null;
   viewState.rawDiffCache = undefined;
 }
@@ -1409,24 +1612,37 @@ export function renderConfig(props: ConfigProps) {
   );
   const formUnsafe = analysis.schema ? analysis.unsupportedPaths.length > 0 : false;
   const rawAvailable = props.rawAvailable ?? true;
-  const formMode = showModeToggle && rawAvailable ? props.formMode : "form";
+  // An unsaved raw draft stays authoritative in the capability; hiding the
+  // raw editor would show a stale form beside an apply that always refuses.
+  // Pin the raw view until the draft is saved or discarded.
+  const rawDraftPending = Boolean(props.rawDraftPending) && rawAvailable;
+  const displayFormMode = showModeToggle && rawAvailable ? props.formMode : "form";
+  const formMode = rawDraftPending ? "raw" : displayFormMode;
   const requestUpdate = props.onViewStateChange;
   // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
   const resetContentScroll = (target: EventTarget | null) => {
     queueMicrotask(() => {
+      // Flat layout: the settings shell owns the scroll viewport; the sibling
+      // .config-content lookup covers embedded/detached hosts.
       const origin = target instanceof Element ? target : null;
-      const content =
-        origin?.closest(".config-main")?.querySelector<HTMLElement>(".config-content") ??
-        globalThis.document?.querySelector<HTMLElement>(".config-content");
-      if (!content) {
-        return;
+      const scrollTargets = [
+        origin
+          ?.closest(".config-lead")
+          ?.parentElement?.querySelector<HTMLElement>(".config-content") ??
+          globalThis.document?.querySelector<HTMLElement>(".config-content"),
+        globalThis.document?.querySelector<HTMLElement>(".shell--settings .content"),
+      ];
+      for (const content of scrollTargets) {
+        if (!content) {
+          continue;
+        }
+        if (typeof content.scrollTo === "function") {
+          content.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        } else {
+          content.scrollTop = 0;
+          content.scrollLeft = 0;
+        }
       }
-      if (typeof content.scrollTo === "function") {
-        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
-        return;
-      }
-      content.scrollTop = 0;
-      content.scrollLeft = 0;
     });
   };
 
@@ -1565,8 +1781,7 @@ export function renderConfig(props: ConfigProps) {
     `;
   }
 
-  // Compute diff for showing changes (works for both form and raw modes)
-  const diff = formMode === "form" ? computeDiff(props.originalValue, props.formValue) : [];
+  // Raw mode keeps an explicit diff + save flow; form edits auto-save.
   const hasRawChanges = formMode === "raw" && props.raw !== props.originalRaw;
   if ((!hasRawChanges || formMode !== "raw") && viewState.rawDiffOpen) {
     viewState.rawDiffOpen = false;
@@ -1578,22 +1793,22 @@ export function renderConfig(props: ConfigProps) {
     formMode === "raw" && hasRawChanges && viewState.rawDiffOpen
       ? computeRawDiff(viewState, props.originalRaw, props.raw)
       : [];
-  const hasChanges = formMode === "form" ? diff.length > 0 : hasRawChanges;
+  if (formMode === "raw" && hasRawChanges && viewState.rawDiffOpen && !isJson5Warm()) {
+    // First diff open can race the lazy JSON5 parser; re-render when it lands
+    // so the pending-changes list fills in instead of staying empty.
+    void warmJson5()
+      .then(() => requestUpdate())
+      .catch(() => undefined);
+  }
+  // Includes the app updater: writes are suspended while it runs, so raw
+  // Save/Discard must read busy instead of silently no-opping.
   const configBusy = props.loading || props.saving || props.applying || props.updating;
-
-  // Save/apply buttons require actual changes to be enabled.
-  // Note: formUnsafe warns about unsupported schema paths but shouldn't block saving.
-  const canSaveForm = Boolean(props.formValue) && !props.loading && Boolean(analysis.schema);
-  const canSave =
-    props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
-  const canApply =
-    props.connected && !configBusy && hasChanges && (formMode === "raw" ? true : canSaveForm);
-  const canUpdate = props.connected && !configBusy;
-  const renderActionButtonContent = (busy: boolean, label: string, busyLabel: string) =>
-    busy
-      ? html`<span class="config-action-spinner" aria-hidden="true">${icons.loader}</span
-          >${busyLabel}`
-      : label;
+  const canRawSave = props.connected && !configBusy && hasRawChanges;
+  const autoSaveStatus = renderConfigAutoSaveStatus({
+    status: props.autoSaveStatus,
+    onRetry: props.onSave,
+    onReload: props.onRawDiscard,
+  });
 
   const showAppearanceOnRoot =
     includeVirtualSections &&
@@ -1601,479 +1816,388 @@ export function renderConfig(props: ConfigProps) {
     props.activeSection === null &&
     Boolean(include?.has("__appearance__"));
 
-  return html`
-    <div class="config-layout">
-      <main class="config-main">
-        <div class="config-actions">
-          <div class="config-actions__left">
-            ${showModeToggle
-              ? html`
-                  <div class="config-mode-toggle">
-                    <button
-                      class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
-                      ?disabled=${props.schemaLoading || !props.schema}
-                      title=${formUnsafe ? t("configView.formUnsafeTitle") : ""}
-                      @click=${() => props.onFormModeChange("form")}
-                    >
-                      ${t("configView.form")}
-                    </button>
-                    <button
-                      class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
-                      ?disabled=${!rawAvailable}
-                      title=${rawAvailable
-                        ? t("configView.rawTitle")
-                        : t("configView.rawUnavailableTitle")}
-                      @click=${() => props.onFormModeChange("raw")}
-                    >
-                      ${t("configView.raw")}
-                    </button>
-                  </div>
-                `
-              : nothing}
-            ${hasChanges
-              ? html`
-                  <span class="config-changes-badge"
-                    >${formMode === "raw"
-                      ? t("common.unsavedChanges")
-                      : t(
-                          diff.length === 1
-                            ? "configView.unsavedChange"
-                            : "configView.unsavedChanges",
-                          { count: String(diff.length) },
-                        )}</span
-                  >
-                `
-              : html` <span class="config-status muted">${t("configView.noChanges")}</span> `}
-          </div>
-          <div class="config-actions__right">
-            ${!rawAvailable
-              ? html`
-                  <span class="config-status muted config-actions__notice"
-                    >${t("configView.rawDisabled")}</span
-                  >
-                `
-              : nothing}
-            <div class="config-actions__buttons">
-              ${props.onOpenFile
-                ? html`
-                    <button class="btn btn--sm" @click=${props.onOpenFile}>
-                      ${icons.fileText} ${t("configView.open")}
-                    </button>
-                  `
-                : nothing}
-              <button class="btn btn--sm" ?disabled=${configBusy} @click=${props.onReload}>
-                ${props.loading ? t("common.loading") : t("common.reload")}
-              </button>
-              <button
-                class="btn btn--sm"
-                ?disabled=${configBusy || !hasChanges}
-                @click=${props.onReset}
+  const rawDiffPanel =
+    hasRawChanges && formMode === "raw"
+      ? html`
+          <details
+            class="config-diff"
+            ?open=${viewState.rawDiffOpen}
+            @toggle=${(e: Event) => {
+              const details = e.target as HTMLDetailsElement;
+              if (viewState.rawDiffOpen === details.open) {
+                return;
+              }
+              viewState.rawDiffOpen = details.open;
+              if (!details.open) {
+                viewState.rawDiffCache = undefined;
+              }
+              requestUpdate();
+            }}
+          >
+            <summary class="config-diff__summary">
+              <span>${t("configView.viewPendingChangesRaw")}</span>
+              <svg
+                class="config-diff__chevron"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
               >
-                ${t("configView.clear")}
-              </button>
-              <button
-                class="btn btn--sm primary"
-                ?disabled=${!canSave}
-                aria-busy=${props.saving ? "true" : "false"}
-                @click=${props.onSave}
-              >
-                ${renderActionButtonContent(props.saving, t("common.save"), t("common.saving"))}
-              </button>
-              <button
-                class="btn btn--sm"
-                ?disabled=${!canApply}
-                aria-busy=${props.applying ? "true" : "false"}
-                @click=${props.onApply}
-              >
-                ${renderActionButtonContent(
-                  props.applying,
-                  t("configView.apply"),
-                  t("configView.applying"),
-                )}
-              </button>
-              <button
-                class="btn btn--sm"
-                ?disabled=${!canUpdate}
-                aria-busy=${props.updating ? "true" : "false"}
-                @click=${props.onUpdate}
-              >
-                ${renderActionButtonContent(
-                  props.updating,
-                  t("configView.update"),
-                  t("configView.updating"),
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        ${settingsLayout === "accordion"
-          ? renderAccordionNav()
-          : html`
-              <div class="config-top-tabs">
-                ${formMode === "form"
-                  ? html`
-                      <div class="config-search config-search--top">
-                        <div class="config-search__input-row">
-                          <svg
-                            class="config-search__icon"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                          >
-                            <circle cx="11" cy="11" r="8"></circle>
-                            <path d="M21 21l-4.35-4.35"></path>
-                          </svg>
-                          <input
-                            type="text"
-                            class="config-search__input"
-                            placeholder=${t("configView.searchPlaceholder")}
-                            aria-label=${t("configView.search")}
-                            .value=${props.searchQuery}
-                            @input=${(e: Event) =>
-                              props.onSearchChange((e.target as HTMLInputElement).value)}
-                          />
-                          ${props.searchQuery
-                            ? html`
-                                <button
-                                  class="config-search__clear"
-                                  aria-label=${t("configView.clearSearch")}
-                                  @click=${() => props.onSearchChange("")}
-                                >
-                                  ×
-                                </button>
-                              `
-                            : nothing}
-                        </div>
-                      </div>
-                    `
-                  : nothing}
-
-                <wa-tab-group
-                  class="config-top-tabs__scroller"
-                  activation="manual"
-                  .active=${props.activeSection ?? "root"}
-                  aria-label="${t("common.settingsSections")}"
-                  @wa-tab-show=${(event: CustomEvent<{ name: string }>) => {
-                    const key = event.detail.name === "root" ? null : event.detail.name;
-                    props.onSectionChange(key);
-                    resetContentScroll(event.currentTarget);
-                  }}
-                >
-                  ${topTabs.map(
-                    (tab) => html`
-                      <wa-tab
-                        slot="nav"
-                        id=${configSectionTabId(tab.key)}
-                        class="config-top-tabs__tab"
-                        panel=${tab.key ?? "root"}
-                        ?active=${(props.activeSection ?? "root") === (tab.key ?? "root")}
-                        aria-controls="config-section-panel"
-                        title=${tab.label}
-                      >
-                        ${tab.label}
-                      </wa-tab>
-                    `,
-                  )}
-                </wa-tab-group>
-              </div>
-            `}
-        ${validity === "invalid" && !viewState.validityDismissed
-          ? html`
-              <div class="config-validity-warning">
-                <svg
-                  class="config-validity-warning__icon"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  width="16"
-                  height="16"
-                >
-                  <path
-                    d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
-                  ></path>
-                  <line x1="12" y1="9" x2="12" y2="13"></line>
-                  <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                </svg>
-                <span class="config-validity-warning__text">${t("configView.invalidConfig")}</span>
-                <button
-                  class="btn btn--sm"
-                  @click=${() => {
-                    viewState.validityDismissed = true;
-                    requestUpdate();
-                  }}
-                >
-                  ${t("configView.dismissWarning")}
-                </button>
-              </div>
-            `
-          : nothing}
-
-        <!-- Diff panel -->
-        ${hasChanges && formMode === "form"
-          ? html`
-              <details class="config-diff">
-                <summary class="config-diff__summary">
-                  <span
-                    >${t(
-                      diff.length === 1
-                        ? "configView.viewPendingChange"
-                        : "configView.viewPendingChanges",
-                      { count: String(diff.length) },
-                    )}</span
-                  >
-                  <svg
-                    class="config-diff__chevron"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="config-diff__content">
-                  ${diff.map(
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </summary>
+            <div class="config-diff__content">
+              ${rawDiff.length > 0
+                ? rawDiff.map(
                     (change) => html`
                       <div class="config-diff__item">
                         <div class="config-diff__path">${formatConfigDiffPath(change.path)}</div>
                         <div class="config-diff__values">
                           <span class="config-diff__from"
-                            >${renderDiffValue(change.path, change.from, props.uiHints)}</span
+                            >${renderRawDiffValue(
+                              change.path,
+                              change.from,
+                              props.uiHints,
+                              viewState.rawRevealed,
+                            )}</span
                           >
                           <span class="config-diff__arrow">→</span>
                           <span class="config-diff__to"
-                            >${renderDiffValue(change.path, change.to, props.uiHints)}</span
+                            >${renderRawDiffValue(
+                              change.path,
+                              change.to,
+                              props.uiHints,
+                              viewState.rawRevealed,
+                            )}</span
                           >
                         </div>
                       </div>
                     `,
-                  )}
-                </div>
-              </details>
-            `
-          : nothing}
-        ${hasRawChanges && formMode === "raw"
-          ? html`
-              <details
-                class="config-diff"
-                ?open=${viewState.rawDiffOpen}
-                @toggle=${(e: Event) => {
-                  const details = e.target as HTMLDetailsElement;
-                  if (viewState.rawDiffOpen === details.open) {
-                    return;
-                  }
-                  viewState.rawDiffOpen = details.open;
-                  if (!details.open) {
-                    viewState.rawDiffCache = undefined;
-                  }
+                  )
+                : html`<div class="config-diff__item">${t("configView.rawDiffUnavailable")}</div>`}
+            </div>
+          </details>
+        `
+      : nothing;
+
+  const showSectionTabs = settingsLayout !== "accordion" && topTabs.length > 1;
+  const sectionTabs = showSectionTabs
+    ? renderSettingsSegmented({
+        value: props.activeSection ?? "root",
+        options: topTabs.map((tab) => ({ value: tab.key ?? "root", label: tab.label })),
+        ariaLabel: t("common.settingsSections"),
+        onChange: (value, element) => {
+          props.onSectionChange(value === "root" ? null : value);
+          resetContentScroll(element);
+        },
+      })
+    : nothing;
+
+  const showAdvancedToggle = formMode === "form";
+  const showToolbar =
+    showModeToggle || showSectionTabs || showAdvancedToggle || autoSaveStatus !== nothing;
+  const applyBanner = renderConfigApplyBanner({
+    needsApply: props.needsApply,
+    applying: props.applying,
+    // Applying mid-save/mid-load would race the write that made the banner
+    // appear (or a stale snapshot); a dirty raw draft blocks apply outright
+    // (raw is explicit-save-only); restarting mid-update can corrupt the
+    // install. Wait for quiet.
+    busy:
+      props.saving ||
+      props.loading ||
+      props.updating ||
+      props.autoSaveStatus === "saving" ||
+      hasRawChanges,
+    connected: props.connected,
+    onApply: props.onApply,
+  });
+  const showValidityWarning = validity === "invalid" && !viewState.validityDismissed;
+  const showLead =
+    showToolbar || settingsLayout === "accordion" || applyBanner !== nothing || showValidityWarning;
+
+  const lead = html`
+    <div class="config-lead">
+      ${showToolbar
+        ? html`
+            <div class="config-toolbar">
+              ${showModeToggle
+                ? html`
+                    <div class="config-mode-toggle">
+                      <button
+                        class="config-mode-toggle__btn ${formMode === "form" ? "active" : ""}"
+                        ?disabled=${props.schemaLoading || !props.schema || rawDraftPending}
+                        title=${rawDraftPending
+                          ? t("configView.rawDraftPendingFormTitle")
+                          : formUnsafe
+                            ? t("configView.formUnsafeTitle")
+                            : ""}
+                        @click=${() => props.onFormModeChange("form")}
+                      >
+                        ${t("configView.form")}
+                      </button>
+                      <button
+                        class="config-mode-toggle__btn ${formMode === "raw" ? "active" : ""}"
+                        ?disabled=${!rawAvailable}
+                        title=${rawAvailable
+                          ? t("configView.rawTitle")
+                          : t("configView.rawUnavailableTitle")}
+                        @click=${() => props.onFormModeChange("raw")}
+                      >
+                        ${t("configView.raw")}
+                      </button>
+                    </div>
+                  `
+                : nothing}
+              ${sectionTabs}
+              ${showAdvancedToggle
+                ? html`
+                    <button
+                      class="btn btn--sm config-show-advanced ${props.showAdvancedSettings
+                        ? "active"
+                        : ""}"
+                      aria-pressed=${props.showAdvancedSettings ? "true" : "false"}
+                      @click=${() => props.setShowAdvancedSettings(!props.showAdvancedSettings)}
+                    >
+                      ${t("configForm.showAdvanced")}
+                    </button>
+                  `
+                : nothing}
+              <div class="config-toolbar__status" role="status" aria-live="polite">
+                ${autoSaveStatus}
+              </div>
+            </div>
+          `
+        : nothing}
+      ${settingsLayout === "accordion" ? renderAccordionNav() : nothing} ${applyBanner}
+      ${showValidityWarning
+        ? html`
+            <div class="config-validity-warning">
+              <svg
+                class="config-validity-warning__icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                width="16"
+                height="16"
+              >
+                <path
+                  d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"
+                ></path>
+                <line x1="12" y1="9" x2="12" y2="13"></line>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+              <span class="config-validity-warning__text">${t("configView.invalidConfig")}</span>
+              <button
+                class="btn btn--sm"
+                @click=${() => {
+                  viewState.validityDismissed = true;
                   requestUpdate();
                 }}
               >
-                <summary class="config-diff__summary">
-                  <span>${t("configView.viewPendingChangesRaw")}</span>
-                  <svg
-                    class="config-diff__chevron"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <polyline points="6 9 12 15 18 9"></polyline>
-                  </svg>
-                </summary>
-                <div class="config-diff__content">
-                  ${rawDiff.length > 0
-                    ? rawDiff.map(
-                        (change) => html`
-                          <div class="config-diff__item">
-                            <div class="config-diff__path">
-                              ${formatConfigDiffPath(change.path)}
-                            </div>
-                            <div class="config-diff__values">
-                              <span class="config-diff__from"
-                                >${renderRawDiffValue(
-                                  change.path,
-                                  change.from,
-                                  props.uiHints,
-                                  viewState.rawRevealed,
-                                )}</span
+                ${t("configView.dismissWarning")}
+              </button>
+            </div>
+          `
+        : nothing}
+    </div>
+  `;
+
+  return html`
+    ${showLead ? lead : nothing}
+    <!-- Form content -->
+    <div
+      id="config-section-panel"
+      class="config-content"
+      role="region"
+      aria-label=${t("common.settingsSections")}
+    >
+      ${props.activeSection === "__appearance__"
+        ? includeVirtualSections
+          ? renderAppearanceSection(props)
+          : nothing
+        : props.activeSection === "__notifications__"
+          ? includeVirtualSections
+            ? renderNotificationsSection(props)
+            : nothing
+          : formMode === "form"
+            ? html`
+                ${formUnsafe && showModeToggle && rawAvailable
+                  ? html`<div class="callout info">${t("configView.formUnsafe")}</div>`
+                  : nothing}
+                ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
+                ${props.schemaLoading
+                  ? html`
+                      <div class="config-loading">
+                        <div class="config-loading__spinner"></div>
+                        <span>${t("configView.loadingSchema")}</span>
+                      </div>
+                    `
+                  : renderConfigForm({
+                      schema: analysis.schema,
+                      uiHints: props.uiHints,
+                      value: props.formValue,
+                      embedded: props.embeddedEditor === true,
+                      rawAvailable,
+                      disabled: configBusy || !props.formValue,
+                      unsupportedPaths: analysis.unsupportedPaths,
+                      onPatch: props.onFormPatch,
+                      activeSection: props.activeSection,
+                      activeSubsection: effectiveSubsection,
+                      showAdvanced: props.showAdvancedSettings,
+                      expandedAdvancedSections: viewState.expandedAdvancedSections,
+                      forceAdvancedSection: props.forceAdvancedSection,
+                      onAdvancedSectionToggle: (section, expanded) => {
+                        if (expanded) {
+                          viewState.expandedAdvancedSections.add(section);
+                        } else {
+                          viewState.expandedAdvancedSections.delete(section);
+                        }
+                        requestUpdate();
+                      },
+                      sectionActions:
+                        props.activeSection === "env"
+                          ? html`
+                              <button
+                                class="btn btn--sm ${envSensitiveVisible ? "active" : ""}"
+                                aria-pressed=${envSensitiveVisible ? "true" : "false"}
+                                title=${envSensitiveVisible
+                                  ? t("configView.hideEnvValues")
+                                  : t("configView.revealEnvValues")}
+                                @click=${() => {
+                                  viewState.envRevealed = !viewState.envRevealed;
+                                  requestUpdate();
+                                }}
                               >
-                              <span class="config-diff__arrow">→</span>
-                              <span class="config-diff__to"
-                                >${renderRawDiffValue(
-                                  change.path,
-                                  change.to,
-                                  props.uiHints,
-                                  viewState.rawRevealed,
-                                )}</span
-                              >
-                            </div>
-                          </div>
-                        `,
-                      )
-                    : html`
-                        <div class="config-diff__item">${t("configView.rawDiffUnavailable")}</div>
-                      `}
-                </div>
-              </details>
-            `
-          : nothing}
-        <!-- Form content -->
-        <wa-tab-panel
-          id="config-section-panel"
-          class="config-content"
-          name=${props.activeSection}
-          active
-          aria-labelledby=${configSectionTabId(props.activeSection)}
-        >
-          ${props.activeSection === "__appearance__"
-            ? includeVirtualSections
-              ? renderAppearanceSection(props)
-              : nothing
-            : props.activeSection === "__notifications__"
-              ? includeVirtualSections
-                ? renderNotificationsSection(props)
-                : nothing
-              : formMode === "form"
-                ? html`
-                    ${formUnsafe && showModeToggle && rawAvailable
-                      ? html`
-                          <div class="callout info" style="margin-bottom: 12px">
-                            ${t("configView.formUnsafe")}
-                          </div>
-                        `
-                      : nothing}
-                    ${showAppearanceOnRoot ? renderAppearanceSection(props) : nothing}
-                    ${props.schemaLoading
-                      ? html`
-                          <div class="config-loading">
-                            <div class="config-loading__spinner"></div>
-                            <span>${t("configView.loadingSchema")}</span>
-                          </div>
-                        `
-                      : renderConfigForm({
-                          schema: analysis.schema,
-                          uiHints: props.uiHints,
-                          value: props.formValue,
-                          rawAvailable,
-                          disabled: configBusy || !props.formValue,
-                          unsupportedPaths: analysis.unsupportedPaths,
-                          onPatch: props.onFormPatch,
-                          searchQuery: props.searchQuery,
-                          activeSection: props.activeSection,
-                          activeSubsection: effectiveSubsection,
-                          sectionActions:
-                            props.activeSection === "env"
-                              ? html`
-                                  <button
-                                    class="btn btn--sm ${envSensitiveVisible ? "active" : ""}"
-                                    aria-pressed=${envSensitiveVisible ? "true" : "false"}
-                                    title=${envSensitiveVisible
-                                      ? t("configView.hideEnvValues")
-                                      : t("configView.revealEnvValues")}
-                                    @click=${() => {
-                                      viewState.envRevealed = !viewState.envRevealed;
-                                      requestUpdate();
-                                    }}
-                                  >
-                                    ${envSensitiveVisible ? icons.eyeOff : icons.eye}
-                                    ${t("configView.peek")}
-                                  </button>
-                                `
-                              : undefined,
-                          revealSensitive:
-                            props.activeSection === "env" ? envSensitiveVisible : false,
-                          isSensitivePathRevealed: (path) =>
-                            isSensitivePathRevealed(viewState, path),
-                          onToggleSensitivePath: (path) => {
-                            toggleSensitivePathReveal(viewState, path);
-                            requestUpdate();
-                          },
-                        })}
-                  `
-                : (() => {
-                    const sensitiveCount = countSensitiveConfigValues(
-                      props.formValue,
-                      [],
-                      props.uiHints,
-                    );
-                    const blurred = sensitiveCount > 0 && !viewState.rawRevealed;
-                    return html`
-                      <div class="field config-raw-field">
-                        <span style="display:flex;align-items:center;gap:8px;">
-                          ${t("configView.rawConfig")}
-                          ${sensitiveCount > 0
+                                ${envSensitiveVisible ? icons.eyeOff : icons.eye}
+                                ${t("configView.peek")}
+                              </button>
+                            `
+                          : undefined,
+                      revealSensitive: props.activeSection === "env" ? envSensitiveVisible : false,
+                      isSensitivePathRevealed: (path) => isSensitivePathRevealed(viewState, path),
+                      onToggleSensitivePath: (path) => {
+                        toggleSensitivePathReveal(viewState, path);
+                        requestUpdate();
+                      },
+                    })}
+              `
+            : (() => {
+                const sensitiveCount = countSensitiveConfigValues(
+                  props.formValue,
+                  [],
+                  props.uiHints,
+                );
+                const blurred = sensitiveCount > 0 && !viewState.rawRevealed;
+                return html`
+                  <div class="settings-page">
+                    ${rawDiffPanel}
+                    <!-- Raw editor: one group surface owning file-level operations. -->
+                    <div class="settings-group">
+                      <div class="settings-row settings-row--stacked">
+                        <div class="config-raw-actions">
+                          ${props.onOpenFile
                             ? html`
-                                <span class="settings-count"
-                                  >${t(
-                                    sensitiveCount === 1
-                                      ? "configView.secretCount"
-                                      : "configView.secretCountPlural",
-                                    { count: String(sensitiveCount) },
-                                  )}
-                                  ${blurred
-                                    ? t("configView.redacted")
-                                    : t("configView.visible")}</span
-                                >
-                                <openclaw-tooltip
-                                  .content=${blurred
-                                    ? t("configView.revealSensitive")
-                                    : t("configView.hideSensitive")}
-                                >
-                                  <button
-                                    class="btn btn--icon config-raw-toggle ${blurred
-                                      ? ""
-                                      : "active"}"
-                                    aria-label=${t("configView.toggleRawRedaction")}
-                                    aria-pressed=${!blurred}
-                                    @click=${() => {
-                                      viewState.rawRevealed = !viewState.rawRevealed;
-                                      requestUpdate();
-                                    }}
-                                  >
-                                    ${blurred ? icons.eyeOff : icons.eye}
-                                  </button>
-                                </openclaw-tooltip>
+                                <button class="btn btn--sm" @click=${props.onOpenFile}>
+                                  ${icons.fileText} ${t("configView.open")}
+                                </button>
                               `
                             : nothing}
-                        </span>
-                        ${blurred
-                          ? html`
-                              <div class="callout info" style="margin-top: 12px">
-                                ${t(
-                                  sensitiveCount === 1
-                                    ? "configView.sensitiveHidden"
-                                    : "configView.sensitiveHiddenPlural",
-                                  { count: String(sensitiveCount) },
-                                )}
-                              </div>
-                            `
-                          : html`
-                              <textarea
-                                placeholder=${t("configView.rawConfig")}
-                                .value=${props.raw}
-                                ?disabled=${configBusy}
-                                @input=${(e: Event) => {
-                                  props.onRawChange((e.target as HTMLTextAreaElement).value);
-                                }}
-                              ></textarea>
-                            `}
+                          <button
+                            class="btn btn--sm"
+                            ?disabled=${configBusy || !hasRawChanges}
+                            @click=${props.onRawDiscard}
+                          >
+                            ${t("configView.rawDiscard")}
+                          </button>
+                          <button
+                            class="btn btn--sm primary"
+                            ?disabled=${!canRawSave}
+                            aria-busy=${props.saving ? "true" : "false"}
+                            @click=${props.onSave}
+                          >
+                            ${renderBusyButtonContent(
+                              props.saving,
+                              t("common.save"),
+                              t("common.saving"),
+                            )}
+                          </button>
+                        </div>
+                        <div class="field config-raw-field">
+                          <span style="display:flex;align-items:center;gap:8px;">
+                            ${t("configView.rawConfig")}
+                            ${sensitiveCount > 0
+                              ? html`
+                                  <span class="settings-count"
+                                    >${t(
+                                      sensitiveCount === 1
+                                        ? "configView.secretCount"
+                                        : "configView.secretCountPlural",
+                                      { count: String(sensitiveCount) },
+                                    )}
+                                    ${blurred
+                                      ? t("configView.redacted")
+                                      : t("configView.visible")}</span
+                                  >
+                                  <openclaw-tooltip
+                                    .content=${blurred
+                                      ? t("configView.revealSensitive")
+                                      : t("configView.hideSensitive")}
+                                  >
+                                    <button
+                                      class="btn btn--icon config-raw-toggle ${blurred
+                                        ? ""
+                                        : "active"}"
+                                      aria-label=${t("configView.toggleRawRedaction")}
+                                      aria-pressed=${!blurred}
+                                      @click=${() => {
+                                        viewState.rawRevealed = !viewState.rawRevealed;
+                                        requestUpdate();
+                                      }}
+                                    >
+                                      ${blurred ? icons.eyeOff : icons.eye}
+                                    </button>
+                                  </openclaw-tooltip>
+                                `
+                              : nothing}
+                          </span>
+                          ${blurred
+                            ? html`
+                                <div class="callout info" style="margin-top: 12px">
+                                  ${t(
+                                    sensitiveCount === 1
+                                      ? "configView.sensitiveHidden"
+                                      : "configView.sensitiveHiddenPlural",
+                                    { count: String(sensitiveCount) },
+                                  )}
+                                </div>
+                              `
+                            : html`
+                                <textarea
+                                  placeholder=${t("configView.rawConfig")}
+                                  .value=${props.raw}
+                                  ?disabled=${configBusy}
+                                  @input=${(e: Event) => {
+                                    props.onRawChange((e.target as HTMLTextAreaElement).value);
+                                  }}
+                                ></textarea>
+                              `}
+                        </div>
                       </div>
-                    `;
-                  })()}
-        </wa-tab-panel>
-
-        ${props.issues.length > 0
-          ? html`<div class="callout danger" style="margin-top: 12px;">
-              <pre class="code-block">${JSON.stringify(props.issues, null, 2)}</pre>
-            </div>`
-          : nothing}
-      </main>
+                    </div>
+                  </div>
+                `;
+              })()}
+      ${props.issues.length > 0
+        ? html`<div class="callout danger" style="margin-top: 12px;">
+            <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.issues, null, 2)))}</pre>
+          </div>`
+        : nothing}
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

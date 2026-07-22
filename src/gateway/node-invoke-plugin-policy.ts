@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -18,6 +19,7 @@ import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
   handlePendingApprovalRequest,
+  isApprovalRecordVisibleToClient,
 } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
@@ -133,17 +135,60 @@ function createApprovalRuntime(params: {
         twoPhase: false,
         approvalKind: "plugin",
         deliverRequest: () => {
+          const deliveryTasks: Array<Promise<boolean>> = [];
           const forward = params.context.forwardPluginApprovalRequest;
-          if (!forward) {
+          if (forward) {
+            deliveryTasks.push(
+              forward(requestEvent).catch((err: unknown) => {
+                params.context.logGateway?.error?.(
+                  `plugin approvals: forward node policy request failed: ${String(err)}`,
+                );
+                return false;
+              }),
+            );
+          }
+          const iosPushDelivery = params.context.pluginApprovalIosPushDelivery;
+          if (iosPushDelivery?.handleRequested) {
+            deliveryTasks.push(
+              iosPushDelivery
+                .handleRequested(requestEvent, {
+                  isTargetVisible: (target) =>
+                    isApprovalRecordVisibleToClient({
+                      record,
+                      client: {
+                        connect: {
+                          client: { id: GATEWAY_CLIENT_IDS.IOS_APP },
+                          device: { id: target.deviceId },
+                          scopes: [...target.scopes],
+                        },
+                      } as GatewayClient,
+                    }),
+                })
+                .catch((err: unknown) => {
+                  params.context.logGateway?.error?.(
+                    `plugin approvals: iOS push node policy request failed: ${String(err)}`,
+                  );
+                  return false;
+                }),
+            );
+          }
+          if (deliveryTasks.length === 0) {
             return false;
           }
-          return forward(requestEvent).catch((err: unknown) => {
-            params.context.logGateway?.error?.(
-              `plugin approvals: forward node policy request failed: ${String(err)}`,
-            );
-            return false;
-          });
+          return (async () => {
+            let delivered = false;
+            for (const task of deliveryTasks) {
+              delivered = (await task) || delivered;
+            }
+            return delivered;
+          })();
         },
+        afterDecision: async (decision) => {
+          if (decision === null) {
+            await params.context.pluginApprovalIosPushDelivery?.handleExpired?.(requestEvent);
+          }
+        },
+        afterDecisionErrorLabel: "plugin approvals: iOS push node policy expire failed",
       });
       const decision = await decisionPromise;
       // This return hands execution authority to the plugin policy. Claim a
@@ -174,6 +219,7 @@ export async function applyPluginNodeInvokePolicy(params: {
   };
   timeoutMs?: number;
   idempotencyKey?: string;
+  isInvocationCurrent?: () => boolean | Promise<boolean>;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActivePluginGatewayNodePolicyRegistry();
   // Route metadata is authority-bearing: only a signed agent-runtime caller may nominate it.
@@ -202,12 +248,31 @@ export async function applyPluginNodeInvokePolicy(params: {
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
     // Policies invoke the real node through this narrowed transport wrapper so
     // they can retry/override params without getting direct registry access.
-    const currentNode = params.context.nodeRegistry.get(params.nodeSession.nodeId);
+    if (params.isInvocationCurrent && !(await params.isInvocationCurrent())) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
+      };
+    }
+    const currentNode = params.nodeSession.pairingGeneration
+      ? params.context.nodeRegistry.getForPairingGeneration(
+          params.nodeSession.nodeId,
+          params.nodeSession.pairingGeneration,
+        )
+      : params.context.nodeRegistry.get(params.nodeSession.nodeId);
     if (!currentNode || currentNode.connId !== params.nodeSession.connId) {
       return {
         ok: false,
         code: "ROUTE_CHANGED",
         message: "node connection changed before dispatch",
+      };
+    }
+    if (currentNode.client.invalidated === true) {
+      return {
+        ok: false,
+        code: "PAIRING_CHANGED",
+        message: "node pairing changed before dispatch",
       };
     }
     const currentConfig = params.context.getRuntimeConfig();
@@ -234,6 +299,9 @@ export async function applyPluginNodeInvokePolicy(params: {
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       expectedConnId: params.nodeSession.connId,
+      ...(params.nodeSession.pairingGeneration
+        ? { expectedPairingGeneration: params.nodeSession.pairingGeneration }
+        : {}),
       command: params.command,
       params: override.params ?? params.params,
       timeoutMs: override.timeoutMs ?? params.timeoutMs,

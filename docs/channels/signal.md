@@ -38,6 +38,9 @@ Bare plugin specs try ClawHub first, then npm fallback. Force a source with `ope
     openclaw channels add
     ```
     The wizard detects whether `signal-cli` is on `PATH` and, when missing, offers to install it: downloads the official native GraalVM build on Linux x86-64, or installs via Homebrew on macOS and other architectures. It then prompts for the bot number and `signal-cli` path.
+
+    For non-interactive setup, `openclaw channels add --channel signal` also accepts `--signal-number <e164>` for the bot phone number, plus `--http-host <host>` and `--http-port <port>` for the Signal daemon endpoint (default `127.0.0.1:8080`).
+
   </Step>
   <Step title="Link or register the account">
     - **QR link (fastest):** `signal-cli link -n "OpenClaw"`, then scan with Signal. See [Path A](#setup-path-a-link-existing-signal-account-qr).
@@ -302,7 +305,7 @@ Set `messages.statusReactions.enabled: true` to let Signal show the shared queue
 
 Status reactions also require an ack reaction and a matching `messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`). Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
 
-`messages.removeAckAfterReply: true` clears the final status reaction after the configured hold time. Otherwise Signal restores the initial ack reaction after the final done/error state.
+Signal restores the initial ack reaction after the final done/error state.
 
 ## Reactions (message tool)
 
@@ -335,6 +338,10 @@ Signal exec and plugin approval prompts use the top-level `approvals.exec` and `
 - Use `/approve <id> allow-always` when a request offers persistent approval.
 
 Approval reaction resolution requires explicit Signal approvers from `channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields. Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback without explicit approvers; no-approver group approvals keep the local fallback visible.
+
+## Question reactions
+
+For an `ask_user` prompt with one non-secret, single-select question and one to four options, Signal shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw verifies the reaction targets the bot-authored message, then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only; normal Signal DM/group admission rules authorize the sender.
 
 ## Delivery targets (CLI/cron)
 
@@ -446,8 +453,7 @@ Provider options:
 - `channels.signal.accountUuid`: optional bot account UUID for native @mention detection and loop protection.
 - `channels.signal.cliPath`: path to `signal-cli`.
 - `channels.signal.configPath`: optional `signal-cli --config` directory.
-- `channels.signal.httpUrl`: full daemon URL (overrides host/port).
-- `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default `127.0.0.1:8080`).
+- `channels.signal.httpUrl`: full daemon URL and canonical daemon bind (default `http://127.0.0.1:8080`).
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
 - `channels.signal.startupTimeoutMs`: startup wait timeout in ms (min 1000, cap 120000; default 30000).
 - `channels.signal.receiveMode`: `on-start | manual`.
@@ -477,9 +483,9 @@ Provider options:
 
 Related global options:
 
-- `agents.list[].groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
+- `agents.entries.*.groupChat.mentionPatterns` (plain-text fallback; Signal native @mentions are detected from structured metadata when the bot account identity is configured).
 - `messages.groupChat.mentionPatterns` (global fallback).
-- `messages.responsePrefix`.
+- `channels.signal.responsePrefix` or an account-level `responsePrefix`.
 
 ## Related
 

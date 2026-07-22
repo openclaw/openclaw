@@ -1,7 +1,12 @@
 /**
  * Gateway tool-resolution exclusion tests.
  */
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type CreateOpenClawToolsArg = {
@@ -150,8 +155,34 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     ]);
     expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
     const args = readCreateToolsArgs(1);
-    expect(args.pluginToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
-    expect(args.inheritedToolDenylist).toEqual(["cron", "gateway", "nodes", "computer"]);
+    expect(args.pluginToolDenylist).toEqual([
+      "cron",
+      "gateway",
+      "sessions",
+      "screen",
+      "terminal",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "nodes",
+      "computer",
+      "mobile_ui",
+      "openclaw",
+    ]);
+    expect(args.inheritedToolDenylist).toEqual([
+      "cron",
+      "gateway",
+      "sessions",
+      "screen",
+      "terminal",
+      "conversations_list",
+      "conversations_send",
+      "conversations_turn",
+      "nodes",
+      "computer",
+      "mobile_ui",
+      "openclaw",
+    ]);
   });
 
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", () => {
@@ -379,6 +410,49 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
 
     expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
+  });
+
+  it("uses persisted delegated policy instead of the sender wildcard", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-delegated-policy-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:gateway-child";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "gateway-child-session",
+      updatedAt: Date.now(),
+      spawnedBy: "agent:main:discord:direct:alice",
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      inheritedToolPolicyVersion: 1,
+    } as SessionEntry);
+
+    try {
+      const result = resolveGatewayScopedTools({
+        cfg: {
+          session: { store: storePath },
+          tools: {
+            toolsBySender: {
+              "*": { deny: ["group:runtime", "group:fs"] },
+              "id:alice": {},
+            },
+          },
+        } as OpenClawConfig,
+        sessionKey,
+        surface: "loopback",
+        senderIsOwner: false,
+        messageProvider: "discord",
+        includeNodeExecTool: true,
+      });
+
+      expect(result.tools.map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["read", "exec"]),
+      );
+      expect(readCreateToolsArgs().pluginToolDenylist).not.toEqual(
+        expect.arrayContaining(["read", "exec"]),
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("filters node exec through plugin group policy bound to group labels", () => {
@@ -634,6 +708,28 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
       { name: "read" },
       { name: "cron" },
+    ]);
+  });
+
+  it("passes unrestricted gateway tool surfaces to cron jobs", () => {
+    hoisted.createOpenClawToolsMock.mockReturnValueOnce([
+      hoisted.makeTool("read"),
+      hoisted.makeTool("cron"),
+      hoisted.makeTool("exec"),
+    ]);
+
+    const result = resolveGatewayScopedTools({
+      cfg: {} as OpenClawConfig,
+      sessionKey: "agent:main:direct:test",
+      surface: "loopback",
+      senderIsOwner: true,
+    });
+
+    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec"]);
+    expect(readCreateToolsArgs().cronCreatorToolAllowlist).toEqual([
+      { name: "read" },
+      { name: "cron" },
+      { name: "exec" },
     ]);
   });
 });

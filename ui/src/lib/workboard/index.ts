@@ -1,7 +1,8 @@
 // Control UI Workboard public surface.
 export {
   WORKBOARD_PRIORITIES,
-  type WorkboardAutoRefreshIntervalMs,
+  WORKBOARD_CHANGED_EVENT,
+  type WorkboardBoardSummary,
   type WorkboardCard,
   type WorkboardDependencyState,
   type WorkboardEvent,
@@ -23,12 +24,12 @@ export {
 } from "./derived.ts";
 export { captureSessionToWorkboard } from "./session-capture.ts";
 export { getWorkboardDependencyState } from "./card-state.ts";
+export { loadWorkboard, refreshWorkboard } from "./loading.ts";
 export {
-  configureWorkboardPolling,
-  loadWorkboard,
-  refreshWorkboard,
-  stopWorkboardPolling,
-} from "./loading.ts";
+  configureWorkboardLiveRefresh,
+  handleWorkboardChanged,
+  resumeWorkboardLiveRefresh,
+} from "./live-refresh.ts";
 export { findWorkboardSession, getWorkboardLifecycle } from "./lifecycle.ts";
 export { syncWorkboardLifecycle } from "./lifecycle-reconciliation.ts";
 export {
@@ -43,6 +44,7 @@ export { startWorkboardCard, stopWorkboardCard } from "./execution.ts";
 export {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
+  stopWorkboardLiveRefresh,
   workboardHasActiveWrites,
   workboardMutationsReady,
 } from "./runtime.ts";

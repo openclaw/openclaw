@@ -141,7 +141,8 @@ function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>)
     !plan.restartHealthMonitor &&
     !plan.reloadPlugins &&
     !plan.disposeMcpRuntimes &&
-    plan.restartChannels.size === 0
+    plan.restartChannels.size === 0 &&
+    (plan.restartChannelAccounts?.size ?? 0) === 0
   );
 }
 
@@ -150,18 +151,15 @@ function resolveConfigRestartRequirement(params: {
   nextConfig: OpenClawConfig;
 }): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  const plan = buildGatewayReloadPlan(params.changedPaths);
+  const plan = buildGatewayReloadPlan(params.changedPaths, { candidateConfig: params.nextConfig });
   if (isNoopConfigReloadPlan(plan)) {
     return { requiresRestart: false, scheduleDirectRestart: false };
   }
   if (reloadSettings.mode === "off") {
     return { requiresRestart: true, scheduleDirectRestart: true };
   }
-  if (reloadSettings.mode === "restart") {
-    return { requiresRestart: true, scheduleDirectRestart: false };
-  }
   if (plan.restartGateway) {
-    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+    return { requiresRestart: true, scheduleDirectRestart: false };
   }
   return { requiresRestart: false, scheduleDirectRestart: false };
 }
@@ -238,11 +236,17 @@ export async function commitGatewayConfigWrite(params: {
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+}): Promise<{
+  path: string;
+  config: OpenClawConfig;
+  hash: string | null;
+  queueFollowUp: () => void;
+}> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
     writeOptions: {
       ...params.writeOptions,
+      auditOrigin: "config-rpc",
       runtimeRefresh: {
         ...params.writeOptions.runtimeRefresh,
         includeAuthStoreRefs: false,
@@ -253,6 +257,9 @@ export async function commitGatewayConfigWrite(params: {
   return {
     path: resolveGatewayConfigPath(params.snapshot),
     config: result.nextConfig,
+    // Persisted hash of the re-read file (resolveConfigSnapshotHash), i.e.
+    // exactly what a follow-up config.get reports — writers ack against it.
+    hash: result.persistedHash,
     queueFollowUp: () => {
       // Defer generation refresh/disconnect until after the RPC response so
       // the writer receives the success payload before its connection is closed.

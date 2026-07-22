@@ -6,8 +6,9 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
-import type { SessionListRow } from "./sessions-helpers.js";
-import { runSessionsSendA2AFlow, testing } from "./sessions-send-tool.a2a.js";
+import type { GatewaySessionListRow } from "./sessions-helpers.js";
+import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import { testing } from "./sessions-send-tool.a2a.test-support.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -44,7 +45,7 @@ function firstMockArg(
 
 describe("runSessionsSendA2AFlow announce delivery", () => {
   let gatewayCalls: CallGatewayOptions[];
-  let sessionListRows: SessionListRow[];
+  let sessionListRows: GatewaySessionListRow[];
 
   beforeEach(() => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
@@ -295,7 +296,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
           to: "channel:target-room",
           accountId: "thinker",
         },
-      } satisfies SessionListRow,
+      } satisfies GatewaySessionListRow,
     },
     {
       source: "lastAccountId",
@@ -307,7 +308,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
         lastChannel: "discord",
         lastTo: "channel:target-room",
         lastAccountId: "scout",
-      } satisfies SessionListRow,
+      } satisfies GatewaySessionListRow,
     },
   ])("uses Discord session $source for announce accountId", async ({ accountId, session }) => {
     sessionListRows = [session];

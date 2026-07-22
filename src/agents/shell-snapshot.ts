@@ -102,14 +102,7 @@ export async function maybeWrapCommandWithShellSnapshot(
   }
 }
 
-export function resetShellSnapshotCacheForTests(): void {
-  snapshotCache.clear();
-  cleanupPromise = null;
-}
-
-export function resolveShellSnapshotDir(
-  env: Record<string, string | undefined> = process.env,
-): string {
+function resolveShellSnapshotDir(env: Record<string, string | undefined> = process.env): string {
   return path.join(resolveStateDir(env as NodeJS.ProcessEnv), "cache", "shell-snapshots");
 }
 
@@ -456,11 +449,11 @@ async function runShell(opts: {
       }
       settled = true;
       clearTimeout(timeout);
-      killProcessTree(child.pid ?? 0, { graceMs: 0 });
+      killProcessTree(child.pid ?? 0, { graceMs: 0, detached: true });
       resolve({ status });
     };
     const timeout = setTimeout(() => {
-      killProcessTree(child.pid ?? 0, { graceMs: 250 });
+      killProcessTree(child.pid ?? 0, { graceMs: 250, detached: true });
       finish(null);
     }, opts.timeoutMs);
     child.on("error", () => {

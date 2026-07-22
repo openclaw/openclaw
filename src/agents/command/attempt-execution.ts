@@ -12,6 +12,12 @@ import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.tu
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { resolveAcpToolTerminalOutcome } from "../../acp/tool-status.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
+import {
+  readChannelSourceTurnId,
+  readChannelSourceTurnSameThreadRequired,
+  setChannelSourceTurnId,
+  setChannelSourceTurnSameThreadRequired,
+} from "../../auto-reply/reply/source-turn-id.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
@@ -68,6 +74,7 @@ import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { withLocalSessionPlacementTurnAdmission } from "../session-placement-admission.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
+import { isSubagentAnnounceCompletionHandoff } from "../subagent-announce-handoff.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
@@ -508,6 +515,13 @@ export function runAgentAttempt(params: {
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
+  // A completion handoff relays frozen child output; letting it act with the
+  // requester's tools would turn child text into a new privileged instruction.
+  const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
+    inputProvenance: params.opts.inputProvenance,
+    internalEvents: params.opts.internalEvents,
+  });
+  const disableTools = params.opts.modelRun === true || isSubagentAnnounceHandoff;
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -794,6 +808,7 @@ export function runAgentAttempt(params: {
             // accompany every CLI process. Native dedupe requires a runtime receipt.
             images: params.opts.images,
             imageOrder: params.opts.imageOrder,
+            media: params.opts.media,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             streamParams: params.opts.streamParams,
@@ -821,6 +836,8 @@ export function runAgentAttempt(params: {
             oneShotCliRun: params.opts.oneShotCliRun,
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
+            disableTools,
+            allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
             ...(mutableCliSessionStore && !forkCliSessionOnResume
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
@@ -877,7 +894,7 @@ export function runAgentAttempt(params: {
     });
   }
 
-  return runEmbeddedAgent({
+  const embeddedRunParams: Parameters<typeof runEmbeddedAgent>[0] = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionTarget: params.sessionTarget,
@@ -916,6 +933,7 @@ export function runAgentAttempt(params: {
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
+    media: params.opts.media,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,
@@ -934,18 +952,21 @@ export function runAgentAttempt(params: {
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
-    // Hidden internal runs have no assistant-event consumer. Visible subagent
-    // lanes can still feed Control UI, session subscribers, and ACP parent relays.
+    // Hidden internal runs lack an event consumer; visible lanes still feed UI and parent relays.
     suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
     bootstrapContextRunKind: params.opts.bootstrapContextRunKind,
     toolsAllow: params.opts.toolsAllow,
+    runtimePluginToolGrant: params.opts.runtimePluginToolGrant,
+    trustedInternalHandoff: params.opts.trustedInternalHandoff,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
     sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     disableMessageTool: params.opts.disableMessageTool,
+    swarmCollector: params.opts.swarmCollector,
+    swarmOutputSchema: params.opts.swarmOutputSchema,
     forceRestartSafeTools: params.opts.forceRestartSafeTools,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
@@ -955,7 +976,8 @@ export function runAgentAttempt(params: {
     oneShotCliRun: params.opts.oneShotCliRun,
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
-    disableTools: params.opts.modelRun === true,
+    disableTools,
+    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
@@ -969,7 +991,13 @@ export function runAgentAttempt(params: {
     onSessionIdChanged: params.opts.onSessionIdChanged,
     bootstrapPromptWarningSignaturesSeen,
     bootstrapPromptWarningSignature,
-  });
+  };
+  setChannelSourceTurnId(embeddedRunParams, readChannelSourceTurnId(params.runContext));
+  setChannelSourceTurnSameThreadRequired(
+    embeddedRunParams,
+    readChannelSourceTurnSameThreadRequired(params.runContext),
+  );
+  return runEmbeddedAgent(embeddedRunParams);
 }
 
 export function buildAcpResult(params: {
@@ -1425,3 +1453,4 @@ export function emitAcpAssistantDelta(params: { runId: string; text: string; del
     },
   });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import {
-  loadModelCatalog,
+  loadPreparedModelCatalog,
   resolveAgentConfig,
+  resolveAgentDir,
   resolveDefaultModelForAgent,
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -215,11 +216,6 @@ const loadTelegramNativeCommandDeliveryRuntime = createLazyRuntimeModule(
 const loadTelegramNativeCommandRuntime = createLazyRuntimeModule(
   () => import("./bot-native-commands.runtime.js"),
 );
-
-export const testing = {
-  loadNativeCommandRuntime: loadTelegramNativeCommandRuntime,
-};
-export { testing as __testing };
 
 type TelegramNativeCommandRuntime = Awaited<ReturnType<typeof loadTelegramNativeCommandRuntime>>;
 
@@ -441,7 +437,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
   model?: string;
   agentRuntime?: string;
   thinkingLevel?: string;
-  catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
+  catalog: Awaited<ReturnType<typeof loadPreparedModelCatalog>>;
 }): Promise<string> {
   const explicit = normalizeOptionalString(params.thinkingLevel);
   if (explicit) {
@@ -462,7 +458,7 @@ async function resolveTelegramThinkMenuCurrentLevel(params: {
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
     agentRuntime: params.agentRuntime,
-    loadModelCatalog: async () => params.catalog,
+    loadRuntimeCatalog: async () => params.catalog,
   });
 }
 
@@ -816,12 +812,12 @@ async function resolveTelegramCommandAuth(params: {
     senderId,
     senderUsername,
     resolveGroupPolicy,
-    enforcePolicy: cfg.commands?.useAccessGroups !== false,
+    enforcePolicy: true,
     useTopicAndGroupOverrides: false,
     enforceAllowlistAuthorization: requireAuth && !commandsAllowFromConfigured,
     allowEmptyAllowlistEntries: true,
     requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: cfg.commands?.useAccessGroups !== false,
+    checkChatAllowlist: true,
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {
@@ -1498,7 +1494,12 @@ export const registerTelegramNativeCommands = ({
         // Native /think must not wait on provider discovery; persisted rows retain its metadata.
         const menuModelCatalog =
           commandDefinition?.key === "think" && menuNeedsModelContext
-            ? await loadModelCatalog({ config: runtimeCfg, readOnly: true })
+            ? await loadPreparedModelCatalog({
+                config: runtimeCfg,
+                agentId: route.agentId,
+                agentDir: resolveAgentDir(runtimeCfg, route.agentId),
+                readOnly: true,
+              })
             : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
@@ -1968,3 +1969,4 @@ export const registerTelegramNativeCommands = ({
     }).catch(() => {});
   }
 };
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

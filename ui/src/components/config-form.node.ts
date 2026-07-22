@@ -1,9 +1,10 @@
 // Control UI view renders config form screen content.
+import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHints } from "../api/types.ts";
 import { icons } from "../components/icons.ts";
 import "../components/tooltip.ts";
-import { t } from "../i18n/index.ts";
+import { i18n, t } from "../i18n/index.ts";
 import { formatUnknownText } from "../lib/format.ts";
 import {
   hasConfigSearchCriteria as hasSearchCriteria,
@@ -129,8 +130,7 @@ function renderSensitiveToggleButton(params: {
     <openclaw-tooltip .content=${label}>
       <button
         type="button"
-        class="btn btn--icon ${state.isRevealed ? "active" : ""}"
-        style="width:28px;height:28px;padding:0;"
+        class="settings-secret__toggle"
         aria-label=${label}
         aria-pressed=${state.isRevealed}
         ?disabled=${params.disabled || !state.canReveal}
@@ -140,6 +140,18 @@ function renderSensitiveToggleButton(params: {
       </button>
     </openclaw-tooltip>
   `;
+}
+
+/* Sensitive fields inset the reveal eye inside the field (settings-secret
+ * pattern); non-sensitive fields render the bare control unchanged. */
+function wrapSensitiveControl(
+  control: TemplateResult,
+  toggle: TemplateResult | typeof nothing,
+): TemplateResult {
+  if (toggle === nothing) {
+    return control;
+  }
+  return html`<span class="settings-secret">${control}${toggle}</span>`;
 }
 
 function renderTags(tags: string[]): TemplateResult | typeof nothing {
@@ -483,8 +495,13 @@ function renderTextInput(params: {
       ? jsonValue(value)
       : (value ?? "");
   const effectiveInputType = sensitiveState.isSensitive && !effectiveRedacted ? "text" : inputType;
+  const isPhonePresentation = hint?.presentation === "phone-number";
+  const phonePresentation =
+    isPhonePresentation && !effectiveRedacted && typeof value === "string"
+      ? formatInternationalPhoneNumberForDisplay(value, i18n.getLocale())
+      : undefined;
 
-  const control = html`
+  const inputControl = html`
     <input
       type=${effectiveInputType}
       class="settings-input${effectiveRedacted ? " cfg-redacted" : ""}"
@@ -521,14 +538,28 @@ function renderTextInput(params: {
         onPatch(path, raw.trim());
       }}
     />
-    ${isStructuredSecretRef
-      ? nothing
-      : renderSensitiveToggleButton({
-          path,
-          state: sensitiveState,
-          disabled,
-          onToggleSensitivePath: params.onToggleSensitivePath,
-        })}
+  `;
+  const revealToggle = isStructuredSecretRef
+    ? nothing
+    : renderSensitiveToggleButton({
+        path,
+        state: sensitiveState,
+        disabled,
+        onToggleSensitivePath: params.onToggleSensitivePath,
+      });
+  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const presentedInput = isPhonePresentation
+    ? html`
+        <span class="settings-phone-presentation">
+          ${wrappedInput}
+          ${phonePresentation
+            ? html`<span class="settings-phone-presentation__value">${phonePresentation}</span>`
+            : nothing}
+        </span>
+      `
+    : wrappedInput;
+  const control = html`
+    ${presentedInput}
     ${schema.default !== undefined
       ? html`
           <openclaw-tooltip .content=${t("configForm.resetToDefault")}>
@@ -664,7 +695,7 @@ function renderJsonTextareaControl(params: {
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }): TemplateResult {
   const { path, fallback, sensitiveState, disabled, onPatch } = params;
-  return html`
+  const textareaControl = html`
     <textarea
       class="settings-input${sensitiveState.isRedacted ? " cfg-redacted" : ""}"
       placeholder=${sensitiveState.isRedacted ? REDACTED_PLACEHOLDER : t("configForm.jsonValue")}
@@ -694,13 +725,16 @@ function renderJsonTextareaControl(params: {
         }
       }}
     ></textarea>
-    ${renderSensitiveToggleButton({
+  `;
+  return wrapSensitiveControl(
+    textareaControl,
+    renderSensitiveToggleButton({
       path,
       state: sensitiveState,
       disabled,
       onToggleSensitivePath: params.onToggleSensitivePath,
-    })}
-  `;
+    }),
+  );
 }
 
 function renderJsonTextarea(params: {
@@ -1160,3 +1194,4 @@ function renderMapField(params: {
     </div>
   `;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

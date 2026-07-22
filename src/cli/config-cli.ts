@@ -1,5 +1,5 @@
 // Config CLI command implementation for get/set/unset/patch/validate and secret refs.
-import fs from "node:fs";
+import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -19,11 +19,12 @@ import {
 } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import { attachConfigIssueDiagnostics } from "../config/issue-location.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, resolveConfigPath } from "../config/paths.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -46,10 +47,11 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info, success, warn } from "../globals.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -71,6 +73,7 @@ import {
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type {
   ConfigSetDryRunError,
@@ -82,6 +85,7 @@ import {
   hasProviderBuilderOptions,
   hasRefBuilderOptions,
   parseBatchSource,
+  readConfigMutationFileSync,
   type ConfigSetBatchEntry,
   type ConfigSetOptions,
 } from "./config-set-input.js";
@@ -364,9 +368,8 @@ function parseBracketPathSegment(raw: string, fullPath: string): string {
   return trimmed;
 }
 
-// A buffered key with characters that are all whitespace is stray text between a
-// "."/"]" and the next "."/"[" boundary (e.g. "agents.list[0] .id" or "agents.list[0] [1]").
-// Pushing it would silently collapse into a different key, so reject it like an empty segment.
+// A buffered key with characters that are all whitespace is stray text between
+// path boundaries (for example, "gateway. .port"). Reject it like an empty segment.
 function assertNotWhitespaceSegment(current: string, raw: string): void {
   if (current.length > 0 && !current.trim()) {
     throw new Error(`Invalid path (empty segment): ${raw}`);
@@ -381,8 +384,7 @@ function parsePath(raw: string): PathSegment[] {
   const parts: string[] = [];
   let current = "";
   // Tracks whether a bracket segment was emitted since the last "." boundary, so
-  // "foo[0].bar" is accepted while empty key segments (leading/trailing/double dots,
-  // whitespace-only segments) are rejected instead of silently collapsed.
+  // "foo[0].bar" is accepted while empty key segments are rejected.
   let segmentEmitted = false;
   let i = 0;
   while (i < trimmed.length) {
@@ -429,6 +431,10 @@ function parsePath(raw: string): PathSegment[] {
         throw new Error(`Invalid path (empty "[]"): ${raw}`);
       }
       parts.push(parseBracketPathSegment(inside, raw));
+      const next = trimmed[close + 1];
+      if (next !== undefined && next !== "." && next !== "[") {
+        throw new Error(`Invalid path (missing separator after bracket): ${raw}`);
+      }
       segmentEmitted = true;
       i = close + 1;
       continue;
@@ -952,7 +958,15 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
     return snapshot;
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
-  for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
+  const displayIssues = attachConfigIssueDiagnostics(snapshot.issues, {
+    raw: snapshot.raw,
+    parsed: snapshot.parsed,
+    effective: snapshot.sourceConfig,
+    configPath: snapshot.path,
+    formatPathForDisplay: true,
+    includeReceivedValueHint: true,
+  });
+  for (const line of formatConfigIssueLines(displayIssues, "-", { normalizeRoot: true })) {
     runtime.error(line);
   }
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
@@ -1039,13 +1053,13 @@ function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): 
   if (paths.some(isPluginEntryConfigPath)) {
     return RESTART_HINT;
   }
-  const plan = buildGatewayReloadPlan(paths);
+  const plan = buildGatewayReloadPlan(paths, { candidateConfig: afterConfig });
   if (plan.restartGateway) {
     return RESTART_HINT;
   }
   if (plan.hotReasons.length > 0) {
     const { mode } = resolveGatewayReloadSettings(afterConfig);
-    if (mode === "off" || mode === "restart") {
+    if (mode === "off") {
       return RESTART_HINT;
     }
     return HOT_RELOAD_HINT;
@@ -1466,25 +1480,20 @@ function configPatchModeError(message: string): Error {
 }
 
 async function readStdinText(): Promise<string> {
-  const chunks: string[] = [];
-  let bytes = 0;
   if (process.stdin.isTTY) {
     throw configPatchModeError(
       "--stdin refuses to read from an interactive terminal; pipe input or use --file <path>.",
     );
   }
   process.stdin.setEncoding("utf8");
-  for await (const chunk of process.stdin) {
-    const text = String(chunk);
-    bytes += Buffer.byteLength(text, "utf8");
-    if (bytes > CONFIG_PATCH_STDIN_MAX_BYTES) {
-      throw configPatchModeError(
-        `--stdin input exceeds ${CONFIG_PATCH_STDIN_MAX_BYTES} bytes; use --file <path> for larger patches.`,
-      );
-    }
-    chunks.push(text);
-  }
-  return chunks.join("");
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: CONFIG_PATCH_STDIN_MAX_BYTES,
+    onOverflow: ({ maxBytes }) =>
+      configPatchModeError(
+        `--stdin input exceeds ${maxBytes} bytes; use --file <path> for larger patches.`,
+      ),
+  });
+  return bytes.toString("utf8");
 }
 
 async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> {
@@ -1494,7 +1503,19 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
     throw configPatchModeError("provide exactly one of --file <path> or --stdin.");
   }
   const sourceLabel = stdin ? "--stdin" : "--file";
-  const raw = stdin ? await readStdinText() : fs.readFileSync(file as string, "utf8");
+  let raw: string;
+  if (stdin) {
+    raw = await readStdinText();
+  } else {
+    try {
+      raw = readConfigMutationFileSync(file as string, "--file");
+    } catch (err) {
+      if (hasErrnoCode(err, "ENOENT")) {
+        throw new Error(`--file not found: ${file}`, { cause: err });
+      }
+      throw err;
+    }
+  }
   try {
     return JSON5.parse(raw);
   } catch (err) {
@@ -2086,6 +2107,7 @@ function formatDryRunFailureMessage(params: {
   const missingPathErrors = errors.filter((error) => error.kind === "missing-path");
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
+  const modelErrors = errors.filter((error) => error.kind === "model");
   const lines: string[] = [];
   if (missingPathErrors.length > 0) {
     lines.push(...missingPathErrors.map((error) => error.message));
@@ -2106,6 +2128,10 @@ function formatDryRunFailureMessage(params: {
     if (resolveErrors.length > 5) {
       lines.push(`- ... ${resolveErrors.length - 5} more`);
     }
+  }
+  if (modelErrors.length > 0) {
+    lines.push("Dry run failed: model reference validation failed.");
+    lines.push(...modelErrors.map((error) => `- ${error.message}`));
   }
   if (skippedExecRefs > 0) {
     lines.push(
@@ -2207,6 +2233,13 @@ async function runConfigOperations(params: {
       allowExecInDryRun: Boolean(options.allowExec),
     });
     const errors: ConfigSetDryRunError[] = [];
+    const modelRefCheck = await checkTouchedTextModelRefs({
+      config: nextConfig,
+      previousConfig: currentConfigForApplyHint,
+      touchedPaths: operations.map((operation) => operation.setPath),
+      redactDependencyValues: true,
+    });
+    errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(
         ...policyIssueLines.map((message) => ({
@@ -2241,19 +2274,20 @@ async function runConfigOperations(params: {
     const dryRunResult: ConfigSetDryRunResult = {
       ok: dedupedErrors.length === 0,
       operations: operations.length,
-      configPath: shortenHomePath(snapshot.path),
+      configPath: snapshot.path,
       inputModes: uniqueValues(operations.map((operation) => operation.inputMode)),
       checks: {
         schema:
           requiresFullSchemaValidation ||
           policyIssueLines.length > 0 ||
           pluginIntegrationProviderErrors.length > 0,
-        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
+        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefCheck.refsTotal > 0,
         resolvabilityComplete:
-          (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
-          selectedDryRunRefs.skippedExecRefs.length === 0,
+          (hasJsonMode || hasBuilderMode || hasUnsetMode || modelRefCheck.refsTotal > 0) &&
+          selectedDryRunRefs.skippedExecRefs.length === 0 &&
+          modelRefCheck.refsChecked === modelRefCheck.refsTotal,
       },
-      refsChecked: selectedDryRunRefs.refsToResolve.length,
+      refsChecked: selectedDryRunRefs.refsToResolve.length + modelRefCheck.refsChecked,
       skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
       ...(dedupedErrors.length > 0 ? { errors: dedupedErrors } : {}),
     };
@@ -2305,19 +2339,31 @@ async function runConfigOperations(params: {
     );
   }
 
+  const modelRefCheck = await checkTouchedTextModelRefs({
+    config: nextConfig,
+    previousConfig: currentConfigForApplyHint,
+    touchedPaths: operations.map((operation) => operation.setPath),
+    redactDependencyValues: true,
+  });
+  const firstModelError = modelRefCheck.errors[0];
+  if (firstModelError) {
+    throw new Error(firstModelError);
+  }
+
   await replaceConfigFile({
     nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     ...(unsetPaths.length > 0 || explicitSetPaths.length > 0
       ? {
           writeOptions: {
+            auditOrigin: "cli",
             ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
             ...(normalizedExplicitSetPaths.length > 0
               ? { explicitSetPaths: normalizedExplicitSetPaths }
               : {}),
           },
         }
-      : {}),
+      : { writeOptions: { auditOrigin: "cli" } }),
   });
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(
@@ -2448,6 +2494,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
+      if (opts.json) {
+        writeRuntimeJson(runtime, { error: `Config path not found: ${opts.path}` });
+        runtime.exit(1);
+        return;
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Run ${formatCliCommand("openclaw config validate")} to inspect config shape.`,
@@ -2470,6 +2521,9 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     writeRuntimeJson(runtime, res.value ?? null);
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     runtime.error(danger(String(err)));
     runtime.exit(1);
   }
@@ -2513,7 +2567,7 @@ export async function runConfigUnset(opts: {
         throw new ConfigSetDryRunValidationError({
           ok: false,
           operations: 1,
-          configPath: shortenHomePath(snapshot.path),
+          configPath: snapshot.path,
           inputModes: ["unset"],
           checks: {
             schema: false,
@@ -2545,17 +2599,28 @@ export async function runConfigUnset(opts: {
       });
       return;
     }
+    const nextConfig = normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig);
+    const modelRefCheck = await checkTouchedTextModelRefs({
+      config: nextConfig,
+      previousConfig: currentConfigForApplyHint,
+      touchedPaths: [parsedPath],
+      redactDependencyValues: true,
+    });
+    const firstModelError = modelRefCheck.errors[0];
+    if (firstModelError) {
+      throw new Error(firstModelError);
+    }
     await replaceConfigFile({
-      nextConfig: next,
+      nextConfig,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
       ...(unsetResult.leafContainer === "array"
-        ? {}
-        : { writeOptions: { unsetPaths: [parsedPath] } }),
+        ? { writeOptions: { auditOrigin: "cli" } }
+        : { writeOptions: { auditOrigin: "cli", unsetPaths: [parsedPath] } }),
     });
     const hint = configApplyHintForOperations(
       [buildUnsetOperation(parsedPath)],
       currentConfigForApplyHint,
-      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+      nextConfig,
     );
     runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
@@ -2566,8 +2631,7 @@ export async function runConfigUnset(opts: {
 async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
-    const snapshot = await readConfigFileSnapshot();
-    runtime.log(shortenHomePath(snapshot.path));
+    runtime.log(resolveConfigPath());
   } catch (err) {
     runtime.error(danger(String(err)));
     runtime.exit(1);
@@ -2626,8 +2690,18 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       if (opts.json) {
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
+        const displayIssues = attachConfigIssueDiagnostics(issues, {
+          raw: snapshot.raw,
+          parsed: snapshot.parsed,
+          effective: snapshot.sourceConfig,
+          configPath: snapshot.path,
+          formatPathForDisplay: true,
+          includeReceivedValueHint: true,
+        });
         runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
-        for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
+        for (const line of formatConfigIssueLines(displayIssues, danger("×"), {
+          normalizeRoot: true,
+        })) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
@@ -2836,3 +2910,4 @@ export function registerConfigCli(program: Command) {
       await runConfigValidate({ json: Boolean(opts.json) });
     });
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

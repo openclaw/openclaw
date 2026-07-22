@@ -56,32 +56,40 @@ already contain a strictly later calendar month's final version below patch
 month.
 
 On the exact extended-stable branch, bump the root package to `YYYY.M.P`, run
-`pnpm release:prep`, and verify every publishable extension package has the
-same version. Commit and push all generated changes, create and push the
-immutable `vYYYY.M.P` tag at that commit, and record the resulting full SHA.
-The workflows consume this prepared tree; they do not bump or synchronize
-versions for you.
+`pnpm release:prep`, and verify every publishable plugin package has the
+same version. Commit and push all generated changes, then freeze and record the
+resulting full SHA. The workflows consume this prepared tree; they do not bump
+or synchronize versions for you. Do not create the final tag for a candidate.
 
-Run the npm preflight and Full Release Validation from that exact prepared
-branch tip, then save both run IDs and the successful Full Release Validation
-run attempt:
+Run the npm preflight and Full Release Validation against that frozen SHA, then
+save both run IDs and the successful Full Release Validation run attempt:
 
 ```bash
+RELEASE_SHA="$(git rev-parse HEAD)"
+
 gh workflow run openclaw-npm-release.yml \
   --ref extended-stable/YYYY.M.33 \
-  -f tag=vYYYY.M.P \
+  -f tag="$RELEASE_SHA" \
   -f preflight_only=true \
   -f npm_dist_tag=extended-stable
 
-gh workflow run full-release-validation.yml \
-  --ref extended-stable/YYYY.M.33 \
-  -f ref=extended-stable/YYYY.M.33 \
-  -f release_profile=stable
+node scripts/full-release-validation-at-sha.mjs \
+  --sha "$RELEASE_SHA" \
+  --target-ref extended-stable/YYYY.M.33
 ```
 
-`release_profile=stable` is the existing validation-depth profile; it is
-separate from the npm `extended-stable` dist-tag and is intentionally
-unchanged.
+The SHA form is supported only by validation-only npm preflight. The helper
+pins trusted workflow code while recording the exact product SHA and canonical
+branch context. Its stable validation profile is separate from the npm
+`extended-stable` dist-tag.
+
+If either candidate gate fails or another backport is needed, update the branch,
+freeze a new SHA, and rerun the affected candidate gates. Do not create, delete,
+or move a final tag during candidate validation. Once both gates are green,
+re-resolve the branch tip, require it still equals `RELEASE_SHA`, then create
+and push immutable `vYYYY.M.P` at that SHA. A post-tag source change requires a
+new patch version and new candidate; final extended-stable tags are never moved
+or deleted.
 
 After both runs succeed, publish every npm-publishable official plugin from the
 same exact branch tip. Patch `P` must be `33` or greater. Pass the full release
@@ -212,7 +220,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 - Run `pnpm check:test-types` before release preflight so test TypeScript stays covered outside the faster local `pnpm check` gate.
 - Run `pnpm check:architecture` before release preflight so the broader import cycle and architecture boundary checks are green outside the faster local gate.
 - Run `pnpm build && pnpm ui:build` before `pnpm release:check` so the expected `dist/*` release artifacts and Control UI bundle exist for the pack validation step.
-- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, and plugin SDK API baseline. `pnpm release:check` re-runs those guards in check mode (plus a plugin SDK surface budget check) and reports every generated drift failure in one pass before running package release checks.
+- Run `pnpm release:prep` after the root version bump and before tagging. It runs every deterministic release generator that commonly drifts after a version/config/API change: plugin versions, npm shrinkwraps, plugin inventory, base config schema, bundled channel config metadata, config docs baseline, plugin SDK exports, the Plugin SDK API contract manifest, and Control UI locale bundles. It also blocks until native app translations and platform-generated locale resources match the source inventory; if they lag, wait for or dispatch `Native App Locale Refresh` before freezing the Code SHA. `pnpm release:check` re-runs those guards in check mode (including the strict locale gates plus the plugin SDK surface budget) and reports every generated drift failure in one pass before running package release checks.
 - Plugin version sync updates the publishable `@openclaw/ai` runtime package, official plugin package versions, and existing `openclaw.compat.pluginApi` floors to the OpenClaw release version by default. Treat that field as the plugin SDK/runtime API floor, not just a copy of the package version: for plugin-only releases that intentionally remain compatible with older OpenClaw hosts, keep the floor at the oldest supported host API and document that choice in the plugin release proof.
 - Run the manual `Full Release Validation` workflow before release approval to kick off all pre-release test boxes from one entrypoint. It accepts a branch, tag, or full commit SHA, dispatches manual `CI`, and dispatches `OpenClaw Release Checks` for install smoke, package acceptance, cross-OS package checks, QA Lab parity, Matrix, and Telegram lanes. Stable and full runs always include exhaustive live/E2E and Docker release-path soak; `run_release_soak=true` is retained for an explicit beta soak. Package Acceptance provides the canonical package Telegram E2E during candidate validation, avoiding a second concurrent live poller.
 
@@ -258,7 +266,7 @@ A legacy fallback correction tag may reuse base-package evidence only when the c
 
   Manually dispatch `Windows Node Release` only for recovery, and always pass an exact tag, never `latest`, plus the explicit `expected_installer_digests` JSON map from the approved source release. Website download links should target exact OpenClaw release asset URLs for the current stable release, or `releases/latest/download/...` only after verifying GitHub's latest redirect points at that same release; do not link only to the companion repo release page.
 
-- Release checks now run in a separate manual workflow: `OpenClaw Release Checks`. It also runs the QA Lab mock parity lane plus the fast live Matrix profile and Telegram QA lane before release approval. The live lanes use the `qa-live-shared` environment; Telegram also uses Convex CI credential leases. Run the manual `QA-Lab - All Lanes` workflow with `matrix_profile=all` and `matrix_shards=true` when you want full Matrix transport, media, and E2EE inventory in parallel.
+- Release checks now run in a separate manual workflow: `OpenClaw Release Checks`. It also runs the QA Lab mock parity lane plus the Matrix release profile and Telegram QA lane before release approval. The live lanes use the `qa-live-shared` environment; Telegram also uses Convex CI credential leases. Run the manual `QA-Lab - All Lanes` workflow with `matrix_profile=all` when you want every maintained Matrix scenario; the workflow fans that selection across the transport, media, and E2EE profiles to keep full proof within per-job timeouts.
 - Cross-OS install and upgrade runtime validation is part of public `OpenClaw Release Checks` and `Full Release Validation`, which call the reusable workflow `.github/workflows/openclaw-cross-os-release-checks-reusable.yml` directly. This split is intentional: keep the real npm release path short, deterministic, and artifact-focused, while slower live checks stay in their own lane so they do not stall or block publish.
 - Secret-bearing release checks should be dispatched through `Full Release Validation` or from the `main`/release workflow ref so workflow logic and secrets stay controlled.
 - `OpenClaw Release Checks` accepts a branch, tag, or full commit SHA as long as the resolved commit is reachable from an OpenClaw branch or release tag.
@@ -412,7 +420,7 @@ The QA Lab box is also part of `OpenClaw Release Checks`. It is the agentic beha
 Release QA Lab coverage includes:
 
 - mock parity lane comparing the OpenAI candidate lane against the `anthropic/claude-opus-4-8` baseline using the agentic parity pack
-- fast live Matrix QA profile using the `qa-live-shared` environment
+- Matrix live-adapter release profile using the `qa-live-shared` environment
 - live Telegram QA lane using Convex CI credential leases
 - `pnpm qa:otel:smoke`, `pnpm qa:otel:collector-smoke`, `pnpm qa:prometheus:smoke`, or `pnpm qa:observability:smoke` when release telemetry needs explicit local proof
 

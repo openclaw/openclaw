@@ -114,7 +114,11 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
-function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
+function makeInboundRuntime(
+  dispatchReplyWithBufferedBlockDispatcher: (params: unknown) => Promise<unknown>,
+  onResolvedContext?: (ctx: Record<string, unknown>) => void,
+  onResolvedTurn?: (turn: Record<string, unknown>) => void,
+): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
       const params = rawParams as {
@@ -132,14 +136,37 @@ function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
           kind: "message",
         },
         {},
-      )) as { runDispatch: () => Promise<unknown> };
-      return { dispatchResult: await turn.runDispatch() };
+      )) as {
+        cfg: unknown;
+        ctxPayload: Record<string, unknown>;
+        record?: Record<string, unknown>;
+        dispatcherOptions?: Record<string, unknown>;
+        delivery: { deliver: unknown; onError?: unknown };
+        replyOptions?: unknown;
+        replyResolver?: unknown;
+      };
+      onResolvedContext?.(turn.ctxPayload);
+      onResolvedTurn?.(turn as unknown as Record<string, unknown>);
+      return {
+        dispatchResult: await dispatchReplyWithBufferedBlockDispatcher({
+          ctx: turn.ctxPayload,
+          cfg: turn.cfg,
+          dispatcherOptions: {
+            ...turn.dispatcherOptions,
+            deliver: turn.delivery.deliver,
+            onError: turn.delivery.onError,
+          },
+          replyOptions: turn.replyOptions,
+          replyResolver: turn.replyResolver,
+        }),
+      };
     }),
   };
 }
 
 function makeRuntime(params: {
   onFinalize?: (ctx: Record<string, unknown>) => void;
+  onTurn?: (turn: Record<string, unknown>) => void;
   isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
   skipFreshSettledDelivery?: boolean;
   onDispatch?: (dispatcherOptions: {
@@ -161,7 +188,50 @@ function makeRuntime(params: {
     ) => Promise<void>,
   ) => Promise<void>;
 }): GatewayPluginRuntime {
+  const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (rawParams: unknown) => {
+    const dispatcherOptions = (
+      rawParams as {
+        dispatcherOptions: {
+          deliver: (
+            payload: {
+              text?: string;
+              mediaUrl?: string;
+              mediaUrls?: string[];
+              audioAsVoice?: boolean;
+            },
+            info: { kind: string },
+          ) => Promise<void>;
+          onSkip?: (
+            payload: {
+              text?: string;
+              mediaUrl?: string;
+              mediaUrls?: string[];
+              audioAsVoice?: boolean;
+            },
+            info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+          ) => void;
+          onSettled?: () => unknown;
+          onFreshSettledDelivery?: () => unknown;
+        };
+      }
+    ).dispatcherOptions;
+    if (params.onDispatch) {
+      await params.onDispatch(dispatcherOptions);
+    } else {
+      await params.onDeliver?.(dispatcherOptions.deliver);
+    }
+    await dispatcherOptions.onSettled?.();
+    if (!params.skipFreshSettledDelivery) {
+      await dispatcherOptions.onFreshSettledDelivery?.();
+    }
+    return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+  });
   return {
+    state: {
+      openChannelIngressQueue: () => {
+        throw new Error("unexpected durable ingress access");
+      },
+    },
     channel: {
       activity: { record: vi.fn() },
       routing: {
@@ -171,47 +241,8 @@ function makeRuntime(params: {
         })),
       },
       reply: {
-        dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (rawParams: unknown) => {
-          const dispatcherOptions = (
-            rawParams as {
-              dispatcherOptions: {
-                deliver: (
-                  payload: {
-                    text?: string;
-                    mediaUrl?: string;
-                    mediaUrls?: string[];
-                    audioAsVoice?: boolean;
-                  },
-                  info: { kind: string },
-                ) => Promise<void>;
-                onSkip?: (
-                  payload: {
-                    text?: string;
-                    mediaUrl?: string;
-                    mediaUrls?: string[];
-                    audioAsVoice?: boolean;
-                  },
-                  info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
-                ) => void;
-                onSettled?: () => unknown;
-                onFreshSettledDelivery?: () => unknown;
-              };
-            }
-          ).dispatcherOptions;
-          if (params.onDispatch) {
-            await params.onDispatch(dispatcherOptions);
-          } else {
-            await params.onDeliver?.(dispatcherOptions.deliver);
-          }
-          await dispatcherOptions.onSettled?.();
-          if (!params.skipFreshSettledDelivery) {
-            await dispatcherOptions.onFreshSettledDelivery?.();
-          }
-        }),
-        finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => {
-          params.onFinalize?.(rawCtx);
-          return rawCtx;
-        }),
+        dispatchReplyWithBufferedBlockDispatcher,
+        finalizeInboundContext: vi.fn((rawCtx: Record<string, unknown>) => rawCtx),
         formatInboundEnvelope: vi.fn(() => "voice"),
         resolveEffectiveMessagesConfig: vi.fn(() => ({})),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
@@ -220,7 +251,11 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      inbound: makeInboundRuntime(),
+      inbound: makeInboundRuntime(
+        dispatchReplyWithBufferedBlockDispatcher,
+        params.onFinalize,
+        params.onTurn,
+      ),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },
@@ -575,9 +610,6 @@ describe("dispatchOutbound", () => {
         expect.anything(),
         "assistant",
       );
-      expect(runtime.channel.session.resolveStorePath).toHaveBeenCalledWith(undefined, {
-        agentId: "assistant",
-      });
       expect(finalized?.AgentId).toBe("assistant");
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
@@ -914,6 +946,55 @@ describe("dispatchOutbound", () => {
       expect(sendTextMock).toHaveBeenCalledWith(
         expect.anything(),
         "late answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps durable settlement with a dispatch that outlives the response watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      const lifecycle = {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: vi.fn(async () => {}),
+      };
+      const inbound = makeInbound();
+      inbound.event.turnAdoptionLifecycle = lifecycle;
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 301_000);
+          });
+          await deliver({ text: "late durable answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+      const dispatchPromise = dispatchOutbound(inbound, {
+        runtime,
+        cfg: {},
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(lifecycle.onAbandoned).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late durable answer",
         expect.anything(),
         expect.anything(),
       );
@@ -1477,4 +1558,80 @@ describe("dispatchOutbound", () => {
       ].join("\n"),
     ]);
   });
+
+  it("persists announce routes only for group and guild turns", async () => {
+    const cases = [
+      {
+        type: "group" as const,
+        isGroupChat: true,
+        eventTarget: { groupOpenid: "group-1001" },
+        peerId: "group-1001",
+        qualifiedTarget: "qqbot:group:group-1001",
+      },
+      {
+        type: "guild" as const,
+        isGroupChat: true,
+        eventTarget: { channelId: "channel-2001", guildId: "guild-2001" },
+        peerId: "channel-2001",
+        qualifiedTarget: "qqbot:channel:channel-2001",
+      },
+      {
+        type: "c2c" as const,
+        isGroupChat: false,
+        eventTarget: {},
+        peerId: "user-openid",
+        qualifiedTarget: "qqbot:c2c:user-openid",
+      },
+      {
+        type: "dm" as const,
+        isGroupChat: false,
+        eventTarget: { guildId: "dm-guild-1" },
+        peerId: "user-openid",
+        qualifiedTarget: "qqbot:dm:dm-guild-1",
+      },
+    ];
+
+    for (const testCase of cases) {
+      let record: Record<string, unknown> | undefined;
+      const runtime = makeRuntime({
+        onTurn: (turn) => {
+          record = turn.record as Record<string, unknown> | undefined;
+        },
+        onDeliver: async (deliver) => {
+          await deliver({ text: "hello" }, { kind: "block" });
+        },
+      });
+      const sessionKey = `agent:main:qqbot:${testCase.type}:${testCase.peerId}`;
+      await dispatchOutbound(
+        makeInbound({
+          event: {
+            type: testCase.type,
+            senderId: "user-openid",
+            messageId: `msg-${testCase.type}`,
+            content: "hello",
+            timestamp: "2026-04-25T00:00:00.000Z",
+            ...testCase.eventTarget,
+          } as InboundContext["event"],
+          isGroupChat: testCase.isGroupChat,
+          peerId: testCase.peerId,
+          qualifiedTarget: testCase.qualifiedTarget,
+          route: { sessionKey, accountId: "qq-main" },
+        }),
+        { runtime, cfg: {}, account },
+      );
+
+      expect(record).toBeDefined();
+      expect(record?.updateLastRoute).toEqual(
+        testCase.isGroupChat
+          ? {
+              sessionKey,
+              channel: "qqbot",
+              to: testCase.qualifiedTarget,
+              accountId: "qq-main",
+            }
+          : undefined,
+      );
+    }
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

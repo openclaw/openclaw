@@ -193,7 +193,7 @@ export type CronExecutionResult = {
 };
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
-export function createCronPromptExecutor(params: {
+function createCronPromptExecutor(params: {
   cfg: OpenClawConfig;
   cfgWithAgentDefaults: OpenClawConfig;
   job: CronJob;
@@ -566,6 +566,12 @@ export function createCronPromptExecutor(params: {
           sourceReplyDeliveryMode,
           runId: params.cronSession.sessionEntry.sessionId,
           allowEmptyAssistantReplyAsSilent,
+          // Cron owns the resolved delivery contract. A valid announce route
+          // still needs a final payload; none, webhook, and invalid routes do not.
+          terminalReplyExpectation:
+            params.deliveryRequested === true && params.resolvedDeliveryOk
+              ? "required"
+              : "optional",
           requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
           disableMessageTool: !sourceDelivery.messageTool.enabled,
           forceMessageTool: sourceDelivery.messageTool.force,
@@ -836,3 +842,4 @@ export async function executeCronRun(params: {
     liveSelection: params.liveSelection,
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

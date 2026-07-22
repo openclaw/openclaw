@@ -21,6 +21,7 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
+import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
@@ -38,6 +39,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
+const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
@@ -119,9 +121,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
-export function legacyCodexProviderOverrideToHealthFinding(
-  providerOverride: unknown,
-): HealthFinding {
+function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): HealthFinding {
   const message =
     "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.";
   const details = buildCodexProviderOverrideWarning(providerOverride);
@@ -132,6 +132,12 @@ export function legacyCodexProviderOverrideToHealthFinding(
     path: `models.providers.${LEGACY_CODEX_PROVIDER_ID}`,
     target: LEGACY_CODEX_PROVIDER_ID,
     fixHint: details,
+  };
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.doctorAuthTestApi")] = {
+    legacyCodexProviderOverrideToHealthFinding,
   };
 }
 
@@ -194,7 +200,7 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
 }
 
 /** Returns the short doctor hint for disabled or cooldown auth profiles. */
-export function resolveUnusableProfileHint(params: {
+function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
 }): string {
@@ -227,7 +233,7 @@ function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | nul
 }
 
 /** Formats provider OAuth refresh failures as actionable doctor note lines. */
-export function formatOAuthRefreshFailureDoctorLine(params: {
+function formatOAuthRefreshFailureDoctorLine(params: {
   profileId: string;
   provider: string;
   message: string;
@@ -341,6 +347,16 @@ function authProfileCooldownToHealthFinding(params: {
 function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]): boolean {
   if (profile.type === "api_key") {
     return profile.status === "missing";
+  }
+  // Claude CLI refreshes its short-lived access token when the process runs.
+  // Warn once that external credential is unusable, not throughout its normal lifetime.
+  if (
+    profile.profileId === CLAUDE_CLI_PROFILE_ID &&
+    profile.provider === CLAUDE_CLI_PROVIDER_ID &&
+    profile.type === "oauth" &&
+    profile.status === "expiring"
+  ) {
+    return false;
   }
   return (
     (profile.type === "oauth" || profile.type === "token") &&
@@ -522,6 +538,7 @@ async function noteAuthProfileHealthForTarget(params: {
           store,
           profileId: profile.profileId,
           agentDir: params.target.agentDir,
+          forceRefresh: true,
         });
       } catch (err) {
         const message = formatErrorMessage(err);

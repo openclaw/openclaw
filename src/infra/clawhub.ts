@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
+import { hasValidIsoCalendarComponents } from "../shared/iso-time.js";
 import { retryClawHubRead } from "./clawhub-retry.js";
 import { sha256Base64, sha256Hex as digestSha256Hex } from "./crypto-digest.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./http-body.js";
@@ -269,6 +270,8 @@ export type ClawHubPackageSearchResult = {
 export type ClawHubSkillSearchResult = {
   score: number;
   slug: string;
+  // Search may return the same slug for multiple publishers; exact install refs need this handle.
+  ownerHandle?: string | null;
   displayName: string;
   summary?: string;
   version?: string;
@@ -718,17 +721,31 @@ async function buildClawHubError(
 }
 
 function formatRateLimitSuffix(headers: Headers, hasToken: boolean): string {
-  const reset =
-    normalizeHeaderValue(headers.get("RateLimit-Reset")) ??
-    normalizeHeaderValue(headers.get("Retry-After"));
+  const resetSeconds =
+    parseRateLimitDeltaSeconds(headers.get("RateLimit-Reset")) ??
+    parseRateLimitDeltaSeconds(headers.get("Retry-After"));
   const segments: string[] = [];
-  if (reset && Number.isFinite(Number(reset))) {
-    segments.push(`(resets in ${reset}s)`);
+  if (resetSeconds !== undefined) {
+    segments.push(`(resets in ${resetSeconds}s)`);
   }
   if (!hasToken) {
     segments.push("Sign in for higher rate limits.");
   }
   return segments.join(" ");
+}
+
+function parseRateLimitDeltaSeconds(value: string | null): number | undefined {
+  const normalized = normalizeHeaderValue(value);
+  if (!normalized || !/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  return parseStrictNonNegativeInteger(normalized);
+}
+
+// Successful ClawHub payloads must reject malformed UTF-8 so replacement
+// characters never pass validation or enter persistent caches.
+function decodeClawHubResponseBody(buffer: Uint8Array): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
 }
 
 async function fetchJson<T>(params: ClawHubRequestParams): Promise<T> {
@@ -754,7 +771,7 @@ async function parseClawHubJsonBody<T>(
       new Error(`ClawHub ${url.pathname} response stalled after ${chunkTimeoutMs}ms`),
   });
   try {
-    return JSON.parse(new TextDecoder().decode(buffer)) as T;
+    return JSON.parse(decodeClawHubResponseBody(buffer)) as T;
   } catch (cause) {
     throw new Error(`ClawHub ${url.pathname} returned malformed JSON`, { cause });
   }
@@ -1326,7 +1343,7 @@ export async function fetchClawHubSkillCard(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: slug ? `skill card for ${slug}` : `skill card at ${url.pathname}`,
   });
-  return new TextDecoder().decode(bytes);
+  return decodeClawHubResponseBody(bytes);
 }
 
 export async function downloadClawHubPackageArchive(params: {
@@ -1615,7 +1632,9 @@ export async function reportClawHubSkillInstallTelemetry(params: {
 }
 
 function isClawHubTelemetryDisabled(): boolean {
-  const raw = process.env.CLAWHUB_DISABLE_TELEMETRY ?? process.env.CLAWDHUB_DISABLE_TELEMETRY;
+  const raw =
+    normalizeOptionalString(process.env.CLAWHUB_DISABLE_TELEMETRY) ??
+    normalizeOptionalString(process.env.CLAWDHUB_DISABLE_TELEMETRY);
   if (!raw) {
     return false;
   }
@@ -1873,7 +1892,12 @@ export function parseClawHubPromotionsFeed(value: unknown): ClawHubPromotionsFee
   const expiresAt = requiredStringField(value, "expiresAt", context);
   const generatedAtMs = Date.parse(generatedAt);
   const expiresAtMs = Date.parse(expiresAt);
-  if (!Number.isFinite(generatedAtMs) || !Number.isFinite(expiresAtMs)) {
+  if (
+    !Number.isFinite(generatedAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    !hasValidIsoCalendarComponents(generatedAt) ||
+    !hasValidIsoCalendarComponents(expiresAt)
+  ) {
     throw new Error(`Malformed ClawHub ${context}: timestamps must be ISO dates.`);
   }
   if (expiresAtMs <= generatedAtMs) {
@@ -1932,7 +1956,7 @@ export async function fetchClawHubPromotionsFeed(
     timeoutMs: params.timeoutMs,
     resourceLabel: "promotions feed",
   });
-  const payload = new TextDecoder().decode(buffer);
+  const payload = decodeClawHubResponseBody(buffer);
   let parsedJson: unknown;
   try {
     parsedJson = JSON.parse(payload);
@@ -1943,3 +1967,4 @@ export async function fetchClawHubPromotionsFeed(
   const etag = response.headers.get("etag") ?? undefined;
   return { status: "ok", feed, payload, ...(etag ? { etag } : {}) };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

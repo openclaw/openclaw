@@ -978,7 +978,7 @@ function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addResolvedModelRef({
-    raw: config.messages?.tts?.summaryModel,
+    raw: config.tts?.summaryModel,
     aliasIndex,
     refs,
     ...normalizationParams,
@@ -1050,31 +1050,6 @@ function collectConfiguredModelPricingRefs(
       ...normalizationParams,
     });
   }
-  for (const entry of config.tools?.media?.image?.models ?? []) {
-    addProviderModelPair({
-      provider: entry.provider,
-      model: entry.model,
-      refs,
-      ...normalizationParams,
-    });
-  }
-  for (const entry of config.tools?.media?.audio?.models ?? []) {
-    addProviderModelPair({
-      provider: entry.provider,
-      model: entry.model,
-      refs,
-      ...normalizationParams,
-    });
-  }
-  for (const entry of config.tools?.media?.video?.models ?? []) {
-    addProviderModelPair({
-      provider: entry.provider,
-      model: entry.model,
-      refs,
-      ...normalizationParams,
-    });
-  }
-
   return Array.from(refs.values());
 }
 
@@ -1441,3 +1416,4 @@ export function startGatewayModelPricingRefresh(
     clearRefreshTimer();
   };
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

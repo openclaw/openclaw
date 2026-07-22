@@ -91,7 +91,6 @@ function createWriter(options: HeartbeatRuntimeOptions) {
       id: "heartbeat-active-hours",
       title: "Heartbeat active-hours scheduler",
       sourcePath: "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
-      primaryCoverageIds: ["automation.active-hours"],
       docsRefs: ["docs/gateway/heartbeat.md"],
       codeRefs: [
         "test/e2e/qa-lab/runtime/heartbeat-active-hours-runtime.ts",
@@ -153,8 +152,6 @@ export async function runHeartbeatActiveHoursRuntime(options: HeartbeatRuntimeOp
     runner.stop();
   }
 }
-
-export const testing = { heartbeatConfig, parseOptions, waitForObservation };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runHeartbeatActiveHoursRuntime(parseOptions(process.argv.slice(2)))

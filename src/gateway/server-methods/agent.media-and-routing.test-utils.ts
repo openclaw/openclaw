@@ -389,6 +389,65 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.pluginOwnerId).toBe("memory-core");
   });
 
+  it("forwards plugin-owned additive tools only for tracked plugin subagent runs", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "finish the workboard card",
+        sessionKey: "agent:main:subagent:workboard-card",
+        idempotencyKey: "plugin-tools-also-allow",
+      },
+      {
+        client: {
+          internal: {
+            agentRunTracking: "plugin_subagent",
+            pluginRuntimeOwnerId: "workboard",
+            runtimePluginToolGrant: {
+              pluginId: "workboard",
+              toolNames: ["workboard_heartbeat", "workboard_complete"],
+            },
+          },
+        } as never,
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      runtimePluginToolGrant?: { pluginId: string; toolNames: readonly string[] };
+    }>();
+    expect(call.runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", "workboard_complete"],
+    });
+  });
+
+  it("forwards trusted delegated policy handoffs only from internal client metadata", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "child completed",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "delegated-policy-handoff",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:subagent:child",
+          sourceTool: "subagent_announce",
+        },
+      },
+      {
+        client: {
+          internal: {
+            delegatedToolPolicyHandoff: true,
+          },
+        } as never,
+      },
+    );
+
+    const call = await waitForAgentCommandCall<{ trustedInternalHandoff?: boolean }>();
+    expect(call.trustedInternalHandoff).toBe(true);
+  });
+
   it("does not claim stale pre-existing sessions for plugin runtime cleanup", async () => {
     const sessionKey = "agent:main:existing-user-session";
     const existingEntry = {
@@ -1969,3 +2028,4 @@ describe("gateway agent handler", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

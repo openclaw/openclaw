@@ -13,6 +13,7 @@ import {
   type SpeechProviderPlugin,
   type SpeechSynthesisTarget,
 } from "openclaw/plugin-sdk/speech";
+import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-core";
 import {
   asFiniteNumberInRange,
   normalizeLowercaseStringOrEmpty,
@@ -98,7 +99,7 @@ function normalizeXaiProviderConfig(rawConfig: Record<string, unknown>): XaiTtsP
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: xai?.apiKey,
-      path: "messages.tts.providers.xai.apiKey",
+      path: "tts.providers.xai.apiKey",
     }),
     baseUrl: normalizeXaiTtsBaseUrl(
       trimToUndefined(xai?.baseUrl) ?? trimToUndefined(process.env.XAI_BASE_URL) ?? XAI_BASE_URL,
@@ -134,6 +135,10 @@ function readXaiOverrides(overrides: SpeechProviderOverrides | undefined): XaiTt
     language: normalizeXaiLanguageCode(trimToUndefined(overrides.language)),
     speed: normalizeXaiSpeechSpeed(overrides.speed),
   };
+}
+
+function resolveDirectXaiAudioApiKey(configApiKey?: string): string | undefined {
+  return resolveSpeechProviderApiKey(configApiKey, process.env.XAI_API_KEY);
 }
 
 function resolveGeneratedAudioMaxBytes(req: {
@@ -240,7 +245,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       });
     },
     isConfigured: ({ providerConfig, cfg }) =>
-      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
+      Boolean(resolveDirectXaiAudioApiKey(readXaiProviderConfig(providerConfig).apiKey)) ||
       isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     synthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
@@ -312,14 +317,14 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
 }
 
 // Resolve an xAI bearer for `/v1/tts`:
-// 1. Configured `messages.tts.providers.xai.apiKey` (or talk equivalent)
+// 1. Configured `tts.providers.xai.apiKey` (or talk equivalent)
 // 2. `XAI_API_KEY` env var
 // 3. xAI OAuth auth profile (cfg-scoped)
 async function resolveOptionalXaiAudioApiKey(
   configApiKey: string | undefined,
   cfg?: OpenClawConfig,
 ): Promise<string | undefined> {
-  const direct = trimToUndefined(configApiKey) ?? trimToUndefined(process.env.XAI_API_KEY);
+  const direct = resolveDirectXaiAudioApiKey(configApiKey);
   if (direct) {
     return direct;
   }

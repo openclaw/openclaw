@@ -33,6 +33,8 @@ export type AdoptedSessionEntry = {
   sessionId: string;
   agentId: string;
   initializing?: true;
+  /** Bound canonical thread for local supervision adoptions; absent for node entries. */
+  boundThreadId?: string;
 };
 
 export type CodexNodeHistory = {
@@ -140,6 +142,7 @@ export function listNodeAdoptedSessionEntries(params: {
   for (const agentId of listSupervisionAgentIds(params.config ?? {})) {
     for (const { entry, sessionKey } of params.runtime.agent.session.listSessionEntries({
       agentId,
+      readOnly: true,
     })) {
       const marker = readNodeSessionMarker(entry);
       const sessionId = entry.sessionId?.trim();

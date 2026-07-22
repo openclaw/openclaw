@@ -23,9 +23,11 @@ const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
+const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`);
 const tempDirs = createTrackedTempDirs();
 
-vi.mock("../../infra/clawhub.js", () => ({
+vi.mock("../../infra/clawhub.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clawhub.js")>()),
   fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
   fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
@@ -59,8 +61,13 @@ vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: pathExistsMock,
 }));
 
+vi.mock("./skill-tree-digest.js", () => ({
+  digestClawHubSkillTree: digestClawHubSkillTreeMock,
+}));
+
 const {
   installSkillFromClawHub,
+  preflightSkillFromClawHub,
   readVerifiedClawHubSkillSourceUrl,
   resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
@@ -322,6 +329,55 @@ describe("skills-clawhub", () => {
       slug: "agentreceipt",
       version: "1.0.0",
     });
+  });
+
+  it("resolves an exact skill artifact without mutating the workspace", async () => {
+    const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    downloadClawHubSkillArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/agentreceipt.zip",
+      integrity,
+      sha256Hex: "a".repeat(64),
+      artifact: "archive",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await preflightSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "agentreceipt",
+      version: "1.0.0",
+      acknowledgeClawHubRisk: true,
+    });
+
+    expect(result).toEqual({ ok: true, action: "install", integrity });
+    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
+    expect(installPackageDirMock).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a downloaded skill whose bytes do not match the consented plan", async () => {
+    const observed = `sha256-${Buffer.from("b".repeat(64), "hex").toString("base64")}`;
+    const expected = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    downloadClawHubSkillArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/agentreceipt.zip",
+      integrity: observed,
+      sha256Hex: "b".repeat(64),
+      artifact: "archive",
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "agentreceipt",
+      version: "1.0.0",
+      expectedIntegrity: `sha256:${"a".repeat(64)}`,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: `ClawHub archive integrity mismatch: expected ${expected}, got ${observed}.`,
+    });
+    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
+    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
   it("bypasses ClawHub trust checks for official skill install resolutions", async () => {
@@ -1045,6 +1101,7 @@ describe("skills-clawhub", () => {
 
   it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const warn = vi.fn();
     const skillContent = "---\nname: agentreceipt\ndescription: Receipt helper\n---\n";
     const skillSha256 = createHash("sha256").update(skillContent).digest("hex");
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
@@ -1057,6 +1114,7 @@ describe("skills-clawhub", () => {
       const result = await installSkillFromClawHub({
         workspaceDir,
         slug: "agentreceipt",
+        logger: { warn },
       });
 
       expectInstalledSkill(result, {
@@ -1069,6 +1127,7 @@ describe("skills-clawhub", () => {
         version: "1.0.0",
         baseUrl: undefined,
       });
+      expect(warn).not.toHaveBeenCalled();
       const lock = JSON.parse(
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
@@ -1335,6 +1394,7 @@ describe("skills-clawhub", () => {
 
   it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
+    const warn = vi.fn();
     fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
     installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
       await fs.mkdir(params.targetDir, { recursive: true });
@@ -1346,9 +1406,14 @@ describe("skills-clawhub", () => {
       const result = await installSkillFromClawHub({
         workspaceDir,
         slug: "agentreceipt",
+        logger: { warn },
       });
 
       expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(
+        "Skill verification for agentreceipt failed: verification down",
+      );
       const lock = JSON.parse(
         await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
       ) as { skills: Record<string, Record<string, unknown>> };
@@ -2796,3 +2861,4 @@ describe("ClawHub origin provenance readback", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

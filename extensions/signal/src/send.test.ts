@@ -28,7 +28,6 @@ const {
   clearSignalApprovalReactionTargetsForTest,
   resolveSignalApprovalReactionTargetWithPersistence,
 } = await import("./approval-reactions.js");
-const { clearSignalReplyAuthorsForTest } = await import("./reply-authors.js");
 const { sendMessageSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
@@ -45,9 +44,8 @@ const SIGNAL_TEST_CFG = {
 };
 
 describe("sendMessageSignal receipts", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     clearSignalApprovalReactionTargetsForTest();
-    await clearSignalReplyAuthorsForTest();
     signalRpcRequestMock.mockReset();
     resolveOutboundAttachmentFromUrlMock.mockClear();
   });
@@ -89,6 +87,21 @@ describe("sendMessageSignal receipts", () => {
     expect(result.receipt.sentAt).toBeGreaterThan(0);
   });
 
+  it.each(["username:alice.42", "u:alice.42", "signal:u:ALICE.42"])(
+    "sends %s through the canonical username parameter",
+    async (target) => {
+      signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567890 });
+
+      await sendMessageSignal(target, "hello", { cfg: SIGNAL_TEST_CFG });
+
+      expect(signalRpcRequestMock).toHaveBeenCalledWith(
+        "send",
+        expect.objectContaining({ username: ["alice.42"] }),
+        expect.any(Object),
+      );
+    },
+  );
+
   it("attaches a media receipt for attachment sends", async () => {
     signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567891 });
     const maxBytes = 12 * 1024 * 1024;
@@ -107,7 +120,7 @@ describe("sendMessageSignal receipts", () => {
     );
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
-      expect.objectContaining({ attachments: ["/tmp/image.png"] }),
+      expect.objectContaining({ attachments: ["/tmp/image.png"], message: "" }),
       expect.objectContaining({ maxAttachmentBytes: maxBytes }),
     );
     expect(result.messageId).toBe("1234567891");

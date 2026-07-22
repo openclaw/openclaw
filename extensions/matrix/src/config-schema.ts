@@ -3,12 +3,12 @@ import {
   AllowFromListSchema,
   BlockStreamingCoalesceSchema,
   buildChannelConfigSchema,
+  buildGroupEntrySchema,
   buildNestedDmConfigSchema,
   ContextVisibilityModeSchema,
   GroupPolicySchema,
   MarkdownConfigSchema,
   MentionPatternsPolicySchema,
-  ToolPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
@@ -33,8 +33,6 @@ const matrixThreadBindingsSchema = z
     maxAgeHours: z.number().nonnegative().optional(),
     spawnSessions: z.boolean().optional(),
     defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-    spawnSubagentSessions: z.boolean().optional(),
-    spawnAcpSessions: z.boolean().optional(),
   })
   .optional();
 
@@ -58,19 +56,15 @@ const botLoopProtectionSchema = z
   .strict()
   .optional();
 
-const matrixRoomSchema = z
-  .object({
-    account: z.string().optional(),
-    enabled: z.boolean().optional(),
-    requireMention: z.boolean().optional(),
-    allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-    botLoopProtection: botLoopProtectionSchema,
-    tools: ToolPolicySchema,
-    autoReply: z.boolean().optional(),
-    users: AllowFromListSchema,
-    skills: z.array(z.string()).optional(),
-    systemPrompt: z.string().optional(),
-  })
+const matrixRoomSchema = buildGroupEntrySchema({
+  account: z.string().optional(),
+  allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+  botLoopProtection: botLoopProtectionSchema,
+  autoReply: z.boolean().optional(),
+  users: AllowFromListSchema,
+})
+  .omit({ toolsBySender: true, allowFrom: true })
+  .strict()
   .optional();
 
 const matrixNetworkSchema = z
@@ -98,6 +92,7 @@ const matrixStreamingSchema = z
         maxLines: z.number().int().positive().optional(),
         maxLineChars: z.number().int().positive().optional(),
         toolProgress: z.boolean().optional(),
+        commandText: z.enum(["raw", "status"]).optional(),
       })
       .strict()
       .optional(),

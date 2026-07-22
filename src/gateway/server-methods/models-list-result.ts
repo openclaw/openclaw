@@ -9,6 +9,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailability,
@@ -18,7 +19,7 @@ import {
 import { hasSyntheticLocalProviderAuthConfig } from "../../agents/model-auth.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
-  loadModelCatalogSnapshotForBrowse,
+  loadPreparedModelCatalogSnapshotForBrowse,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
 import {
@@ -47,6 +48,7 @@ import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 import { resolveManifestProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
+import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
@@ -54,7 +56,10 @@ type ModelsListEntry = Pick<
   ModelCatalogEntry,
   "alias" | "contextWindow" | "id" | "input" | "name" | "provider" | "reasoning"
 > & { available?: boolean };
-type ModelsListEntryWithCapabilities = ModelsListEntry & { apiKeySupported?: boolean };
+type ModelsListEntryWithCapabilities = ModelsListEntry & {
+  agentRuntime?: GatewayAgentRuntime;
+  apiKeySupported?: boolean;
+};
 type ApiKeyProviderCapabilities = {
   providers: ReadonlyMap<string, boolean>;
   resolveProvider(provider: string): string;
@@ -75,8 +80,8 @@ function resolvePositiveSafeInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-// Project explicitly onto the public protocol shape. Route, base URL, auth,
-// runtime, and cost facts stay private to server-side selection.
+// Project explicitly onto the public protocol shape. Concrete route, base URL,
+// auth, and cost facts stay private; runtime intent is attached separately.
 function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
   return {
@@ -86,6 +91,28 @@ function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
     ...(entry.alias ? { alias: entry.alias } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(typeof entry.reasoning === "boolean" ? { reasoning: entry.reasoning } : {}),
+  };
+}
+
+function resolveModelChoiceAgentRuntime(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: ModelCatalogEntry;
+}): GatewayAgentRuntime | undefined {
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.entry.provider,
+    modelId: params.entry.id,
+    modelApi: params.entry.api,
+    modelBaseUrl: params.entry.baseUrl,
+    config: params.cfg,
+    agentId: params.agentId,
+  });
+  if (harnessPolicy.runtime === "auto") {
+    return undefined;
+  }
+  return {
+    id: harnessPolicy.runtime,
+    source: harnessPolicy.runtimeSource ?? "implicit",
   };
 }
 
@@ -349,6 +376,7 @@ export function createGatewayAgentModelCatalogProjector(params: {
 async function buildPublicModelsListEntries(params: {
   catalog: ModelCatalogEntry[];
   cfg: OpenClawConfig;
+  agentId: string;
   evaluateEntry(entry: ModelCatalogEntry): Promise<ModelsListEntryEvaluation>;
   includeInput?: boolean;
   preserveUnknownAvailability?: boolean;
@@ -367,8 +395,14 @@ async function buildPublicModelsListEntries(params: {
       // Legacy views keep emitting a boolean because existing clients treat
       // omission as selectable. Inventory consumers preserve unknown state.
       const capabilityProvider = params.apiKeyCapabilities?.resolveProvider(entry.provider);
+      const agentRuntime = resolveModelChoiceAgentRuntime({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        entry,
+      });
       return {
         ...publicEntry,
+        ...(agentRuntime ? { agentRuntime } : {}),
         ...(capabilityProvider && params.apiKeyCapabilities?.providers.has(capabilityProvider)
           ? {
               apiKeySupported: params.apiKeyCapabilities.providers.get(capabilityProvider) === true,
@@ -414,7 +448,10 @@ export async function buildModelsListResult(params: {
   context: GatewayRequestContext;
   agentId?: string;
   params: Record<string, unknown>;
-  preloadedCatalog?: ModelCatalogSnapshot;
+  preloadedCatalog?: {
+    agentId: string;
+    snapshot: ModelCatalogSnapshot;
+  };
   catalogProjector?: ReturnType<typeof createGatewayAgentModelCatalogProjector>;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): Promise<{ models: ModelsListEntryWithCapabilities[] }> {
@@ -422,15 +459,19 @@ export async function buildModelsListResult(params: {
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const view = resolveModelsListView(params.params);
-  const snapshot = await loadModelCatalogSnapshotForBrowse({
+  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
     cfg,
     view,
     loadCatalog: async (loadParams) => {
       const readOnlyLoad = loadParams.readOnly ?? true;
-      if (params.preloadedCatalog && readOnlyLoad) {
-        return params.preloadedCatalog;
+      if (params.preloadedCatalog?.agentId === agentId && readOnlyLoad) {
+        return params.preloadedCatalog.snapshot;
       }
-      return await params.context.loadGatewayModelCatalogSnapshot(loadParams);
+      return await params.context.loadGatewayModelCatalogSnapshot({
+        ...loadParams,
+        agentId,
+        agentDir: resolveAgentDir(cfg, agentId),
+      });
     },
     onTimeout: (timeoutMs) => {
       if (loggedSlowModelsListCatalog) {
@@ -472,6 +513,7 @@ export async function buildModelsListResult(params: {
       models: await buildPublicModelsListEntries({
         catalog: inventory,
         cfg,
+        agentId,
         evaluateEntry: inventoryProjector.evaluateEntry,
         includeInput: true,
         preserveUnknownAvailability: true,
@@ -534,6 +576,7 @@ export async function buildModelsListResult(params: {
     models: await buildPublicModelsListEntries({
       catalog: models,
       cfg,
+      agentId,
       evaluateEntry,
       ...(capableProviders ? { apiKeyCapabilities: capableProviders } : {}),
     }),

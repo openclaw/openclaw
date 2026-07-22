@@ -169,36 +169,38 @@ const TINY_PNG_BASE64 =
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
+    mockState.loadSessionEntryCalls.push({ rawKey, opts });
+    const canonicalKey =
+      typeof mockState.sessionEntry.canonicalKey === "string"
+        ? mockState.sessionEntry.canonicalKey
+        : rawKey || "main";
+    const entry = mockState.sessionMissing
+      ? undefined
+      : {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          ...mockState.sessionEntry,
+        };
+    return {
+      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
+      cfg: {
+        ...mockState.config,
+        session: {
+          ...(mockState.config.session as Record<string, unknown> | undefined),
+          mainKey: mockState.mainSessionKey,
+        },
+      },
+      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      store: entry ? { [canonicalKey]: entry } : {},
+      entry,
+      canonicalKey,
+    };
+  };
   return {
     ...original,
-    loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
-      mockState.loadSessionEntryCalls.push({ rawKey, opts });
-      const canonicalKey =
-        typeof mockState.sessionEntry.canonicalKey === "string"
-          ? mockState.sessionEntry.canonicalKey
-          : rawKey || "main";
-      const entry = mockState.sessionMissing
-        ? undefined
-        : {
-            sessionId: mockState.sessionId,
-            sessionFile: mockState.transcriptPath,
-            ...mockState.sessionEntry,
-          };
-      return {
-        ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-        cfg: {
-          ...mockState.config,
-          session: {
-            ...(mockState.config.session as Record<string, unknown> | undefined),
-            mainKey: mockState.mainSessionKey,
-          },
-        },
-        storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        store: entry ? { [canonicalKey]: entry } : {},
-        entry,
-        canonicalKey,
-      };
-    },
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
   };
 });
 
@@ -404,27 +406,35 @@ vi.mock("../../agents/sandbox/context.js", async () => {
 
 vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
   stageSandboxMedia: vi.fn(
-    async (params: { ctx: { MediaPaths?: string[]; MediaPath?: string } }) => {
+    async (params: {
+      ctx: { media?: Array<{ path?: string; contentType?: string; workspaceDir?: string }> };
+    }) => {
       if (mockState.stageSandboxMediaError) {
         throw mockState.stageSandboxMediaError;
       }
-      const staged = new Map<string, string>();
-      const originalPaths = params.ctx.MediaPaths ?? [];
+      const staged = new Map<number, string>();
+      const originalPaths = params.ctx.media?.map((fact) => fact.path) ?? [];
       if (mockState.stagedRelativePaths) {
         const mapping = mockState.stagedRelativePaths;
-        params.ctx.MediaPaths = [...mapping];
-        params.ctx.MediaPath = mapping[0];
+        params.ctx.media = (params.ctx.media ?? []).map((fact, index) => ({
+          path: mapping[index] ?? fact.path,
+          contentType: fact.contentType,
+          workspaceDir: mockState.sandboxWorkspace?.workspaceDir,
+        }));
         for (let i = 0; i < mapping.length; i += 1) {
           const source = originalPaths[i];
           const dest = mapping[i];
           if (source && dest) {
-            staged.set(source, dest);
+            staged.set(i, dest);
           }
         }
       }
       if (mockState.unstagedSources) {
         for (const source of mockState.unstagedSources) {
-          staged.delete(source);
+          const index = originalPaths.indexOf(source);
+          if (index >= 0) {
+            staged.delete(index);
+          }
         }
       }
       return { staged };
@@ -1085,6 +1095,176 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(assistantEntries[0]?.idempotencyKey).toBe("idem-final-sqlite");
       expect(JSON.stringify(assistantEntries[0])).toContain("sqlite mirror text");
     });
+  });
+
+  it("persists non-agent plugin-bound replies in the binding-owned session", async () => {
+    await createTranscriptFixture("openclaw-chat-send-plugin-binding-history-");
+    const targetSessionKey = "plugin-binding:codex:history123";
+    mockState.finalPayload = setReplyPayloadMetadata(
+      { text: "bound history reply" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: targetSessionKey,
+          agentId: "main",
+          expectedSessionId: mockState.sessionId,
+        },
+      },
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-plugin-binding-history",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.loadSessionEntryCalls).toContainEqual({
+      rawKey: targetSessionKey,
+      opts: { agentId: "main" },
+    });
+    const assistantUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) => (update.message as { role?: unknown } | undefined)?.role === "assistant",
+    );
+    expect(assistantUpdate?.target).toMatchObject({
+      agentId: "main",
+      sessionKey: targetSessionKey,
+    });
+  });
+
+  it("does not cross a plugin-bound session rotation during finalization", async () => {
+    await createTranscriptFixture("openclaw-chat-send-plugin-binding-rotation-");
+    const targetSessionKey = "plugin-binding:codex:rotated";
+    mockState.finalPayload = setReplyPayloadMetadata(
+      { text: "stale bound reply" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: targetSessionKey,
+          agentId: "main",
+          expectedSessionId: "previous-bound-session",
+        },
+      },
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-plugin-binding-rotation",
+      expectBroadcast: false,
+    });
+
+    expect(
+      mockState.emittedTranscriptUpdates.some(
+        (update) => (update.message as { role?: unknown } | undefined)?.role === "assistant",
+      ),
+    ).toBe(false);
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      "webchat transcript append skipped: binding-owned session changed before finalization",
+    );
+  });
+
+  it("keeps a twice-raced plugin-bound turn out of source history", async () => {
+    await createTranscriptFixture("openclaw-chat-send-plugin-binding-blocked-");
+    mockState.finalPayload = setReplyPayloadMetadata(
+      { text: "live reply without durable turn" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "plugin-binding:codex:blocked",
+          agentId: "main",
+          transcriptWriteBlocked: true,
+        },
+      },
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-plugin-binding-blocked",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.emittedTranscriptUpdates).toHaveLength(0);
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      "webchat transcript append skipped: binding-owned user turn was not persisted",
+    );
+  });
+
+  it("does not fall back to source history for partial binding transcript metadata", async () => {
+    await createTranscriptFixture("openclaw-chat-send-plugin-binding-partial-");
+    const targetSessionKey = "plugin-binding:codex:partial";
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          { text: "bound reply" },
+          {
+            sourceReplyTranscriptMirror: {
+              sessionKey: targetSessionKey,
+              agentId: "main",
+              expectedSessionId: mockState.sessionId,
+            },
+          },
+        ),
+      },
+      { kind: "final", payload: { text: "derived reply without owner" } },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-plugin-binding-partial",
+      expectBroadcast: false,
+    });
+
+    expect(
+      mockState.emittedTranscriptUpdates.some(
+        (update) => (update.message as { role?: unknown } | undefined)?.role === "assistant",
+      ),
+    ).toBe(false);
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      "webchat transcript append skipped: inconsistent binding-owned transcript metadata",
+    );
+  });
+
+  it("keeps legacy source-reply mirror metadata on source history", async () => {
+    await createTranscriptFixture("openclaw-chat-send-source-mirror-legacy-");
+    mockState.finalPayload = setReplyPayloadMetadata(
+      { text: "legacy source reply" },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "main",
+          text: "legacy source reply",
+          idempotencyKey: "legacy-source-reply",
+        },
+      },
+    );
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-source-mirror-legacy",
+      expectBroadcast: false,
+    });
+
+    const assistantUpdate = mockState.emittedTranscriptUpdates.find(
+      (update) => (update.message as { role?: unknown } | undefined)?.role === "assistant",
+    );
+    expect(assistantUpdate?.target).toMatchObject({
+      agentId: "main",
+      sessionKey: "main",
+    });
+    expect(context.logGateway.warn).not.toHaveBeenCalledWith(
+      "webchat transcript append skipped: inconsistent binding-owned transcript metadata",
+    );
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -2400,6 +2580,57 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
+  it("does not finalize an error-marked source reply as assistant transcript content", async () => {
+    const mirrorIdempotencyKey = "idem-agent-source-reply-marked-error:internal-source-reply:0";
+    await createTranscriptFixture("openclaw-chat-send-agent-source-reply-marked-error-");
+    await appendSourceReplyMirrorEntry({
+      idempotencyKey: mirrorIdempotencyKey,
+      text: "Original source reply",
+    });
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: setReplyPayloadMetadata(
+          {
+            text: "Model login expired. Re-authenticate, then try again.",
+            isError: true,
+          },
+          {
+            sourceReplyTranscriptMirror: {
+              sessionKey: "main",
+              text: "Model login expired. Re-authenticate, then try again.",
+              idempotencyKey: mirrorIdempotencyKey,
+            },
+          },
+        ),
+      },
+    ];
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond: vi.fn(),
+      idempotencyKey: "idem-agent-source-reply-marked-error",
+      waitFor: "dedupe",
+    });
+
+    const broadcasts = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([, payload]) => payload as Record<string, unknown>,
+    );
+    expect(broadcasts).toHaveLength(1);
+    expect(broadcasts[0]).toMatchObject({
+      state: "error",
+      errorMessage: "Model login expired. Re-authenticate, then try again.",
+    });
+    expect(broadcasts[0]).not.toHaveProperty("message");
+    const assistantEntries = await readActiveAssistantTranscriptMessages();
+    expect(assistantEntries).toHaveLength(1);
+    expect(assistantEntries[0]?.content).toStrictEqual([
+      { type: "text", text: "Original source reply" },
+    ]);
+  });
+
   it("broadcasts returned agent errors after status notices", async () => {
     await createTranscriptFixture("openclaw-chat-send-agent-status-notice-error-");
     const errorMessage = "LLM idle timeout (120s): no response from model";
@@ -2436,6 +2667,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "error",
       errorMessage,
     });
+    expect(broadcast).not.toHaveProperty("message");
     const finalBroadcasts = (
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "final");
@@ -2471,6 +2703,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "error",
       errorMessage,
     });
+    expect(broadcast).not.toHaveProperty("message");
     const dedupe = context.dedupe.get("chat:idem-agent-returned-error");
     expect(dedupe?.ok).toBe(false);
     expect(dedupe?.payload).toMatchObject({
@@ -6986,3 +7219,4 @@ describe("chat.send operator UI client sender context", () => {
     expect(mockState.lastTaskSuggestionDeliveryMode).toBeUndefined();
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

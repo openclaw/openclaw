@@ -15,6 +15,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
+  type AmbientEnvTriggerPolicy,
 } from "../channels/config-presence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -24,7 +25,11 @@ import {
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
-import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
+import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
+import {
+  hasExplicitChannelConfig,
+  listExplicitConfiguredChannelIdsForConfig,
+} from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
@@ -77,6 +82,24 @@ type VoiceProviderContractKey =
   | "speechProviders"
   | "realtimeTranscriptionProviders"
   | "realtimeVoiceProviders";
+
+function readStartupBundledDiscoveryMode(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): "compat" | "allowlist" | undefined {
+  const stateMode = readBundledDiscoveryMode({ env });
+  if (stateMode) {
+    return stateMode;
+  }
+  // Bootstrap Doctor with the raw legacy marker before it has been imported
+  // into SQLite; steady-state runtime consumers use machine state only.
+  const legacyMode = (config.plugins as { bundledDiscovery?: unknown } | undefined)
+    ?.bundledDiscovery;
+  if (legacyMode === "compat" || legacyMode === "allowlist") {
+    return legacyMode;
+  }
+  return undefined;
+}
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
 type ConfiguredVoiceProviderIds = Record<VoiceProviderContractKey, ReadonlySet<string>>;
 
@@ -103,9 +126,19 @@ function isConfigActivationValueEnabled(value: unknown): boolean {
   return true;
 }
 
-function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+function listPotentialEnabledChannelIds(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  ambientEnvTriggers: AmbientEnvTriggerPolicy = "allow",
+): string[] {
   const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(config));
-  return listPotentialConfiguredChannelIds(config, env, { includePersistedAuthState: false })
+  return sortUniquePluginIds([
+    ...listPotentialConfiguredChannelIds(config, env, {
+      includePersistedAuthState: false,
+      ambientEnvTriggers,
+    }),
+    ...listExplicitConfiguredChannelIdsForConfig(config),
+  ])
     .map((id) => normalizeOptionalLowercaseString(id) ?? "")
     .filter((id) => id && !disabled.has(id));
 }
@@ -532,9 +565,9 @@ function collectConfiguredGenerationProviderIds(
 ): ConfiguredGenerationProviderIds {
   const defaults = config.agents?.defaults;
   return {
-    imageGenerationProviders: collectModelProviderIds(defaults?.imageGenerationModel),
-    videoGenerationProviders: collectModelProviderIds(defaults?.videoGenerationModel),
-    musicGenerationProviders: collectModelProviderIds(defaults?.musicGenerationModel),
+    imageGenerationProviders: collectModelProviderIds(defaults?.mediaModels?.image),
+    videoGenerationProviders: collectModelProviderIds(defaults?.mediaModels?.video),
+    musicGenerationProviders: collectModelProviderIds(defaults?.mediaModels?.music),
   };
 }
 
@@ -670,7 +703,7 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     return [];
   }
   const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
-  const defaultsBlock = config.agents?.defaults?.memorySearch;
+  const defaultsBlock = config.memory?.search;
   const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
   const addEffectiveProviders = (override: Record<string, unknown> | undefined) => {
     for (const { configuredId, source } of resolveEffectiveMemoryEmbeddingProviderEntries(
@@ -695,7 +728,8 @@ export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
     return [...byConfiguredIdAndSource.values()];
   }
   for (const agent of agentEntries) {
-    addEffectiveProviders(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
+    const memory = isRecord(agent.memory) ? agent.memory : undefined;
+    addEffectiveProviders(isRecord(memory?.search) ? memory.search : undefined);
   }
   return [...byConfiguredIdAndSource.values()];
 }
@@ -806,10 +840,15 @@ function collectConfiguredStartupChannelIds(params: {
   activationSourceConfig: OpenClawConfig;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   return sortUniquePluginIds([
-    ...listPotentialEnabledChannelIds(params.config, params.env),
-    ...listPotentialEnabledChannelIds(params.activationSourceConfig, params.env),
+    ...listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+    ...listPotentialEnabledChannelIds(
+      params.activationSourceConfig,
+      params.env,
+      params.ambientEnvTriggers,
+    ),
   ]);
 }
 
@@ -970,6 +1009,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   index: InstalledPluginIndex;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const activationSourceConfig = params.activationSourceConfig ?? params.config;
@@ -982,8 +1022,8 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     return [];
   }
   if (
-    params.config.plugins?.bundledDiscovery === "compat" ||
-    activationSourceConfig.plugins?.bundledDiscovery === "compat"
+    readStartupBundledDiscoveryMode(params.config, params.env) === "compat" ||
+    readStartupBundledDiscoveryMode(activationSourceConfig, params.env) === "compat"
   ) {
     return undefined;
   }
@@ -1031,6 +1071,7 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
     config: params.config,
     activationSourceConfig,
     env: params.env,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   if (!lookup.hasDirectChannelOwners(configuredChannelIds)) {
     return undefined;
@@ -1106,11 +1147,13 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
   env: NodeJS.ProcessEnv;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): PluginMetadataSnapshotPluginIdScope {
   const configuredChannelIds = collectConfiguredStartupChannelIds({
     config: params.config,
     activationSourceConfig: params.activationSourceConfig ?? params.config,
     env: params.env,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
   const workerProviderIds = normalizeWorkerProviderIds(params.workerProviderIds ?? []);
   return {
@@ -1121,6 +1164,7 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
       configuredChannelIds,
       workerProviderIds,
       platform: params.platform ?? null,
+      ambientEnvTriggers: params.ambientEnvTriggers ?? "allow",
     }),
     resolve: ({ index }) =>
       resolveGatewayStartupMetadataPluginIds({
@@ -1132,6 +1176,9 @@ export function createGatewayStartupMetadataPluginIdScope(params: {
         index,
         ...(workerProviderIds.length > 0 ? { workerProviderIds } : {}),
         ...(params.platform !== undefined ? { platform: params.platform } : {}),
+        ...(params.ambientEnvTriggers !== undefined
+          ? { ambientEnvTriggers: params.ambientEnvTriggers }
+          : {}),
       }),
   };
 }
@@ -1176,7 +1223,10 @@ export function resolveConfigValidationMetadataPluginIds(params: {
 }): string[] | undefined {
   const lookup = createInstalledPluginIndexScopeLookup(params.index);
   const pluginsConfig = normalizePluginsConfigForInstalledIndex(params.config.plugins, lookup);
-  if (params.config.plugins?.bundledDiscovery === "compat" || pluginsConfig.loadPaths.length > 0) {
+  if (
+    readStartupBundledDiscoveryMode(params.config, params.env) === "compat" ||
+    pluginsConfig.loadPaths.length > 0
+  ) {
     return undefined;
   }
 
@@ -1870,8 +1920,11 @@ export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
   env: NodeJS.ProcessEnv;
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
-  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
+  const configuredChannelIds = new Set(
+    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+  );
   if (configuredChannelIds.size === 0) {
     return [];
   }
@@ -1933,6 +1986,7 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).configuredDeferredChannelPluginIds];
 }
@@ -1945,11 +1999,14 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
   const channelPluginIds = resolveChannelPluginIdsFromRegistry({
     manifestRegistry: params.manifestRegistry,
   });
-  const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
+  const configuredChannelIds = new Set(
+    listPotentialEnabledChannelIds(params.config, params.env, params.ambientEnvTriggers),
+  );
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -2268,6 +2325,7 @@ export function loadGatewayStartupPluginPlan(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
   const snapshotConfig = params.activationSourceConfig ?? params.config;
   const pluginIdScope = createGatewayStartupMetadataPluginIdScope({
@@ -2278,6 +2336,9 @@ export function loadGatewayStartupPluginPlan(params: {
     env: params.env,
     workerProviderIds: params.workerProviderIds ?? [],
     ...(params.platform !== undefined ? { platform: params.platform } : {}),
+    ...(params.ambientEnvTriggers !== undefined
+      ? { ambientEnvTriggers: params.ambientEnvTriggers }
+      : {}),
   });
   const metadataSnapshot =
     params.metadataSnapshot &&
@@ -2312,6 +2373,7 @@ export function loadGatewayStartupPluginPlan(params: {
     manifestRegistry: metadataSnapshot.manifestRegistry,
     workerProviderIds: params.workerProviderIds ?? [],
     platform: params.platform,
+    ambientEnvTriggers: params.ambientEnvTriggers,
   });
 }
 
@@ -2322,6 +2384,8 @@ export function resolveGatewayStartupPluginIds(params: {
   env: NodeJS.ProcessEnv;
   workerProviderIds?: readonly string[];
   platform?: NodeJS.Platform;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): string[] {
   return [...loadGatewayStartupPluginPlan(params).pluginIds];
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
