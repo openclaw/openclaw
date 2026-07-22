@@ -4919,7 +4919,7 @@ describe("update-cli", () => {
         await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
         await fs.writeFile(
           path.join(pkgRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.6.6" }),
+          JSON.stringify({ name: "openclaw", version: "9999.0.0" }),
           "utf-8",
         );
         await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
