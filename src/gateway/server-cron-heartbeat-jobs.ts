@@ -28,7 +28,8 @@ export async function reconcileHeartbeatMonitorJobs(params: {
   cron: HeartbeatJobCron;
   cfg: OpenClawConfig;
   logger: { warn: (obj: unknown, msg?: string) => void };
-}): Promise<void> {
+}): Promise<{ ok: boolean }> {
+  let ok = true;
   const schedulerSeed = resolveHeartbeatSchedulerSeed();
   const desired = new Set<string>();
   for (const agent of resolveHeartbeatAgents(params.cfg)) {
@@ -61,6 +62,7 @@ export async function reconcileHeartbeatMonitorJobs(params: {
         { enabledExplicit: true },
       );
     } catch (error) {
+      ok = false;
       params.logger.warn(
         { agentId: agent.agentId, err: String(error) },
         "cron-heartbeat: monitor convergence failed",
@@ -80,6 +82,8 @@ export async function reconcileHeartbeatMonitorJobs(params: {
       await params.cron.remove(job.id);
     }
   } catch (error) {
+    ok = false;
     params.logger.warn({ err: String(error) }, "cron-heartbeat: stale monitor cleanup failed");
   }
+  return { ok };
 }

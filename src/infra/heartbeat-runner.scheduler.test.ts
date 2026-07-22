@@ -46,6 +46,32 @@ describe("startHeartbeatRunner", () => {
     } as OpenClawConfig;
   }
 
+  it("keeps a local fallback timer when cron is disabled, none when cron owns cadence", async () => {
+    useFakeHeartbeatTime();
+    const cronDisabledRun = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const disabledCfg = {
+      ...heartbeatConfig(),
+      cron: { enabled: false },
+    } as OpenClawConfig;
+    const fallbackRunner = startHeartbeatRunner({
+      cfg: disabledCfg,
+      runOnce: cronDisabledRun,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    // Shipped contract: cron.enabled=false gateways still get scheduled
+    // heartbeats — the runner self-fires without any external poke.
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(cronDisabledRun).toHaveBeenCalled();
+    fallbackRunner.stop();
+
+    const cronOwnedRun = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const cronOwnedRunner = startDefaultRunner(cronOwnedRun);
+    // With cron owning cadence there is no self-firing timer.
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
+    expect(cronOwnedRun).not.toHaveBeenCalled();
+    cronOwnedRunner.stop();
+  });
+
   function resolveDueFromNow(nowMs: number, intervalMs: number, agentId: string) {
     return computeNextHeartbeatPhaseDueMs({
       nowMs,
