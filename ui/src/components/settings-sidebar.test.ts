@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { pt_BR } from "../i18n/locales/pt-BR.ts";
 import { renderSettingsSidebar } from "./settings-sidebar.ts";
+import "./tooltip.ts";
 
 let container: HTMLDivElement;
 
@@ -363,7 +364,10 @@ describe("settings sidebar search", () => {
 
     renderSidebar(true, "connection refused?token=settings-secret", 3);
     const button = container.querySelector<HTMLButtonElement>(".sidebar-footer-bar__status");
-    expect(button?.title).toBe("connection refused?[redacted-credential]");
+    expect(button?.hasAttribute("title")).toBe(false);
+    expect(
+      (button?.closest("openclaw-tooltip") as (HTMLElement & { content?: string }) | null)?.content,
+    ).toBe("connection refused?[redacted-credential]");
     expect(button?.textContent).toContain("3 queued");
     expect(button?.getAttribute("aria-label")).toBe("Offline — Retry now — 3 queued");
     button?.click();
