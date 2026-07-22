@@ -373,7 +373,7 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
   );
 }
 
-export type EmbeddedRunDiagnosticSnapshot = {
+type EmbeddedRunDiagnosticSnapshot = {
   active: boolean;
   sessionId?: string;
   sessionKey?: string;

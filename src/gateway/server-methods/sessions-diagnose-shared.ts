@@ -4,7 +4,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../../config/sessions.js";
 
-export const DEFAULT_DIAGNOSE_TAIL = 30;
+const DEFAULT_DIAGNOSE_TAIL = 30;
 export const DEFAULT_DIAGNOSE_SCAN_LIMIT = 100;
 export const FRESH_PROGRESS_MAX_AGE_MS = 60_000;
 export const STALE_PROGRESS_MIN_AGE_MS = 120_000;

@@ -12,7 +12,7 @@ import { callGateway, formatGatewayTransportErrorJson } from "../gateway/call.js
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-export type SessionsDiagnoseOptions = {
+type SessionsDiagnoseOptions = {
   sessionKey?: string;
   sessionId?: string;
   label?: string;

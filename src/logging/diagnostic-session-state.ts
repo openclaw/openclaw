@@ -196,7 +196,7 @@ export function peekDiagnosticSessionState(ref: SessionRef): SessionState | unde
   );
 }
 
-export type DiagnosticSessionStateSnapshot = {
+type DiagnosticSessionStateSnapshot = {
   present: boolean;
   sessionId?: string;
   sessionKey?: string;

@@ -4,14 +4,14 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher for Control UI-visible controllers. */
-export type TrackedActiveSessionRun = {
+type TrackedActiveSessionRun = {
   runId: string;
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
 };
 
-export type TrackedActiveSessionRunSnapshot = {
+type TrackedActiveSessionRunSnapshot = {
   hasActiveRun: boolean;
   runs: Array<{
     runId: string;
@@ -29,7 +29,7 @@ export type TrackedActiveSessionRunSnapshot = {
   }>;
 };
 
-export function collectTrackedActiveSessionRuns(
+function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
@@ -170,7 +170,7 @@ function isTrackedActiveSessionRunForKey(
     : false;
 }
 
-export function isTrackedActiveSessionRunForTarget(
+function isTrackedActiveSessionRunForTarget(
   active: TrackedActiveSessionRun,
   params: {
     requestedKey: string;
