@@ -65,7 +65,11 @@ import {
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { readLegacyMatrixIdbSnapshotState } from "./src/matrix/sdk/idb-persistence.js";
 import type { MatrixStoredRecoveryKey } from "./src/matrix/sdk/types.js";
-import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
+import {
+  isMatrixStateArchiveDirectory,
+  isMatrixTokenHashPathSegment,
+  resolveMatrixCredentialsDir,
+} from "./src/storage-paths.js";
 
 export { normalizeCompatibilityConfig, legacyConfigRules } from "./src/doctor-contract.js";
 
@@ -149,10 +153,12 @@ async function collectLegacyMatrixStateRoots(
     for (const entry of entries) {
       const entryPath = path.join(dir, entry.name);
       if (entry.isFile() && entry.name === filename) {
-        roots.push(dir);
+        if (isMatrixTokenHashPathSegment(path.basename(dir))) {
+          roots.push(dir);
+        }
         continue;
       }
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() && !isMatrixStateArchiveDirectory(entry.name)) {
         await visit(entryPath);
       }
     }

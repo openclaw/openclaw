@@ -654,6 +654,44 @@ describe("matrix client storage paths", () => {
     expectCanonicalRootForNewDevice(stateDir);
   });
 
+  it("ignores archived token-hash siblings during root selection", () => {
+    const logger = createTestLogger();
+    const stateDir = setupStateDir(undefined, logger);
+    const currentRoot = seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-new",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-new" }).tokenHash,
+        deviceId: "DEVICE123",
+        currentTokenStateClaimed: true,
+      },
+    });
+    const previousRoot = seedCanonicalStorageRoot({
+      stateDir,
+      accessToken: "secret-token-old",
+      storageMeta: {
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        accountId: "default",
+        accessTokenHash: resolveDefaultStoragePaths({ accessToken: "secret-token-old" }).tokenHash,
+        deviceId: "DEVICE123",
+      },
+    });
+    resetPluginStateStoreForTests();
+    fs.renameSync(previousRoot.rootDir, `${previousRoot.rootDir}.pre-stable-token-20260716`);
+
+    const resolvedPaths = resolveDefaultStoragePaths({
+      accessToken: "secret-token-new",
+      deviceId: "DEVICE123",
+    });
+
+    expect(resolvedPaths.rootDir).toBe(currentRoot.rootDir);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it("keeps the current-token storage root stable after deviceId backfill when startup claimed state there", () => {
     const { stateDir, canonicalPaths } = setupCurrentTokenBackfillScenario({
       currentRootFiles: "thread-bindings",
