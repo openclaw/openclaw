@@ -2278,7 +2278,7 @@ describe("skills-clawhub", () => {
           slug: "agentreceipt",
           requestedReference: "skills-sh/openclaw/skills/agentreceipt",
           baseUrl: "https://private.example.com/clawhub",
-          version: "2.0.0",
+          version: undefined,
           tag: undefined,
           resolution: {
             source: "installed",
@@ -2292,6 +2292,54 @@ describe("skills-clawhub", () => {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
     });
+
+    it.each([
+      { version: "2.0.0", tag: undefined },
+      { version: undefined, tag: "latest" },
+    ])(
+      "rejects selectors for exact skills.sh verification references",
+      async ({ version, tag }) => {
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir: "/tmp/workspace",
+            slug: "skills-sh/openclaw/skills/agentreceipt",
+            version,
+            tag,
+          }),
+        ).resolves.toEqual({
+          ok: false,
+          error: "--version and --tag are not supported for skills-sh references.",
+        });
+      },
+    );
+
+    it.each([
+      { version: "2.0.0", tag: undefined },
+      { version: undefined, tag: "latest" },
+    ])(
+      "rejects selectors when an installed skill is tracked from skills.sh",
+      async ({ version, tag }) => {
+        const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
+        await writeClawHubOriginFixture({
+          workspaceDir,
+          slug: "agentreceipt",
+          requestedReference: "skills-sh/openclaw/skills/agentreceipt",
+          installedVersion: "a".repeat(40),
+        });
+
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug: "agentreceipt",
+            version,
+            tag,
+          }),
+        ).resolves.toEqual({
+          ok: false,
+          error: "--version and --tag are not supported for skills-sh references.",
+        });
+      },
+    );
 
     it("uses installed owner namespace when resolving owner-qualified verification targets", async () => {
       const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));

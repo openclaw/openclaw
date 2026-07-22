@@ -1118,6 +1118,12 @@ export async function resolveClawHubSkillVerificationTarget(params: {
     }
 
     const requestedRef = parseRequestedClawHubSkillRef(params.slug);
+    if (requestedRef.requestedReference && (version || tag)) {
+      return {
+        ok: false,
+        error: "--version and --tag are not supported for skills-sh references.",
+      };
+    }
     const trackedSlug = requestedRef.slug;
     const skillDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, trackedSlug);
     const originRead = await readClawHubSkillOriginStrict(skillDir);
@@ -1161,6 +1167,12 @@ export async function resolveClawHubSkillVerificationTarget(params: {
           error: `Skill "${trackedSlug}" ClawHub origin metadata does not match the workspace ClawHub lockfile. Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
+      if (lockedRequestedReference && (version || tag)) {
+        return {
+          ok: false,
+          error: "--version and --tag are not supported for skills-sh references.",
+        };
+      }
       if (requestedRef.ownerHandle && lockedOwnerHandle !== requestedRef.ownerHandle) {
         const trackedRef = lockedOwnerHandle ? `@${lockedOwnerHandle}/${trackedSlug}` : trackedSlug;
         return {
@@ -1173,14 +1185,17 @@ export async function resolveClawHubSkillVerificationTarget(params: {
         : tag
           ? "tag"
           : "installed-version";
+      // The stored skills.sh reference already identifies the approved commit.
+      // Adding a version or tag makes the ClawHub verification request invalid.
+      const usesExactReference = Boolean(lockedRequestedReference);
       return {
         ok: true,
         slug: trackedSlug,
         ...(lockedOwnerHandle ? { ownerHandle: lockedOwnerHandle } : {}),
         ...(lockedRequestedReference ? { requestedReference: lockedRequestedReference } : {}),
         baseUrl: lockedRegistry,
-        version: version ?? (tag ? undefined : locked.version),
-        tag,
+        version: usesExactReference ? undefined : (version ?? (tag ? undefined : locked.version)),
+        tag: usesExactReference ? undefined : tag,
         resolution: {
           source: "installed",
           selector,
