@@ -3487,6 +3487,8 @@ class ChatPane extends OpenClawLightDomElement {
       catalog: catalogKey !== null,
       listLoaded: state.sessionsResult !== null,
       listLoading: state.sessionsLoading,
+      sharingSupported:
+        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.visibility.set") === true,
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: selectedSession,
     });

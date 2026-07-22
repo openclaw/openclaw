@@ -51,6 +51,7 @@ describe("SessionParticipationTracker", () => {
       catalog: false,
       listLoaded: true,
       listLoading: false,
+      sharingSupported: true,
       sessionKey: "agent:main:tracked",
       session: undefined,
       ...patch,
@@ -76,6 +77,14 @@ describe("SessionParticipationTracker", () => {
     expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
       false,
     );
+  });
+
+  it("never blocks on absence when the gateway does not support sharing", () => {
+    const tracker = new SessionParticipationTracker();
+    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
+      false,
+    );
+    expect(resolve(tracker, { sharingSupported: false })).toBe(false);
   });
 
   it("blocks a member while a draft row is still cached", () => {

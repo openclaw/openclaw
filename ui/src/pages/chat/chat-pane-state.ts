@@ -33,6 +33,7 @@ export class SessionParticipationTracker {
     catalog: boolean;
     listLoaded: boolean;
     listLoading: boolean;
+    sharingSupported: boolean;
     sessionKey: string;
     session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
   }): boolean {
@@ -50,12 +51,21 @@ export class SessionParticipationTracker {
       this.remember(params.sessionKey, { blocked, seen: true });
       return blocked;
     }
-    if (!params.listLoaded) {
+    // Row absence is only a revocation signal on a sharing-capable gateway. On
+    // older or sharing-less gateways a missing row means pagination, filtering,
+    // deletion, or an unsupported feature — never a participation block, so we
+    // must not disable the composer for an otherwise writable session.
+    if (!params.sharingSupported || !params.listLoaded) {
       return false;
     }
     if (params.listLoading) {
       return previous?.blocked === true;
     }
+    // A session we could previously see vanishing from the authoritative loaded
+    // list while still selected is a redaction (owner switched it to draft); the
+    // gateway rejects our mutations, so fail closed. This clears on reconnect
+    // (reset) and when the row reappears. Distinguishing a redaction from a
+    // delete without an explicit revocation event is a deferred refinement.
     const blocked = previous?.seen === true;
     this.remember(params.sessionKey, { blocked, seen: previous?.seen === true });
     return blocked;

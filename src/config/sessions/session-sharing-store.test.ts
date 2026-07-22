@@ -61,4 +61,29 @@ describe("session sharing store", () => {
       expect(removeSessionMember(scope, "alice")).toBeNull();
     });
   });
+
+  it("drops members when the session instance is replaced under the same key", async () => {
+    await withTempDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntry(scope, { sessionId: "session-a", updatedAt: 1 });
+      expect(
+        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 2 }).inserted,
+      ).toBe(true);
+      expect(isSessionMember(scope, "guest")).toBe(true);
+
+      // Reusing the canonical key with a new sessionId is a fresh session; a
+      // stale member must not inherit access to the replacement.
+      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 3 });
+      expect(listSessionMembers(scope)).toEqual([]);
+      expect(isSessionMember(scope, "guest")).toBe(false);
+
+      // An in-place update that keeps the same sessionId preserves membership.
+      expect(
+        addSessionMember(scope, { identityId: "guest", addedBy: "owner", addedAt: 4 }).inserted,
+      ).toBe(true);
+      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 5 });
+      expect(isSessionMember(scope, "guest")).toBe(true);
+    });
+  });
 });

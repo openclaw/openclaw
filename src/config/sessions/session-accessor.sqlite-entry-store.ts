@@ -3,6 +3,7 @@ import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -395,6 +396,23 @@ export function deleteLegacySessionEntryRows(
   }
 }
 
+// session_members is an additive sharing surface with a lazy ensure, so a DB
+// that predates the feature may lack the table; such a DB also has no members
+// to drop. Guard on existence rather than forcing the sharing schema here.
+function clearSessionMembersForKey(database: OpenClawAgentDatabase, sessionKey: string): void {
+  const tableExists = database.db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_members'")
+    .get();
+  if (!tableExists) {
+    return;
+  }
+  const db = getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "session_members">>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db.deleteFrom("session_members").where("session_key", "=", sessionKey),
+  );
+}
+
 export function writeSessionEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
@@ -480,6 +498,14 @@ export function writeSessionEntry(
     sessionKey,
     updatedAt,
   });
+  // A canonical key can be reused by a fresh session instance (reset/recreate);
+  // the entry row is updated in place so the members FK cascade never fires.
+  // Sharing membership is bound to the instance, so a changed sessionId must
+  // drop prior members — otherwise they retain the `member` role (and its
+  // mutation rights) on a replacement session owned by someone else.
+  if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
+    clearSessionMembersForKey(database, sessionKey);
+  }
   executeSqliteQuerySync(
     database.db,
     db
