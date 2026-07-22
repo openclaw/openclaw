@@ -237,6 +237,8 @@ async function resetArchiveHeaderMatchesSessionId(
   }
 }
 
+const ARCHIVE_CANDIDATE_REASONS = ["reset", "deleted"] as const;
+
 async function listResetArchiveCandidatesForTranscriptAsync(
   transcriptPath: string,
 ): Promise<ResetArchiveCandidate[] | undefined> {
@@ -260,14 +262,29 @@ async function listResetArchiveCandidatesForTranscriptAsync(
   const archives: ResetArchiveCandidate[] = [];
   try {
     for (const entry of await fs.promises.readdir(dir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.startsWith(`${base}.reset.`)) {
+      if (!entry.isFile()) {
         continue;
       }
-      const timestamp = parseSessionArchiveTimestamp(entry.name, "reset");
-      if (timestamp == null) {
+      let matched = false;
+      let timestamp: number | null = null;
+      for (const reason of ARCHIVE_CANDIDATE_REASONS) {
+        if (!entry.name.startsWith(`${base}.${reason}.`)) {
+          continue;
+        }
+        timestamp = parseSessionArchiveTimestamp(entry.name, reason);
+        if (timestamp != null) {
+          matched = true;
+          break;
+        }
+      }
+      if (!matched) {
         continue;
       }
-      archives.push({ archivePath: path.join(dir, entry.name), name: entry.name, timestamp });
+      archives.push({
+        archivePath: path.join(dir, entry.name),
+        name: entry.name,
+        timestamp: timestamp!,
+      });
     }
   } catch {
     return undefined;

@@ -1064,6 +1064,39 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(deleteKeys.filter((key: string) => key === firstSessionKey)).toHaveLength(2);
     expect(deleteKeys.filter((key: string) => key === secondSessionKey)).toHaveLength(2);
   });
+
+  it("recovers narrative text when getSessionMessages initially returns empty (archive race, #87182)", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const narrativeText = "The endpoints glowed faintly in the twilight of the codebase.";
+    const subagent = createMockSubagent("");
+    let getSessionCallCount = 0;
+    subagent.getSessionMessages.mockImplementation(async () => {
+      getSessionCallCount += 1;
+      if (getSessionCallCount === 1) {
+        return { messages: [] };
+      }
+      return {
+        messages: [
+          { role: "user", content: "prompt" },
+          { role: "assistant", content: narrativeText },
+        ],
+      };
+    });
+    const logger = createMockLogger();
+
+    await generateAndAppendDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["a distant endpoint"] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain(narrativeText);
+  });
 });
 
 describe("runDetachedDreamNarrative", () => {
