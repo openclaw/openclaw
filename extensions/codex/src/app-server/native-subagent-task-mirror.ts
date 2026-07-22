@@ -514,6 +514,7 @@ export class CodexNativeSubagentTaskMirror {
       recordedAt,
       summary: "Codex app-server connector is healthy.",
     });
+    const relayHealthKnown = this.params.isRelayHealthy !== undefined;
     const relayHealthy = this.params.isRelayHealthy?.() ?? false;
     this.runtime.recordExecutionReceipt({
       runId,
@@ -524,7 +525,7 @@ export class CodexNativeSubagentTaskMirror {
         ? "Native hook relay registration is healthy."
         : "Native hook relay registration is unavailable.",
     });
-    if (!relayHealthy) {
+    if (relayHealthKnown && !relayHealthy) {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
         lastEventAt: recordedAt,
