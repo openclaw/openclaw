@@ -210,6 +210,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected readonly selectSession = (sessionKey: string) => {
+    // Keep the agent chip/select in sync with the route. Session keys are
+    // agent-scoped; switching sessions without updating agentSelection leaves
+    // the sidebar selectedId stale so re-clicking the previous agent no-ops
+    // (issue #109087). Chat pane already does this in applyActiveSessionBindings.
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (agentId) {
+      this.context?.agentSelection.set(agentId);
+    }
     this.context?.gateway.setSessionKey(sessionKey);
     this.onNavigate?.("chat", {
       search: searchForSession(sessionKey),
@@ -389,6 +397,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected readonly replaceCurrentSession = (sessionKey: string) => {
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (agentId) {
+      this.context?.agentSelection.set(agentId);
+    }
     this.context?.gateway.setSessionKey(sessionKey);
     if (this.activeRouteId === "chat") {
       this.onNavigate?.("chat", {

@@ -274,4 +274,39 @@ describe("AppSidebar agent chip", () => {
     expect(rows).toHaveLength(10);
     expect(rows.some((row) => row.textContent?.includes("agent-12"))).toBe(true);
   });
+
+  it("syncs agent selection when selecting a session for another agent (#109087)", async () => {
+    const gatewayHarness = createGatewayHarness({} as GatewayBrowserClient);
+    const setSessionKey = vi.fn();
+    (gatewayHarness.gateway as { setSessionKey: (key: string) => void }).setSessionKey =
+      setSessionKey;
+    // Sessions for both agents so the list can open a research row while the chip is still main.
+    const { sidebar, context } = await mountSidebar(
+      gatewayHarness.gateway,
+      createSessions("main", ["agent:main:main", "agent:research:work"]),
+      "panel",
+      TWO_AGENTS,
+    );
+    const setAgent = vi.fn((agentId: string | null) => {
+      context.agentSelection.state.selectedId = agentId;
+      context.agentSelection.state.scopeId = agentId;
+    });
+    context.agentSelection.set = setAgent;
+    context.agentSelection.state.selectedId = "main";
+    context.agentSelection.state.scopeId = "main";
+    sidebar.connected = true;
+    sidebar.onNavigate = vi.fn();
+    await sidebar.updateComplete;
+
+    // Direct route switch: same path as clicking a session row for another agent.
+    (
+      sidebar as unknown as {
+        selectSession: (key: string) => void;
+      }
+    ).selectSession("agent:research:work");
+
+    expect(setSessionKey).toHaveBeenCalledWith("agent:research:work");
+    expect(setAgent).toHaveBeenCalledWith("research");
+    expect(context.agentSelection.state.selectedId).toBe("research");
+  });
 });

@@ -54,6 +54,7 @@ import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
+import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
@@ -761,8 +762,7 @@ class OpenClawShell extends OpenClawLightDomElement {
     if (handled || (command.kind !== "navigate" && command.kind !== "split")) {
       return;
     }
-    context.gateway.setSessionKey(command.sessionKey);
-    this.navigate("chat", { search: searchForSession(command.sessionKey) });
+    this.selectChatSession(context, command.sessionKey);
   };
 
   private scheduleAgentRosterRefresh() {
@@ -835,6 +835,22 @@ class OpenClawShell extends OpenClawLightDomElement {
   private chatNavigationOptions(options?: ApplicationNavigationOptions) {
     const sessionKey = this.activeSessionKey.trim();
     return options ?? (sessionKey ? { search: searchForSession(sessionKey) } : undefined);
+  }
+
+  /** Switch the active chat session and keep the agent chip/select in sync (#109087). */
+  private selectChatSession(
+    context: {
+      agentSelection: { set: (agentId: string | null) => void };
+      gateway: { setSessionKey: (sessionKey: string) => void };
+    },
+    sessionKey: string,
+  ) {
+    const agentId = parseAgentSessionKey(sessionKey)?.agentId;
+    if (agentId) {
+      context.agentSelection.set(agentId);
+    }
+    context.gateway.setSessionKey(sessionKey);
+    this.navigate("chat", { search: searchForSession(sessionKey) });
   }
 
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
@@ -1529,8 +1545,7 @@ class OpenClawShell extends OpenClawLightDomElement {
         ? html`<openclaw-command-palette
             .onNavigate=${(routeId: RouteId) => this.navigate(routeId)}
             .onSelectSession=${(sessionKey: string) => {
-              context.gateway.setSessionKey(sessionKey);
-              this.navigate("chat", { search: searchForSession(sessionKey) });
+              this.selectChatSession(context, sessionKey);
             }}
             .onSlashCommand=${this.handleCommandPaletteSlashCommand}
           ></openclaw-command-palette>`

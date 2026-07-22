@@ -76,6 +76,7 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/review-artifacts.mjs!",
   "scripts/pr-lib/process-group-runner.mjs!",
   "scripts/pre-commit/filter-staged-files.mjs!",
+  "scripts/proof-session-switcher-agent-sync.mjs!",
   "scripts/qa-coverage-report.ts!",
   "scripts/qa-parity-report.ts!",
   "scripts/repro/tsx-name-repro.ts!",

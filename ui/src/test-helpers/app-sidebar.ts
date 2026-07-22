@@ -288,6 +288,10 @@ export function createContext(
   approvalQueue: readonly ExecApprovalRequest[] = [],
 ): ApplicationContext<RouteId> {
   const selectedAgentId = sessions.state.agentId ?? "main";
+  const selectionState: { selectedId: string | null; scopeId: string | null } = {
+    selectedId: selectedAgentId,
+    scopeId: selectedAgentId,
+  };
   return {
     gateway,
     sessions,
@@ -296,9 +300,14 @@ export function createContext(
       subscribe: () => () => undefined,
     },
     agentSelection: {
-      state: { selectedId: selectedAgentId, scopeId: selectedAgentId },
-      set: () => undefined,
-      setScope: () => undefined,
+      state: selectionState,
+      set: (agentId: string | null) => {
+        selectionState.selectedId = agentId;
+        selectionState.scopeId = agentId;
+      },
+      setScope: (agentId: string | null) => {
+        selectionState.scopeId = agentId;
+      },
       subscribe: () => () => undefined,
     },
     overlays: {

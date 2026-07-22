@@ -677,6 +677,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("routes UI commands to navigation, panels, and chat fallback", () => {
     const update = vi.fn();
     const setSessionKey = vi.fn();
+    const setAgentSelection = vi.fn();
     const navigate = vi.fn();
     const panelEvent = vi.fn();
     const uiCommandEvent = vi.fn();
@@ -687,6 +688,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       context: {
         navigation: { update },
         gateway: { setSessionKey },
+        agentSelection: { set: setAgentSelection },
         navigate,
       } as unknown as ApplicationContext,
     };
@@ -728,6 +730,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       }),
     );
     expect(setSessionKey).toHaveBeenCalledWith("agent:main:other");
+    expect(setAgentSelection).toHaveBeenCalledWith("main");
     expect(navigate).toHaveBeenCalledWith("chat", { search: "?session=agent%3Amain%3Aother" });
     expect(uiCommandEvent).toHaveBeenLastCalledWith(
       expect.objectContaining({
