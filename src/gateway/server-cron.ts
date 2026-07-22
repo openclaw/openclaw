@@ -27,6 +27,10 @@ import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { resolveCronJobBoundSessionKeys } from "../cron/job-session-bindings.js";
 import { toPublicCronJob } from "../cron/public-job.js";
 import { CronService, type CronEvent } from "../cron/service.js";
+import {
+  abortActiveCronTaskRuns,
+  waitForActiveCronTaskRuns,
+} from "../cron/service/active-run-cancellation.js";
 import { applyJobPatch } from "../cron/service/jobs.js";
 import {
   resolveCronDeliverySessionKey,
@@ -257,6 +261,8 @@ function isCommandCronJob(job: CronJob | null | undefined): boolean {
   return job?.payload?.kind === "command";
 }
 
+const CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS = 10_000;
+
 /** Build the cron service state used by Gateway startup and lazy cron loading. */
 export function buildGatewayCronService(params: {
   cfg: OpenClawConfig;
@@ -440,6 +446,7 @@ export function buildGatewayCronService(params: {
   } = { current: undefined };
   let exitWatcherReconciliations = 0;
   let streamWatcherReconciliations = 0;
+  const terminalExitCompletionTokens = new Map<string, object>();
   let exitWatcherGeneration = 0;
   let streamWatcherGeneration = 0;
   // Bumped when a direct watcher route begins; fences reconcile's async list
@@ -458,10 +465,18 @@ export function buildGatewayCronService(params: {
         return;
       }
       const jobs: CronJob[] = Array.isArray(result) ? result : (result as { jobs: CronJob[] }).jobs;
+      const watcherJobs: CronJob[] = [];
+      for (const job of jobs) {
+        watcherJobs.push(
+          terminalExitCompletionTokens.has(job.id) && job.schedule.kind === "on-exit"
+            ? { ...job, enabled: true }
+            : job,
+        );
+      }
       reconcileCronExitWatchers({
         cronEnabled,
         exitWatchers: exitWatchersRef.current,
-        jobs,
+        jobs: watcherJobs,
       });
     } catch (err) {
       cronLogger.warn({ err: String(err) }, "cron-exit: reconcile failed");
@@ -1052,16 +1067,38 @@ export function buildGatewayCronService(params: {
 
   exitWatchersRef.current = createCronExitWatchers({
     getProcessSupervisor,
-    persistCompletion: async (jobId) =>
-      await runWithGatewayIndependentRootWorkAdmission(async () => {
-        await cron.update(jobId, { enabled: false });
-      }),
-    fireOnExit: (job, exit) =>
-      runWithGatewayIndependentRootWorkAdmission(async () =>
+    persistCompletion: async (job) => {
+      const completionToken = {};
+      terminalExitCompletionTokens.set(job.id, completionToken);
+      const releaseCompletionToken = () => {
+        if (terminalExitCompletionTokens.get(job.id) === completionToken) {
+          terminalExitCompletionTokens.delete(job.id);
+        }
+      };
+      try {
+        await runWithGatewayIndependentRootWorkAdmission(async () => {
+          await cron.updateWithPrecondition(job.id, { enabled: false }, (current) => {
+            if (!current.enabled || current.updatedAtMs !== job.updatedAtMs) {
+              throw new Error("cron on-exit job changed before completion");
+            }
+          });
+        });
+        return () => {
+          releaseCompletionToken();
+          void reconcileExitWatchers();
+        };
+      } catch (err) {
+        releaseCompletionToken();
+        throw err;
+      }
+    },
+    fireOnExit: async (job, exit) => {
+      await runWithGatewayIndependentRootWorkAdmission(async () =>
         fireOnExitJob(job, exit, {
           run: (jobId, payload) => cron.run(jobId, "force", payload ? { payload } : undefined),
         }),
-      ),
+      );
+    },
     logger: cronLogger,
   });
   const updateCron = cron.update.bind(cron);
@@ -1290,7 +1327,24 @@ export function buildGatewayCronService(params: {
     stopCron();
     stopExitWatchers();
     stopHeartbeatReconcileRetry();
-    await stopStreamWatchers();
+    const streamWatchersStop = stopStreamWatchers().then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    const abortedRuns = abortActiveCronTaskRuns("Gateway shutting down.");
+    const [activeRunDrain, streamWatchersResult] = await Promise.all([
+      waitForActiveCronTaskRuns(CRON_ACTIVE_RUN_SHUTDOWN_DRAIN_MS),
+      streamWatchersStop,
+    ]);
+    if (!activeRunDrain.drained) {
+      cronLogger.warn(
+        { abortedRuns, activeRuns: activeRunDrain.active },
+        "cron: active runs did not drain before shutdown timeout",
+      );
+    }
+    if (!streamWatchersResult.ok) {
+      throw streamWatchersResult.error;
+    }
     unregisterSessionAutomationSource(automationSource);
   };
   // Reconciliations serialize on one tail and only the latest requested epoch
