@@ -890,15 +890,11 @@ describe("update-cli", () => {
 
   const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
 
-  const mockCurrentProcessFreshDoctor = (
-    params: { postCoreResumeAttempt?: boolean } = {},
-  ) => {
+  const mockCurrentProcessFreshDoctor = (params: { postCoreResumeAttempt?: boolean } = {}) => {
     if (params.postCoreResumeAttempt !== false) {
-      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(null);
+      vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(undefined);
     }
-    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
-      FRESH_POST_UPDATE_ENTRYPOINT,
-    );
+    vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
   };
 
   const expectFreshPostUpdateDoctor = (params: { yes: boolean }) => {

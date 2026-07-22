@@ -95,9 +95,7 @@ function getOptionSwitches(flags: string): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 
-function resolveChannelSetupFlagArity(
-  flags: string,
-): Exclude<ChannelSetupFlagArity, "conflict"> {
+function resolveChannelSetupFlagArity(flags: string): Exclude<ChannelSetupFlagArity, "conflict"> {
   return /<[^>]+>|\[[^\]]+\]/u.test(flags) ? "value" : "boolean";
 }
 
