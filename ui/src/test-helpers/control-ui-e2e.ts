@@ -54,6 +54,11 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  controlUiWidgetKinds?: Array<{
+    kind: string;
+    label: string;
+    pluginId: string;
+  }>;
   featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
@@ -79,7 +84,7 @@ export type ControlUiMockGatewayScenario = {
   }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
-    events: Array<{ event: "agent" | "session.tool"; payload: unknown }>;
+    events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
     intervalMs?: number;
   };
   /** Session run state served alongside history (hasActiveRun/activeRunIds). */
@@ -271,6 +276,7 @@ function normalizeScenario(
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
+    controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
     featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
@@ -644,7 +650,12 @@ function installControlUiMockGateway(input: {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
     }
-    const showArchived = isRecord(params) && params.archived === true;
+    const archivedFilter =
+      isRecord(params) && params.archived === "all"
+        ? "all"
+        : isRecord(params) && params.archived === true
+          ? "archived"
+          : "active";
     const sessions = response.sessions.map((row) => {
       if (!isRecord(row) || typeof row.key !== "string") {
         return row;
@@ -670,7 +681,9 @@ function installControlUiMockGateway(input: {
       return { ...response, sessions };
     }
     const filteredSessions = sessions.filter(
-      (row) => isRecord(row) && (row.archived === true) === showArchived,
+      (row) =>
+        isRecord(row) &&
+        (archivedFilter === "all" || (row.archived === true) === (archivedFilter === "archived")),
     );
     return {
       ...response,
@@ -847,6 +860,7 @@ function installControlUiMockGateway(input: {
             methods: scenario.featureMethods,
           },
           controlUiTabs: scenario.controlUiTabs,
+          controlUiWidgetKinds: scenario.controlUiWidgetKinds,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {

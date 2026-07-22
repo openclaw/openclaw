@@ -105,7 +105,7 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "inbound-reply-dispatch": 26,
   "channel-reply-pipeline": 12,
   "interactive-runtime": 13,
-  "infra-runtime": 593,
+  "infra-runtime": 594,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   "media-runtime": 2,
@@ -145,14 +145,16 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
-      4721,
+      // +2: narrow settled-turn finalization result and safe full-attempt projector.
+      4723,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
-      2879,
+      // +1: settled-turn full-attempt projector.
+      2881,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
