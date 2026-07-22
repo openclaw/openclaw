@@ -4563,14 +4563,6 @@ describe("main-session-restart-recovery", () => {
       },
     ],
     [
-      "completed tool call",
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "write", arguments: {} }],
-        stopReason: "toolUse",
-      },
-    ],
-    [
       "aborted tool call",
       {
         role: "assistant",
@@ -5324,8 +5316,8 @@ describe("main-session-restart-recovery", () => {
     {
       label: "provider abort artifact with partial output",
       content: [{ type: "text", text: "partial answer" }],
-      expected: { recovered: 0, failed: 1, skipped: 0 },
-      gatewayCalls: 0,
+      expected: { recovered: 1, failed: 0, skipped: 0 },
+      gatewayCalls: 1,
     },
   ])(
     "handles $label without discarding assistant output",
@@ -5379,8 +5371,150 @@ describe("main-session-restart-recovery", () => {
 
       expect(result).toEqual(expected);
       expect(callGateway).toHaveBeenCalledTimes(gatewayCalls);
+      expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
     },
   );
+
+  it("resumes a partial streamed answer interrupted by a restart", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Here is the first half of the answer" }],
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes an abort artifact persisted with the gateway restart reason", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "aborted",
+        errorMessage: "agent run aborted for restart",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes a side-effecting tool call restricted to restart-safe tools", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Running the check now." },
+          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("keeps a dangling side-effecting call in an aborted tail restricted", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Kicking that off." },
+          { type: "toolCall", id: "call-bash-1", name: "bash", arguments: { command: "true" } },
+        ],
+        stopReason: "aborted",
+        errorMessage: "This operation was aborted",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).toMatchObject({ forceRestartSafeTools: true });
+  });
+
+  it("resumes an interrupted replay-safe tool call without restricting tools", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me look that up." },
+          { type: "toolCall", id: "call-read-1", name: "read", arguments: { path: "README.md" } },
+        ],
+        stopReason: "toolUse",
+      },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(firstGatewayParams()).not.toMatchObject({ forceRestartSafeTools: true });
+  });
 
   it("resumes through the shutdown error persisted for an interrupted Code Mode wait", async () => {
     const sessionsDir = await makeSessionsDir();
