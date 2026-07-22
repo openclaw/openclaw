@@ -1051,7 +1051,7 @@ async function buildTestPlan(params: {
   isRemoteProviderAuth?: boolean;
   routeAgentId?: string;
   deps: ActivateSetupInferenceDeps;
-}): Promise<SetupInferenceTestPlan | { error: string }> {
+}): Promise<SetupInferenceTestPlan | { error: string; status?: SetupInferenceFailureStatus }> {
   const { kind, cfg, workspaceDir } = params;
   const resolveRouteModelRef = (defaultModelRef: string): string | { error: string } => {
     const modelRef = params.modelRef?.trim() || defaultModelRef;
@@ -1681,7 +1681,7 @@ async function activateSetupInferenceUnredacted(
     if ("error" in plan) {
       return {
         ok: false,
-        status: "status" in plan ? plan.status : "unavailable",
+        status: plan.status ?? "unavailable",
         error: plan.error,
       };
     }
@@ -2638,7 +2638,7 @@ export async function verifySetupInferenceConfig(params: {
     if ("error" in builtPlan) {
       return {
         ok: false,
-        status: "status" in builtPlan ? builtPlan.status : "unavailable",
+        status: builtPlan.status ?? "unavailable",
         error: builtPlan.error,
       };
     }
@@ -2901,7 +2901,7 @@ export async function completeSetupInferenceConfig(params: {
     if ("error" in plan) {
       return {
         ok: false,
-        status: "status" in plan ? plan.status : "unavailable",
+        status: plan.status ?? "unavailable",
         error: plan.error,
       };
     }
