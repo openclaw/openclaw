@@ -78,8 +78,10 @@ import {
   singleAccountKeysToMove,
 } from "./setup-contract.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
-import { runMatrixStartupMaintenance } from "./startup-maintenance.js";
-import { resolveMatrixInboundConversation } from "./thread-binding-api.js";
+import {
+  defaultTopLevelPlacement,
+  resolveMatrixInboundConversation,
+} from "./thread-binding-api.js";
 import type { CoreConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
@@ -454,7 +456,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
-        defaultTopLevelPlacement: "child",
+        defaultTopLevelPlacement,
         setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
           setMatrixThreadBindingIdleTimeoutBySessionKey({
             targetSessionKey,
@@ -471,6 +473,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
       messaging: {
         defaultMarkdownTableMode: "bullets",
         targetPrefixes: ["matrix"],
+        targetIdComparison: "case-sensitive",
         normalizeTarget: normalizeMatrixMessagingTarget,
         resolveInboundConversation: ({ to, conversationId, threadId }) =>
           resolveMatrixInboundConversation({ to, conversationId, threadId }),
@@ -619,9 +622,6 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         },
       },
       doctor: matrixDoctor,
-      lifecycle: {
-        runStartupMaintenance: runMatrixStartupMaintenance,
-      },
       heartbeat: {
         sendTyping: async ({ cfg, to, accountId }) => {
           await (

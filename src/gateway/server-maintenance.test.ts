@@ -3,7 +3,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { HealthSummary } from "../commands/health.js";
-import { CURATOR_INITIAL_DELAY_MS, CURATOR_SWEEP_INTERVAL_MS } from "../skills/workshop/curator.js";
+const CURATOR_INITIAL_DELAY_MS = 5 * 60_000;
+const CURATOR_SWEEP_INTERVAL_MS = 24 * 60 * 60_000;
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
@@ -41,6 +42,7 @@ function createMaintenanceTimerDeps() {
   return {
     ...createGatewayMaintenanceStateForTest(),
     runWorktreeGc: vi.fn(async () => undefined),
+    runDeliveryQueueMediaGc: vi.fn(async () => undefined),
   };
 }
 
@@ -156,6 +158,20 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("runs queue media cleanup at startup and hourly", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(deps.runDeliveryQueueMediaGc).toHaveBeenCalledTimes(2);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("delays curator startup, skips overlap, and unregisters on cleanup", async () => {
     vi.useFakeTimers();
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
@@ -207,7 +223,7 @@ describe("startGatewayMaintenanceTimers", () => {
     const timers = startGatewayMaintenanceTimers(deps);
     await Promise.resolve();
 
-    expect(gc).toHaveBeenCalledWith({ isOwnerActive: expect.any(Function) });
+    expect(gc).toHaveBeenCalledWith({ shouldProtectOwner: expect.any(Function), limits: {} });
     stopMaintenanceTimers(timers);
   });
 

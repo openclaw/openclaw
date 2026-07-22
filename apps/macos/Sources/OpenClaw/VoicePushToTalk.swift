@@ -25,9 +25,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     func setEnabled(_ enabled: Bool) {
-        if ProcessInfo.processInfo.isRunningTests {
-            return
-        }
+        if ProcessInfo.processInfo.isRunningTests { return }
         self.withMainThread { [weak self] in
             guard let self else { return }
             if enabled {
@@ -240,8 +238,8 @@ actor VoicePushToTalk {
         }
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        self.recognitionRequest?.shouldReportPartialResults = true
         guard let request = self.recognitionRequest else { return }
+        SpeechRecognitionRequestPolicy.configureInteractiveTranscription(request)
 
         // Lazily create the engine here so app launch doesn't grab audio resources / trigger Bluetooth HFP.
         if self.audioEngine == nil {
@@ -317,9 +315,7 @@ actor VoicePushToTalk {
     }
 
     private func finalize(transcriptOverride: String?, reason: String, sessionID: UUID?) async {
-        if self.finalized {
-            return
-        }
+        if self.finalized { return }
         if let sessionID, sessionID != self.sessionID {
             self.logger.debug("push-to-talk drop finalize for stale session")
             return
@@ -409,12 +405,8 @@ actor VoicePushToTalk {
     }
 
     private static func join(_ prefix: String, _ suffix: String) -> String {
-        if prefix.isEmpty {
-            return suffix
-        }
-        if suffix.isEmpty {
-            return prefix
-        }
+        if prefix.isEmpty { return suffix }
+        if suffix.isEmpty { return prefix }
         return "\(prefix) \(suffix)"
     }
 }

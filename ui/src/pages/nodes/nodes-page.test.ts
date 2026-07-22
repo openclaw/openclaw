@@ -2,10 +2,12 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createInitialNodesState, loadNodes } from "../../lib/nodes/index.ts";
 import type { NodesRouteData } from "./nodes-page.ts";
 import "./nodes-page.ts";
+import type { InventoryRemovalPrompt } from "./view.types.ts";
 
 type TestNodesPage = HTMLElement & {
   context: ApplicationContext;
@@ -14,8 +16,10 @@ type TestNodesPage = HTMLElement & {
   requestGeneration: number;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
+  presence: PresenceEntry[];
   lastError: string | null;
   chatError: string | null;
+  inventoryRemovalPrompt: InventoryRemovalPrompt | null;
   routeData?: NodesRouteData;
   subscriptions: {
     hostConnected: () => void;
@@ -46,6 +50,7 @@ function gatewaySnapshot(
   return {
     client,
     connected,
+    offlineStable: false,
     reconnecting: !connected,
     hello: null,
     assistantAgentId: null,
@@ -59,6 +64,7 @@ function gateway(client: GatewayBrowserClient | null): ApplicationContext["gatew
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: false,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,
@@ -95,8 +101,10 @@ describe("NodesPage gateway lifecycle", () => {
     expect(page.nodes).toBe(preloadedNodes);
 
     page.context = { gateway: gateway(client) } as unknown as ApplicationContext;
+    page.presence = [{ instanceId: "stale" }];
     page.subscriptions.hostUpdate();
     expect(page.nodes).toEqual([]);
+    expect(page.presence).toEqual([]);
     expect(page.requestGeneration).toBeGreaterThan(0);
 
     page.subscriptions.hostDisconnected();
@@ -155,5 +163,25 @@ describe("NodesPage gateway lifecycle", () => {
     expect(page.nodesLoading).toBe(false);
 
     page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+  });
+
+  it("drops a pending removal prompt when the connection resets", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const page = document.createElement("openclaw-nodes-page") as TestNodesPage;
+    page.client = client;
+    page.connected = true;
+    page.context = {
+      runtimeConfig: { state: { configSnapshot: null, configLoading: false } },
+    } as unknown as ApplicationContext;
+    page.inventoryRemovalPrompt = {
+      kind: "entry",
+      entry: { id: "device-1", name: "Browser", removeNode: false, removeDevice: true },
+    };
+
+    // Disconnect resets server state; the confirm must not survive onto a
+    // different gateway that reuses the same device ids.
+    page.applyGatewaySnapshot(gatewaySnapshot(client, false), false);
+
+    expect(page.inventoryRemovalPrompt).toBeNull();
   });
 });

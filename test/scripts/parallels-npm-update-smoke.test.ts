@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  posixAgentWorkspaceScript,
+  windowsAgentWorkspaceScript,
+} from "../../scripts/e2e/parallels/agent-workspace.ts";
 import { runWindowsBackgroundPowerShell } from "../../scripts/e2e/parallels/guest-transports.ts";
 import { run as hostCommandRun } from "../../scripts/e2e/parallels/host-command.ts";
 import {
@@ -55,7 +59,7 @@ async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for pid ${pid} to exit`);
@@ -68,7 +72,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 2_00
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 20);
+      setTimeout(resolve, 5);
     });
   }
   throw new Error(`timeout waiting for ${label}`);
@@ -153,6 +157,7 @@ describe("parallels npm update smoke", () => {
     await withEnvAsync({ OPENAI_API_KEY: "test-key" }, async () => {
       const smoke = new FailingNpmUpdateSmoke({
         ...TEST_AUTH,
+        dependencyTarballs: [],
         json: false,
         packageSpec: "openclaw@latest",
         platforms: new Set<Platform>(["linux"]),
@@ -202,6 +207,7 @@ exit 1
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -267,6 +273,24 @@ exit 1
     expect(macosUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(linuxUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY='${registry}'`);
     expect(windowsUpdateScript(input)).toContain(`NPM_CONFIG_REGISTRY = '${registry}'`);
+  });
+
+  it("does not recreate retired workspace setup state in release smoke scripts", () => {
+    const input = {
+      auth: TEST_AUTH,
+      expectedNeedle: "2026.7.2-beta.2",
+      updateTarget: "2026.7.2-beta.2",
+    };
+
+    for (const script of [macosUpdateScript(input), linuxUpdateScript(input)]) {
+      expect(script).toContain("IDENTITY.md");
+      expect(script).not.toContain("workspace-state.json");
+    }
+    expect(windowsUpdateScript(input)).toContain("IDENTITY.md");
+    expect(windowsUpdateScript(input)).not.toContain("workspace-state.json");
+
+    expect(posixAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
+    expect(windowsAgentWorkspaceScript("test")).not.toContain("workspace-state.json");
   });
 
   it("accepts keyed and nested npm metadata for published update targets", () => {
@@ -540,6 +564,7 @@ exit 1
       () =>
         new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["linux"]),
@@ -580,6 +605,7 @@ exit 1
         () =>
           new NpmUpdateSmoke({
             ...TEST_AUTH,
+            dependencyTarballs: [],
             json: false,
             packageSpec: "openclaw@latest",
             platforms: new Set<Platform>(["linux"]),
@@ -649,7 +675,7 @@ exit 1
       const decoded = decodePowerShellFromArgs(args);
       decodedCommands.push(decoded);
       if (options?.input) {
-        inputs.push(String(options.input));
+        inputs.push(options.input);
       }
       if (decoded.includes('cmd.exe /d /s /c start "" /b powershell.exe')) {
         return { status: 0, stderr: "", stdout: "started\n" };
@@ -812,6 +838,7 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),
@@ -853,6 +880,7 @@ exit 7
       () => {
         const smoke = new NpmUpdateSmoke({
           ...TEST_AUTH,
+          dependencyTarballs: [],
           json: false,
           packageSpec: "openclaw@latest",
           platforms: new Set<Platform>(["macos"]),

@@ -1,5 +1,7 @@
 // Chat error broadcast tests ensure chat.send failures still respond and emit
 // error-state broadcasts for connected UI clients.
+
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { chatHandlers } from "./chat.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -31,7 +33,10 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -66,7 +71,10 @@ describe("chat.send error broadcast", () => {
       payload: { runId: "test-cached-routing", status: "started" },
     });
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -92,7 +100,10 @@ describe("chat.send error broadcast", () => {
     const ctx = createMockContext();
     const respond = vi.fn();
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -123,7 +134,10 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "main",
         message: "hello",
@@ -144,24 +158,19 @@ describe("chat.send error broadcast", () => {
       expect.any(Object),
     );
 
-    // Verify broadcastChatError was called (via context.broadcast)
-    expect(ctx.broadcast).toHaveBeenCalledWith(
-      "chat",
-      expect.objectContaining({
-        runId: "test-run-1",
-        state: "error",
-        errorMessage: expect.stringContaining("LLM timeout"),
-        message: expect.objectContaining({
-          role: "assistant",
-          content: [
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining("LLM timeout"),
-            }),
-          ],
-        }),
-      }),
-    );
+    const payload = expectDefined(ctx.broadcast.mock.calls[0], "error broadcast")[1] as Record<
+      string,
+      unknown
+    >;
+    expect(payload).toMatchObject({
+      runId: "test-run-1",
+      state: "error",
+      errorMessage: expect.stringContaining("LLM timeout"),
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(ctx.broadcast).toHaveBeenCalledWith("chat", payload, {
+      sessionKeys: ["agent:main:main"],
+    });
   });
 
   it("scopes selected-agent global errors to the linked agent", async () => {
@@ -172,7 +181,10 @@ describe("chat.send error broadcast", () => {
       throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
     });
 
-    await chatHandlers["chat.send"]({
+    await expectDefined(
+      chatHandlers["chat.send"],
+      'chatHandlers["chat.send"] test invariant',
+    )({
       params: {
         sessionKey: "global",
         agentId: "main",
@@ -194,6 +206,7 @@ describe("chat.send error broadcast", () => {
         agentId: "main",
         state: "error",
       }),
+      { sessionKeys: ["agent:main:global", "global"] },
     );
     expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
       "agent:main:global",
@@ -203,22 +216,15 @@ describe("chat.send error broadcast", () => {
         state: "error",
       }),
     );
-    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
-      "global",
-      "chat",
-      expect.objectContaining({
-        agentId: "main",
-        state: "error",
-        message: expect.objectContaining({
-          role: "assistant",
-          content: [
-            expect.objectContaining({
-              type: "text",
-              text: expect.stringContaining("LLM timeout"),
-            }),
-          ],
-        }),
-      }),
-    );
+    const globalPayload = expectDefined(
+      ctx.nodeSendToSession.mock.calls.find(([sessionKey]) => sessionKey === "global"),
+      "global node error payload",
+    )[2] as Record<string, unknown>;
+    expect(globalPayload).toMatchObject({
+      agentId: "main",
+      state: "error",
+      errorMessage: expect.stringContaining("LLM timeout"),
+    });
+    expect(globalPayload).not.toHaveProperty("message");
   });
 });

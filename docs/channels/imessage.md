@@ -323,7 +323,7 @@ If disabling SIP is not acceptable for your threat model:
     Mention gating for groups:
 
     - iMessage has no native mention metadata
-    - mention detection uses regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - mention detection uses regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - with no configured patterns, mention gating cannot be enforced
     - control commands from authorized senders bypass mention gating
 
@@ -510,7 +510,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 
   <Accordion title="Outbound text and chunking">
     - text chunk limit: `channels.imessage.textChunkLimit` (default 4000)
-    - chunk mode: `channels.imessage.chunkMode`
+    - chunk mode: `channels.imessage.streaming.chunkMode`
       - `length` (default)
       - `newline` (paragraph-first splitting)
     - outbound markdown bold/italic/underline/strikethrough is converted to native styled text (macOS 15+ recipients render the styling; older recipients see plain text without the markers); markdown tables are converted per the channel markdown table mode
@@ -584,7 +584,7 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
   </Accordion>
 
   <Accordion title="Message IDs">
-    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs (`MessageSidFull`) when available. Short IDs are scoped to the recent SQLite-backed reply cache and are checked against the current chat before use. If a short ID has expired or belongs to another chat, retry with the full `MessageSidFull`.
+    Inbound iMessage context includes both short `MessageSid` values and full message GUIDs (`MessageSidFull`) when available. Short IDs are scoped to the recent SQLite-backed reply cache and are checked against the current chat before use. If a short ID expires, retry with its `MessageSidFull` while targeting the conversation that supplied it. Full IDs do not bypass conversation or account binding, so replace an ID from another chat with one from the current target. Remote delegated calls can reject stale full IDs when current-conversation evidence is unavailable.
 
   </Accordion>
 
@@ -639,6 +639,13 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
     - The operator's own `is_from_me=true` tapback (for example from a paired Apple device) resolves the approval when that handle is an explicit approver.
     - Approval prompts route into a group conversation only when explicit approvers are configured; otherwise any group member could approve.
     - Legacy text-style tapbacks (`Liked "…"` plain text from very old Apple clients) cannot resolve approvals because they carry no message GUID; reaction resolution requires the structured tapback metadata that current macOS / iOS clients emit.
+
+  </Accordion>
+
+  <Accordion title="Question reactions (1️⃣ / 2️⃣ / 3️⃣ / 4️⃣)">
+    For an `ask_user` prompt with one non-secret, single-select question and one to four options, OpenClaw adds numbered emoji choices. React to the delivered prompt with the matching number to answer it. The reaction must carry the stable GUID of the bot-authored message; OpenClaw then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored.
+
+    Multi-question, multi-select, and free-text prompts remain text-reply-only. Question reactions follow normal iMessage DM/group admission rules. They are recognized even when general `reactionNotifications` is `"off"`, without turning unrelated reactions into agent events.
 
   </Accordion>
 </AccordionGroup>
@@ -741,10 +748,10 @@ The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundl
 
 ## Inbound recovery after a bridge or gateway restart
 
-iMessage recovers messages missed while the gateway was down, and at the same time suppresses the stale "backlog bomb" Apple can flush after a Push recovery. The default behavior is always on, built on the inbound dedupe.
+iMessage recovers messages missed while the gateway was down, and at the same time suppresses the stale "backlog bomb" Apple can flush after a Push recovery. The default behavior is always on, built on durable ingress plus an age fence.
 
-- **Replay dedupe.** Every dispatched inbound message is recorded by its Apple GUID in persistent plugin state (`imessage.inbound-dedupe`), claimed at ingestion and committed after handling (released on a transient failure so it can retry). Anything already handled is dropped instead of dispatched twice. This is what lets recovery replay aggressively without per-message bookkeeping.
-- **Downtime recovery.** On startup the monitor remembers the last dispatched `chat.db` rowid (a persisted per-account cursor) and passes it to `imsg watch.subscribe` as `since_rowid`, so imsg replays the rows that landed while the gateway was down, then tails live. Replay is bounded to the most recent 500 rows and to messages up to ~2 hours old, and the dedupe drops anything already handled.
+- **Durable replay protection.** Before advancing the recovery cursor, OpenClaw journals each raw row in the shared SQLite ingress queue with its Apple GUID as the event ID. A completed row leaves a tombstone for about 4 hours, capped at 10,000 entries, so a replay with the same GUID is dropped even after a restart. A pending row stays recoverable until dispatch adopts it.
+- **Downtime recovery.** On startup the monitor remembers the last durably admitted `chat.db` rowid (a persisted per-account cursor) and passes it to `imsg watch.subscribe` as `since_rowid`, so imsg replays rows that were not yet journaled and then tails live. Rows journaled before a crash resume from SQLite. Replay is bounded to the most recent 500 rows and to messages up to ~2 hours old, and GUID tombstones drop anything already handled.
 - **Stale-backlog age fence.** Rows above the startup boundary are genuinely live; one whose send date is more than ~15 minutes older than its arrival is the Push-flush backlog and is suppressed. Replayed rows (at or below the boundary) use the wider recovery window instead, so a recently-missed message is delivered while ancient history is not.
 
 Recovery works over both local and remote `cliPath` setups, because `since_rowid` replay runs over the same `imsg` RPC connection. The difference is the window: when the gateway can read `chat.db` (local), it anchors the startup rowid boundary, caps the replay span, and delivers missed messages up to a couple of hours old. Over a remote SSH `cliPath` it cannot read the database, so the replay is uncapped and every row uses the live age fence — it still recovers recently-missed messages and still suppresses old backlog, just with the narrower live window. Run the gateway on the Messages Mac for the wider recovery window.
@@ -833,7 +840,7 @@ openclaw channels status --probe --channel imessage
     - `channels.imessage.groupPolicy`
     - `channels.imessage.groupAllowFrom`
     - `channels.imessage.groups` allowlist behavior
-    - mention pattern configuration (`agents.list[].groupChat.mentionPatterns`)
+    - mention pattern configuration (`agents.entries.*.groupChat.mentionPatterns`)
 
   </Accordion>
 

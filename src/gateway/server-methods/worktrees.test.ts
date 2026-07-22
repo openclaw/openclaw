@@ -1,4 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import { WorktreeSnapshotError } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
@@ -58,12 +60,20 @@ describe("worktrees gateway methods", () => {
       { removed: true, snapshotRef: "refs/snapshot" },
       undefined,
     ]);
-    expect((await call(handlers, "worktrees.restore", { id: record.id }))[0]).toBe(true);
-    expect(await call(handlers, "worktrees.gc", {})).toEqual([
+    const restoreResult = expectDefined(
+      await call(handlers, "worktrees.restore", { id: record.id }),
+      "worktree restore response",
+    );
+    expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
+    expect(await call(handlers, "worktrees.gc", {}, { context: emptyConfigContext })).toEqual([
       true,
       { removed: [record.id], orphansDeleted: 1, snapshotsPruned: 2 },
       undefined,
     ]);
+    expect(service.gc).toHaveBeenCalledWith({
+      limits: {},
+      shouldProtectOwner: expect.any(Function),
+    });
 
     expect(service.create).toHaveBeenCalledWith({
       repoRoot: "/repo",
@@ -95,6 +105,17 @@ describe("worktrees gateway methods", () => {
     );
     expect(adminResponse?.[0]).toBe(true);
     expect(service.listRepositoryBranches).toHaveBeenCalledWith("/anywhere");
+
+    const statusResponse = await call(
+      handlers,
+      "worktrees.branches",
+      { repoRoot: "/anywhere", includeRepositoryStatus: true },
+      { client: adminClient, context: emptyConfigContext },
+    );
+    expect(statusResponse?.[0]).toBe(true);
+    expect(service.listRepositoryBranches).toHaveBeenCalledWith("/anywhere", {
+      includeRepositoryStatus: true,
+    });
 
     // Write scope cannot probe arbitrary host paths for branch names.
     const denied = await call(
@@ -137,6 +158,34 @@ describe("worktrees gateway methods", () => {
     } finally {
       await fs.rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("uses the built-in cleanup policy for gc", async () => {
+    const service = {
+      gc: vi.fn(async () => ({ removed: [], orphansDeleted: 0, snapshotsPruned: 0 })),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    const context = { getRuntimeConfig: () => ({}) };
+    const response = await call(handlers, "worktrees.gc", {}, { context });
+    expect(response?.[0]).toBe(true);
+    expect(service.gc).toHaveBeenCalledWith({
+      limits: {},
+      shouldProtectOwner: expect.any(Function),
+    });
+  });
+
+  it("maps snapshot failures onto a structured removed=false result", async () => {
+    const service = {
+      remove: vi.fn(async () => {
+        throw new WorktreeSnapshotError("nested gitlink");
+      }),
+    };
+    const handlers = createWorktreesHandlers(service as never);
+    expect(await call(handlers, "worktrees.remove", { id: record.id })).toEqual([
+      true,
+      { removed: false, snapshotError: "nested gitlink" },
+      undefined,
+    ]);
   });
 
   it("rejects invalid parameters", async () => {

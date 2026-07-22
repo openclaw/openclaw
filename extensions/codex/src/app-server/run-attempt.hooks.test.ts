@@ -18,8 +18,8 @@ import {
   createMockPluginRegistry,
   onTrustedInternalDiagnosticEvent,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT } from "openclaw/plugin-sdk/provider-model-shared";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
   assistantMessage,
   createAppServerHarness,
@@ -51,25 +51,15 @@ setupRunAttemptTestHooks();
 
 describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   it.each([
-    { label: "completed", status: "completed" as const, error: undefined, legacy: false },
-    { label: "failed", status: "failed" as const, error: "codex exploded", legacy: false },
-    {
-      label: "completed legacy alias",
-      status: "completed" as const,
-      error: undefined,
-      legacy: true,
-    },
-  ])("defers $label lifecycle terminal ownership", async ({ status, error, legacy }) => {
+    { label: "completed", status: "completed" as const, error: undefined },
+    { label: "failed", status: "failed" as const, error: "codex exploded" },
+  ])("defers $label lifecycle terminal ownership", async ({ status, error }) => {
     const onRunAgentEvent = vi.fn();
     const sessionFile = path.join(tempDir, `deferred-${status}.jsonl`);
     const workspaceDir = path.join(tempDir, `workspace-${status}`);
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
-    if (legacy) {
-      params.deferTerminalLifecycleEnd = true;
-    } else {
-      params.deferTerminalLifecycle = true;
-    }
+    params.deferTerminalLifecycle = true;
     params.onAgentEvent = onRunAgentEvent;
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
@@ -285,10 +275,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
   it("emits gated model-call content diagnostics for codex turns", async () => {
     const diagnosticEvents: DiagnosticEventPayload[] = [];
     const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
-    let diagnosticTypesAtLlmOutput: string[] = [];
-    const llmOutput = vi.fn(() => {
-      diagnosticTypesAtLlmOutput = diagnosticEvents.map((event) => event.type);
-    });
+    const llmOutput = vi.fn();
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
     );
@@ -332,12 +319,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
           otel: {
             enabled: true,
             traces: true,
-            captureContent: {
-              enabled: true,
-              inputMessages: true,
-              outputMessages: true,
-              systemPrompt: true,
-            },
+            captureContent: true,
           },
         },
       } as never;
@@ -359,27 +341,23 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       );
 
       const startedEvent = diagnosticEvents.find((event) => event.type === "model.call.started");
-      const completedEvent = diagnosticEvents.find(
-        (event) => event.type === "model.call.completed",
-      );
-      expect(startedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
+      const completed = diagnosticEvents.find((event) => event.type === "model.call.completed");
+      const expectedCallId = "diagnostic-run-1:codex-model:1";
+      expect(startedEvent).toMatchObject({ callId: expectedCallId, observationUnit: "turn" });
       expect(startedEvent?.trace?.traceId).toBeTypeOf("string");
       expect(JSON.stringify(startedEvent)).not.toContain("hello");
       const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
       expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
       expect(JSON.stringify(startedContent?.inputMessages)).not.toContain("existing context");
-      expect(startedContent?.systemPrompt).toContain(
-        "You are a personal agent running inside OpenClaw.",
-      );
-      expect(completedEvent?.callId).toBe("diagnostic-run-1:codex-model:1");
-      expect(JSON.stringify(completedEvent)).not.toContain("hello back");
+      expect(startedContent?.systemPrompt).toBeUndefined();
+      expect(completed).toMatchObject({ callId: expectedCallId, observationUnit: "turn" });
+      expect(JSON.stringify(completed)).not.toContain("hello back");
       expect(
         JSON.stringify(diagnosticContentByType.get("model.call.completed")?.modelContent),
       ).toContain("hello back");
-      expect(completedEvent?.requestPayloadBytes).toBeGreaterThan(0);
+      expect(completed?.requestPayloadBytes).toBeGreaterThan(0);
       expect(llmOutput).toHaveBeenCalledTimes(1);
-      expect(diagnosticTypesAtLlmOutput).toContain("model.call.completed");
-      expect(diagnosticTypesAtLlmOutput).not.toContain("model.call.error");
+      expect(diagnosticEvents.map((event) => event.type)).not.toContain("model.call.error");
     } finally {
       stopDiagnostics();
     }

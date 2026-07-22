@@ -2,9 +2,11 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelSetupInput } from "../channels/plugins/types.core.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import type { PluginPackageChannelCliOption } from "../plugins/manifest.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -65,7 +67,6 @@ const bundledMocks = vi.hoisted(() => ({
 
 vi.mock("../channels/plugins/catalog.js", () => ({
   getChannelPluginCatalogEntry: catalogMocks.getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
 }));
 
@@ -111,6 +112,27 @@ vi.mock("./onboard-channels.js", async () => {
 });
 
 const runtime = createTestRuntime();
+
+function createSetupOptionCatalogEntry(
+  id: string,
+  label: string,
+  cliAddOptions: readonly PluginPackageChannelCliOption[],
+): ChannelPluginCatalogEntry {
+  return {
+    id,
+    pluginId: id,
+    origin: "global",
+    channel: { id, label, cliAddOptions },
+    meta: {
+      id,
+      label,
+      selectionLabel: label,
+      docsPath: `/channels/${id}`,
+      blurb: `${label} test channel.`,
+    },
+    install: { npmSpec: `@openclaw/${id}` },
+  };
+}
 
 type MockCallSource = {
   mock: {
@@ -352,6 +374,16 @@ type SignalAfterAccountConfigWritten = NonNullable<
 type ApplyAccountConfigParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["setup"]>["applyAccountConfig"]>
 >[0];
+type ResolveAccountIdParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["setup"]>["resolveAccountId"]>
+>[0];
+type PrepareAccountConfigInputParams = Parameters<
+  NonNullable<NonNullable<ChannelPlugin["setup"]>["prepareAccountConfigInput"]>
+>[0];
+type SignalSetupInput = ChannelSetupInput & { signalNumber?: string };
+type NextcloudTalkSetupInput = ChannelSetupInput & { secretFile?: string };
+type MatrixSetupInput = ChannelSetupInput & { initialSyncLimit?: number };
+type PreparedChatSetupInput = ChannelSetupInput & { workspace?: string };
 
 function createSignalPlugin(
   afterAccountConfigWritten: SignalAfterAccountConfigWritten,
@@ -370,7 +402,7 @@ function createSignalPlugin(
             enabled: true,
             accounts: {
               [accountId]: {
-                account: input.signalNumber,
+                account: (input as SignalSetupInput).signalNumber,
               },
             },
           },
@@ -381,14 +413,17 @@ function createSignalPlugin(
   } as ChannelPlugin;
 }
 
-async function runSignalAddCommand(afterAccountConfigWritten: SignalAfterAccountConfigWritten) {
+async function runSignalAddCommand(
+  afterAccountConfigWritten: SignalAfterAccountConfigWritten,
+  beforePersistentEffect?: () => Promise<void>,
+) {
   const plugin = createSignalPlugin(afterAccountConfigWritten);
   setActivePluginRegistry(createTestRegistry([{ pluginId: "signal", plugin, source: "test" }]));
   configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
   await channelsAddCommand(
     { channel: "signal", account: "ops", signalNumber: "+15550001" },
     runtime,
-    { hasFlags: true },
+    { hasFlags: true, ...(beforePersistentEffect ? { beforePersistentEffect } : {}) },
   );
 }
 
@@ -476,6 +511,40 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
 
+  it("persists an accepted plugin install after setup returns to an empty selection", async () => {
+    const config: OpenClawConfig = { channels: {} };
+    const installedConfig: OpenClawConfig = {
+      ...config,
+      plugins: {
+        entries: { "external-chat": { enabled: true } },
+        installs: {
+          "external-chat": {
+            source: "npm",
+            spec: "@vendor/external-chat@1.0.0",
+          },
+        },
+      },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: config,
+      config,
+    });
+    channelWizardMocks.setupChannels.mockResolvedValueOnce(installedConfig);
+
+    await channelsAddCommand({}, runtime, { hasFlags: false });
+
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledWith(expect.objectContaining({ nextConfig: installedConfig }));
+    expect(
+      pluginInstallRecordCommitMocks.commitConfigWithPendingPluginInstalls,
+    ).toHaveBeenCalledOnce();
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(installedConfig);
+    expect(channelWizardMocks.prompter.confirm).not.toHaveBeenCalled();
+    expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("Channels updated.");
+  });
+
   it("preselects an installable catalog channel in guided setup", async () => {
     const config: OpenClawConfig = { channels: {} };
     configMocks.readConfigFileSnapshot.mockResolvedValue({
@@ -555,7 +624,7 @@ describe("channelsAddCommand", () => {
           enabled: true,
           baseUrl: input.baseUrl,
           botSecret: input.secret,
-          botSecretFile: input.secretFile,
+          botSecretFile: (input as NextcloudTalkSetupInput).secretFile,
         },
       },
     }));
@@ -568,7 +637,16 @@ describe("channelsAddCommand", () => {
               id: "nextcloud-talk",
               label: "Nextcloud Talk",
             }),
-            setup: { applyAccountConfig },
+            setup: {
+              resolveAccountId: ({ accountId }: ResolveAccountIdParams) => accountId ?? "default",
+              prepareAccountConfigInput: ({ input }: PrepareAccountConfigInputParams) => ({
+                ...input,
+                baseUrl: input.baseUrl ?? input.url,
+                secret: input.secret ?? input.token ?? input.password,
+                secretFile: (input as NextcloudTalkSetupInput).secretFile ?? input.tokenFile,
+              }),
+              applyAccountConfig,
+            },
           },
           source: "test",
         },
@@ -675,6 +753,98 @@ describe("channelsAddCommand", () => {
           authDir: "/tmp/openclaw-wa-auth",
         },
       },
+    });
+  });
+
+  it("prepares setup input before validation, config writes, and post-write hooks", async () => {
+    const callOrder: string[] = [];
+    const beforePersistentEffect = vi.fn(async () => {
+      callOrder.push("authority");
+    });
+    const prepareAccountConfigInput = vi.fn(async ({ input }) => {
+      callOrder.push("prepare");
+      return {
+        ...input,
+        token: "test-token",
+        workspace: "prepared-workspace",
+      };
+    });
+    const validateInput = vi.fn(({ input }) => {
+      callOrder.push("validate");
+      return input.token === "test-token" ? null : "input was not prepared";
+    });
+    const applyAccountConfig = vi.fn(({ cfg, input }) => {
+      callOrder.push("apply");
+      return {
+        ...cfg,
+        channels: {
+          ...cfg.channels,
+          "prepared-chat": {
+            enabled: true,
+            token: input.token,
+            workspace: (input as PreparedChatSetupInput).workspace,
+          },
+        },
+      };
+    });
+    const afterAccountConfigWritten = vi.fn(({ input }) => {
+      callOrder.push("after");
+      expect(input).toMatchObject({
+        token: "test-token",
+        workspace: "prepared-workspace",
+      });
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "prepared-chat",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "prepared-chat",
+              label: "Prepared Chat",
+            }),
+            setup: {
+              prepareAccountConfigInput,
+              validateInput,
+              applyAccountConfig,
+              afterAccountConfigWritten,
+            },
+          } as ChannelPlugin,
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand(
+      {
+        channel: "prepared-chat",
+        account: "work",
+        code: "setup-code",
+      },
+      runtime,
+      { hasFlags: true, beforePersistentEffect },
+    );
+
+    expect(callOrder).toEqual([
+      "authority",
+      "prepare",
+      "validate",
+      "apply",
+      "authority",
+      "authority",
+      "after",
+    ]);
+    expect(prepareAccountConfigInput).toHaveBeenCalledWith({
+      cfg: baseConfigSnapshot.config,
+      accountId: "work",
+      input: { code: "setup-code" },
+      runtime,
+    });
+    expect(writtenChannel("prepared-chat")).toEqual({
+      enabled: true,
+      token: "test-token",
+      workspace: "prepared-workspace",
     });
   });
 
@@ -911,7 +1081,7 @@ describe("channelsAddCommand", () => {
         ...cfg.channels,
         matrix: {
           enabled: true,
-          initialSyncLimit: input.initialSyncLimit,
+          initialSyncLimit: (input as MatrixSetupInput).initialSyncLimit,
         },
       },
     }));
@@ -919,6 +1089,15 @@ describe("channelsAddCommand", () => {
       ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
       setup: { applyAccountConfig },
     };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createSetupOptionCatalogEntry("matrix", "Matrix", [
+        {
+          flags: "--initial-sync-limit <n>",
+          description: "Matrix initial sync limit",
+          valueType: "int",
+        },
+      ]),
+    ]);
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", plugin, source: "test" }]));
 
@@ -935,6 +1114,100 @@ describe("channelsAddCommand", () => {
 
     expect(applyAccountConfig).not.toHaveBeenCalled();
     expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("coerces list-valued channel setup options from delimited strings", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        tlon: {
+          enabled: true,
+          groupChannels: input.groupChannels,
+          dmAllowlist: input.dmAllowlist,
+        },
+      },
+    }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "tlon", label: "Tlon" }),
+      setup: { applyAccountConfig },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createSetupOptionCatalogEntry("tlon", "Tlon", [
+        {
+          flags: "--group-channels <list>",
+          description: "Tlon group channels",
+          valueType: "list",
+        },
+        {
+          flags: "--dm-allowlist <list>",
+          description: "Tlon DM allowlist",
+          valueType: "list",
+        },
+      ]),
+    ]);
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "tlon", plugin, source: "test" }]));
+
+    await channelsAddCommand(
+      {
+        channel: "tlon",
+        groupChannels: "chat/~host/general, chat/~host/random",
+        dmAllowlist: "~zod;~nec",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(writtenChannel("tlon")).toEqual({
+      enabled: true,
+      groupChannels: ["chat/~host/general", "chat/~host/random"],
+      dmAllowlist: ["~zod", "~nec"],
+    });
+  });
+
+  it("does not apply another channel's coercion to a shared flag", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        matrix: {
+          enabled: true,
+          sharedValue: requireRecord(input, "shared input").sharedValue,
+        },
+      },
+    }));
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([
+      createSetupOptionCatalogEntry("matrix", "Matrix", [
+        { flags: "--shared-value <value>", description: "Matrix shared value" },
+      ]),
+      createSetupOptionCatalogEntry("tlon", "Tlon", [
+        {
+          flags: "--shared-value <value>",
+          description: "Tlon shared values",
+          valueType: "list",
+        },
+      ]),
+    ]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+            setup: { applyAccountConfig },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+
+    await channelsAddCommand({ channel: "matrix", sharedValue: "one,two" }, runtime, {
+      hasFlags: true,
+    });
+
+    expect(writtenChannel("matrix").sharedValue).toBe("one,two");
   });
 
   it("falls back from untrusted workspace catalog shadows when adding by alias", async () => {
@@ -1198,4 +1471,21 @@ describe("channelsAddCommand", () => {
       'Channel signal post-setup warning for "ops": hook failed',
     );
   });
+
+  it("rechecks persistent authority before direct account post-setup hooks", async () => {
+    const afterAccountConfigWritten = vi.fn().mockResolvedValue(undefined);
+    const beforePersistentEffect = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("inference authority changed"));
+
+    await expect(
+      runSignalAddCommand(afterAccountConfigWritten, beforePersistentEffect),
+    ).rejects.toThrow("inference authority changed");
+
+    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(beforePersistentEffect).toHaveBeenCalledTimes(2);
+    expect(afterAccountConfigWritten).not.toHaveBeenCalled();
+  });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

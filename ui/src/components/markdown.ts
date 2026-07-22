@@ -17,6 +17,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
+import remend, { type RemendOptions } from "remend";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiBasePath } from "../app/browser.ts";
@@ -24,6 +25,18 @@ import { i18n, t } from "../i18n/index.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { truncateText } from "../lib/format.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import {
+  installAssistantTranscriptRoleMarkdown,
+  installAssistantTranscriptRoleImageRenderer,
+  renderAssistantTranscriptPlainTextFallback,
+} from "./markdown-assistant-transcript.ts";
+import {
+  normalizeMarkdownRenderOptions,
+  type MarkdownRenderEnv,
+  type MarkdownRenderOptions,
+} from "./markdown-render-options.ts";
+
+export type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 
 const allowedTags = [
   "a",
@@ -94,7 +107,7 @@ const INLINE_DATA_IMAGE_RE = /^data:image\/[a-z0-9.+-]+;base64,/i;
 const BLOCK_ART_LINE_RE = /^[\t \u00a0▀▄█]+$/u;
 const BLOCK_ART_GLYPH_RE = /[▀▄█]/u;
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
-export const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
+const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const HOST_LOCAL_FILE_HREF_RE =
   /^(?:~\/|\/(?:Users|home|tmp|private\/tmp|var\/folders|private\/var\/folders)\/|\/[A-Za-z]:\/|[A-Za-z]:[\\/])/;
 const FILE_SEGMENT_SOURCE = "[A-Za-z0-9_.@#+-]+";
@@ -398,18 +411,6 @@ const TAIL_LINK_BLUR_CLASS = "chat-link-tail-blur";
 const FENCE_OPEN_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
 const FENCE_CONTAINER_PREFIX_RE = /^[ \t]{0,3}(?:(?:>\s?)|(?:(?:[-+*]|\d{1,9}[.)])[ \t]+))/;
 
-type MarkdownCodeBlockChrome = "copy" | "none";
-
-export type MarkdownRenderOptions = {
-  codeBlockChrome?: MarkdownCodeBlockChrome;
-  fileLinks?: boolean;
-};
-
-type MarkdownRenderEnv = {
-  codeBlockChrome: MarkdownCodeBlockChrome;
-  fileLinks: boolean;
-};
-
 // CJK character ranges for URL boundary detection (RFC 3986: CJK is not valid in raw URLs).
 // CJK Unified Ideographs, CJK Symbols/Punctuation, Fullwidth Forms, Hiragana, Katakana,
 // Hangul Syllables, and CJK Compatibility Ideographs.
@@ -438,22 +439,15 @@ function setCachedMarkdown(key: string, value: string) {
   }
 }
 
-function normalizeMarkdownRenderOptions(options: MarkdownRenderOptions = {}): MarkdownRenderEnv {
-  return {
-    codeBlockChrome: options.codeBlockChrome ?? "copy",
-    fileLinks: options.fileLinks ?? false,
-  };
-}
-
 function shouldRenderCodeBlockCopy(env: unknown): boolean {
   return (env as Partial<MarkdownRenderEnv> | undefined)?.codeBlockChrome !== "none";
 }
 
-export function encodeBlockArtCodeBlockCopyPayload(value: string): string {
+function encodeBlockArtCodeBlockCopyPayload(value: string): string {
   return `${blockArtCopyPayloadPrefix}${JSON.stringify(value)}`;
 }
 
-export function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
+function decodeCodeBlockCopyPayload(value: string, encoding?: string): string {
   if (
     encoding !== blockArtCodeBlockCopyPayloadEncoding ||
     !value.startsWith(blockArtCopyPayloadPrefix)
@@ -505,8 +499,9 @@ export function markdownFileLinkFromEvent(
 
 function splitFileLineSuffix(raw: string): { path: string; line: number | null } {
   const match = FILE_LINE_SUFFIX_RE.exec(raw);
-  return match
-    ? { path: raw.slice(0, match.index), line: Number.parseInt(match[1], 10) }
+  const line = match?.[1];
+  return match && line
+    ? { path: raw.slice(0, match.index), line: Number.parseInt(line, 10) }
     : { path: raw, line: null };
 }
 
@@ -688,16 +683,6 @@ function normalizeMarkdownLineBreaks(value: string): string {
   return value.replace(/\r\n?|[\u2028\u2029]/g, "\n");
 }
 
-function normalizeMarkdownInput(markdownLocal: string): string {
-  const input = normalizeMarkdownLineBreaks(
-    stripUnsupportedCitationControlMarkers(markdownLocal),
-  ).trim();
-  if (!input) {
-    return "";
-  }
-  return formatTruncatedMarkdownInput(input);
-}
-
 function formatTruncatedMarkdownInput(input: string): string {
   const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
   return appendMarkdownTruncationNotice(truncated);
@@ -739,7 +724,10 @@ function getFenceMarker(line: string): { marker: "`" | "~"; length: number } | n
     return null;
   }
   const fence = match[1];
-  const marker = fence[0] as "`" | "~";
+  if (!fence) {
+    return null;
+  }
+  const marker = fence.charAt(0) as "`" | "~";
   return { marker, length: fence.length };
 }
 
@@ -761,14 +749,25 @@ function isFenceClose(line: string, fence: { marker: "`" | "~"; length: number }
   if (!match) {
     return false;
   }
-  const marker = match[1][0];
-  if (marker !== fence.marker || match[1].length < fence.length) {
+  const markerText = match[1];
+  if (!markerText) {
+    return false;
+  }
+  const marker = markerText.charAt(0);
+  if (marker !== fence.marker || markerText.length < fence.length) {
     return false;
   }
   return trimmed.slice(match[0].length).trim() === "";
 }
 
-function findStableStreamingMarkdownBoundary(markdownLocal: string): number {
+type StreamingMarkdownSplit = {
+  /** Offset just past the last blank line outside a code fence; the prefix is block-stable. */
+  boundary: number;
+  /** True when the text after the boundary contains a code fence that has not closed yet. */
+  tailHasOpenFence: boolean;
+};
+
+function splitStableStreamingMarkdown(markdownLocal: string): StreamingMarkdownSplit {
   let boundary = 0;
   let index = 0;
   let openFence: { marker: "`" | "~"; length: number } | null = null;
@@ -800,75 +799,37 @@ function findStableStreamingMarkdownBoundary(markdownLocal: string): number {
     index = lineEnd;
   }
 
-  return boundary;
+  return { boundary, tailHasOpenFence: openFence !== null };
 }
 
-for (const [language, definition, aliases] of [
-  ["bash", bash, ["sh", "shell"]],
-  ["cpp", cpp, ["c++", "cxx"]],
-  ["css", css, []],
-  ["diff", diff, ["patch"]],
-  ["go", go, ["golang"]],
-  ["java", java, []],
-  ["javascript", javascript, ["js", "jsx"]],
-  ["json", json, []],
-  ["markdown", markdown, ["md"]],
-  ["python", python, ["py"]],
-  ["rust", rust, ["rs"]],
-  ["typescript", typescript, ["ts", "tsx"]],
-  ["xml", xml, ["html", "svg"]],
-  ["yaml", yaml, ["yml"]],
-] as const) {
+for (const [language, definition] of Object.entries({
+  bash,
+  cpp,
+  css,
+  diff,
+  go,
+  java,
+  javascript,
+  json,
+  markdown,
+  python,
+  rust,
+  typescript,
+  xml,
+  yaml,
+})) {
   hljs.registerLanguage(language, definition);
-  if (aliases.length > 0) {
-    hljs.registerAliases([...aliases], { languageName: language });
-  }
 }
+hljs.registerAliases("shell", { languageName: "bash" });
 
-function normalizeHighlightLanguage(lang: string): string {
-  const normalized = lang.trim().toLowerCase();
-  if (!normalized) {
-    return "";
-  }
-  const aliases: Record<string, string> = {
-    "c++": "cpp",
-    cxx: "cpp",
-    js: "javascript",
-    jsx: "javascript",
-    md: "markdown",
-    sh: "bash",
-    shell: "bash",
-    ts: "typescript",
-    tsx: "typescript",
-  };
-  return aliases[normalized] ?? normalized;
-}
-
-const autoHighlightLanguages = [
-  "bash",
-  "cpp",
-  "css",
-  "diff",
-  "go",
-  "java",
-  "javascript",
-  "json",
-  "markdown",
-  "python",
-  "rust",
-  "typescript",
-  "xml",
-  "yaml",
-];
-
-export function highlightCode(text: string, lang: string): string {
-  const language = normalizeHighlightLanguage(lang);
+function highlightCode(text: string, lang: string): string {
+  const language = lang.trim().toLowerCase();
   try {
     if (language && hljs.getLanguage(language)) {
       return hljs.highlight(text, { language, ignoreIllegals: true }).value;
     }
     if (!language && text.trim()) {
-      const result = hljs.highlightAuto(text, autoHighlightLanguages);
+      const result = hljs.highlightAuto(text);
       if (result.relevance >= 2) {
         return result.value;
       }
@@ -877,6 +838,11 @@ export function highlightCode(text: string, lang: string): string {
     // Fall back to escaped plaintext; malformed input should not break chat rendering.
   }
   return escapeHtml(text);
+}
+
+/** Highlight a JSON/JSON5 snippet; output is escaped hljs markup safe for unsafeHTML in a code block. */
+export function highlightJsonHtml(text: string): string {
+  return highlightCode(text, "json");
 }
 
 function codeClassAttribute(lang: string, highlighted: string): string {
@@ -941,7 +907,7 @@ function codeBlockCopyTextFromMarkdownToken(content: string): string {
   return content.endsWith("\n") ? content.slice(0, -1) : content;
 }
 
-export const md = new MarkdownIt({
+const md = new MarkdownIt({
   html: true, // Enable HTML recognition so html_block/html_inline overrides can escape it
   breaks: true,
   linkify: true,
@@ -951,6 +917,7 @@ const defaultCodeInlineRenderer = md.renderer.rules.code_inline!;
 // Enable GFM strikethrough (~~text~~) to match original marked.js behavior.
 // markdown-it uses <s> tags; we added "s" to allowedTags for DOMPurify.
 md.enable("strikethrough");
+installAssistantTranscriptRoleMarkdown(md, escapeHtml);
 
 // Disable fuzzy link detection to prevent bare filenames like "README.md"
 // from being auto-linked as "http://README.md". URLs with explicit protocol
@@ -1003,7 +970,7 @@ md.linkify.add("www", {
     for (const [close, open] of Object.entries(balancePairs)) {
       balance[close] = 0;
       for (let i = 0; i < len; i++) {
-        const c = tail[i];
+        const c = tail.charAt(i);
         if (open === close) {
           // Self-matching pair (e.g., "") — toggle between 0 and 1
           if (c === open) {
@@ -1011,15 +978,15 @@ md.linkify.add("www", {
           }
         } else if (c === open) {
           // Distinct open/close (e.g., ())
-          balance[close]++;
+          balance[close] = (balance[close] ?? 0) + 1;
         } else if (c === close) {
-          balance[close]--;
+          balance[close] = (balance[close] ?? 0) - 1;
         }
       }
     }
 
     while (len > 0) {
-      const ch = tail[len - 1];
+      const ch = tail.charAt(len - 1);
       // GFM trailing punctuation: ?, !, ., ,, :, *, _, ~ stripped unconditionally.
       // Semicolon is handled specially below (entity reference rule).
       if (/[?!.,:*_~]/.test(ch)) {
@@ -1031,11 +998,11 @@ md.linkify.add("www", {
       if (ch === ";") {
         // Backward scan to find & (O(n) total, avoids string allocation)
         let j = len - 2;
-        while (j >= 0 && /[a-zA-Z0-9]/.test(tail[j])) {
+        while (j >= 0 && /[a-zA-Z0-9]/.test(tail.charAt(j))) {
           j--;
         }
         // j < len - 2 ensures at least one alphanumeric between & and ;
-        if (j >= 0 && tail[j] === "&" && j < len - 2) {
+        if (j >= 0 && tail.charAt(j) === "&" && j < len - 2) {
           len = j;
           continue;
         }
@@ -1047,14 +1014,14 @@ md.linkify.add("www", {
       if (open !== undefined) {
         if (open === ch) {
           // Self-matching: strip if odd count (unbalanced)
-          if (balance[ch] !== 0) {
+          if ((balance[ch] ?? 0) !== 0) {
             balance[ch] = 0;
             len--;
             continue;
           }
-        } else if (balance[ch] < 0) {
+        } else if ((balance[ch] ?? 0) < 0) {
           // Distinct pair: strip if more closes than opens
-          balance[ch]++;
+          balance[ch] = (balance[ch] ?? 0) + 1;
           len--;
           continue;
         }
@@ -1092,6 +1059,9 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
     const children = blockToken.children;
     for (let i = children.length - 1; i >= 0; i--) {
       const token = children[i];
+      if (!token) {
+        continue;
+      }
       if (token.type !== "link_open") {
         continue;
       }
@@ -1111,7 +1081,7 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
       // Middle CJK must be preserved (e.g. https://example.com/你/test stays intact);
       // only strip a contiguous CJK tail adjacent to non-URL text.
       let cjkIdx = displayText.length;
-      while (cjkIdx > 0 && CJK_RE.test(displayText[cjkIdx - 1])) {
+      while (cjkIdx > 0 && CJK_RE.test(displayText.charAt(cjkIdx - 1))) {
         cjkIdx--;
       }
       if (cjkIdx <= 0 || cjkIdx === displayText.length) {
@@ -1129,7 +1099,7 @@ md.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
       textToken.content = trimmedDisplay;
       // Find link_close and insert CJK text after it
       for (let j = i + 1; j < children.length; j++) {
-        if (children[j].type === "link_close") {
+        if (children[j]?.type === "link_close") {
           const tailToken = new state.Token("text", "", 0);
           tailToken.content = cjkTail;
           children.splice(j + 1, 0, tailToken);
@@ -1163,6 +1133,9 @@ md.core.ruler.after("linkify", "file-links", (state) => {
     let linkDepth = 0;
     for (let index = 0; index < children.length; index += 1) {
       const token = children[index];
+      if (!token) {
+        continue;
+      }
       if (token.type === "link_open") {
         const href = token.attrGet("href");
         if (href) {
@@ -1254,34 +1227,16 @@ md.core.ruler.after("linkify", "file-links", (state) => {
 // accessibility when the item contains links (MDN warns against anchors inside labels).
 md.use(markdownItTaskLists, { enabled: false, label: false });
 
-// Mark the <input> html_inline token inside task-list items as trusted so the
-// html_inline override lets it through. With label: false, the plugin generates
-// only a single <input ...> token per item.
-// We identify task-list items by the class="task-list-item" the plugin sets.
+// The plugin inserts its checkbox as the first inline child. Trust only that
+// generated token so later user-authored HTML remains escaped.
 md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
-  const tokens = state.tokens;
-  for (let i = 2; i < tokens.length; i++) {
-    if (tokens[i].type !== "inline" || !tokens[i].children) {
+  for (const [index, listItem] of state.tokens.entries()) {
+    if (listItem.type !== "list_item_open" || listItem.attrGet("class") !== "task-list-item") {
       continue;
     }
-    if (tokens[i - 1].type !== "paragraph_open") {
-      continue;
-    }
-    if (tokens[i - 2].type !== "list_item_open") {
-      continue;
-    }
-    const listItem = tokens[i - 2];
-    const cls = listItem.attrGet("class") ?? "";
-    if (!cls.includes("task-list-item")) {
-      continue;
-    }
-    // Only trust the checkbox <input> token from the plugin, not other user-supplied HTML.
-    // The plugin inserts an <input> at the start; user HTML elsewhere must stay escaped.
-    for (const child of tokens[i].children!) {
-      if (child.type === "html_inline" && /^<input\s/i.test(child.content)) {
-        child.meta = { taskListPlugin: true };
-        break; // Only one checkbox per item
-      }
+    const checkbox = state.tokens[index + 2]?.children?.[0];
+    if (checkbox?.type === "html_inline") {
+      checkbox.meta = { taskListPlugin: true };
     }
   }
 });
@@ -1290,21 +1245,21 @@ md.core.ruler.after("github-task-lists", "task-list-allowlist", (state) => {
 // Exception: html_inline tokens marked by a trusted plugin (meta.taskListPlugin)
 // are allowed through — they are generated by our own plugin pipeline, not user input,
 // and DOMPurify provides the final safety net regardless.
+// Renderer rules degrade to empty output on impossible token misses instead of
+// throwing mid-render; markdown input is untrusted and the chat view must not crash.
 md.renderer.rules.html_block = (tokens, idx) => {
-  return escapeHtml(tokens[idx].content) + "\n";
+  const token = tokens[idx];
+  return token ? escapeHtml(token.content) + "\n" : "";
 };
 md.renderer.rules.html_inline = (tokens, idx) => {
   const token = tokens[idx];
-  if (token.meta?.taskListPlugin === true) {
-    return token.content;
-  }
-  return escapeHtml(token.content);
+  return token?.meta?.taskListPlugin === true ? token.content : escapeHtml(token?.content ?? "");
 };
-
 md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   const rendered = defaultCodeInlineRenderer(tokens, idx, options, env, self);
   const renderEnv = env as Partial<MarkdownRenderEnv> | undefined;
-  const target = renderEnv?.fileLinks === true ? parseFileLinkTarget(tokens[idx].content) : null;
+  const token = tokens[idx];
+  const target = token && renderEnv?.fileLinks === true ? parseFileLinkTarget(token.content) : null;
   if (!target) {
     return rendered;
   }
@@ -1313,22 +1268,26 @@ md.renderer.rules.code_inline = (tokens, idx, options, env, self) => {
   return `<a class="markdown-file-link" data-file-path="${escapeHtml(target.path)}"${lineAttr}>${rendered}</a>`;
 };
 
-// Override image to only allow base64 data URIs (#15437)
-md.renderer.rules.image = (tokens, idx) => {
-  const token = tokens[idx];
-  const src = token.attrGet("src")?.trim() ?? "";
-  // Use token.content which preserves raw markdown formatting (e.g. **bold**)
-  // to match original marked.js behavior.
-  const alt = normalizeMarkdownImageLabel(token.content);
-  if (!INLINE_DATA_IMAGE_RE.test(src)) {
-    return escapeHtml(alt);
-  }
-  return `<img class="markdown-inline-image" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}">`;
-};
+// Override image to only allow base64 data URIs (#15437).
+installAssistantTranscriptRoleImageRenderer(md, {
+  escapeHtml,
+  isInlineDataImage: (src) => INLINE_DATA_IMAGE_RE.test(src),
+  normalizeLabel: normalizeMarkdownImageLabel,
+  assistantLabel: () => t("sessionsView.assistant"),
+  openImageLabel: (alt, hasAlt) =>
+    t("chat.imageLightbox.open", {
+      title: hasAlt ? alt : t("chat.imageLightbox.untitled"),
+    }),
+  interactiveImages: (env) =>
+    (env as Partial<MarkdownRenderEnv> | undefined)?.interactiveImages === true,
+});
 
 // Override fenced code blocks with copy button + JSON collapse
 md.renderer.rules.fence = (tokens, idx, _options, env) => {
   const token = tokens[idx];
+  if (!token) {
+    return "";
+  }
   // token.info contains the full fence info string (e.g., "json title=foo");
   // extract only the first whitespace-separated token as the language.
   const lang = token.info.trim().split(/\s+/)[0] || "";
@@ -1339,11 +1298,44 @@ md.renderer.rules.fence = (tokens, idx, _options, env) => {
 
 // Override indented code blocks (code_block) with the same treatment as fence
 md.renderer.rules.code_block = (tokens, idx, _options, env) => {
-  const content = tokens[idx].content;
+  const content = tokens[idx]?.content;
+  if (content === undefined) {
+    return "";
+  }
   return renderCodeBlock(content, "", env, {
     copyText: codeBlockCopyTextFromMarkdownToken(content),
   });
 };
+
+// Uncached render core shared by the static and streaming paths. The streaming
+// tail changes on every delta, so routing it through here (instead of the cached
+// wrapper) keeps per-message churn out of the LRU cache.
+function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
+  installHooks();
+  const truncated = truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
+  const input = appendMarkdownTruncationNotice(truncated);
+  if (isMarkdownBlockArtText(truncated.text)) {
+    return DOMPurify.sanitize(
+      renderCodeBlock(input, "", renderOptions, { blockArt: true }),
+      sanitizeOptions,
+    );
+  }
+  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
+    // Large plain-text replies should stay readable without inheriting the
+    // capped code-block chrome, while still preserving whitespace for logs
+    // and other structured text that commonly trips the parse guard.
+    return DOMPurify.sanitize(toEscapedPlainTextHtml(input, renderOptions), sanitizeOptions);
+  }
+  let rendered: string;
+  try {
+    rendered = md.render(input, renderOptions);
+  } catch (err) {
+    // Fall back to escaped plain text when md.render() throws (#36213).
+    console.warn("[markdown] md.render failed, falling back to plain text:", err);
+    rendered = toEscapedPlainTextHtml(input, renderOptions);
+  }
+  return DOMPurify.sanitize(rendered, sanitizeOptions);
+}
 
 export function toSanitizedMarkdownHtml(
   markdownLocal: string,
@@ -1357,84 +1349,57 @@ export function toSanitizedMarkdownHtml(
   if (!input) {
     return "";
   }
-  installHooks();
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderInput}`;
-  if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+  const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderInput}`;
+  if (cacheable) {
     const cached = getCachedMarkdown(cacheKey);
     if (cached !== null) {
       return cached;
     }
   }
-  const truncated = truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
-  if (isMarkdownBlockArtText(truncated.text)) {
-    const rendered = renderCodeBlock(appendMarkdownTruncationNotice(truncated), "", renderOptions, {
-      blockArt: true,
-    });
-    const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
-    if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-      setCachedMarkdown(cacheKey, sanitized);
-    }
-    return sanitized;
-  }
-  if (truncated.text.length > MARKDOWN_PARSE_LIMIT) {
-    // Large plain-text replies should stay readable without inheriting the
-    // capped code-block chrome, while still preserving whitespace for logs
-    // and other structured text that commonly trips the parse guard.
-    const html = toEscapedPlainTextHtml(appendMarkdownTruncationNotice(truncated));
-    const sanitized = DOMPurify.sanitize(html, sanitizeOptions);
-    if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
-      setCachedMarkdown(cacheKey, sanitized);
-    }
-    return sanitized;
-  }
-  let rendered: string;
-  try {
-    rendered = md.render(appendMarkdownTruncationNotice(truncated), renderOptions);
-  } catch (err) {
-    // Fall back to escaped plain text when md.render() throws (#36213).
-    console.warn("[markdown] md.render failed, falling back to plain text:", err);
-    const escaped = escapeHtml(appendMarkdownTruncationNotice(truncated));
-    rendered = `<pre class="code-block">${escaped}</pre>`;
-  }
-  const sanitized = DOMPurify.sanitize(rendered, sanitizeOptions);
-  if (input.length <= MARKDOWN_CACHE_MAX_CHARS) {
+  const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
+  if (cacheable) {
     setCachedMarkdown(cacheKey, sanitized);
   }
   return sanitized;
 }
 
-function toEscapedPlainTextHtml(value: string): string {
-  return `<div class="markdown-plain-text-fallback">${escapeHtml(normalizeMarkdownLineBreaks(value))}</div>`;
+function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): string {
+  return renderAssistantTranscriptPlainTextFallback(
+    normalizeMarkdownLineBreaks(value),
+    options.assistantTranscriptRoleHeaders,
+    () => t("sessionsView.assistant"),
+    escapeHtml,
+  );
 }
 
-export function toStreamingPlainTextHtml(markdownLocal: string): string {
-  const input = normalizeMarkdownInput(markdownLocal);
-  if (!input) {
-    return "";
-  }
-  return toEscapedPlainTextHtml(input);
-}
+// Streaming-tail repair config: math is not rendered by this pipeline, so
+// completing `$$` would inject visible characters into ordinary prose.
+const streamingRemendOptions = { katex: false, linkMode: "text-only" } satisfies RemendOptions;
 
+// Renders the in-flight block live. remend closes/strips unterminated inline
+// constructs (`**bold`, half links, …) so partially streamed markup styles
+// immediately instead of flashing raw markers. Inside an open code fence the
+// tail is code, not prose: skip remend (it only understands top-level ```
+// fences) and let markdown-it auto-close the fence at end of input (CommonMark
+// allows unterminated fences), so code streams with live highlighting.
+// Invariant: the tail never contains a *closed* fence — the split boundary
+// advances past every fence close — so remend (which cannot see ~~~ fences)
+// never runs across completed fenced code.
+function toStreamingTailHtml(tail: string, renderOptions: MarkdownRenderEnv): string {
+  return renderSanitizedMarkdown(remend(tail, streamingRemendOptions), renderOptions);
+}
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
+  const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );
   if (isMarkdownBlockArtText(rawInput)) {
-    const truncated = truncateText(rawInput, MARKDOWN_CHAR_LIMIT);
-    installHooks();
-    return DOMPurify.sanitize(
-      renderCodeBlock(
-        appendMarkdownTruncationNotice(truncated),
-        "",
-        normalizeMarkdownRenderOptions(options),
-        { blockArt: true },
-      ),
-      sanitizeOptions,
-    );
+    return renderSanitizedMarkdown(rawInput, renderOptions);
   }
 
   const trimmedInput = rawInput.trim();
@@ -1443,16 +1408,16 @@ export function toStreamingMarkdownHtml(
   }
   const input = formatTruncatedMarkdownInput(trimmedInput);
 
-  const boundary = findStableStreamingMarkdownBoundary(input);
-  if (boundary <= 0) {
-    return toEscapedPlainTextHtml(input);
-  }
-
+  const { boundary, tailHasOpenFence } = splitStableStreamingMarkdown(input);
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
-  const stableHtml = toSanitizedMarkdownHtml(stableMarkdown, options);
+  const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
   if (!streamingTail.trim()) {
     return stableHtml;
   }
-  return `${stableHtml}${toEscapedPlainTextHtml(streamingTail)}`;
+  const tailHtml = tailHasOpenFence
+    ? renderSanitizedMarkdown(streamingTail, renderOptions)
+    : toStreamingTailHtml(streamingTail, renderOptions);
+  return `${stableHtml}${tailHtml}`;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

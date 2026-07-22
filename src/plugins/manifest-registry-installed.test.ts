@@ -1,6 +1,7 @@
 // Covers installed plugin manifest registry behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
@@ -468,7 +469,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             pluginId: "claude-bundle",
             manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
             source: rootDir,
@@ -518,7 +519,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             packageChannel: {
               id: "installed",
               label: "Installed",
@@ -570,7 +571,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
         ...index,
         plugins: [
           {
-            ...index.plugins[0],
+            ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
             packageJson: {
               path: "..meta/package.json",
               hash: "old-index-hash",
@@ -623,7 +624,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
           ...index,
           plugins: [
             {
-              ...index.plugins[0],
+              ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
               packageJson: {
                 path: "package.json",
                 hash: "old-index-hash",
@@ -676,6 +677,47 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(registry.plugins[0]?.channelCatalogMeta).toBeUndefined();
   });
 
+  it("normalizes persisted channel CLI option value types", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageChannel: {
+              id: "installed",
+              cliAddOptions: [
+                {
+                  flags: "--limit <n>",
+                  description: "Limit",
+                  valueType: "int",
+                },
+                {
+                  flags: "--ignored <value>",
+                  description: "Ignored",
+                  valueType: "string",
+                },
+              ],
+            },
+          },
+        ],
+      } as unknown as InstalledPluginIndex,
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageChannel?.cliAddOptions).toEqual([
+      { flags: "--limit <n>", description: "Limit", valueType: "int" },
+      { flags: "--ignored <value>", description: "Ignored" },
+    ]);
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();
@@ -692,7 +734,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
 
     const index = createIndex(rootDir);
     const persistedPlugin = {
-      ...index.plugins[0],
+      ...expectDefined(index.plugins[0], "index.plugins[0] test invariant"),
       pluginId: "claude-bundle",
       manifestPath: path.join(rootDir, ".claude-plugin", "plugin.json"),
       source: rootDir,

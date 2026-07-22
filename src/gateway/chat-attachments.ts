@@ -3,9 +3,11 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer, type SavedMedia } from "../media/store.js";
@@ -36,6 +38,7 @@ type ParsedMessageWithImages = {
   message: string;
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
+  media: MediaFact[];
   offloadedRefs: OffloadedRef[];
 };
 
@@ -58,7 +61,7 @@ type SavedMediaRef = {
 const OFFLOAD_THRESHOLD_BYTES = 2_000_000;
 const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
-export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
 export async function persistInboundImagesForTranscript(params: {
   images: ChatImageContent[];
@@ -295,7 +298,7 @@ function normalizeAttachment(
   if (opts.stripDataUrlPrefix) {
     const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
     if (dataUrlMatch) {
-      base64 = dataUrlMatch[1];
+      base64 = expectDefined(dataUrlMatch[1], "data url match capture group 1");
     }
   }
   return { label, mime, base64 };
@@ -319,7 +322,7 @@ export async function parseMessageWithAttachments(
   const acceptNonImage = opts?.acceptNonImage !== false;
 
   if (!attachments || attachments.length === 0) {
-    return { message, images: [], imageOrder: [], offloadedRefs: [] };
+    return { message, images: [], imageOrder: [], media: [], offloadedRefs: [] };
   }
 
   const images: ChatImageContent[] = [];
@@ -490,6 +493,11 @@ export async function parseMessageWithAttachments(
     message: updatedMessage !== message ? updatedMessage.trimEnd() : message,
     images,
     imageOrder,
+    media: offloadedRefs.map((ref) => ({
+      path: ref.path,
+      url: ref.mediaRef,
+      contentType: ref.mimeType,
+    })),
     offloadedRefs,
   };
 }

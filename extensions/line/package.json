@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/line",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
   "repository": {
     "type": "git",
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.11"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -30,6 +30,14 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "line",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "LINE_CHANNEL_ACCESS_TOKEN",
+            "LINE_CHANNEL_SECRET"
+          ]
+        }
+      },
       "label": "LINE",
       "selectionLabel": "LINE (Messaging API)",
       "detailLabel": "LINE Bot",
@@ -38,7 +46,13 @@
       "blurb": "LINE Messaging API webhook bot.",
       "systemImage": "message",
       "order": 75,
-      "quickstartAllowFrom": true
+      "quickstartAllowFrom": true,
+      "cliAddOptions": [
+        {
+          "flags": "--secret-file <path>",
+          "description": "Read channel shared secret from file"
+        }
+      ]
     },
     "install": {
       "npmSpec": "@openclaw/line",
@@ -46,10 +60,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11"
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "publishToClawHub": true,

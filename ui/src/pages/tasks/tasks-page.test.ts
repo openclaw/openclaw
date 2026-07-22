@@ -22,6 +22,7 @@ function createGateway(client: GatewayBrowserClient) {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,
@@ -51,10 +52,25 @@ function createGateway(client: GatewayBrowserClient) {
   };
 }
 
-function createContext(gateway: ApplicationContext["gateway"]): ApplicationContext {
+function createContext(
+  gateway: ApplicationContext["gateway"],
+  scopeId: string | null = "main",
+): ApplicationContext {
+  const subscribe = () => () => undefined;
   return {
     basePath: "",
     gateway,
+    agents: {
+      state: { agentsList: { defaultId: "main", agents: [{ id: "main" }, { id: "writer" }] } },
+      ensureList: vi.fn(async () => undefined),
+      subscribe,
+    },
+    agentSelection: {
+      state: { selectedId: scopeId, scopeId },
+      set: () => undefined,
+      setScope: () => undefined,
+      subscribe,
+    },
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
@@ -66,6 +82,24 @@ afterEach(() => {
 });
 
 describe("TasksPage cancellation lifecycle", () => {
+  it("scopes both active and recent task requests to the selected agent", async () => {
+    const request = vi.fn(async () => ({ tasks: [] }));
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway, "writer");
+    document.body.append(page);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenCalledWith(
+      "tasks.list",
+      expect.objectContaining({ agentId: "writer", status: ["queued", "running"] }),
+    );
+    expect(request).toHaveBeenCalledWith(
+      "tasks.list",
+      expect.objectContaining({ agentId: "writer", limit: 200 }),
+    );
+  });
+
   it("discards a cancellation response across a same-client reconnect", async () => {
     const pendingCancel = deferred<{ cancelled: false; found: true; reason: string }>();
     const request = vi.fn((method: string) => {

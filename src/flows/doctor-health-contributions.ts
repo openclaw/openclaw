@@ -1,6 +1,7 @@
 // Doctor health contribution helpers collect health checks from plugin manifests.
 import fs from "node:fs";
 import nodePath from "node:path";
+import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import {
@@ -12,6 +13,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
 import type { HealthCheckInput, RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
@@ -28,7 +31,10 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  skipWizardMetadataForIncludeWrite?: boolean;
   preservedLegacyRootKeys?: readonly string[];
+  shouldRepairCronCodexModelRefsAfterConfigWrite?: boolean;
+  blockedCodexModelIdentities?: readonly string[];
 };
 
 export type DoctorHealthFlowContext = {
@@ -80,7 +86,9 @@ const loadDoctorCoreChecksModule = async () => await import("./doctor-core-check
 const loadDoctorStateIntegrityModule = async () =>
   await import("../commands/doctor-state-integrity.js");
 const loadHealthCheckRegistryModule = async () => await import("./health-check-registry.js");
-const loadModelCatalogModule = async () => await import("../agents/model-catalog.js");
+const loadCatalogLookupModule = async () => await import("../agents/model-catalog.js");
+const loadPreparedModelCatalogModule = async () =>
+  await import("../agents/prepared-model-catalog.js");
 const loadModelSelectionModule = async () => await import("../agents/model-selection.js");
 const loadNoteModule = async () => await import("../../packages/terminal-core/src/note.js");
 const loadOnboardHelpersModule = async () => await import("../commands/onboard-helpers.js");
@@ -103,9 +111,7 @@ function isTruthyEnvValue(value: string | undefined): boolean {
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
 }
 
-export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
-  env: NodeJS.ProcessEnv;
-}): boolean {
+function shouldSkipLegacyUpdateDoctorConfigWrite(params: { env: NodeJS.ProcessEnv }): boolean {
   if (!isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
     return false;
   }
@@ -115,7 +121,7 @@ export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
   return true;
 }
 
-export function createDoctorHealthContribution(params: {
+function createDoctorHealthContribution(params: {
   id: string;
   label: string;
   healthCheckIds?: readonly string[];
@@ -476,11 +482,11 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   noteClaudeCliHealth(ctx.cfg);
 }
 
-async function runCoreContributionHealthRepair(
+async function runCoreContributionHealth(
   ctx: DoctorHealthFlowContext,
   checkIds: readonly string[],
 ): Promise<void> {
-  if (!ctx.prompter.shouldRepair || checkIds.length === 0) {
+  if (checkIds.length === 0) {
     return;
   }
   const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
@@ -495,6 +501,7 @@ async function runCoreContributionHealthRepair(
     return;
   }
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  const dryRun = !ctx.prompter.shouldRepair;
   const result = await runDoctorHealthRepairs(
     {
       mode: "fix",
@@ -502,10 +509,12 @@ async function runCoreContributionHealthRepair(
       cfg: ctx.cfg,
       cwd: workspaceDir,
       configPath: ctx.configPath,
+      dryRun,
     },
-    { checks },
+    { checks, dryRun },
   );
   ctx.cfg = result.config;
+  renderStructuredHealthFindings(ctx, dryRun ? result.findings : result.remainingFindings);
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -518,15 +527,13 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
     await import("../commands/doctor-state-migrations.js");
   const { note } = await loadNoteModule();
-  // Only a direct operator-owned doctor may inspect the default state dir for
-  // imports. Automated repair callers explicitly lack this capability so a
-  // temporary OPENCLAW_STATE_DIR cannot capture and archive production trust.
-  const operatorCanApproveCrossStateDirImports =
-    ctx.prompter.repairMode.canPrompt || ctx.prompter.shouldRepair;
+  // Settle retired-plugin state cleanup (may replace ctx.cfg) before the
+  // legacy-state detect/migrate pair reads the config.
+  await runCoreContributionHealth(ctx, ["core/doctor/removed-workspaces-state"]);
+  const doctorOnlyStateMigrations = ctx.options.repair === true || ctx.options.yes === true;
   const legacyState = await detectLegacyStateMigrations({
     cfg: ctx.cfg,
-    crossStateDirImports:
-      ctx.options.crossStateDirImports === true && operatorCanApproveCrossStateDirImports,
+    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
   });
   if (legacyState.warnings.length > 0) {
     note(legacyState.warnings.join("\n"), "Doctor warnings");
@@ -542,7 +549,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     ctx.options.nonInteractive === true
       ? true
       : await ctx.prompter.confirm({
-          message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+          message: "Migrate detected legacy state now?",
           initialValue: true,
         });
   if (!migrate) {
@@ -551,6 +558,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const migrated = await runLegacyStateMigrations({
     detected: legacyState,
     config: ctx.cfg,
+    ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
     recoverCorruptTargetStore: ctx.options.repair === true || ctx.options.yes === true,
   });
   if (migrated.changes.length > 0) {
@@ -625,14 +633,24 @@ async function runReleaseConfiguredPluginInstallsHealth(
     meta: {
       ...ctx.cfg.meta,
       lastTouchedVersion,
-      lastTouchedAt: new Date().toISOString(),
     },
   };
+  writeConfigMachineState("config.lastTouchedAt", new Date().toISOString());
 }
 
 async function runDiskSpaceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteDiskSpace } = await import("../commands/doctor-disk-space.js");
   noteDiskSpace(ctx.cfg);
+}
+
+async function runDatabaseBloatHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
+  noteSqliteDatabaseBloat(ctx.cfg);
+}
+
+async function runChannelIngressDeadLettersHealth(): Promise<void> {
+  const { noteChannelIngressDeadLetters } = await import("../commands/doctor-channel-ingress.js");
+  noteChannelIngressDeadLetters();
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -648,6 +666,9 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
     cfg: ctx.cfg,
     env: ctx.env ?? process.env,
     shouldRepair: ctx.prompter.shouldRepair,
+    ...(ctx.configResult.blockedCodexModelIdentities?.length
+      ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+      : {}),
   });
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
@@ -668,7 +689,11 @@ async function runSessionLocksHealth(ctx: DoctorHealthFlowContext): Promise<void
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
-  await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
+  await noteSessionTranscriptHealth({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    shouldRepair: ctx.prompter.shouldRepair,
+  });
 }
 
 async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -681,8 +706,8 @@ async function runSessionSnapshotsHealth(ctx: DoctorHealthFlowContext): Promise<
 }
 
 async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeScrubConfigAuditLog } = await import("../commands/doctor-config-audit-scrub.js");
-  await maybeScrubConfigAuditLog({ shouldRepair: ctx.prompter.shouldRepair });
+  const legacyFiles = await import("../commands/doctor-usage-cost-cache.js");
+  await legacyFiles.maybeRepairLegacyRuntimeFiles(ctx.prompter.shouldRepair, ctx.env);
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -751,9 +776,14 @@ async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
+async function runWebFetchProxyHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteWebFetchProxyDiagnostic } = await import("../commands/doctor-web-fetch-proxy.js");
+  await noteWebFetchProxyDiagnostic({ cfg: ctx.cfg, env: ctx.env ?? process.env });
+}
+
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
-  await runCoreContributionHealthRepair(ctx, ["core/doctor/browser-clawd-profile-residue"]);
+  await runCoreContributionHealth(ctx, ["core/doctor/browser-clawd-profile-residue"]);
   await noteChromeMcpBrowserReadiness(ctx.cfg);
 }
 
@@ -771,7 +801,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
     return;
   }
   const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await loadAgentDefaultsModule();
-  const { loadModelCatalog } = await loadModelCatalogModule();
+  const { loadPreparedModelCatalog } = await loadPreparedModelCatalogModule();
   const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
     await loadModelSelectionModule();
   const { note } = await loadNoteModule();
@@ -788,7 +818,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const catalog = await loadModelCatalog({ config: ctx.cfg, readOnly: true });
+  const catalog = await loadPreparedModelCatalog({ config: ctx.cfg, readOnly: true });
   const status = getModelRefStatus({
     cfg: ctx.cfg,
     catalog,
@@ -799,7 +829,7 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   const warnings: string[] = [];
   if (!status.allowed) {
     warnings.push(
-      `- hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+      `- hooks.gmail.model "${status.key}" not allowed by agents.defaults.modelPolicy.allow (will use primary instead)`,
     );
   }
   if (!status.inCatalog) {
@@ -888,10 +918,11 @@ async function collectToolResultCapTargetAdvice(params: {
   }>
 > {
   const { DEFAULT_CONTEXT_TOKENS } = await loadAgentDefaultsModule();
-  const { loadModelCatalog, findModelCatalogEntry } = await loadModelCatalogModule();
+  const { findModelCatalogEntry } = await loadCatalogLookupModule();
+  const { loadPreparedModelCatalog } = await loadPreparedModelCatalogModule();
   const { resolveContextWindowInfo } = await import("../agents/context-window-guard.js");
   const { resolveDefaultModelForAgent, modelKey } = await loadModelSelectionModule();
-  const catalog = await loadModelCatalog({
+  const catalog = await loadPreparedModelCatalog({
     config: params.cfg,
     ...(params.readOnlyCatalog ? { readOnly: true } : {}),
   });
@@ -1042,33 +1073,6 @@ async function detectSystemdLingerFindings(
       fixHint: `Run: sudo loginctl enable-linger ${status.user}`,
     },
   ];
-}
-
-async function hasActiveGatewayExecCredential(
-  ctx: Pick<DoctorHealthFlowContext, "cfg">,
-  mode: DoctorFlowMode = resolveDoctorMode(ctx.cfg),
-): Promise<boolean> {
-  const { resolveSecretInputRef } = await loadSecretTypesModule();
-  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
-  const { ALL_GATEWAY_SECRET_INPUT_PATHS, readGatewaySecretInputValue } =
-    await import("../gateway/secret-input-paths.js");
-  return ALL_GATEWAY_SECRET_INPUT_PATHS.some((path) => {
-    if (
-      !gatewaySecretInputPathCanWin({
-        config: ctx.cfg,
-        env: process.env,
-        modeOverride: mode,
-        path,
-      })
-    ) {
-      return false;
-    }
-    const ref = resolveSecretInputRef({
-      value: readGatewaySecretInputValue(ctx.cfg, path),
-      defaults: ctx.cfg.secrets?.defaults,
-    }).ref;
-    return ref?.source === "exec";
-  });
 }
 
 async function collectWorkspaceStatusPluginVersionDrift(params: {
@@ -1224,12 +1228,12 @@ function inferMemorySearchFindingPath(message: string): string {
     return "memory.backend";
   }
   if (message.includes("OpenAI-compatible embeddings endpoint")) {
-    return "agents.defaults.memorySearch.remote.baseUrl";
+    return "memory.search.remote.baseUrl";
   }
   if (message.includes("OpenAI-compatible embedding model")) {
-    return "agents.defaults.memorySearch.model";
+    return "memory.search.model";
   }
-  return "agents.defaults.memorySearch.provider";
+  return "memory.search.provider";
 }
 
 async function collectMemorySearchHealthFindings(
@@ -1289,10 +1293,12 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
-    ctx.cfg = applyWizardMetadata(ctx.cfg, {
-      command: "doctor",
-      mode: resolveDoctorMode(ctx.cfg),
-    });
+    if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
+      ctx.cfg = applyWizardMetadata(ctx.cfg, {
+        command: "doctor",
+        mode: resolveDoctorMode(ctx.cfg),
+      });
+    }
     if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
@@ -1303,6 +1309,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
       writeOptions: {
+        auditOrigin: "doctor",
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
         skipPluginValidation:
           ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
@@ -1312,6 +1319,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
           : {}),
       },
     });
+    // logConfigUpdated already prints the `.bak` backup line when it exists.
     logConfigUpdated(ctx.runtime);
     const preUpdateSnapshotPath = `${ctx.configPath}.pre-update`;
     if (updateDoctorRun && fs.existsSync(preUpdateSnapshotPath)) {
@@ -1319,9 +1327,27 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
         `Update changed config; pre-update backup: ${shortenHomePath(preUpdateSnapshotPath)}`,
       );
     }
-    const backupPath = `${ctx.configPath}.bak`;
-    if (fs.existsSync(backupPath)) {
-      ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
+  }
+  if (ctx.configResult.shouldRepairCronCodexModelRefsAfterConfigWrite === true) {
+    // Two-phase safety: replaceConfigFile above persists ctx.cfg itself
+    // (cfgForPersistence is only the flow-start change-detection clone), and
+    // when no write was scheduled ctx.cfg still mirrors disk because the
+    // required runtime policy was already persisted. Either way ctx.cfg is the
+    // durable config, so the cron rewrite below validates against real state.
+    const { repairCronCodexModelRefsAfterConfigWrite } =
+      await import("../commands/doctor/cron/legacy-repair.js");
+    const result = await repairCronCodexModelRefsAfterConfigWrite({
+      cfg: ctx.cfg,
+      ...(ctx.configResult.blockedCodexModelIdentities?.length
+        ? { blockedModelIdentities: new Set(ctx.configResult.blockedCodexModelIdentities) }
+        : {}),
+    });
+    const { note } = await loadNoteModule();
+    if (result.changes.length > 0) {
+      note(result.changes.join("\n"), "Doctor changes");
+    }
+    if (result.warnings.length > 0) {
+      note(result.warnings.join("\n"), "Doctor warnings");
     }
   }
 }
@@ -1419,8 +1445,7 @@ function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext): {
   if (!isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)) {
     return {};
   }
-  const version =
-    ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion;
+  const version = ctx.configResult.sourceLastTouchedVersion?.trim();
   return version ? { lastTouchedVersionOverride: version } : {};
 }
 
@@ -1477,13 +1502,11 @@ async function runCoreHealthFindingNote(
   ctx: DoctorHealthFlowContext,
   checkId: string,
 ): Promise<void> {
-  const { registerCoreHealthChecks } = await loadDoctorCoreChecksModule();
-  const { getHealthCheck } = await loadHealthCheckRegistryModule();
+  const { CORE_HEALTH_CHECKS } = await loadDoctorCoreChecksModule();
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } = await loadAgentScopeModule();
   const { note } = await loadNoteModule();
 
-  registerCoreHealthChecks();
-  const check = getHealthCheck(checkId);
+  const check = CORE_HEALTH_CHECKS.find((candidate) => candidate.id === checkId);
   if (!check) {
     return;
   }
@@ -1493,16 +1516,28 @@ async function runCoreHealthFindingNote(
     cfg: ctx.cfg,
     cwd: resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg)),
     configPath: ctx.configPath,
+    allowExecSecretRefs: ctx.options.allowExec === true,
   });
   if (findings.length === 0) {
     return;
   }
-  ctx.healthOk = false;
-  note(formatHealthFindings(findings), "Doctor warnings");
+  const information = findings.filter((finding) => finding.severity === "info");
+  const warnings = findings.filter((finding) => finding.severity !== "info");
+  if (information.length > 0) {
+    note(formatHealthFindings(information), "Doctor information");
+  }
+  if (warnings.length > 0) {
+    ctx.healthOk = false;
+    note(formatHealthFindings(warnings), "Doctor warnings");
+  }
 }
 
 async function runProviderCatalogProjectionHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   await runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection");
+}
+
+async function runLocalAudioAccelerationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration");
 }
 
 async function runRuntimeToolSchemasHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -1513,7 +1548,11 @@ async function runSkillWorkshopToolPolicyHealth(ctx: DoctorHealthFlowContext): P
   await runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy");
 }
 
-export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
+async function runClawStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  await runCoreHealthFindingNote(ctx, "core/doctor/claws-state");
+}
+
+function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return [
     createDoctorHealthContribution({
       id: "doctor:gateway-config",
@@ -1565,7 +1604,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-state",
       label: "Legacy state",
-      healthCheckIds: ["core/doctor/legacy-state"],
+      healthCheckIds: ["core/doctor/legacy-state", "core/doctor/removed-workspaces-state"],
       run: runLegacyStateHealth,
     }),
     createDoctorHealthContribution({
@@ -1726,6 +1765,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         },
       },
       run: runDiskSpaceHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:db-bloat",
+      label: "SQLite database size",
+      run: runDatabaseBloatHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:channel-ingress-dead-letters",
+      label: "Channel ingress dead letters",
+      run: runChannelIngressDeadLettersHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
@@ -1994,6 +2043,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:web-fetch-proxy",
+      label: "Web fetch proxy",
+      run: runWebFetchProxyHealth,
+    }),
+    createDoctorHealthContribution({
       id: "doctor:browser",
       label: "Browser",
       healthCheckIds: ["core/doctor/browser", "core/doctor/browser-clawd-profile-residue"],
@@ -2028,6 +2082,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       label: "Provider catalog projection",
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
       run: runProviderCatalogProjectionHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:local-audio-acceleration",
+      label: "Local audio acceleration",
+      healthCheckIds: ["core/doctor/local-audio-acceleration"],
+      run: runLocalAudioAccelerationHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",
@@ -2074,6 +2134,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       },
       run: runWorkspaceStatusHealth,
     }),
+    ...(isExperimentalClawsEnabled()
+      ? [
+          createDoctorHealthContribution({
+            id: "doctor:claws-state",
+            label: "Claws state",
+            healthCheckIds: ["core/doctor/claws-state"],
+            run: runClawStateHealth,
+          }),
+        ]
+      : []),
     createDoctorHealthContribution({
       id: "doctor:skill-curator",
       label: "Skill curator",
@@ -2229,8 +2299,8 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
 }
 
 export async function resolveDoctorContributionHealthChecks(): Promise<readonly HealthCheck[]> {
-  const { CORE_HEALTH_CHECKS } = await import("./doctor-core-checks.js");
-  const checksById = new Map(CORE_HEALTH_CHECKS.map((check) => [check.id, check]));
+  const { createCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const checksById = new Map(createCoreHealthChecks().map((check) => [check.id, check]));
   const checks: HealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
@@ -2255,3 +2325,10 @@ export async function runDoctorHealthContributions(ctx: DoctorHealthFlowContext)
     await contribution.run(ctx);
   }
 }
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.doctorHealthContributionsTestApi")
+  ] = { createDoctorHealthContribution, resolveDoctorHealthContributions };
+}
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

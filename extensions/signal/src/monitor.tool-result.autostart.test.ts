@@ -1,7 +1,7 @@
 // Signal tests cover monitor.tool result.autostart plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
-import type { SignalDaemonExitEvent } from "./daemon.js";
+import type { SignalDaemonHandle } from "./daemon.js";
 import {
   createSignalToolResultConfig,
   createMockSignalDaemonHandle,
@@ -20,6 +20,7 @@ const { waitForTransportReadyMock, spawnSignalDaemonMock, streamMock } =
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
 type MonitorSignalProviderOptions = NonNullable<Parameters<typeof monitorSignalProvider>[0]>;
+type SignalDaemonExitEvent = Awaited<SignalDaemonHandle["exited"]>;
 
 function createMonitorRuntime() {
   return {
@@ -133,6 +134,23 @@ describe("monitorSignalProvider autostart", () => {
     );
   });
 
+  it("passes a bare IPv6 bind host from an IPv6 daemon URL", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: "http://[::1]:9090",
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+      expect.objectContaining({ httpHost: "::1", httpPort: 9090 }),
+    );
+  });
+
   it("omits configPath when channels.signal.configPath is blank", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ configPath: " " });
@@ -214,7 +232,7 @@ describe("monitorSignalProvider autostart", () => {
     const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
       resolveExit = resolve;
     });
-    const stop = vi.fn(() => {
+    const stop = vi.fn(async () => {
       if (exited) {
         return;
       }
@@ -223,6 +241,7 @@ describe("monitorSignalProvider autostart", () => {
         throw new Error("Expected signal daemon exit resolver to be initialized");
       }
       resolveExit({ source: "process", code: null, signal: "SIGTERM" });
+      await exitedPromise;
     });
     spawnSignalDaemonMock.mockReturnValueOnce(
       createMockSignalDaemonHandle({
@@ -243,6 +262,38 @@ describe("monitorSignalProvider autostart", () => {
         abortSignal: abortController.signal,
       }),
     ).resolves.toBeUndefined();
+  });
+
+  it("awaits daemon exit before resolving aborted monitor shutdown", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = new AbortController();
+    let resolveStop!: () => void;
+    const stopPromise = new Promise<void>((resolve) => {
+      resolveStop = resolve;
+    });
+    const stop = vi.fn(() => stopPromise);
+    spawnSignalDaemonMock.mockReturnValueOnce(createMockSignalDaemonHandle({ stop }));
+    streamMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("stop"));
+    });
+
+    let settled = false;
+    const monitorPromise = runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      runtime,
+      abortSignal: abortController.signal,
+    }).then(() => {
+      settled = true;
+    });
+
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+    expect(settled).toBe(false);
+
+    resolveStop();
+    await monitorPromise;
+    expect(settled).toBe(true);
   });
 });
 

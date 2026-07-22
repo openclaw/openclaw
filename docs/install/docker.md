@@ -10,6 +10,8 @@ Docker is **optional**. Use it for an isolated, throwaway gateway environment or
 
 The default sandbox backend uses Docker when `agents.defaults.sandbox` is enabled, but sandboxing is off by default and does not require the gateway itself to run in Docker. SSH and OpenShell sandbox backends are also available; see [Sandboxing](/gateway/sandboxing).
 
+Hosting multiple users? See [Multi-tenant hosting](/gateway/multi-tenant-hosting) for the one-cell-per-tenant model.
+
 ## Prerequisites
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
@@ -346,14 +348,9 @@ docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
   'curl -fsSL https://claude.ai/install.sh | bash'
 ```
 
-The native installer writes `claude` to `/home/node/.local/bin/claude`. Point OpenClaw at that path:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
-  openclaw-cli config set \
-  agents.defaults.cliBackends.claude-cli.command \
-  /home/node/.local/bin/claude
-```
+The native installer writes `claude` to `/home/node/.local/bin/claude`. The
+OpenClaw image includes `/home/node/.local/bin` on `PATH`, so the bundled
+Anthropic plugin resolves it without an adapter config override.
 
 Log in and verify from the same persisted home:
 
@@ -407,7 +404,7 @@ Installed downloadable plugins store package state under the mounted OpenClaw ho
 
 For full VM persistence details, see [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** `media/`, session JSONL files, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
+**Disk growth hotspots:** `media/`, per-agent SQLite databases, legacy session JSONL transcripts, the shared SQLite state database, installed plugin package roots, and rolling file logs under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)
 

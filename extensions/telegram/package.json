@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/telegram",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "private": true,
   "description": "OpenClaw Telegram channel plugin",
   "type": "module",
@@ -25,6 +25,14 @@
     },
     "channel": {
       "id": "telegram",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "TELEGRAM_BOT_TOKEN"
+          ]
+        }
+      },
+      "approvalFlags": ["native"],
       "label": "Telegram",
       "selectionLabel": "Telegram (Bot API)",
       "detailLabel": "Telegram Bot",
@@ -41,15 +49,6 @@
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
-      },
-      "configuredState": {
-        "env": {
-          "allOf": [
-            "TELEGRAM_BOT_TOKEN"
-          ]
-        },
-        "specifier": "./configured-state",
-        "exportName": "hasTelegramConfiguredState"
       }
     }
   }

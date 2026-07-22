@@ -3,9 +3,9 @@ import { Command } from "commander";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import type { HookInstallRecord } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { createEmptyUninstallActions } from "../plugins/uninstall.js";
 import type { CliMockOutputRuntime } from "./test-runtime-capture.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
@@ -27,7 +27,26 @@ type UpdateNpmInstalledHookPacksFn =
   (typeof import("../hooks/update.js"))["updateNpmInstalledHookPacks"];
 type PluginInstallRecordMap = Record<string, PluginInstallRecord>;
 
+function createEmptyUninstallActions() {
+  return {
+    entry: false,
+    install: false,
+    allowlist: false,
+    denylist: false,
+    loadPath: false,
+    memorySlot: false,
+    contextEngineSlot: false,
+    channelConfig: false,
+    directory: false,
+  };
+}
+
 let mockInstalledPluginIndexInstallRecords: PluginInstallRecordMap = {};
+let mockHookInstallRecords: Record<string, HookInstallRecord> = {};
+
+export function setHookInstallRecords(records: Record<string, HookInstallRecord>): void {
+  mockHookInstallRecords = structuredClone(records);
+}
 
 function clonePluginInstallRecords(records: PluginInstallRecordMap): PluginInstallRecordMap {
   // Tests mutate records freely; clone to keep helper state from leaking across assertions.
@@ -73,15 +92,15 @@ export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
+export const notifyGatewayPluginMetadataChanged: AsyncUnknownMock = vi.fn();
 export const clearPluginRegistryLoadCache: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
-const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: Mock<UpdateNpmInstalledPluginsFn> = vi.fn();
 export const updateNpmInstalledHookPacks: Mock<UpdateNpmInstalledHookPacksFn> = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();
-export const promptText: AsyncUnknownMock = vi.fn();
+const promptText: AsyncUnknownMock = vi.fn();
 export class PromptInputClosedError extends Error {
   constructor() {
     super("Prompt input closed before an answer was received.");
@@ -170,6 +189,11 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
   writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
     runtime.writeJson(value, space),
+}));
+
+vi.mock("./plugins-update-gateway-signal.js", () => ({
+  notifyGatewayPluginMetadataChanged: (...args: unknown[]) =>
+    notifyGatewayPluginMetadataChanged(...args),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -482,18 +506,6 @@ vi.mock("../plugins/uninstall.js", async (importOriginal) => {
         applyPluginUninstallDirectoryRemoval,
         ...args,
       )) as (typeof import("../plugins/uninstall.js"))["applyPluginUninstallDirectoryRemoval"],
-    uninstallPlugin: ((
-      ...args: Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-    ) =>
-      invokeMock<
-        Parameters<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>,
-        ReturnType<(typeof import("../plugins/uninstall.js"))["uninstallPlugin"]>
-      >(uninstallPlugin, ...args)) as (typeof import("../plugins/uninstall.js"))["uninstallPlugin"],
-    resolveUninstallDirectoryTarget: ({
-      installRecord,
-    }: {
-      installRecord?: { installPath?: string; sourcePath?: string };
-    }) => installRecord?.installPath ?? installRecord?.sourcePath ?? null,
   };
 });
 
@@ -652,6 +664,7 @@ vi.mock("../hooks/install.js", () => ({
 }));
 
 vi.mock("../hooks/installs.js", () => ({
+  readHookInstalls: () => structuredClone(mockHookInstallRecords),
   recordHookInstall: ((
     ...args: Parameters<(typeof import("../hooks/installs.js"))["recordHookInstall"]>
   ) =>
@@ -728,13 +741,14 @@ export function resetPluginsCliTestState() {
   buildPluginCompatibilityNotices.mockReset();
   inspectPluginRegistry.mockReset();
   refreshPluginRegistry.mockReset();
+  notifyGatewayPluginMetadataChanged.mockReset();
   clearPluginRegistryLoadCache.mockReset();
   applyExclusiveSlotSelection.mockReset();
   planPluginUninstall.mockReset();
   applyPluginUninstallDirectoryRemoval.mockReset();
-  uninstallPlugin.mockReset();
   updateNpmInstalledPlugins.mockReset();
   updateNpmInstalledHookPacks.mockReset();
+  mockHookInstallRecords = {};
   promptText.mockReset();
   promptYesNo.mockReset();
   installPluginFromGitSpec.mockReset();
@@ -839,6 +853,7 @@ export function resetPluginsCliTestState() {
     current: defaultRegistryIndex,
   });
   refreshPluginRegistry.mockResolvedValue(defaultRegistryIndex);
+  notifyGatewayPluginMetadataChanged.mockResolvedValue(true);
   applyExclusiveSlotSelection.mockImplementation((({ config }: { config: OpenClawConfig }) => ({
     config,
     warnings: [],
@@ -859,12 +874,6 @@ export function resetPluginsCliTestState() {
   applyPluginUninstallDirectoryRemoval.mockResolvedValue({
     directoryRemoved: false,
     warnings: [],
-  });
-  uninstallPlugin.mockResolvedValue({
-    ok: true,
-    config: {} as OpenClawConfig,
-    warnings: [],
-    actions: createEmptyUninstallActions(),
   });
   updateNpmInstalledPlugins.mockResolvedValue({
     outcomes: [],
@@ -920,3 +929,4 @@ export function resetPluginsCliTestState() {
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

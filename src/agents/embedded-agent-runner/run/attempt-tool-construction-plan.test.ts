@@ -75,6 +75,23 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ]);
   });
 
+  it("materializes host-required collector output through empty runtime allowlists", () => {
+    const tools = [{ name: "structured_output" }, { name: "read" }];
+    const toolsAllow = mergeForcedEmbeddedAttemptToolsAllow([], {
+      forceToolNames: ["structured_output"],
+    });
+
+    expect(toolsAllow).toEqual(["structured_output"]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, toolsAllow).map((tool) => tool.name)).toEqual([
+      "structured_output",
+    ]);
+    expect(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow })).toMatchObject({
+      constructTools: true,
+      includeCoreTools: true,
+      codingToolConstructionPlan: { includeOpenClawTools: true },
+    });
+  });
+
   it("normalizes explicit toolsAllow entries before filtering", () => {
     const tools = [{ name: "cron" }, { name: "read" }, { name: "message" }];
 
@@ -386,7 +403,29 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
+  it("materializes transcripts through the core factory", () => {
+    expectConstructionPlan(
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["transcripts"] }),
+      {
+        includeCoreTools: true,
+        coding: {
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      },
+    );
+  });
+
   it("keeps plugin-owned catalog tools on the plugin construction path", () => {
+    expectConstructionPlan(resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["canvas"] }), {
+      includeCoreTools: false,
+      coding: {
+        includeChannelTools: true,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+    });
     expectConstructionPlan(
       resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["browser"] }),
       {

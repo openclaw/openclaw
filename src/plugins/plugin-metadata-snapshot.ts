@@ -1,4 +1,3 @@
-// Builds plugin metadata snapshots for gateway and diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -24,6 +23,7 @@ import {
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -69,7 +69,6 @@ const MEMO_RELEVANT_ENV_KEYS = [
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
   "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
-  "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY",
   "OPENCLAW_HOME",
   "OPENCLAW_NIX_MODE",
   "OPENCLAW_STATE_DIR",
@@ -180,13 +179,7 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   preferPersisted?: boolean;
   stateDir?: string;
 }): Record<string, unknown> {
-  const disabledByEnv = params.env.OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY?.trim().toLowerCase();
-  const disabled =
-    params.preferPersisted === false ||
-    (Boolean(disabledByEnv) &&
-      disabledByEnv !== "0" &&
-      disabledByEnv !== "false" &&
-      disabledByEnv !== "no");
+  const disabled = params.preferPersisted === false;
   if (disabled) {
     return { disabled: true };
   }
@@ -547,6 +540,7 @@ function buildPluginMetadataOwnerMaps(
     setupProviders: freezeOwnerMap(setupProviders),
     commandAliases: freezeOwnerMap(commandAliases),
     contracts: freezeOwnerMap(contracts),
+    ...buildPluginMetadataProviderFacts(plugins),
   };
 }
 

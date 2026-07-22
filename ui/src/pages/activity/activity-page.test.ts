@@ -19,6 +19,7 @@ function gateway(): ApplicationContext["gateway"] {
   const snapshot: ApplicationGatewaySnapshot = {
     client: null,
     connected: false,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: null,
@@ -40,6 +41,7 @@ function staleEntry(): ActivityEntry {
     toolCallId: "stale",
     runId: "stale",
     toolName: "stale",
+    entryKind: "tool",
     status: "done",
     startedAt: 0,
     updatedAt: 0,

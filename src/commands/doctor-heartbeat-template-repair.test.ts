@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  analyzeHeartbeatTemplateForRepair,
   collectHeartbeatTemplateHealthFindings,
   maybeRepairHeartbeatTemplate,
 } from "./doctor-heartbeat-template-repair.js";
@@ -34,6 +33,13 @@ async function makeWorkspaceWithHeartbeat(content: string): Promise<{
   return { workspaceDir, heartbeatPath };
 }
 
+async function collectFindingsForContent(content: string) {
+  return collectHeartbeatTemplateHealthFindings(
+    { agents: { defaults: { workspace: "/tmp/openclaw-heartbeat-template-test" } } },
+    { readFile: async () => content },
+  );
+}
+
 describe("heartbeat template repair", () => {
   afterEach(async () => {
     mocks.note.mockReset();
@@ -42,13 +48,13 @@ describe("heartbeat template repair", () => {
     );
   });
 
-  it("recognizes the original prose docs-backed template as repairable", () => {
-    const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md
+  it("recognizes the original prose docs-backed template as repairable", async () => {
+    const findings = await collectFindingsForContent(`# HEARTBEAT.md
 
 Keep this file empty unless you want a tiny checklist. Keep it small.
 `);
 
-    expect(analysis.status).toBe("dirty-template");
+    expect(findings).toEqual([expect.objectContaining({ requirement: "legacy-template" })]);
   });
 
   it("keeps original prose templates with user tasks unchanged", async () => {
@@ -71,8 +77,8 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
     );
   });
 
-  it("recognizes the docs-backed heading plus fenced template as repairable", () => {
-    const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md Template
+  it("recognizes the docs-backed heading plus fenced template as repairable", async () => {
+    const findings = await collectFindingsForContent(`# HEARTBEAT.md Template
 
 \`\`\`markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
@@ -81,22 +87,22 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 \`\`\`
 `);
 
-    expect(analysis.status).toBe("dirty-template");
+    expect(findings).toEqual([expect.objectContaining({ requirement: "legacy-template" })]);
   });
 
-  it("recognizes the fenced docs-backed template as repairable", () => {
-    const analysis = analyzeHeartbeatTemplateForRepair(`\`\`\`markdown
+  it("recognizes the fenced docs-backed template as repairable", async () => {
+    const findings = await collectFindingsForContent(`\`\`\`markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
 # Add tasks below when you want the agent to check something periodically.
 \`\`\`
 `);
 
-    expect(analysis.status).toBe("dirty-template");
+    expect(findings).toEqual([expect.objectContaining({ requirement: "legacy-template" })]);
   });
 
-  it("recognizes the original docs-backed template as repairable", () => {
-    const analysis = analyzeHeartbeatTemplateForRepair(`\`\`\`markdown
+  it("recognizes the original docs-backed template as repairable", async () => {
+    const findings = await collectFindingsForContent(`\`\`\`markdown
 # Keep this file empty (or with only comments) to skip heartbeat API calls.
 
 # Add tasks below when you want the agent to check something periodically.
@@ -107,11 +113,11 @@ Keep this file empty unless you want a tiny checklist. Keep it small.
 - [Heartbeat config](/gateway/config-agents)
 `);
 
-    expect(analysis.status).toBe("dirty-template");
+    expect(findings).toEqual([expect.objectContaining({ requirement: "legacy-template" })]);
   });
 
-  it("recognizes the current docs page boilerplate template as repairable", () => {
-    const analysis = analyzeHeartbeatTemplateForRepair(`# HEARTBEAT.md template
+  it("recognizes the current docs page boilerplate template as repairable", async () => {
+    const findings = await collectFindingsForContent(`# HEARTBEAT.md template
 
 \`HEARTBEAT.md\` lives in the agent workspace. Keep the file empty, or with only Markdown comments and headings, when you want OpenClaw to skip heartbeat model calls.
 
@@ -130,11 +136,11 @@ Add short tasks below the comments only when you want the agent to check somethi
 - [Heartbeat config](/gateway/config-agents)
 `);
 
-    expect(analysis.status).toBe("dirty-template");
+    expect(findings).toEqual([expect.objectContaining({ requirement: "legacy-template" })]);
   });
 
-  it("ignores user-authored fenced content without the old template body", () => {
-    const analysis = analyzeHeartbeatTemplateForRepair(`tasks:
+  it("ignores user-authored fenced content without the old template body", async () => {
+    const findings = await collectFindingsForContent(`tasks:
   - name: status
     prompt: |
       \`\`\`yaml
@@ -142,7 +148,7 @@ Add short tasks below the comments only when you want the agent to check somethi
       \`\`\`
 `);
 
-    expect(analysis.status).toBe("clean");
+    expect(findings).toEqual([]);
   });
 
   it("keeps dirty templates with user tasks unchanged", async () => {
@@ -279,6 +285,46 @@ Add short tasks below the comments only when you want the agent to check somethi
     await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(cleanTemplate);
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("clean heartbeat template"),
+      "Doctor changes",
+    );
+  });
+
+  it("labels and repairs only the secondary agent with a stale template", async () => {
+    const main = await makeWorkspaceWithHeartbeat("# Main heartbeat task\n");
+    const secondary = await makeWorkspaceWithHeartbeat(`\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+`);
+    const cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: main.workspaceDir },
+          { id: "secondary", workspace: secondary.workspaceDir },
+        ],
+      },
+    };
+
+    const findings = await collectHeartbeatTemplateHealthFindings(cfg);
+
+    expect(findings).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining('Agent "secondary"'),
+        path: secondary.heartbeatPath,
+        target: "secondary",
+      }),
+    ]);
+
+    await maybeRepairHeartbeatTemplate({ cfg, shouldRepair: true });
+
+    await expect(fs.readFile(main.heartbeatPath, "utf-8")).resolves.toBe("# Main heartbeat task\n");
+    const cleanTemplate = await fs.readFile(
+      path.resolve("src", "agents", "templates", "HEARTBEAT.md"),
+      "utf-8",
+    );
+    await expect(fs.readFile(secondary.heartbeatPath, "utf-8")).resolves.toBe(cleanTemplate);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining('Agent "secondary"'),
       "Doctor changes",
     );
   });

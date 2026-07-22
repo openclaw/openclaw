@@ -1,6 +1,7 @@
+// @vitest-environment node
 // Control UI tests cover history merge behavior.
 import { describe, expect, it } from "vitest";
-import { preserveOptimisticTailMessages } from "./chat-history.ts";
+import { preserveOptimisticTailMessages } from "./history-merge.ts";
 
 describe("preserveOptimisticTailMessages", () => {
   it("keeps optimistic tail messages while history is stale", () => {
@@ -51,5 +52,23 @@ describe("preserveOptimisticTailMessages", () => {
         [persistedUser, streamedAssistant],
       ),
     ).toEqual([persistedUser, historyAssistant]);
+  });
+
+  it("keeps an idempotency-marked queued turn while history is stale", () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const materializedQueuedUser = {
+      role: "user",
+      content: [{ type: "text", text: "steered follow-up" }],
+      timestamp: 10,
+      __openclaw: { idempotencyKey: "steer-run:user" },
+    };
+
+    expect(
+      preserveOptimisticTailMessages([persistedUser], [persistedUser, materializedQueuedUser]),
+    ).toEqual([persistedUser, materializedQueuedUser]);
   });
 });

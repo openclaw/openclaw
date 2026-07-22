@@ -12,7 +12,9 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
@@ -279,6 +281,8 @@ export async function resolveReplyDirectives(params: {
           cfg,
           agentId,
           skillFilter,
+          sessionEntry: targetSessionEntry,
+          sessionKey,
         })
       : [];
   reserveSkillCommandNames({ reservedCommands, skillCommands });
@@ -503,7 +507,7 @@ export async function resolveReplyDirectives(params: {
     : undefined;
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
-    isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
+    isFastTestEnv: isFastTestRuntimeEnv(),
   });
 
   const useFastModelSelection =
@@ -552,6 +556,10 @@ export async function resolveReplyDirectives(params: {
           isHeartbeat: opts?.isHeartbeat === true,
         });
   } catch (error) {
+    if (error instanceof ModelSelectionLockedError) {
+      typing.cleanup();
+      return { kind: "reply", reply: { text: error.message } };
+    }
     if (!isSessionWorkStartInvalidatedError(error)) {
       throw error;
     }

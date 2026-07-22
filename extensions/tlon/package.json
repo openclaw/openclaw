@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.6.11",
+  "version": "2026.7.2",
   "description": "OpenClaw Tlon/Urbit channel plugin for chat workflows.",
   "repository": {
     "type": "git",
@@ -19,7 +19,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.6.11"
+    "openclaw": ">=2026.7.2"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -31,6 +31,9 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "tlon",
       "label": "Tlon",
@@ -42,6 +45,10 @@
       "quickstartAllowFrom": true,
       "cliAddOptions": [
         {
+          "flags": "--url <url>",
+          "description": "Channel setup URL"
+        },
+        {
           "flags": "--ship <ship>",
           "description": "Tlon ship name (~sampel-palnet)"
         },
@@ -51,11 +58,13 @@
         },
         {
           "flags": "--group-channels <list>",
-          "description": "Tlon group channels (comma-separated)"
+          "description": "Tlon group channels (comma-separated)",
+          "valueType": "list"
         },
         {
           "flags": "--dm-allowlist <list>",
-          "description": "Tlon DM allowlist (comma-separated ships)"
+          "description": "Tlon DM allowlist (comma-separated ships)",
+          "valueType": "list"
         },
         {
           "flags": "--auto-discover-channels",
@@ -73,10 +82,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.6.11"
+      "pluginApi": ">=2026.7.2"
     },
     "build": {
-      "openclawVersion": "2026.6.11"
+      "openclawVersion": "2026.7.2"
     },
     "release": {
       "bundleRuntimeDependencies": false,

@@ -88,7 +88,7 @@ struct ConfigSchemaForm: View {
                     if sortedKeys.isEmpty, self.mode == .channelQuick, self.isChannelRoot(path) {
                         self.renderChannelQuickEmptyState()
                     }
-                    if self.shouldRenderAdditionalProperties(schema, path: path, value: value) {
+                    if self.shouldRenderAdditionalProperties(schema, value: value) {
                         self.renderAdditionalProperties(schema, path: path, value: value)
                     }
                 })
@@ -98,8 +98,8 @@ struct ConfigSchemaForm: View {
             if self.isChannelQuickLeaf(path) {
                 return AnyView(
                     SettingsCardToggleRow(
-                        title: label ?? "Enabled",
-                        subtitle: help,
+                        title: label.map(SettingsTextValue.verbatim) ?? "Enabled",
+                        subtitle: help.map(SettingsTextValue.verbatim),
                         binding: self.boolBinding(path, defaultValue: schema.explicitDefault as? Bool)))
             }
             return AnyView(
@@ -121,9 +121,7 @@ struct ConfigSchemaForm: View {
             }
             return AnyView(
                 VStack(alignment: .leading, spacing: 6) {
-                    if let label {
-                        Text(label).font(.callout.weight(.semibold))
-                    }
+                    if let label { Text(label).font(.callout.weight(.semibold)) }
                     Text("Unsupported field type.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -154,9 +152,7 @@ struct ConfigSchemaForm: View {
         let sortedKeys = properties.keys.sorted { lhs, rhs in
             let orderA = hintForPath(path + [.key(lhs)], hints: store.configUiHints)?.order ?? 0
             let orderB = hintForPath(path + [.key(rhs)], hints: store.configUiHints)?.order ?? 0
-            if orderA != orderB {
-                return orderA < orderB
-            }
+            if orderA != orderB { return orderA < orderB }
             return lhs < rhs
         }
 
@@ -206,13 +202,10 @@ struct ConfigSchemaForm: View {
 
     private func shouldRenderAdditionalProperties(
         _ schema: ConfigSchemaNode,
-        path: ConfigPath,
         value: Any?) -> Bool
     {
         guard schema.allowsAdditionalProperties else { return false }
-        if self.mode != .channelQuick {
-            return true
-        }
+        if self.mode != .channelQuick { return true }
         guard let dict = value as? [String: Any] else { return false }
         let reserved = Set(schema.properties.keys)
         return dict.keys.contains { !reserved.contains($0) }
@@ -262,7 +255,7 @@ struct ConfigSchemaForm: View {
                 }
             }
 
-            if self.shouldRenderAdditionalProperties(schema, path: path, value: value) {
+            if self.shouldRenderAdditionalProperties(schema, value: value) {
                 self.renderAdditionalProperties(schema, path: path, value: value)
             }
         }
@@ -306,7 +299,10 @@ struct ConfigSchemaForm: View {
         subtitle: String?,
         @ViewBuilder control: () -> some View) -> some View
     {
-        SettingsCardRow(title: title ?? "Value", subtitle: subtitle) {
+        SettingsCardRow(
+            title: title.map(SettingsTextValue.verbatim) ?? "Value",
+            subtitle: subtitle.map(SettingsTextValue.verbatim))
+        {
             control()
         }
     }
@@ -341,9 +337,7 @@ struct ConfigSchemaForm: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                if let label {
-                    Text(label).font(.callout.weight(.semibold))
-                }
+                if let label { Text(label).font(.callout.weight(.semibold)) }
                 if let help {
                     Text(help)
                         .font(.caption)
@@ -379,9 +373,7 @@ struct ConfigSchemaForm: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                if let label {
-                    Text(label).font(.callout.weight(.semibold))
-                }
+                if let label { Text(label).font(.callout.weight(.semibold)) }
                 if let help {
                     Text(help)
                         .font(.caption)
@@ -420,9 +412,7 @@ struct ConfigSchemaForm: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 6) {
-                if let label {
-                    Text(label).font(.callout.weight(.semibold))
-                }
+                if let label { Text(label).font(.callout.weight(.semibold)) }
                 if let help {
                     Text(help)
                         .font(.caption)
@@ -450,9 +440,7 @@ struct ConfigSchemaForm: View {
         let items = value as? [Any] ?? []
         let itemSchema = schema.items
         VStack(alignment: .leading, spacing: 10) {
-            if let label {
-                Text(label).font(.callout.weight(.semibold))
-            }
+            if let label { Text(label).font(.callout.weight(.semibold)) }
             if let help {
                 Text(help)
                     .font(.caption)
@@ -544,9 +532,7 @@ struct ConfigSchemaForm: View {
     private func stringBinding(_ path: ConfigPath, defaultValue: String?) -> Binding<String> {
         Binding(
             get: {
-                if let value = store.configValue(at: path) as? String {
-                    return value
-                }
+                if let value = store.configValue(at: path) as? String { return value }
                 return defaultValue ?? ""
             },
             set: { newValue in
@@ -558,9 +544,7 @@ struct ConfigSchemaForm: View {
     private func boolBinding(_ path: ConfigPath, defaultValue: Bool?) -> Binding<Bool> {
         Binding(
             get: {
-                if let value = store.configValue(at: path) as? Bool {
-                    return value
-                }
+                if let value = store.configValue(at: path) as? Bool { return value }
                 return defaultValue ?? false
             },
             set: { newValue in
@@ -575,9 +559,7 @@ struct ConfigSchemaForm: View {
     {
         Binding(
             get: {
-                if let value = store.configValue(at: path) {
-                    return String(describing: value)
-                }
+                if let value = store.configValue(at: path) { return String(describing: value) }
                 guard let defaultValue else { return "" }
                 return isInteger ? String(Int(defaultValue)) : String(defaultValue)
             },

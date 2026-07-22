@@ -32,10 +32,13 @@ ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # Copy package.json files for workspace packages used by the install layer.
 # Manifest-only bundled plugins remain valid selections but need no workspace metadata.
-RUN --mount=type=bind,source=packages,target=/tmp/packages,readonly \
-    --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
-    --mount=type=bind,source=scripts/lib/docker-plugin-selection.mjs,target=/tmp/docker-plugin-selection.mjs,readonly \
-    mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
+# Use COPY because build-context bind mounts are unreliable across supported
+# Podman/Buildah hosts. Full trees stay in this disposable stage; later stages
+# receive only extracted manifests.
+COPY scripts/lib/docker-plugin-selection.mjs /tmp/docker-plugin-selection.mjs
+COPY packages /tmp/packages
+COPY ${OPENCLAW_BUNDLED_PLUGIN_DIR} /tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}
+RUN mkdir -p /out/packages "/out/${OPENCLAW_BUNDLED_PLUGIN_DIR}" && \
     for manifest in /tmp/packages/*/package.json; do \
       [ -f "$manifest" ] || continue; \
       pkg_dir="${manifest%/package.json}"; \
@@ -116,6 +119,10 @@ ENV GIT_COMMIT=${GIT_COMMIT} \
     OPENCLAW_BUILD_TIMESTAMP=${OPENCLAW_BUILD_TIMESTAMP}
 
 COPY . .
+
+# The build stage also backs non-root live-test containers. Build contexts preserve
+# host modes, so normalize readability before Node resolves workspace packages.
+RUN chmod -R a+rX /app
 
 # Normalize extension paths now so runtime COPY preserves safe modes
 # without adding a second full extensions layer.
@@ -256,6 +263,7 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
 # Legacy alias: OPENCLAW_DOCKER_APT_PACKAGES is still accepted as a fallback.
 ARG OPENCLAW_IMAGE_APT_PACKAGES
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
+ENV PATH="/home/node/.local/bin:${PATH}"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     packages="${OPENCLAW_IMAGE_APT_PACKAGES-$OPENCLAW_DOCKER_APT_PACKAGES}"; \
@@ -310,7 +318,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       # Require exactly one primary key (`pub` in --with-colons; subkeys use `sub`) so we
       # never pin the first fingerprint while apt trusts extra keys from the same file.
       # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
-      curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
+      curl -fsSL --connect-timeout 10 --max-time 120 \
+        https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
       docker_gpg_pub_count="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "pub" { c++ } END { print c+0 }')" && \
       if [ "$docker_gpg_pub_count" != "1" ]; then \

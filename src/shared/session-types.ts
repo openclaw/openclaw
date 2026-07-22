@@ -1,5 +1,7 @@
+import type { SessionCreatorIdentity } from "../../packages/gateway-protocol/src/schema/sessions.js";
+
 /** Agent identity fields returned by gateway session listing APIs. */
-export type GatewayAgentIdentity = {
+type GatewayAgentIdentity = {
   name?: string;
   theme?: string;
   emoji?: string;
@@ -8,7 +10,7 @@ export type GatewayAgentIdentity = {
 };
 
 /** Model summary returned for an agent/session row. */
-export type GatewayAgentModel = {
+type GatewayAgentModel = {
   primary?: string;
   fallbacks?: string[];
 };
@@ -17,7 +19,15 @@ export type GatewayAgentModel = {
 export type GatewayAgentRuntime = {
   id: string;
   fallback?: "openclaw" | "none";
-  source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
+  source:
+    | "env"
+    | "agent"
+    | "defaults"
+    | "model"
+    | "provider"
+    | "implicit"
+    | "session"
+    | "session-key";
 };
 
 /** Thinking-level option exposed to UI clients. */
@@ -26,9 +36,12 @@ export type GatewayThinkingLevelOption = {
   label: string;
 };
 
+export type GatewayAgentKind = "agent" | "system";
+
 /** Common agent row shape used by session list responses. */
 export type GatewayAgentRow = {
   id: string;
+  kind?: GatewayAgentKind;
   name?: string;
   identity?: GatewayAgentIdentity;
   workspace?: string;
@@ -50,6 +63,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   offset?: number;
   nextOffset?: number | null;
   hasMore?: boolean;
+  /** Complete creator facet for the filtered result, independent of pagination. */
+  creators?: SessionCreatorIdentity[];
   defaults: TDefaults;
   sessions: TRow[];
 };

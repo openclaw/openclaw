@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
@@ -20,7 +21,7 @@ import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { appendRegularFileSync } from "../infra/regular-file.js";
 import {
-  POSIX_OPENCLAW_TMP_DIR,
+  DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
 import { readLoggingConfig, shouldSkipMutatingLoggingConfigRead } from "./config.js";
@@ -34,13 +35,13 @@ import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
 
 function resolveDefaultLogDir(): string {
-  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : POSIX_OPENCLAW_TMP_DIR;
+  return canUseNodeFs() ? resolvePreferredOpenClawTmpDir() : DEFAULT_POSIX_TMP_ROOT;
 }
 
 function resolveDefaultLogFile(defaultLogDir: string): string {
   return canUseNodeFs()
     ? path.join(defaultLogDir, "openclaw.log")
-    : `${POSIX_OPENCLAW_TMP_DIR}/openclaw.log`;
+    : `${DEFAULT_POSIX_TMP_ROOT}/openclaw.log`;
 }
 
 export const DEFAULT_LOG_DIR = resolveDefaultLogDir();
@@ -471,12 +472,8 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   };
 }
 
-function isLogRedactionDisabled(): boolean {
-  return readLoggingConfig()?.redactSensitive === "off";
-}
-
 function redactLogRecordForTransport<T extends LogObj>(record: T): T {
-  return isLogRedactionDisabled() ? record : redactSecrets(record);
+  return redactSecrets(record);
 }
 
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
@@ -534,7 +531,7 @@ function resolveSettings(): ResolvedSettings {
     };
   }
 
-  const cfg: OpenClawConfig["logging"] | undefined =
+  const cfg: OpenClawConfig["logging"] | LoggerSettings | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
@@ -607,7 +604,10 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
       const structuredFields = buildStructuredFileLogFields(logObj as TsLogRecord);
       const record = {
         ...logObj,
-        _meta: withResolvedLogMetaHostname(logObj["_meta"], structuredFields.hostname),
+        _meta: withResolvedLogMetaHostname(
+          logObj["_meta"],
+          expectDefined(structuredFields.hostname, "structured log hostname"),
+        ),
         time,
         ...structuredFields,
         ...traceFields,
@@ -831,3 +831,4 @@ function rotateLogFile(file: string): boolean {
     return false;
   }
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -15,7 +15,10 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import {
+  buildMemorySystemPromptAddition,
+  prepareMemorySystemPromptAddition,
+} from "openclaw/plugin-sdk/core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -124,6 +127,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
   projection: CodexContextEngineThreadBootstrapProjection;
   dynamicToolsFingerprint: string;
+  legacyDynamicToolsFingerprint?: string;
 }): { project: boolean; reason: string } {
   const bindingProjection = params.startupBinding?.contextEngine?.projection;
   if (!params.startupBinding?.threadId || !bindingProjection) {
@@ -144,6 +148,7 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     !areCodexDynamicToolFingerprintsCompatible({
       previous: params.startupBinding.dynamicToolsFingerprint,
       next: params.dynamicToolsFingerprint,
+      nextLegacy: params.legacyDynamicToolsFingerprint,
     })
   ) {
     return { project: true, reason: "dynamic-tools-mismatch" };
@@ -168,6 +173,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
+  sandboxed?: boolean;
 }): Promise<CodexWorkspaceBootstrapContext> {
   try {
     const memoryToolsAvailable =
@@ -255,13 +261,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         turnScopedDeveloperInstructionFiles,
       ),
       memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
-        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+        ? await renderCodexWorkspaceMemoryCollaborationInstructions({
             files: memoryReferenceFiles,
             toolNames: params.memoryToolNames,
             memoryToolRouted: memoryToolsAvailable,
             citationsMode: params.params.config?.memory?.citations,
             agentId: params.params.agentId ?? params.sessionAgentId,
             agentSessionKey: params.sessionKey,
+            sandboxed: params.sandboxed,
           })
         : undefined,
       heartbeatCollaborationInstructions:
@@ -833,7 +840,7 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
  * Renders a memory-file reference that points Codex at memory tools instead of
  * embedding MEMORY.md contents.
  */
-export function renderCodexWorkspaceMemoryReference(params: {
+function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];
 }): string | undefined {
@@ -855,20 +862,22 @@ export function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+async function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   files: EmbeddedContextFile[];
   toolNames: readonly string[];
   memoryToolRouted: boolean;
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
-}): string | undefined {
+  sandboxed?: boolean;
+}): Promise<string | undefined> {
   const memoryRecallInstructions = params.memoryToolRouted
-    ? renderCodexMemoryRecallInstructions({
+    ? await renderCodexMemoryRecallInstructions({
         toolNames: params.toolNames,
         citationsMode: params.citationsMode,
         agentId: params.agentId,
         agentSessionKey: params.agentSessionKey,
+        sandboxed: params.sandboxed,
       })
     : undefined;
   const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
@@ -879,18 +888,20 @@ function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
   return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
 
-function renderCodexMemoryRecallInstructions(params: {
+async function renderCodexMemoryRecallInstructions(params: {
   toolNames: readonly string[];
   citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
   agentId?: string;
   agentSessionKey?: string;
-}): string | undefined {
+  sandboxed?: boolean;
+}): Promise<string | undefined> {
   const availableTools = new Set(params.toolNames);
-  const memoryPrompt = buildMemorySystemPromptAddition({
+  const memoryPrompt = await prepareMemorySystemPromptAddition({
     availableTools,
     citationsMode: params.citationsMode,
     agentId: params.agentId,
     agentSessionKey: params.agentSessionKey,
+    sandboxed: params.sandboxed,
   });
   if (!memoryPrompt) {
     // Memory recall policy belongs to the active memory plugin.
@@ -990,7 +1001,7 @@ function isSameCodexWorkspacePath(left: string, right: string): boolean {
  * Remaps bootstrap file paths from the resolved workspace to the effective Codex
  * workspace while preserving platform path separators.
  */
-export function remapCodexContextFilePath(params: {
+function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
@@ -1060,3 +1071,4 @@ function normalizeCodexDynamicToolName(name: string): string {
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

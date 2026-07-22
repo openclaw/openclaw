@@ -23,7 +23,7 @@ When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate in
 - Default: `~/.openclaw/workspace`
 - If `OPENCLAW_PROFILE` is set and not `"default"`, the default becomes `~/.openclaw/workspace-<profile>`.
 - `OPENCLAW_WORKSPACE_DIR` overrides both of the above when set.
-- Non-default agents (`agents.list[]`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
+- Non-default agents (`agents.entries.*`) without an explicit workspace resolve to `<state-dir>/workspace-<agentId>`, not the shared default workspace.
 
 Override in `~/.openclaw/openclaw.json`:
 
@@ -37,7 +37,7 @@ Override in `~/.openclaw/openclaw.json`:
 }
 ```
 
-Per-agent override: `agents.list[].workspace`.
+Per-agent override: `agents.entries.*.workspace`.
 
 `openclaw onboard`, `openclaw configure`, or `openclaw setup` create the workspace and seed the bootstrap files if they are missing.
 
@@ -111,13 +111,21 @@ If a bootstrap file is missing, OpenClaw injects a "missing file" marker into th
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
+- `~/.openclaw/state/openclaw.sqlite` (shared workspace setup state and attestations)
 - `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (model auth profiles: OAuth + API keys)
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (session rows, transcripts, and per-agent runtime state)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
-- `~/.openclaw/agents/<agentId>/sessions/` (session transcripts + metadata)
+- `~/.openclaw/agents/<agentId>/sessions/` (legacy migration sources and archive/support artifacts)
 - `~/.openclaw/skills/` (managed skills)
 
 If you need to migrate sessions or config, copy them separately and keep them out of version control.
+
+Older OpenClaw releases wrote `openclaw-workspace-state.json`,
+`.openclaw/workspace-state.json`, and `.attested` workspace sidecars. Current
+runtime uses only the shared SQLite database for that state. If Doctor reports
+one of these files, run `openclaw doctor --fix`; Doctor imports valid legacy
+state and deletes a source only after verifying the database rows.
 
 ## Git backup (recommended, private)
 
@@ -217,13 +225,15 @@ Suggested `.gitignore` starter:
     Run `openclaw setup --workspace <path>` to seed any missing files.
   </Step>
   <Step title="Copy sessions (optional)">
-    If you need sessions, copy `~/.openclaw/agents/<agentId>/sessions/` from the old machine separately.
+    If you need sessions, copy `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    from the old machine separately. Copy `~/.openclaw/agents/<agentId>/sessions/`
+    only when you also need legacy migration inputs or archive/support artifacts.
   </Step>
 </Steps>
 
 ## Advanced notes
 
-- Multi-agent routing can use different workspaces per agent via `agents.list[].workspace`. See [Channel routing](/channels/channel-routing) for routing configuration.
+- Multi-agent routing can use different workspaces per agent via `agents.entries.*.workspace`. See [Channel routing](/channels/channel-routing) for routing configuration.
 - If `agents.defaults.sandbox` is enabled, non-main sessions can use per-session sandbox workspaces under `agents.defaults.sandbox.workspaceRoot`.
 
 ## Related

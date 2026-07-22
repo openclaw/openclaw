@@ -7,12 +7,16 @@ import {
   type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/agent-tools.before-tool-call.js";
+import {
+  consumeTrackedToolExecutionStarted,
+  resetAdjustedParamsByToolCallIdForTests,
+} from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
@@ -64,6 +68,7 @@ afterEach(() => {
   resolvePluginToolsMock.mockReset();
   resolvePluginToolsMock.mockReturnValue([]);
   routeLogsToStderrMock.mockReset();
+  resetAdjustedParamsByToolCallIdForTests();
   resetGlobalHookRunner();
 });
 
@@ -86,6 +91,41 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
 }
 
 describe("plugin tools MCP server", () => {
+  it("passes the managed ACP session agent into plugin tool factories", async () => {
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+    const runtimeRegistry = createMockPluginRegistry([]);
+    ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
+    const config = { plugins: { enabled: true } } as never;
+
+    resolvePluginToolsForMcp({
+      config,
+      agentSessionKey: "agent:research:acp:session-1",
+    });
+
+    const expectedContext = {
+      config,
+      agentId: "research",
+      sessionKey: "agent:research:acp:session-1",
+    };
+    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+      context: expectedContext,
+    });
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ context: expectedContext, runtimeRegistry }),
+    );
+  });
+
+  it("rejects a non-agent session identity from the managed bridge", async () => {
+    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+
+    expect(() =>
+      resolvePluginToolsForMcp({
+        config: { plugins: { enabled: true } } as never,
+        agentSessionKey: "research-session",
+      }),
+    ).toThrow("must be a canonical agent session key");
+  });
+
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
     const runtimeRegistry = createMockPluginRegistry([]);
@@ -175,12 +215,48 @@ describe("plugin tools MCP server", () => {
     const executeCall = requireFirstMockCall(execute.mock.calls, "plugin tool execute");
     const requestId = executeCall[0];
     expect(typeof requestId).toBe("string");
-    expect((requestId as string).startsWith("mcp-")).toBe(true);
-    expect(Number.isSafeInteger(Number((requestId as string).slice("mcp-".length)))).toBe(true);
+    expect(requestId).toMatch(
+      /^mcp-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
     expect(executeCall[1]).toEqual({ query: "remember this" });
     expect(executeCall[2]).toBeUndefined();
     expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
+  });
+
+  it("uses unique ids and releases execution tracking after repeated direct MCP calls", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    const executeSuccess = vi.fn().mockResolvedValue({ content: "Stored." });
+    const executeFailure = vi.fn().mockRejectedValue(new Error("unavailable"));
+    const handlers = createPluginToolsMcpHandlers([
+      {
+        name: "memory_recall",
+        description: "Recall stored memory",
+        parameters: { type: "object", properties: {} },
+        execute: executeSuccess,
+      } as unknown as AnyAgentTool,
+      {
+        name: "memory_forget",
+        description: "Forget stored memory",
+        parameters: { type: "object", properties: {} },
+        execute: executeFailure,
+      } as unknown as AnyAgentTool,
+    ]);
+
+    for (let index = 0; index < 32; index += 1) {
+      await handlers.callTool({ name: "memory_recall", arguments: { index } });
+      await handlers.callTool({ name: "memory_forget", arguments: { index } });
+    }
+
+    expect(executeSuccess).toHaveBeenCalledTimes(32);
+    expect(executeFailure).toHaveBeenCalledTimes(32);
+    const toolCallIds = [...executeSuccess.mock.calls, ...executeFailure.mock.calls].map(
+      ([toolCallId]) => String(toolCallId),
+    );
+    expect(new Set(toolCallIds).size).toBe(toolCallIds.length);
+    for (const toolCallId of toolCallIds) {
+      expect(consumeTrackedToolExecutionStarted(toolCallId)).toBeUndefined();
+    }
   });
 
   it("serializes source-shaped image tool content with pinned MCP image blocks", async () => {

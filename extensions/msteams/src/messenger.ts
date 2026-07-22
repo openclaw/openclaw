@@ -110,6 +110,7 @@ export function buildConversationReference(
   if (!conversationId) {
     throw new Error("Invalid stored reference: missing conversation.id");
   }
+  // Legacy imported rows may only carry `bot`; see StoredConversationReference.bot.
   const agent = ref.agent ?? ref.bot ?? undefined;
   if (agent == null || !agent.id) {
     throw new Error("Invalid stored reference: missing agent.id");
@@ -274,7 +275,7 @@ export function renderReplyPayloadsToMessages(
 
 import { AI_GENERATED_ENTITY } from "./ai-entity.js";
 
-export async function buildActivity(
+async function buildActivity(
   msg: MSTeamsRenderedMessage,
   conversationRef: StoredConversationReference,
   tokenProvider?: MSTeamsAccessTokenProvider,

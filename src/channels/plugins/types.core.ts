@@ -19,13 +19,14 @@ import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
+import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
 
 export type { ChannelId } from "./channel-id.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
 
-export type ChannelExposure = {
+type ChannelExposure = {
   configured?: boolean;
   setup?: boolean;
   docs?: boolean;
@@ -94,51 +95,68 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-/** Shared setup input bag used by CLI, onboarding, and setup adapters. */
-export type ChannelSetupInput = {
+type ChannelSetupEnvelope = {
   name?: string;
   token?: string;
-  privateKey?: string;
   tokenFile?: string;
-  secret?: string;
-  secretFile?: string;
-  botToken?: string;
-  appToken?: string;
-  signalNumber?: string;
-  cliPath?: string;
-  dbPath?: string;
-  service?: "imessage" | "sms" | "auto";
-  region?: string;
-  authDir?: string;
-  httpUrl?: string;
-  httpHost?: string;
-  httpPort?: string;
-  webhookPath?: string;
-  webhookUrl?: string;
-  audienceType?: string;
-  audience?: string;
   useEnv?: boolean;
-  homeserver?: string;
-  dangerouslyAllowPrivateNetwork?: boolean;
-  /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
-  allowPrivateNetwork?: boolean;
-  proxy?: string;
+  defaultTo?: string;
+  allowFrom?: string[];
+};
+
+/**
+ * Compatibility fields with known published readers in the 2026-07-22 registry sweep.
+ * Each field is deleted as soon as no published plugin reads it; no version boundary is needed.
+ */
+type DeprecatedChannelSetupFields = {
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  privateKey?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  secret?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  botToken?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  appToken?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  signingSecret?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  mode?: "socket" | "http" | "relay";
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  cliPath?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  authDir?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  httpUrl?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  httpPort?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  webhookPath?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
+  webhookUrl?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   userId?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   accessToken?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   password?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   deviceName?: string;
-  avatarUrl?: string;
-  initialSyncLimit?: number;
-  profile?: string;
-  ship?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   url?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   baseUrl?: string;
-  relayUrls?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   code?: string;
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   groupChannels?: string[];
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   dmAllowlist?: string[];
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   autoDiscoverChannels?: boolean;
 };
+
+/** Generic setup envelope used by CLI, onboarding, and channel-owned setup adapters. */
+export type ChannelSetupInput = ChannelSetupEnvelope & DeprecatedChannelSetupFields;
 
 export type ChannelStatusIssue = {
   channel: ChannelId;
@@ -178,8 +196,6 @@ export type ChannelMeta = {
   systemImage?: string;
   markdownCapable?: boolean;
   exposure?: ChannelExposure;
-  showConfigured?: boolean;
-  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
@@ -221,18 +237,21 @@ export type ChannelAccountSnapshot = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
   botTokenStatus?: string;
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  identity?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;
@@ -284,7 +303,7 @@ export type ChannelGroupContext = {
  * one here. Adding a new entry requires extending the host transcoder
  * recipe table in lockstep so a typed declaration cannot silently no-op.
  */
-export type PreferredAudioFileFormat = "caf";
+type PreferredAudioFileFormat = "caf";
 
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
@@ -365,19 +384,19 @@ export type ChannelStreamingAdapter = {
 // their side and cast at the boundary.
 export type ChannelStructuredComponents = unknown[];
 
-export type ChannelCrossContextPresentationFactory = (params: {
+type ChannelCrossContextPresentationFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) => MessagePresentation;
 
-export type ChannelReplyTransport = {
+type ChannelReplyTransport = {
   replyToId?: string | null;
   threadId?: string | number | null;
 };
 
-export type ChannelFocusedBindingContext = {
+type ChannelFocusedBindingContext = {
   conversationId: string;
   parentConversationId?: string;
   placement: "current" | "child";
@@ -474,6 +493,8 @@ export type ChannelThreadingContext = {
 
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
+  /** Trusted normalized conversation kind for the active inbound turn. */
+  currentChatType?: ChatType;
   /** Routable messaging target when it differs from the platform-native channel id. */
   currentMessagingTarget?: string;
   currentGraphChannelId?: string;
@@ -500,6 +521,12 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
+  directTargetStyle?: "user-prefixed";
+  /** Equality rule for ids carried by prefixed outbound targets. */
+  targetIdComparison?: "case-sensitive" | "lowercase";
+  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -669,7 +696,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
-  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+  inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];
@@ -693,7 +720,7 @@ export type ChannelDirectoryEntry = {
   raw?: unknown;
 };
 
-export type ChannelMessageActionName = ChannelMessageActionNameFromList;
+type ChannelMessageActionName = ChannelMessageActionNameFromList;
 
 /** Execution context passed to channel-owned actions on the shared `message` tool. */
 export type ChannelMessageActionContext = {
@@ -714,6 +741,11 @@ export type ChannelMessageActionContext = {
   requesterSenderId?: string | null;
   /** Trusted owner identity bit from command/channel-action auth. */
   senderIsOwner?: boolean;
+  /**
+   * Server-owned origin for this operation. Missing values are delegated.
+   * Plugins must use it only for conversation-read visibility policy.
+   */
+  conversationReadOrigin?: ConversationReadInvocationOrigin;
   sessionKey?: string | null;
   sessionId?: string | null;
   inboundEventKind?: InboundEventKind;
@@ -740,11 +772,13 @@ export type ChannelToolSend = {
   threadSuppressed?: boolean;
 };
 
-export type ChannelMessagePreparedSendPayloadContext = {
+type ChannelMessagePreparedSendPayloadContext = {
   ctx: ChannelMessageActionContext;
   to: string;
   payload: ReplyPayload;
   replyToId?: string | null;
+  /** Preserve caller intent when plugins translate reply ids into durable payloads. */
+  replyToIdSource?: "explicit" | "implicit";
   threadId?: string | number | null;
 };
 
@@ -777,6 +811,15 @@ export type ChannelMessageActionAdapter = {
         deliveryTargetAliases?: string[];
         /** Convert typed owner fields such as chatId into the canonical shared target shape. */
         resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
+        /**
+         * Prove that provider-native aliases name the trusted current conversation.
+         * Core consults this only for host-owned bundled registrations.
+         */
+        matchesCurrentConversation?: (params: {
+          args: Record<string, unknown>;
+          accountId: string;
+          toolContext: ChannelThreadingToolContext;
+        }) => boolean;
       }
     >
   >;

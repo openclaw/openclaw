@@ -108,7 +108,7 @@ When a run is already active, inbound messages steer into it by default. `messag
 | `collect`         | Batch compatible messages into one later turn.      |
 | `interrupt`       | Abort the active run, then start the newest prompt. |
 
-Defaults: `messages.queue.debounceMs` is 500ms (applies to steer, followup, and collect batching alike), `messages.queue.cap` is 20 queued messages, and `messages.queue.drop` is `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
+The queue uses a built-in 500ms debounce for steer, followup, and collect batching. `messages.queue.cap` defaults to 20 queued messages, and `messages.queue.drop` defaults to `summarize` (`old` and `new` are also available). Configure per-channel overrides via `messages.queue.byChannel` and `messages.queue.debounceMsByChannel`.
 
 Details: [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
@@ -125,7 +125,7 @@ Block streaming sends partial replies as the model produces text blocks; chunkin
 - `agents.defaults.blockStreamingChunk` (`minChars|maxChars|breakPreference`)
 - `agents.defaults.blockStreamingCoalesce` (idle-based batching)
 - `agents.defaults.humanDelay` (human-like pause between block replies)
-- Channel overrides: `*.blockStreaming` and `*.blockStreamingCoalesce` (block streaming is off unless `*.blockStreaming` is explicitly set to `true`, on every channel including Telegram).
+- Channel overrides: `*.streaming.block.enabled` and `*.streaming.block.coalesce` on bundled channels; stale flat keys are migrated by `openclaw doctor --fix`. Block streaming is off unless explicitly enabled, on every channel including Telegram. QQ Bot is the exception: it has no `streaming.block` keys and streams block replies unless `channels.qqbot.streaming.mode` is `"off"`.
 
 Details: [Streaming + chunking](/concepts/streaming).
 
@@ -139,7 +139,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/ref
 
 ## Prefixes, threading, and replies
 
-- Outbound prefix cascade: `messages.responsePrefix`, `channels.<channel>.responsePrefix`, `channels.<channel>.accounts.<id>.responsePrefix`. WhatsApp also has `channels.whatsapp.messagePrefix` for an inbound prefix.
+- Outbound prefixes live at `channels.<channel>.responsePrefix` and `channels.<channel>.accounts.<id>.responsePrefix`. Account values win. Doctor copies the global fallback into configured channel blocks when those canonical fields are unset; `messages.responsePrefix` remains as a fallback for implicit and custom channels.
 - Reply threading via `replyToMode` and per-channel defaults.
 
 Details: [Configuration](/gateway/config-agents#messages) and channel docs.

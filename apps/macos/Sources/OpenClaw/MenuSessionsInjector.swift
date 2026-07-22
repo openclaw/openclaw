@@ -27,7 +27,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
     private var cachedUsageSummary: GatewayUsageSummary?
-    private var cachedUsageErrorText: String?
     private var usageCacheUpdatedAt: Date?
     private let usageRefreshIntervalSeconds: TimeInterval = 30
     private var cachedCostSummary: GatewayCostUsageSummary?
@@ -326,7 +325,7 @@ extension MenuSessionsInjector {
 
             if rows.isEmpty {
                 menu.insertItem(
-                    self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
+                    self.makeMessageItem(text: "No active threads", symbolName: "minus", width: width),
                     at: cursor)
                 cursor += 1
             } else {
@@ -349,7 +348,7 @@ extension MenuSessionsInjector {
             headerItem.tag = self.tag
             headerItem.isEnabled = false
             let statusText = isConnected
-                ? (self.cachedErrorText ?? "Loading sessions…")
+                ? (self.cachedErrorText ?? "Loading threads…")
                 : self.controlChannelStatusText(for: channelState)
             headerItem.view = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
@@ -363,7 +362,7 @@ extension MenuSessionsInjector {
             if !isConnected {
                 menu.insertItem(
                     self.makeMessageItem(
-                        text: "Connect the gateway to see sessions",
+                        text: "Connect the gateway to see threads",
                         symbolName: "bolt.slash",
                         width: width),
                     at: cursor)
@@ -394,30 +393,20 @@ extension MenuSessionsInjector {
         let now = Date()
         let mainKey = self.mainSessionKey
         return snapshot.rows.filter { row in
-            if row.key == "main", mainKey != "main" {
-                return false
-            }
-            if row.key == mainKey {
-                return true
-            }
+            if row.key == "main", mainKey != "main" { return false }
+            if row.key == mainKey { return true }
             guard let updatedAt = row.updatedAt else { return false }
             return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
         }.sorted { lhs, rhs in
-            if lhs.key == mainKey {
-                return true
-            }
-            if rhs.key == mainKey {
-                return false
-            }
+            if lhs.key == mainKey { return true }
+            if rhs.key == mainKey { return false }
             return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
         }
     }
 
     private func sessionsSubtitle(count: Int) -> String {
-        if count == 1 {
-            return "1 session · 24h"
-        }
-        return "\(count) sessions · 24h"
+        if count == 1 { return "1 thread · 24h" }
+        return "\(count) threads · 24h"
     }
 
     private func insertUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
@@ -537,20 +526,16 @@ extension MenuSessionsInjector {
 
     private var isControlChannelConnected: Bool {
         #if DEBUG
-        if let override = self.testControlChannelConnected {
-            return override
-        }
+        if let override = self.testControlChannelConnected { return override }
         #endif
-        if case .connected = ControlChannel.shared.state {
-            return true
-        }
+        if case .connected = ControlChannel.shared.state { return true }
         return false
     }
 
     private func controlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
         switch state {
         case .connected:
-            "Loading sessions…"
+            "Loading threads…"
         case .connecting:
             "Connecting…"
         case let .degraded(message):
@@ -791,7 +776,6 @@ extension MenuSessionsInjector {
             self.cachedUsageSummary = try await UsageLoader.loadSummary()
         } catch {
             self.cachedUsageSummary = nil
-            self.cachedUsageErrorText = nil
         }
         self.usageCacheUpdatedAt = Date()
     }
@@ -821,12 +805,8 @@ extension MenuSessionsInjector {
 
     private func compactUsageError(_ error: Error) -> String {
         let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        if message.isEmpty {
-            return "Usage unavailable"
-        }
-        if message.count > 90 {
-            return "\(message.prefix(87))…"
-        }
+        if message.isEmpty { return "Usage unavailable" }
+        if message.count > 90 { return "\(message.prefix(87))…" }
         return message
     }
 
@@ -836,10 +816,10 @@ extension MenuSessionsInjector {
             case .gatewayUnavailable:
                 return "No connection to gateway"
             case .decodeFailed:
-                return "Sessions unavailable"
+                return "Threads unavailable"
             }
         }
-        return "Sessions unavailable"
+        return "Threads unavailable"
     }
 
     private static func menuStatusText(_ text: String) -> String {
@@ -1243,17 +1223,11 @@ extension MenuSessionsInjector {
     private func sortedNodeEntries() -> [NodeInfo] {
         let entries = self.nodesStore.nodes.filter { $0.isConnected || $0.isPaired }
         return entries.sorted { lhs, rhs in
-            if lhs.isConnected != rhs.isConnected {
-                return lhs.isConnected
-            }
-            if lhs.isPaired != rhs.isPaired {
-                return lhs.isPaired
-            }
+            if lhs.isConnected != rhs.isConnected { return lhs.isConnected }
+            if lhs.isPaired != rhs.isPaired { return lhs.isPaired }
             let lhsName = NodeMenuEntryFormatter.primaryName(lhs).lowercased()
             let rhsName = NodeMenuEntryFormatter.primaryName(rhs).lowercased()
-            if lhsName == rhsName {
-                return lhs.nodeId < rhs.nodeId
-            }
+            if lhsName == rhsName { return lhs.nodeId < rhs.nodeId }
             return lhsName < rhsName
         }
     }
@@ -1307,9 +1281,8 @@ extension MenuSessionsInjector {
         self.cacheUpdatedAt = Date()
     }
 
-    func setTestingUsageSummary(_ summary: GatewayUsageSummary?, errorText: String? = nil) {
+    func setTestingUsageSummary(_ summary: GatewayUsageSummary?) {
         self.cachedUsageSummary = summary
-        self.cachedUsageErrorText = errorText
         self.usageCacheUpdatedAt = Date()
     }
 
@@ -1325,10 +1298,6 @@ extension MenuSessionsInjector {
 
     func testingControlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
         self.controlChannelStatusText(for: state)
-    }
-
-    func testingMenuStatusText(_ text: String) -> String {
-        Self.menuStatusText(text)
     }
 
     func testingFindInsertIndex(in menu: NSMenu) -> Int? {

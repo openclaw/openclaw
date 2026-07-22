@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -182,29 +184,57 @@ describe("resolveConversationCapabilityProfile", () => {
     expect(profile.policy.explicitToolOverrideAllowlist).toEqual(["pdf"]);
   });
 
-  it("keeps inherited subagent grants out of explicit overrides", () => {
-    const storePath = path.join(
-      os.tmpdir(),
-      `openclaw-capability-profile-inherited-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-    );
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        "agent:main:subagent:limited": {
-          sessionId: "limited-session",
-          updatedAt: Date.now(),
-          spawnDepth: 1,
-          subagentRole: "orchestrator",
-          subagentControlScope: "children",
-          inheritedToolAllow: ["image_generate"],
+  it("adds runtime tools without replacing the configured tool surface", () => {
+    const profile = resolveConversationCapabilityProfile({
+      config: {
+        tools: {
+          profile: "coding",
+          deny: ["workboard_block"],
         },
-      }),
-    );
+      },
+      runtimePluginToolGrant: {
+        pluginId: "workboard",
+        toolNames: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
+      },
+    });
+
+    expect(profile.policy.profileAlsoAllow).toEqual(["workboard_heartbeat", "workboard_complete"]);
+    expect(profile.policy.providerProfileAlsoAllow).toEqual([
+      "workboard_heartbeat",
+      "workboard_complete",
+    ]);
+    expect(profile.policy.explicitToolAllowlist).toEqual(expect.arrayContaining(["read", "exec"]));
+    expect(profile.policy.explicitToolAllowlist).not.toContain("workboard_heartbeat");
+    expect(profile.policy.explicitToolOverrideAllowlist).toEqual([]);
+    expect(profile.policy.explicitToolDenylist).toEqual(["workboard_block"]);
+    expect(profile.policy.runtimePluginToolGrant).toEqual({
+      pluginId: "workboard",
+      toolNames: ["workboard_heartbeat", " workboard_complete ", "workboard_heartbeat"],
+    });
+    expect(profile.policy.inheritancePolicies).not.toContainEqual({
+      allow: ["workboard_heartbeat", "workboard_complete"],
+    });
+  });
+
+  it("keeps inherited subagent grants out of explicit overrides", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-capability-profile-"));
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:limited";
+    await replaceSessionEntry({ storePath, sessionKey }, {
+      sessionId: "limited-session",
+      updatedAt: Date.now(),
+      spawnDepth: 1,
+      subagentRole: "orchestrator",
+      subagentControlScope: "children",
+      spawnedBy: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
+      inheritedToolAllow: ["image_generate"],
+    } as SessionEntry);
 
     try {
       const profile = resolveConversationCapabilityProfile({
         config: { session: { store: storePath } },
-        sessionKey: "agent:main:subagent:limited",
+        sessionKey,
         agentId: "main",
         modelProvider: "ollama",
         modelId: "qwen3.5:9b",
@@ -212,9 +242,39 @@ describe("resolveConversationCapabilityProfile", () => {
 
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+      expect(profile.policy.delegated).toBe(true);
+      expect(profile.policy.requesterPolicySource).toBe("persisted-child");
     } finally {
-      fs.rmSync(storePath, { force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps runtime allowlists local unless the caller opts into inheritance", () => {
+    const localRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    });
+
+    expect(localRuntimeProfile.policy.explicitToolAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.explicitToolOverrideAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.runtimeToolPolicyForInheritance).toBeUndefined();
+
+    const inheritedRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+      inheritRuntimeToolAllowlist: true,
+    });
+
+    expect(inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance).toEqual({
+      allow: ["sessions_spawn", "memory_search"],
+    });
+    expect(inheritedRuntimeProfile.policy.inheritancePolicies).toContain(
+      inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance,
+    );
   });
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {

@@ -17,7 +17,11 @@ if [[ "$scope" != "ios" ]]; then
   swiftformat --lint apps/macos/Sources \
     --config config/swiftformat \
     --exclude '**/OpenClawProtocol'
-  swiftformat --lint apps/macos-mlx-tts/Sources apps/swabble/Sources \
+  swiftformat --lint \
+    apps/macos-mlx-tts/Sources \
+    apps/shared/OpenClawKit/Sources/OpenClawNativeState \
+    apps/shared/OpenClawMLXTTSProtocol/Sources \
+    apps/swabble/Sources \
     --config config/swiftformat
 fi
 
@@ -30,6 +34,6 @@ node scripts/ios-write-swift-filelist.mjs
   cd apps/ios
   swiftformat --lint \
     --config ../../config/swiftformat \
-    --unexclude "$PWD/Sources,$PWD/ShareExtension,$PWD/ActivityWidget,$PWD/WatchApp,$PWD/../shared/OpenClawKit/Sources/OpenClawChatUI,$PWD/../shared/OpenClawKit/Sources/OpenClawKit,$PWD/../shared/OpenClawKit/Sources/OpenClawProtocol,$PWD/../swabble/Sources/SwabbleKit" \
+    --unexclude "$PWD/Sources,$PWD/ShareExtension,$PWD/ActivityWidget,$PWD/WatchApp,$PWD/../shared/OpenClawKit/Sources/OpenClawChatUI,$PWD/../shared/OpenClawKit/Sources/OpenClawKit,$PWD/../shared/OpenClawKit/Sources/OpenClawNativeState,$PWD/../shared/OpenClawKit/Sources/OpenClawProtocol,$PWD/../swabble/Sources/SwabbleKit" \
     --filelist SwiftSources.input.xcfilelist
 )

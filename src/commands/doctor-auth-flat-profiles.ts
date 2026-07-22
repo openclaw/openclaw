@@ -1198,8 +1198,29 @@ export async function maybeRepairLegacyFlatAuthProfileStores(params: {
 
   for (const entry of legacyStores) {
     try {
+      const existing = loadPersistedAuthProfileStore(entry.agentDir) ?? {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+      };
+      const importedProfileIds = new Set(Object.keys(entry.store.profiles));
+      const merged = mergeImportedAuthProfiles({
+        store: { ...existing, version: Math.max(existing.version, entry.store.version) },
+        profiles: entry.store.profiles,
+        existingProfileIds: new Set(Object.keys(existing.profiles)),
+      });
       const backupPath = backupAuthProfileStore(entry.authPath, now);
-      saveAuthProfileStore(entry.store, entry.agentDir, { syncExternalCli: false });
+      saveAuthProfileStore(merged, entry.agentDir, { syncExternalCli: false });
+      const verificationFailure = formatMissingAuthProfileSqliteVerification({
+        expected: merged,
+        importedProfileIds,
+        loaded: loadPersistedAuthProfileStore(entry.agentDir),
+      });
+      if (verificationFailure) {
+        result.warnings.push(
+          `Left auth profile JSON in place for ${shortenHomePath(entry.authPath)} because SQLite verification did not find ${verificationFailure}.`,
+        );
+        continue;
+      }
       fs.unlinkSync(entry.authPath);
       result.changes.push(
         `Migrated ${shortenHomePath(entry.authPath)} to the SQLite auth profile store (backup: ${shortenHomePath(backupPath)}).`,
@@ -1759,3 +1780,4 @@ export async function maybeRepairOpenAICodexAuthProfileStores(params: {
   clearRuntimeAuthProfileStoreSnapshots();
   return result;
 }
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

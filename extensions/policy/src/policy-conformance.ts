@@ -334,6 +334,8 @@ function baselineRuleIsNoOp(metadata: PolicyRuleMetadata, baseline: unknown): bo
     case "exact-list":
     case "ordered-string":
       return false;
+    case "routing-probes":
+      return policyRuleListIsEmpty(baseline, metadata);
   }
   return false;
 }
@@ -368,6 +370,8 @@ function policyRuleValueIsValid(metadata: PolicyRuleMetadata, value: unknown): b
           entry.trim() !== "" &&
           policyStringIsAllowed(metadata, entry),
       );
+    case "routing-probes":
+      return Array.isArray(value);
   }
   return false;
 }
@@ -424,6 +428,9 @@ function policyRuleListIsEmpty(value: unknown, metadata: PolicyRuleMetadata): bo
     return false;
   }
   if (metadata.valueType === "channel-provider-deny-rules") {
+    return value.length === 0;
+  }
+  if (metadata.valueType === "routing-probes") {
     return value.length === 0;
   }
   return value.length === 0;
@@ -573,8 +580,12 @@ function normalizeSelectorValues(
 }
 
 function scopedPolicyValue(overlay: Record<string, unknown>, path: readonly string[]): unknown {
-  const scopedRoot = path[0] === "agents" ? overlay.agents : overlay[path[0]];
-  return getPolicyPath(scopedRoot, path.slice(1));
+  const [root, ...remainingPath] = path;
+  if (!root) {
+    return undefined;
+  }
+  const scopedRoot = root === "agents" ? overlay.agents : overlay[root];
+  return getPolicyPath(scopedRoot, remainingPath);
 }
 
 function getPolicyPath(value: unknown, path: readonly string[]): unknown {

@@ -4,9 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
-import { withAudioFixture } from "./runner.test-utils.js";
+import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
+import { createSafeAudioFixtureBuffer, withAudioFixture } from "./runner.test-utils.js";
+import type { MediaAttachment } from "./types.js";
 
 const runExecMock = vi.hoisted(() => vi.fn());
 
@@ -83,18 +86,26 @@ function requireFirstRunExecCall(): unknown[] {
   return call;
 }
 
+function requireFirstAttachment(media: MediaAttachment[]): MediaAttachment {
+  const attachment = media[0];
+  if (!attachment) {
+    throw new Error("expected media attachment");
+  }
+  return attachment;
+}
+
 async function runAudioEntry(params: {
   command: string;
   args: string[];
 }): Promise<Awaited<ReturnType<typeof runCliEntry>>> {
   let result: Awaited<ReturnType<typeof runCliEntry>> = null;
-  await withAudioFixture(`openclaw-cli-${params.command}`, async ({ ctx, cache }) => {
+  await withAudioFixture(`openclaw-cli-${params.command}`, async ({ ctx, media, cache }) => {
     result = await runCliEntry({
       capability: "audio",
       entry: { type: "cli", command: params.command, args: params.args },
       cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
       ctx,
-      attachmentIndex: 0,
+      attachment: requireFirstAttachment(media),
       cache,
       config: {} as never,
     });
@@ -118,7 +129,7 @@ describe("media-understanding CLI audio entry", () => {
   it("applies per-request prompt and language overrides to CLI transcription templating", async () => {
     let mediaPath = "";
 
-    await withAudioFixture("openclaw-cli-audio", async ({ ctx, cache }) => {
+    await withAudioFixture("openclaw-cli-audio", async ({ ctx, media, cache }) => {
       mediaPath = await fs.realpath(ctx.MediaPath);
 
       await runCliEntry({
@@ -143,7 +154,7 @@ describe("media-understanding CLI audio entry", () => {
           },
         } as OpenClawConfig,
         ctx,
-        attachmentIndex: 0,
+        attachment: requireFirstAttachment(media),
         cache,
         config: {
           prompt: "configured prompt",
@@ -164,6 +175,77 @@ describe("media-understanding CLI audio entry", () => {
     });
   });
 
+  it.each([
+    { name: "one attachment", count: 1, leadingEmpty: false },
+    { name: "many attachments after an empty slot", count: 2, leadingEmpty: true },
+  ])("projects singular template variables for $name", async ({ count, leadingEmpty }) => {
+    await withTempDir({ prefix: "openclaw-cli-media-template-" }, async (base) => {
+      const media = await Promise.all(
+        Array.from({ length: count }, async (_, index) => {
+          const mediaPath = path.join(base, `audio-${index}.wav`);
+          await fs.writeFile(mediaPath, createSafeAudioFixtureBuffer());
+          return {
+            path: mediaPath,
+            url: `media://inbound/audio-${index}.wav`,
+            contentType: index === 0 ? "audio/wav" : "audio/x-wav",
+          };
+        }),
+      );
+      const alignedMedia: Array<Partial<(typeof media)[number]>> = leadingEmpty
+        ? [{}, ...media]
+        : media;
+      const ctx = {
+        media: alignedMedia,
+        MediaPath: "/tmp/stale-first.wav",
+        MediaUrl: "media://inbound/stale-first.wav",
+        MediaType: "application/octet-stream",
+        MediaPaths: alignedMedia.map((entry) => entry.path ?? ""),
+        MediaUrls: alignedMedia.map((entry) => entry.url ?? ""),
+        MediaTypes: alignedMedia.map((entry) => entry.contentType ?? ""),
+      };
+      const attachments = normalizeMediaAttachments(ctx);
+      expect(attachments.map((attachment) => attachment.index)).toEqual(
+        leadingEmpty ? [1, 2] : [0],
+      );
+      const cache = createMediaAttachmentCache(attachments, {
+        localPathRoots: [base],
+        includeDefaultLocalPathRoots: false,
+      });
+      try {
+        for (const [callIndex, attachment] of attachments.entries()) {
+          await runCliEntry({
+            capability: "audio",
+            entry: {
+              type: "cli",
+              command: "mock-transcriber",
+              args: [
+                "{{MediaPath}}",
+                "{{MediaUrl}}",
+                "{{MediaType}}",
+                "{{MediaDir}}",
+                "{{MediaPaths}}",
+              ],
+            },
+            cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
+            ctx,
+            attachment,
+            cache,
+            config: {} as never,
+          });
+          expect(runExecMock.mock.calls[callIndex]?.[1]).toEqual([
+            media[callIndex]?.path,
+            media[callIndex]?.url,
+            media[callIndex]?.contentType,
+            base,
+            "",
+          ]);
+        }
+      } finally {
+        await cache.cleanup();
+      }
+    });
+  });
+
   it.each(transcriptFileCases)("reads $name transcript output", async (testCase) => {
     runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
       await fs.writeFile(testCase.resolvePath(args), "file transcript\n");
@@ -173,6 +255,28 @@ describe("media-understanding CLI audio entry", () => {
     const result = await runAudioEntry(testCase);
 
     expect(result?.text).toBe("file transcript");
+  });
+
+  it("records the backend observed during a whisper.cpp model run", async () => {
+    runExecMock.mockImplementationOnce(async (_command, args: string[]) => {
+      await fs.writeFile(`${args[2]}.txt`, "observed transcript\n");
+      return {
+        stdout: "",
+        stderr: "whisper_backend_init_gpu: using MTL0 backend",
+      };
+    });
+
+    const result = await runAudioEntry({
+      command: "whisper-cli",
+      args: ["-otxt", "-of", "{{OutputBase}}", "{{MediaPath}}"],
+    });
+
+    expect(result).toMatchObject({
+      provider: "whisper-cli",
+      model: "whisper-cli",
+      observedBackend: "metal",
+      text: "observed transcript",
+    });
   });
 
   it("reads parakeet txt output selected through its upstream environment", async () => {
@@ -265,7 +369,7 @@ describe("media-understanding CLI audio entry", () => {
       stderr: "",
     });
 
-    await withAudioFixture("openclaw-cli-audio-empty-sherpa", async ({ ctx, cache }) => {
+    await withAudioFixture("openclaw-cli-audio-empty-sherpa", async ({ ctx, media, cache }) => {
       const result = await runCliEntry({
         capability: "audio",
         entry: {
@@ -275,7 +379,7 @@ describe("media-understanding CLI audio entry", () => {
         },
         cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
         ctx,
-        attachmentIndex: 0,
+        attachment: requireFirstAttachment(media),
         cache,
         config: {} as never,
       });
@@ -290,7 +394,7 @@ describe("media-understanding CLI audio entry", () => {
       stderr: "",
     });
 
-    await withAudioFixture("openclaw-cli-audio-sherpa-json", async ({ ctx, cache }) => {
+    await withAudioFixture("openclaw-cli-audio-sherpa-json", async ({ ctx, media, cache }) => {
       const result = await runCliEntry({
         capability: "audio",
         entry: {
@@ -300,7 +404,7 @@ describe("media-understanding CLI audio entry", () => {
         },
         cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
         ctx,
-        attachmentIndex: 0,
+        attachment: requireFirstAttachment(media),
         cache,
         config: {} as never,
       });

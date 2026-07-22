@@ -8,6 +8,7 @@ import {
   resetAgentEventsForTest,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import { resetDiagnosticEventsForTest } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
@@ -16,24 +17,26 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
 import type { CodexAppServerClient } from "./client.js";
+import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
+import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
-import {
-  runCodexAppServerAttempt as runCodexAppServerAttemptImpl,
-  testing,
-} from "./run-attempt.js";
-import { closeCodexSandboxExecServersForTests } from "./sandbox-exec-server.js";
+import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
+import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import {
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./session-binding.test-helpers.js";
-import type { CodexAppServerClientFactory } from "./shared-client.js";
+import type { CodexAppServerClientFactory, CodexAppServerClientOptions } from "./shared-client.js";
 import {
   adaptCodexTestClientFactory,
   createCodexTestModel,
+  createCodexTestToolTerminalObserver,
   type CodexTestAppServerClientFactory,
 } from "./test-support.js";
+import { codexWorkspaceDirCache } from "./workspace-dir-cache.js";
 
 export let tempDir: string;
 let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
@@ -207,6 +210,7 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
+    observeToolTerminal: createCodexTestToolTerminalObserver(),
   } as EmbeddedRunAttemptParams;
 }
 
@@ -267,7 +271,7 @@ export function mockCall(mock: unknown, label: string, index = 0): unknown[] {
   return call;
 }
 
-export function getMockServerVersion() {
+function getMockServerVersion() {
   return "0.132.0";
 }
 
@@ -277,6 +281,7 @@ export function getMockRuntimeIdentity() {
 
 export function mockClientRuntimeMethods() {
   return {
+    getInstanceId: () => "test-client-1",
     getRuntimeIdentity: getMockRuntimeIdentity,
     getServerVersion: getMockServerVersion,
   };
@@ -361,7 +366,11 @@ export function createAppServerHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown>,
   options: {
-    onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+    onStart?: (
+      authProfileId: string | undefined,
+      agentDir: string | undefined,
+      options: CodexAppServerClientOptions | undefined,
+    ) => void;
   } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
@@ -393,10 +402,12 @@ export function createAppServerHarness(
       return () => closeHandlers.delete(handler);
     },
   } as unknown as CodexAppServerClient;
-  setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
-    options.onStart?.(authProfileId, agentDir);
-    return client;
-  });
+  setCodexAppServerClientFactoryForTest(
+    async (_startOptions, authProfileId, agentDir, _config, clientOptions) => {
+      options.onStart?.(authProfileId, agentDir, clientOptions);
+      return client;
+    },
+  );
 
   const waitForServerRequestHandler = async () => {
     await vi.waitFor(() => expect(serverRequestHandlers.size).toBeGreaterThan(0), {
@@ -489,7 +500,11 @@ export function createStartedThreadHarness(
     options?: { signal?: AbortSignal },
   ) => Promise<unknown> = async () => undefined,
   options: {
-    onStart?: (authProfileId: string | undefined, agentDir: string | undefined) => void;
+    onStart?: (
+      authProfileId: string | undefined,
+      agentDir: string | undefined,
+      options: CodexAppServerClientOptions | undefined,
+    ) => void;
   } = {},
 ) {
   return createAppServerHarness(async (method, params, requestOptions) => {
@@ -592,6 +607,7 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
     resetCodexTestBindingStore();
+    clearRuntimeAuthProfileStoreSnapshots();
     vi.useRealTimers();
     clearInternalHooks();
     clearMemoryPluginState();
@@ -605,11 +621,12 @@ export function setupRunAttemptTestHooks(): void {
 
   afterEach(async () => {
     await drainActiveAppServerAttemptsForTest();
-    await closeCodexSandboxExecServersForTests();
+    await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
-    testing.resetOpenClawCodingToolsFactoryForTests();
-    testing.resetEnsuredCodexWorkspaceDirsForTests();
-    testing.clearPendingCodexNativeHookRelayUnregistersForTests();
+    clearRuntimeAuthProfileStoreSnapshots();
+    dynamicToolBuildState.openClawCodingToolsFactory = undefined;
+    codexWorkspaceDirCache.clear();
+    nativeHookRelayUnregisterQueue.clear();
     nativeHookRelayTesting.clearNativeHookRelaysForTests();
     clearMemoryPluginState();
     clearPluginCommands();
@@ -618,10 +635,11 @@ export function setupRunAttemptTestHooks(): void {
     resetGlobalHookRunner();
     clearInternalHooks();
     defaultCodexAppInventoryCache.clear();
+    defaultCodexPluginMetadataCache.clear();
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
-    await closeCodexSandboxExecServersForTests();
+    await sandboxExecServerRegistry.closeAll();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   });
 }

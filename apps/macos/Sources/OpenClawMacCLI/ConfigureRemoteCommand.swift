@@ -141,7 +141,7 @@ private func configureSSHRemote(
             userInfo: [NSLocalizedDescriptionKey: "SSH target must look like user@host[:port]"])
     }
 
-    let configURL = openClawConfigURL()
+    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -201,7 +201,7 @@ private func configureDirectRemote(
             ])
     }
 
-    let configURL = openClawConfigURL()
+    let configURL = resolveOpenClawConfigURL()
     var root = try loadConfigRoot(from: configURL)
     var gateway = root["gateway"] as? [String: Any] ?? [:]
     var remote = gateway["remote"] as? [String: Any] ?? [:]
@@ -232,15 +232,6 @@ private func configureDirectRemote(
         remotePort: defaultPort(for: directURL) ?? opts.remotePort,
         sshHostKeyPolicy: nil,
         onboardingSkipped: true)
-}
-
-private func openClawConfigURL() -> URL {
-    if let raw = ProcessInfo.processInfo.environment["OPENCLAW_CONFIG_PATH"],
-       !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    {
-        return URL(fileURLWithPath: NSString(string: raw).expandingTildeInPath)
-    }
-    return FileManager().homeDirectoryForCurrentUser.appendingPathComponent(".openclaw/openclaw.json")
 }
 
 private func loadConfigRoot(from url: URL) throws -> [String: Any] {
@@ -293,9 +284,7 @@ private func normalizeDirectURL(_ raw: String) -> URL? {
 }
 
 private func defaultPort(for url: URL) -> Int? {
-    if let port = url.port {
-        return port
-    }
+    if let port = url.port { return port }
     switch url.scheme?.lowercased() {
     case "wss":
         return 443
@@ -427,9 +416,7 @@ private func normalizedSSHHostKeyPolicy(_ raw: String?) -> String? {
 }
 
 private func isValidSSHTarget(_ raw: String) -> Bool {
-    if raw.isEmpty || raw.hasPrefix("-") {
-        return false
-    }
+    if raw.isEmpty || raw.hasPrefix("-") { return false }
     if raw.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters)) != nil {
         return false
     }
