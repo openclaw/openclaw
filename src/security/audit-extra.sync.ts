@@ -14,6 +14,7 @@ import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
@@ -580,8 +581,9 @@ export function collectSyncedFolderFindings(params: {
 
 export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  const password = cfg.gateway?.auth?.password;
+  const passwordString = normalizeOptionalString(password) ?? "";
+  if (password && !looksLikeEnvRef(passwordString) && !coerceSecretRef(password)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -593,8 +595,14 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
     });
   }
 
-  const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  const hooksToken = cfg.hooks?.token;
+  const hooksTokenString = normalizeOptionalString(hooksToken) ?? "";
+  if (
+    cfg.hooks?.enabled === true &&
+    hooksToken &&
+    !looksLikeEnvRef(hooksTokenString) &&
+    !coerceSecretRef(hooksToken)
+  ) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
