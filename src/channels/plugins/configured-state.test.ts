@@ -30,7 +30,6 @@ describe("bundled channel configured-state metadata", () => {
       "telegram",
       "twitch",
       "zalo",
-      "zalouser",
     ]);
   });
 

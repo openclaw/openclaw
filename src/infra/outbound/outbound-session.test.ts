@@ -285,12 +285,12 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
-      name: "Zalo Personal DM target",
+      name: "Telegram DM target",
       cfg: perChannelPeerCfg,
-      channel: "zalouser",
+      channel: "telegram",
       target: "123456",
       expected: {
-        sessionKey: "agent:main:zalouser:direct:123456",
+        sessionKey: "agent:main:telegram:direct:123456",
         chatType: "direct",
       },
     },

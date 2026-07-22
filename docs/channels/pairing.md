@@ -47,7 +47,7 @@ That gives first-time setups an explicit owner for privileged commands and exec
 approval prompts. After an owner exists, later pairing approvals only grant DM
 access; they do not add more owners.
 
-Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
+Supported channels (any installed channel plugin that declares pairing; external plugins such as `openclaw-weixin` can add more): `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `signal`, `slack`, `sms`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`.
 
 ### Reusable sender groups
 

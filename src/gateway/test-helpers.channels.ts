@@ -113,11 +113,6 @@ export function createDefaultGatewayTestChannels() {
       plugin: createStubChannelPlugin({ id: "zalo", label: "Zalo" }),
     },
     {
-      pluginId: "zalouser",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
-    },
-    {
       pluginId: "imessage",
       source: "test" as const,
       plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),

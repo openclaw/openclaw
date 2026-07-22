@@ -444,8 +444,8 @@ function resolveZaloOutboundSessionRouteForTest(params: ChannelOutboundSessionRo
   });
 }
 
-function resolveZalouserOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
-  const trimmed = stripChannelTargetPrefix(params.target, "zalouser", "zlu");
+function resolveTelegramOutboundSessionRouteForTest(params: ChannelOutboundSessionRouteParams) {
+  const trimmed = stripChannelTargetPrefix(params.target, "telegram", "tg");
   if (!trimmed) {
     return null;
   }
@@ -458,12 +458,12 @@ function resolveZalouserOutboundSessionRouteForTest(params: ChannelOutboundSessi
   return buildChannelOutboundSessionRoute({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "zalouser",
+    channel: "telegram",
     accountId: params.accountId,
     peer: { kind: isGroup ? "group" : "direct", id: peerId },
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalouser:group:${peerId}` : `zalouser:${peerId}`,
-    to: `zalouser:${peerId}`,
+    from: isGroup ? `telegram:group:${peerId}` : `telegram:${peerId}`,
+    to: `telegram:${peerId}`,
   });
 }
 
@@ -564,9 +564,9 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
       resolveOutboundSessionRoute: resolveZaloOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
-      id: "zalouser",
-      label: "Zalo Personal",
-      resolveOutboundSessionRoute: resolveZalouserOutboundSessionRouteForTest,
+      id: "telegram",
+      label: "Telegram",
+      resolveOutboundSessionRoute: resolveTelegramOutboundSessionRouteForTest,
     }),
     createSessionRouteTestPlugin({
       id: "nostr",

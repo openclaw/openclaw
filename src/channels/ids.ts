@@ -48,6 +48,27 @@ export const CHAT_CHANNEL_ORDER = Object.freeze(
 export const CHANNEL_IDS = CHAT_CHANNEL_ORDER;
 
 /**
+ * Bundled channel ids that shipped in a prior release and have since been removed.
+ *
+ * A removed bundled channel leaves a bare `channels.<id>` block in existing configs
+ * with no `plugins.*`/install evidence, so unknown-channel validation would fail the
+ * config load fatally. Listing the id here downgrades that to a doctor-fixable warning
+ * (see config validation) and lets `openclaw doctor --fix` strip the stale key
+ * (see stale-plugin-config). Keep entries until the migration window is no longer needed.
+ */
+export const REMOVED_BUNDLED_CHANNEL_IDS: ReadonlySet<string> = Object.freeze(
+  new Set<string>(["zalouser"]),
+);
+
+/**
+ * Returns true when the id names a bundled channel that has been removed.
+ */
+export function isRemovedBundledChannelId(raw?: string | null): boolean {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  return normalized ? REMOVED_BUNDLED_CHANNEL_IDS.has(normalized) : false;
+}
+
+/**
  * Maps configured built-in channel aliases to canonical chat channel ids.
  */
 const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(

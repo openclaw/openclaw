@@ -313,7 +313,6 @@
     "!dist/extensions/whatsapp/**",
     "!dist/extensions/zai/**",
     "!dist/extensions/zalo/**",
-    "!dist/extensions/zalouser/**",
     "!dist/plugin-sdk/extensions/qa-channel/**",
     "!dist/plugin-sdk/extensions/qa-lab/**",
     "!dist/plugin-sdk/qa-channel.*",

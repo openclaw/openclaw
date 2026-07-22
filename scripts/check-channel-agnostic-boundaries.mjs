@@ -59,7 +59,6 @@ const channelIds = [
   "web",
   "whatsapp",
   "zalo",
-  "zalouser",
 ];
 
 const channelIdSet = new Set(channelIds);

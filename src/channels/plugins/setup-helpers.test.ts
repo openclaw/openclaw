@@ -340,7 +340,7 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
     const next = moveSingleAccountChannelSectionToDefaultAccount({
       cfg: asConfig({
         channels: {
-          zalouser: {
+          zalo: {
             dmPolicy: "disabled",
             accounts: {
               work: {
@@ -350,13 +350,13 @@ describe("moveSingleAccountChannelSectionToDefaultAccount", () => {
           },
         },
       }),
-      channelKey: "zalouser",
+      channelKey: "zalo",
     });
 
-    const channel = channelRecord(next, "zalouser");
+    const channel = channelRecord(next, "zalo");
     const work = accountRecord(channel, "work");
     expect(work.dmPolicy).toBe("allowlist");
-    expect(next.channels?.zalouser?.dmPolicy).toBeUndefined();
+    expect(next.channels?.zalo?.dmPolicy).toBeUndefined();
   });
 
   it("promotes legacy Matrix keys into an existing non-canonical default account key", () => {

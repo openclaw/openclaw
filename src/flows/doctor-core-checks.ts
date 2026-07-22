@@ -38,6 +38,7 @@ import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
+import { removedZalouserStateCheck } from "./doctor-removed-zalouser-state-check.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
 import type {
@@ -1134,6 +1135,7 @@ function createConvertedWorkflowChecks(
     gatewayAuthCheck,
     legacyStateCheck,
     removedWorkspacesStateCheck,
+    removedZalouserStateCheck,
     legacyWhatsAppCrontabCheck,
     legacyCronStoreCheck,
     codexSessionRoutesCheck,

@@ -52,13 +52,13 @@ describe("status issue composition", () => {
     });
     expect(
       standardNotConfiguredIssue({
-        channel: "zalouser",
+        channel: "zalo",
         accountId: "default",
         message: "Not authenticated.",
         fix: "Run login.",
       }),
     ).toEqual({
-      channel: "zalouser",
+      channel: "zalo",
       accountId: "default",
       kind: "auth",
       message: "Not authenticated.",

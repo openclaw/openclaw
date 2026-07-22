@@ -16,7 +16,7 @@ vi.mock("./channel-doctor.js", () => ({
     channelName,
   }: {
     channelName?: string;
-  }) => channelName === "zalouser",
+  }) => channelName === "zalo",
 }));
 
 describe("doctor empty allowlist policy warnings", () => {
@@ -46,12 +46,12 @@ describe("doctor empty allowlist policy warnings", () => {
     ]);
   });
 
-  it("stays quiet for zalouser hybrid route-and-sender group access", () => {
+  it("stays quiet for zalo hybrid route-and-sender group access", () => {
     const warnings = collectEmptyAllowlistPolicyWarningsForAccount({
       account: { groupPolicy: "allowlist" },
-      channelName: "zalouser",
+      channelName: "zalo",
       doctorFixCommand: "openclaw doctor --fix",
-      prefix: "channels.zalouser",
+      prefix: "channels.zalo",
     });
 
     expect(warnings).toStrictEqual([]);

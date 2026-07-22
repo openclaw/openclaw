@@ -1667,6 +1667,25 @@ describe("config plugin validation", () => {
     expectNoPath(res.warnings, "channels.telegarm");
   });
 
+  it("warns instead of failing for a removed bundled channel with no plugin evidence", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        zalouser: { profile: "default" },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toContainEqual({
+      path: "channels.zalouser",
+      message:
+        "channel removed: zalouser (stale channel config ignored; run openclaw doctor --fix to remove it)",
+    });
+  });
+
   it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", () => {
     const res = validateConfigObjectWithPlugins(
       {

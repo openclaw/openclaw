@@ -1250,7 +1250,6 @@ describe("bundled channel entry shape guards", () => {
       "extensions/matrix/src/doctor.ts",
       "extensions/slack/src/doctor.ts",
       "extensions/telegram/src/doctor.ts",
-      "extensions/zalouser/src/doctor.ts",
     ].filter((filePath) =>
       fs
         .readFileSync(path.resolve(filePath), "utf8")

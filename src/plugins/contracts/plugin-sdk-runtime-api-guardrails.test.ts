@@ -39,7 +39,6 @@ const UNGUARDED_RUNTIME_API_PLUGIN_IDS = [
   "workboard",
   "zai",
   "zalo",
-  "zalouser",
 ] as const;
 
 const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {

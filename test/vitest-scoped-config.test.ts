@@ -855,7 +855,7 @@ describe("scoped vitest configs", () => {
   it("normalizes zalo extension include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultExtensionZaloConfig);
     expect(testConfig.dir).toBe(path.join(process.cwd(), "extensions"));
-    expect(testConfig.include).toEqual(["zalo/**/*.test.ts", "zalouser/**/*.test.ts"]);
+    expect(testConfig.include).toEqual(["zalo/**/*.test.ts"]);
   });
 
   it("normalizes voice-call extension include patterns relative to the scoped dir", () => {
@@ -928,11 +928,6 @@ describe("scoped vitest configs", () => {
     const extensionExcludes = defaultExtensionsConfig.test?.exclude ?? [];
     expect(
       extensionExcludes.some((pattern) => path.matchesGlob("zalo/src/channel.test.ts", pattern)),
-    ).toBe(true);
-    expect(
-      extensionExcludes.some((pattern) =>
-        path.matchesGlob("zalouser/src/channel.test.ts", pattern),
-      ),
     ).toBe(true);
   });
 

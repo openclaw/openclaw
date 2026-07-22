@@ -5,7 +5,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 
 function stubChannelPlugin(params: {
-  id: "zalouser";
+  id: "zalo";
   label: string;
   resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
 }): ChannelPlugin {
@@ -36,7 +36,7 @@ function requireReadOnlyResolutionFinding(
   findings: Awaited<ReturnType<typeof collectChannelSecurityFindings>>,
 ) {
   const finding = findings.find(
-    (entry) => entry.checkId === "channels.zalouser.account.read_only_resolution",
+    (entry) => entry.checkId === "channels.zalo.account.read_only_resolution",
   );
   if (!finding) {
     throw new Error("Expected Zalo read-only resolution warning");
@@ -47,8 +47,8 @@ function requireReadOnlyResolutionFinding(
 describe("security audit channel read-only resolution", () => {
   it("adds a read-only resolution warning when channel account resolveAccount throws", async () => {
     const plugin = stubChannelPlugin({
-      id: "zalouser",
-      label: "Zalo Personal",
+      id: "zalo",
+      label: "Zalo",
       resolveAccount: () => {
         throw new Error("missing SecretRef");
       },
@@ -56,7 +56,7 @@ describe("security audit channel read-only resolution", () => {
 
     const cfg: OpenClawConfig = {
       channels: {
-        zalouser: {
+        zalo: {
           enabled: true,
         },
       },
@@ -70,7 +70,7 @@ describe("security audit channel read-only resolution", () => {
     const finding = requireReadOnlyResolutionFinding(findings);
     expect(finding.severity).toBe("warn");
     expect(finding.title).toContain("could not be fully resolved");
-    expect(finding.detail).toContain("zalouser:default: failed to resolve account");
+    expect(finding.detail).toContain("zalo:default: failed to resolve account");
     expect(finding.detail).toContain("missing SecretRef");
   });
 });

@@ -78,7 +78,6 @@ const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
   whatsapp: "wizard.channelsPrimer.blurbs.whatsapp",
   yuanbao: "wizard.channelsPrimer.blurbs.yuanbao",
   zalo: "wizard.channelsPrimer.blurbs.zalo",
-  zalouser: "wizard.channelsPrimer.blurbs.zalouser",
 };
 
 function buildChannelSetupSelectionContribution(params: {

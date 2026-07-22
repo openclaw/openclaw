@@ -694,7 +694,6 @@ The Control UI needs a secure context (HTTPS or localhost) to generate device id
     - `channels.mattermost.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.synology-chat.dangerouslyAllowNameMatching` (plugin channel)
     - `channels.synology-chat.dangerouslyAllowInheritedWebhookPath` (plugin channel)
-    - `channels.zalouser.dangerouslyAllowNameMatching` (plugin channel)
 
     Network exposure:
     - `channels.telegram.network.dangerouslyAllowPrivateNetwork` (also per account)

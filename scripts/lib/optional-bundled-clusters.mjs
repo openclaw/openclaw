@@ -12,7 +12,6 @@ const optionalBundledClusters = [
   "twitch",
   "ui",
   "whatsapp",
-  "zalouser",
 ];
 
 /**

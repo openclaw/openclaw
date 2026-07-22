@@ -419,7 +419,6 @@ describe("scripts/test-extension.mjs", () => {
         "voice-call",
         "whatsapp",
         "zalo",
-        "zalouser",
         "memory-core",
         "msteams",
         "feishu",
@@ -452,7 +451,6 @@ describe("scripts/test-extension.mjs", () => {
       "vydra",
       "whatsapp",
       "zalo",
-      "zalouser",
     ]);
     const stablePlanGroups = batch.planGroups.map(({ estimatedCost, testFileCount, ...group }) => {
       expectPositiveIntegerMetric(estimatedCost);
@@ -553,8 +551,8 @@ describe("scripts/test-extension.mjs", () => {
       },
       {
         config: "test/vitest/vitest.extension-zalo.config.ts",
-        extensionIds: ["zalo", "zalouser"],
-        roots: [bundledPluginRoot("zalo"), bundledPluginRoot("zalouser")],
+        extensionIds: ["zalo"],
+        roots: [bundledPluginRoot("zalo")],
       },
     ]);
   });

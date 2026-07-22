@@ -24,7 +24,6 @@ const threadingContractPluginIds = new Set<ChannelId>([
   "slack",
   "telegram",
   "zalo",
-  "zalouser",
 ]);
 
 const directoryContractPluginIds = new Set<ChannelId>([
@@ -41,7 +40,6 @@ const directoryContractPluginIds = new Set<ChannelId>([
   "telegram",
   "whatsapp",
   "zalo",
-  "zalouser",
 ]);
 
 function getBundledChannelPluginIdsForShard(params: {
@@ -71,7 +69,7 @@ export function getThreadingContractRegistryShardRefs(params: {
     .map((id) => ({ id }));
 }
 
-const directoryPresenceOnlyIds = new Set(["whatsapp", "zalouser"]);
+const directoryPresenceOnlyIds = new Set(["whatsapp"]);
 
 /** Returns shard refs for bundled channels expected to expose directory hooks. */
 export function getDirectoryContractRegistryShardRefs(params: {

@@ -1185,8 +1185,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
-                  "channels/zaloclawbot",
-                  "channels/zalouser"
+                  "channels/zaloclawbot"
                 ]
               },
               {
@@ -1317,8 +1316,7 @@
                   "plugins/memory-wiki",
                   "plugins/llama-cpp",
                   "plugins/memory-lancedb",
-                  "plugins/oc-path",
-                  "plugins/zalouser"
+                  "plugins/oc-path"
                 ]
               },
               {

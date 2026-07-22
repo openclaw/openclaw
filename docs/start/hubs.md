@@ -170,7 +170,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [ClawHub](/clawhub)
 - [Capability cookbook](/tools/capability-cookbook)
 - [Voice call plugin](/plugins/voice-call)
-- [Zalo user plugin](/plugins/zalouser)
 
 ## Workspace + templates
 

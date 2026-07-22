@@ -5,6 +5,7 @@ import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isRemovedBundledChannelId } from "../channels/ids.js";
 import {
   type ChannelDmAllowFromMode,
   resolveChannelDmAllowFrom,
@@ -1805,7 +1806,12 @@ function validateConfigObjectWithPluginsBase(
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
         };
-        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+        if (isRemovedBundledChannelId(trimmed)) {
+          warnings.push({
+            ...issue,
+            message: `channel removed: ${trimmed} (stale channel config ignored; run openclaw doctor --fix to remove it)`,
+          });
+        } else if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
           warnings.push({
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,

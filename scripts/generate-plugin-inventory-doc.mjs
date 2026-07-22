@@ -190,7 +190,6 @@ function humanizeId(value) {
     ["whatsapp", "WhatsApp"],
     ["xai", "xAI"],
     ["zai", "Z.AI"],
-    ["zalouser", "Zalo Personal"],
   ]);
   return value
     .split("-")

@@ -388,7 +388,7 @@ describe("channel-auth", () => {
 
   it("propagates auth-channel ambiguity when multiple configured channels support login", async () => {
     const zaloPlugin = {
-      id: "zalouser",
+      id: "zalo",
       auth: { login: vi.fn() },
       gateway: {},
       config: {
@@ -396,19 +396,15 @@ describe("channel-auth", () => {
         resolveAccount: vi.fn().mockReturnValue({ enabled: true }),
       },
     };
-    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, zalouser: {} } });
+    mocks.loadConfig.mockReturnValue({ channels: { whatsapp: {}, zalo: {} } });
     mocks.listChannelPlugins.mockReturnValue([plugin, zaloPlugin]);
     mocks.normalizeChannelId.mockImplementation((value) => value);
     mocks.getChannelPlugin.mockImplementation((value) =>
-      value === "whatsapp"
-        ? plugin
-        : value === "zalouser"
-          ? (zaloPlugin as typeof plugin)
-          : undefined,
+      value === "whatsapp" ? plugin : value === "zalo" ? (zaloPlugin as typeof plugin) : undefined,
     );
 
     await expect(runChannelLogin({}, runtime)).rejects.toThrow(
-      "Multiple configured channels support login: whatsapp, zalouser.",
+      "Multiple configured channels support login: whatsapp, zalo.",
     );
     expect(mocks.login).not.toHaveBeenCalled();
   });
