@@ -6827,10 +6827,10 @@ describe("active-memory plugin", () => {
     // The subagent should NOT have been called a third time.
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
 
-    const infoLines = vi
-      .mocked(api.logger.info)
+    const warnLines = vi
+      .mocked(api.logger.warn)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expectLinesToContain(infoLines, "circuit breaker open");
+    expectLinesToContain(warnLines, "circuit breaker open");
   });
 
   it("resets circuit breaker after a successful recall", async () => {
