@@ -110,12 +110,12 @@ Gateway startup uses the same effective port and bind when it seeds local Contro
 
 ### Hot reload modes
 
-| `gateway.reload.mode` | Behavior                                                                                                    |
-| --------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `off`                 | No config reload                                                                                            |
+| `gateway.reload.mode` | Behavior                                                                                                                                   |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `off`                 | No config reload                                                                                                                           |
 | `hot`                 | Hot-apply safe changes; warn on restart-required (security-critical auth changes still auto-restart; provider secret rotations apply live) |
-| `restart`             | Restart on reload-required changes                                                                          |
-| `hybrid` (default)    | Hot-apply when safe, restart when required                                                                  |
+| `restart`             | Restart on reload-required changes                                                                                                         |
+| `hybrid` (default)    | Hot-apply when safe, restart when required                                                                                                 |
 
 ## Operator command set
 

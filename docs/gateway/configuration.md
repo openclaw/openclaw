@@ -518,12 +518,12 @@ for the checklist.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                                                                                                                                                         |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.                                                                                                                                    |
+| Mode                   | Behavior                                                                                                                                                                                                                                      |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.                                                                                                                                                                 |
 | **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed; you handle it. Security-critical changes (`gateway.auth.*`, `auth.profiles.*`/`auth.order.*`) still auto-restart; `secrets.providers.*` rotations keep applying live. |
-| **`restart`**          | Restarts the Gateway on any config change, safe or not.                                                                                                                                                          |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart.                                                                                                                                          |
+| **`restart`**          | Restarts the Gateway on any config change, safe or not.                                                                                                                                                                                       |
+| **`off`**              | Disables file watching. Changes take effect on the next manual restart.                                                                                                                                                                       |
 
 ```json5
 {
