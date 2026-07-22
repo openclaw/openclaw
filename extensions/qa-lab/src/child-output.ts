@@ -90,6 +90,10 @@ export function appendQaChildOutputTail(tail: QaChildOutputTail, chunk: unknown)
   tail.truncated = true;
 }
 
+export function readQaChildOutputTail(tail: QaChildOutputTail) {
+  return tail.buffer.toString("utf8");
+}
+
 export function formatQaChildOutputTail(tail: QaChildOutputTail, label: string) {
   const text = decodeUtf8Tail(tail.buffer, tail.truncated).trim();
   if (!text) {

@@ -1,6 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QA_CHILD_STDERR_TAIL_BYTES, QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 
@@ -111,6 +112,79 @@ describe.skipIf(process.platform === "win32")("qa scenario command lifecycle", (
     });
 
     await expect(runCommand()).rejects.toBe(error);
+    expect(parentHandlers.size).toBe(0);
+  });
+
+  it.each(["stdout", "stderr"] as const)(
+    "stops the process group and reports a %s pipe failure once",
+    async (streamName) => {
+      const child = createChild();
+      const resultPromise = runCommand(5_000);
+      const message = `synthetic ${streamName} read failure`;
+
+      child[streamName]?.emit("error", new Error(message));
+      child.emit("close", 0, null);
+      child.emit("close", 0, null);
+
+      await expect(resultPromise).resolves.toEqual({
+        exitCode: 1,
+        failureMessage: `scenario-command ${streamName} stream failed: ${message}`,
+        signal: null,
+        stdout: "",
+        stderr: "",
+      });
+      expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+      expect(parentHandlers.size).toBe(0);
+      processKill.mockClear();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(processKill).not.toHaveBeenCalled();
+    },
+  );
+
+  it("bounds stdout and keeps close from replacing the overflow failure", async () => {
+    const child = createChild();
+    const resultPromise = runCommand(5_000);
+
+    child.stdout?.emit("data", Buffer.alloc(QA_CHILD_STDOUT_MAX_BYTES + 1, "x"));
+    child.emit("close", 0, null);
+
+    const result = await resultPromise;
+    expect(result).toMatchObject({
+      exitCode: 1,
+      failureMessage: `scenario-command stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes`,
+      signal: null,
+    });
+    expect(Buffer.byteLength(result.stdout)).toBe(QA_CHILD_STDOUT_MAX_BYTES);
+    expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
+    expect(parentHandlers.size).toBe(0);
+  });
+
+  it("retains the stderr tail after overflow", async () => {
+    const child = createChild();
+    const resultPromise = runCommand(5_000);
+    const prefix = "discarded startup output\n";
+    const suffix = "\nretained final stack trace";
+
+    child.stderr?.emit(
+      "data",
+      Buffer.concat([
+        Buffer.from(prefix),
+        Buffer.alloc(QA_CHILD_STDERR_TAIL_BYTES, "x"),
+        Buffer.from(suffix),
+      ]),
+    );
+    child.emit("close", 0, null);
+
+    const result = await resultPromise;
+    expect(result).toMatchObject({
+      exitCode: 1,
+      failureMessage: `scenario-command stderr exceeded ${QA_CHILD_STDERR_TAIL_BYTES} bytes`,
+      signal: null,
+    });
+    expect(Buffer.byteLength(result.stderr)).toBe(QA_CHILD_STDERR_TAIL_BYTES);
+    expect(result.stderr).not.toContain(prefix);
+    expect(result.stderr.endsWith(suffix)).toBe(true);
+    expect(processKill).toHaveBeenCalledWith(-42, "SIGTERM");
     expect(parentHandlers.size).toBe(0);
   });
 

@@ -4,6 +4,14 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+  readQaChildOutput,
+} from "./child-output.js";
 
 const PROCESS_BOUNDARY_VERSION = 1;
 const PROCESS_BOUNDARY_START_TIMEOUT_MS = 30_000;
@@ -319,37 +327,74 @@ async function runBoundaryLauncherCommand(params: {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
-  child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-  child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+  const stdout = createQaChildOutputCapture();
+  const stderr = createQaChildOutputTail();
+  let settled = false;
+  child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+  const exitCode = await new Promise<number>((resolve, reject) => {
+    const clearTimer = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimer();
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // The launcher may have exited between the stream failure and cleanup.
+      }
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    child.stdout.on("data", (chunk) => {
+      appendQaChildOutput(stdout, chunk);
+      if (stdout.exceeded) {
+        rejectOnce(
+          new Error(
+            `process-boundary ${params.label} proxy stdout exceeded ${stdout.maxBytes} bytes`,
+          ),
+        );
+      }
+    });
+    child.stdout.once("error", (error) => {
+      rejectOnce(
+        new Error(`process-boundary ${params.label} proxy stdout stream failed: ${String(error)}`, {
+          cause: error,
+        }),
+      );
+    });
+    child.stderr.once("error", (error) => {
+      rejectOnce(
+        new Error(`process-boundary ${params.label} proxy stderr stream failed: ${String(error)}`, {
+          cause: error,
+        }),
+      );
+    });
+    child.once("error", rejectOnce);
+    child.once("close", (code) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimer();
+      resolve(code ?? 1);
+    });
     timeout = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error(`process-boundary ${params.label} proxy timed out`));
+      rejectOnce(new Error(`process-boundary ${params.label} proxy timed out`));
     }, params.timeoutMs);
   });
-  let exitCode: number;
-  try {
-    exitCode = await Promise.race([
-      new Promise<number>((resolve, reject) => {
-        child.once("error", reject);
-        child.once("close", (code) => resolve(code ?? 1));
-      }),
-      timeoutPromise,
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
   if (exitCode !== 0) {
     throw new Error(
-      `process-boundary ${params.label} proxy exited ${exitCode}: ${Buffer.concat(stderr).toString("utf8").trim()}`,
+      `process-boundary ${params.label} proxy exited ${exitCode}: ${formatQaChildOutputTail(stderr, "stderr")}`,
     );
   }
-  return Buffer.concat(stdout).toString("utf8");
+  return readQaChildOutput(stdout);
 }
 
 async function runBoundaryVerification(params: {
