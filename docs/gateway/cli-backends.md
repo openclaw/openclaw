@@ -307,6 +307,11 @@ If no MCP servers are enabled, OpenClaw still injects a strict config when a bac
 
 Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end so stdio children and Streamable HTTP/SSE streams do not outlive the run.
 
+For `claude-cli`, a compatible selected or ordered OpenClaw OAuth/token profile
+is forwarded to that Claude child. This makes per-agent profiles authoritative
+for the turn while preserving Claude's native host login when no compatible
+profile exists.
+
 ## Reseed history cap
 
 When a fresh CLI session is seeded from a prior OpenClaw transcript (for example after a `session_expired` retry), the rendered `<conversation_history>` block is capped to keep reseed prompts from exploding. The default is 12,288 characters (about 3,000 tokens).

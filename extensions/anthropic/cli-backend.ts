@@ -18,6 +18,38 @@ import {
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
+type ClaudeCliAuthCredential =
+  | { type: "oauth"; access: string }
+  | { type: "token"; token: string }
+  | { type: "api_key"; key: string }
+  | { type: string };
+
+function resolveClaudeCliAuthEnv(
+  credential: ClaudeCliAuthCredential | undefined,
+): Record<string, string> | undefined {
+  if (
+    credential?.type === "oauth" &&
+    "access" in credential &&
+    typeof credential.access === "string"
+  ) {
+    const token = credential.access.trim();
+    return token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : undefined;
+  }
+  if (
+    credential?.type === "token" &&
+    "token" in credential &&
+    typeof credential.token === "string"
+  ) {
+    const token = credential.token.trim();
+    return token ? { CLAUDE_CODE_OAUTH_TOKEN: token } : undefined;
+  }
+  if (credential?.type === "api_key" && "key" in credential && typeof credential.key === "string") {
+    const key = credential.key.trim();
+    return key ? { ANTHROPIC_API_KEY: key } : undefined;
+  }
+  return undefined;
+}
+
 /** Build the Claude CLI backend plugin descriptor. */
 export function buildAnthropicCliBackend(): CliBackendPlugin {
   return {
@@ -105,10 +137,23 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       serialize: true,
     },
     normalizeConfig: normalizeClaudeBackendConfig,
-    autoSelectAuthProfile: false,
-    prepareExecution: ({ contextTokenBudget }) => {
-      const env = resolveClaudeCliAutoCompactEnv(contextTokenBudget);
-      return env ? { env } : undefined;
+    authEpochMode: "profile-only",
+    prepareExecution: (context) => {
+      const credentialContext = context as typeof context & {
+        authCredential?: ClaudeCliAuthCredential;
+      };
+      const authEnv = resolveClaudeCliAuthEnv(credentialContext.authCredential);
+      const env = {
+        ...resolveClaudeCliAutoCompactEnv(context.contextTokenBudget),
+        ...authEnv,
+        ...(authEnv ? { CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1" } : {}),
+      };
+      return Object.keys(env).length > 0
+        ? {
+            env,
+            ...(authEnv ? { clearEnv: [...CLAUDE_CLI_CLEAR_ENV] } : {}),
+          }
+        : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
   };

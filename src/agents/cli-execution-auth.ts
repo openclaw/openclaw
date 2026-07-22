@@ -8,6 +8,7 @@ import { resolveCliBackendConfig } from "./cli-backends.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
+const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
 type CliExecutionAuthProfileSelection = {
   authProfileId?: string;
@@ -22,14 +23,14 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
   const backend = resolveCliBackendConfig(params.provider, params.config, {
     agentId: params.agentId,
   });
-  return backend?.id === GOOGLE_GEMINI_CLI_PROVIDER_ID;
+  return backend?.id === GOOGLE_GEMINI_CLI_PROVIDER_ID || backend?.id === CLAUDE_CLI_PROVIDER_ID;
 }
 
 /**
- * Resolve the profile a CLI backend may consume. Gemini CLI prefers its own
- * OAuth identity, then bridges a canonical Google API key when that model is
- * explicitly routed through the CLI runtime. A user-locked profile must fail
- * closed here; falling through would silently run the request as another user.
+ * Resolve the profile a CLI backend may consume. Claude and Gemini use their
+ * native profile identities; Gemini may additionally bridge a canonical
+ * Google API key. A user-locked profile must fail closed here because falling
+ * through would silently run the request as another user.
  */
 export function resolveCliExecutionAuthProfileId(params: {
   cliExecutionProvider: string;

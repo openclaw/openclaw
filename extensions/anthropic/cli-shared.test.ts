@@ -595,6 +595,82 @@ describe("normalizeClaudeBackendConfig", () => {
     });
   });
 
+  it("forwards the selected OAuth profile to the Claude child only", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        authProfileId: "anthropic:claude-cli",
+        authCredential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "selected-access-token",
+          refresh: "selected-refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+        authCredential: {
+          type: "oauth";
+          provider: string;
+          access: string;
+          refresh: string;
+          expires: number;
+        };
+      }),
+    ).toEqual({
+      env: {
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-access-token",
+        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+      },
+      clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+    });
+  });
+
+  it("keeps native Claude login when no compatible profile is selected", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("forwards a selected API-key profile instead of falling back to host login", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-7",
+        authProfileId: "claude-cli:api",
+        authCredential: {
+          type: "api_key",
+          provider: "claude-cli",
+          key: "selected-api-key",
+        },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0] & {
+        authCredential: {
+          type: "api_key";
+          provider: string;
+          key: string;
+        };
+      }),
+    ).toEqual({
+      env: {
+        ANTHROPIC_API_KEY: "selected-api-key",
+        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+      },
+      clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
+    });
+  });
+
   it("disables native background Bash and Monitor tools in args and resumeArgs", () => {
     const backend = buildAnthropicCliBackend();
 

@@ -308,7 +308,7 @@ function shouldRefreshAuthProfileForExecution(params: {
   authCredential?: AuthProfileCredential;
 }): boolean {
   return Boolean(
-    params.backendId === "google-gemini-cli" &&
+    (params.backendId === "google-gemini-cli" || params.backendId === "claude-cli") &&
     params.authProfileId &&
     (params.authCredential?.type === "oauth" ||
       params.authCredential?.type === "api_key" ||
@@ -781,10 +781,10 @@ export async function prepareCliRunContext(
     preparedExecution = nodeClaudePlacement
       ? undefined
       : await backendResolved.prepareExecution?.(
-          (backendResolved.id === "google-gemini-cli"
+          (backendResolved.id === "google-gemini-cli" || backendResolved.id === "claude-cli"
             ? {
                 ...prepareExecutionContext,
-                // Private bridge for bundled Gemini CLI. This is intentionally not
+                // Private bridge for bundled auth-owning CLI backends. This is intentionally not
                 // part of the public Plugin SDK until a credential-forwarding
                 // contract exists.
                 authCredential,

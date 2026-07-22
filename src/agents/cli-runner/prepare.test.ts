@@ -914,7 +914,7 @@ describe("prepareCliRunContext", () => {
     }
   });
 
-  it("does not expose auth profile credentials to non-Gemini CLI prepare hooks", async () => {
+  it("does not expose auth profile credentials to non-bundled prepare hooks", async () => {
     const { dir, sessionFile } = createSessionFile();
     const agentDir = path.join(dir, "agents", "main", "agent");
     const authProfileId = "test-cli:secret";
@@ -973,6 +973,75 @@ describe("prepareCliRunContext", () => {
         }),
       );
       expect(prepareExecution.mock.calls[0]?.[0]).not.toHaveProperty("authCredential");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes and forwards a selected Claude CLI OAuth profile", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const agentDir = path.join(dir, "agents", "main", "agent");
+    const authProfileId = "anthropic:claude-cli";
+    const prepareExecution = vi.fn(async () => undefined);
+    fs.mkdirSync(agentDir, { recursive: true });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [authProfileId]: {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "stored-access-token",
+            refresh: "stored-refresh-token",
+            expires: Date.now() + 60 * 60_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    setCliBackendForPrepareTest({ prepareExecution, authEpochMode: "profile-only" });
+    setCliRunnerPrepareTestDeps({
+      resolveApiKeyForProfile: vi.fn(async () => ({
+        apiKey: "stored-access-token",
+        provider: "claude-cli",
+        profileId: authProfileId,
+        profileType: "oauth",
+        credential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "stored-access-token",
+          refresh: "stored-refresh-token",
+          expires: Date.now() + 60 * 60_000,
+        },
+      })),
+    });
+
+    try {
+      await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir: dir,
+        agentDir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "sonnet",
+        timeoutMs: 1_000,
+        runId: "run-test-claude-profile-forwarding",
+        authProfileId,
+        config: {},
+      });
+
+      expect(prepareExecution).toHaveBeenCalledWith(
+        expect.objectContaining({
+          authProfileId,
+          authCredential: expect.objectContaining({
+            type: "oauth",
+            provider: "claude-cli",
+            access: "stored-access-token",
+          }),
+        }),
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
