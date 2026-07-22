@@ -15,11 +15,17 @@ function normalizeMattermostApproverId(value: string | number): string | undefin
   return MATTERMOST_USER_ID_RE.test(lowered) ? lowered : undefined;
 }
 
-export const mattermostApprovalAuth = createChannelApprovalAuth({
-  channelLabel: "Mattermost",
-  resolveInputs: ({ cfg, accountId }) => {
-    const account = resolveMattermostAccount({ cfg, accountId }).config;
-    return { allowFrom: account.allowFrom };
-  },
-  normalizeApprover: normalizeMattermostApproverId,
-}).approvalAuth;
+export const mattermostApprovalAuth = {
+  ...createChannelApprovalAuth({
+    channelLabel: "Mattermost",
+    resolveInputs: ({ cfg, accountId }) => {
+      const account = resolveMattermostAccount({ cfg, accountId }).config;
+      return { allowFrom: account.allowFrom };
+    },
+    normalizeApprover: normalizeMattermostApproverId,
+  }).approvalAuth,
+  // Mattermost has no render adapter, so approval text comes from the
+  // forwarder fallback, but its server renders markdown. Without this the
+  // plaintext default would strip a code block users see today.
+  approvalText: "markdown" as const,
+};

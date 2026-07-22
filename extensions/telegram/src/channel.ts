@@ -930,6 +930,8 @@ export const telegramPlugin = createChatChannelPlugin({
     },
     approvalCapability: {
       ...telegramApprovalCapability,
+      // Telegram send path converts the canonical subset and escapes for parse mode.
+      approvalText: "markdown",
       render: {
         exec: {
           buildPendingPayload: ({ request, nowMs }) =>

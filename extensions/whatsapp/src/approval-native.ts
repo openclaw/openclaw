@@ -201,6 +201,8 @@ function buildWhatsAppPluginPendingPayload(params: {
 
 export const whatsappApprovalCapability: ChannelApprovalCapability =
   createChannelApprovalCapability({
+    // WhatsApp send path converts the canonical subset to native markup.
+    approvalText: "markdown",
     ...whatsappApprovalAuth,
     getActionAvailabilityState: ({ cfg, accountId, approvalKind }) =>
       (

@@ -158,6 +158,8 @@ function createDiscordApproverDmTargetResolver(configOverride?: DiscordExecAppro
 
 function createDiscordApprovalCapability(configOverride?: DiscordExecApprovalConfig | null) {
   return createApproverRestrictedNativeApprovalCapability({
+    // Discord authors its own component containers and renders markdown natively.
+    approvalText: "markdown",
     channel: "discord",
     channelLabel: "Discord",
     describeExecApprovalSetup: ({

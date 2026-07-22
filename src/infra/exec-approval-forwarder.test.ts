@@ -158,6 +158,9 @@ const telegramApprovalPlugin: Pick<
 > = {
   ...createChannelTestPluginBase({ id: "telegram" }),
   approvalCapability: {
+    // Mirrors the shipped Telegram declaration, so the fence-formatting cases
+    // below keep asserting the canonical markdown rather than its downgrade.
+    approvalText: "markdown",
     delivery: {
       shouldSuppressForwardingFallback: (params: {
         cfg: OpenClawConfig;
@@ -194,6 +197,16 @@ const discordApprovalPlugin: Pick<
     },
   },
 };
+// TARGETS_CFG forwards to slack, so this fixture decides whether the delivered
+// fallback text keeps its canonical markdown. Mirrors the shipped Slack
+// declaration; without it every fallback assertion below sees the downgrade.
+const slackApprovalPlugin: Pick<
+  ChannelPlugin,
+  "id" | "meta" | "capabilities" | "config" | "approvalCapability"
+> = {
+  ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+  approvalCapability: { approvalText: "markdown" },
+};
 const defaultRegistry = createTestRegistry([
   {
     pluginId: "telegram",
@@ -203,6 +216,11 @@ const defaultRegistry = createTestRegistry([
   {
     pluginId: "discord",
     plugin: discordApprovalPlugin,
+    source: "test",
+  },
+  {
+    pluginId: "slack",
+    plugin: slackApprovalPlugin,
     source: "test",
   },
 ]);
@@ -668,6 +686,38 @@ describe("exec approval forwarder", () => {
     },
   ])("formats forwarded approval text for %j", async ({ command, expectedText }) => {
     await expectForwardedApprovalText({ command, expectedText });
+  });
+
+  it("downgrades forwarded approval text for channels that declare no mode", async () => {
+    vi.useFakeTimers();
+    // Same delivery target as the markdown cases, but declaring no mode — the
+    // shape of every auth-only channel: no render adapter, no native runtime.
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", plugin: telegramApprovalPlugin, source: "test" },
+        { pluginId: "discord", plugin: discordApprovalPlugin, source: "test" },
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" as ChannelPlugin["id"] }),
+            approvalCapability: { authorizeActorAction: () => ({ authorized: true }) },
+          } satisfies Pick<
+            ChannelPlugin,
+            "id" | "meta" | "capabilities" | "config" | "approvalCapability"
+          >,
+          source: "test",
+        },
+      ]),
+    );
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).not.toContain("`");
+    // Content survives the downgrade: only the markers are gone.
+    expect(text).toContain("🔒 Exec approval required");
+    expect(text).toContain("Command: echo hello");
+    expect(text).toContain("Reply with: /approve req-1 allow-once|allow-always|deny");
   });
 
   it("returns false when forwarding is disabled", async () => {

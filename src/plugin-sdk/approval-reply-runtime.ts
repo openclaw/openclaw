@@ -17,6 +17,11 @@ export {
   type ExecApprovalReplyDecision,
   type ExecApprovalReplyMetadata,
 } from "../infra/exec-approval-reply.js";
+export {
+  downgradeApprovalMarkdownToPlaintext,
+  DEFAULT_APPROVAL_TEXT_MODE,
+  type ChannelApprovalTextMode,
+} from "./approval-markdown.js";
 export { resolveExecApprovalCommandDisplay } from "../infra/exec-approval-command-display.js";
 export {
   resolveExecApprovalAllowedDecisions,

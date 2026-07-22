@@ -228,6 +228,8 @@ function buildSignalPluginPendingPayload(params: {
 }
 
 export const signalApprovalCapability: ChannelApprovalCapability = createChannelApprovalCapability({
+  // Signal send path converts the canonical subset to native styled text.
+  approvalText: "markdown",
   ...signalApprovalAuth,
   getActionAvailabilityState: ({ cfg, accountId, approvalKind }) =>
     (

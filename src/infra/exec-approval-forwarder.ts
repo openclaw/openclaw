@@ -4,6 +4,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   getLoadedChannelPlugin,
   resolveChannelApprovalAdapter,
+  resolveChannelApprovalTextMode,
 } from "../channels/plugins/index.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type {
@@ -12,6 +13,7 @@ import type {
 } from "../config/types.approvals.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { downgradeApprovalMarkdownToPlaintext } from "../plugin-sdk/approval-markdown.js";
 import {
   buildApprovalResolvedReplyPayload,
   buildPluginApprovalResolvedReplyPayload,
@@ -413,12 +415,20 @@ function buildApprovalRenderPayload<TParams>(params: {
   buildFallback: () => ReplyPayload;
 }): ReplyPayload {
   const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
+  const plugin = channel ? getLoadedChannelPlugin(channel) : undefined;
   const adapterPayload = channel
-    ? params.resolveRenderer(resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel)))?.(
-        params.renderParams,
-      )
+    ? params.resolveRenderer(resolveChannelApprovalAdapter(plugin))?.(params.renderParams)
     : null;
-  return adapterPayload ?? params.buildFallback();
+  const payload = adapterPayload ?? params.buildFallback();
+  // Approval text is canonical markdown. A channel that has not declared it
+  // renders the subset gets the plaintext projection here, so markers never
+  // reach a transport that would show them literally. Presentation and
+  // channelData are untouched: buttons and metadata are not text.
+  const mode = resolveChannelApprovalTextMode(plugin);
+  if (mode === "markdown" || !payload.text) {
+    return payload;
+  }
+  return { ...payload, text: downgradeApprovalMarkdownToPlaintext(payload.text) };
 }
 
 function buildExecPendingPayload(params: {

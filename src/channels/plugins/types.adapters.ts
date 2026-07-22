@@ -15,6 +15,7 @@ import type {
   PluginApprovalRequest,
   PluginApprovalResolved,
 } from "../../infra/plugin-approvals.js";
+import type { ChannelApprovalTextMode } from "../../plugin-sdk/approval-markdown.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { ResolverContext, SecretDefaults } from "../../secrets/runtime-shared.js";
 import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-types.js";
@@ -634,6 +635,16 @@ export type ChannelApprovalAdapter = {
 };
 
 export type ChannelApprovalCapability = ChannelApprovalAdapter & {
+  /**
+   * How this channel handles the canonical approval markdown subset.
+   * Defaults to `plaintext`, which downgrades before send. Declaring
+   * `markdown` means the channel owns the translation and any escaping.
+   *
+   * Lives on the capability rather than the adapter because auth-only
+   * channels have no adapter projection but still receive approval text
+   * through the forwarder fallback.
+   */
+  approvalText?: ChannelApprovalTextMode;
   authorizeActorAction?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

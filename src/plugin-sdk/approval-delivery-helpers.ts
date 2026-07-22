@@ -36,6 +36,8 @@ type DeliverySuppressionParams = {
 };
 
 type ApproverRestrictedNativeApprovalParams = {
+  /** How the channel handles canonical approval markdown. Defaults to plaintext. */
+  approvalText?: ChannelApprovalCapability["approvalText"];
   /** Channel id that owns this native approval capability. */
   channel: string;
   /** Human-readable channel label used in denial messages. */
@@ -215,6 +217,7 @@ function buildApproverRestrictedNativeApprovalCapability(
           }
         : undefined,
     nativeRuntime: params.nativeRuntime,
+    approvalText: params.approvalText,
   });
 }
 
@@ -247,6 +250,8 @@ export function createChannelApprovalCapability(params: {
   render?: ChannelApprovalCapability["render"];
   /** Native target/capability discovery hooks. */
   native?: ChannelApprovalCapability["native"];
+  /** How the channel handles canonical approval markdown. Defaults to plaintext. */
+  approvalText?: ChannelApprovalCapability["approvalText"];
 }): ChannelApprovalCapability {
   const surfaces: ChannelApprovalCapabilitySurfaces = {
     delivery: params.delivery,
@@ -265,6 +270,7 @@ export function createChannelApprovalCapability(params: {
     nativeRuntime: surfaces.nativeRuntime,
     render: surfaces.render,
     native: surfaces.native,
+    approvalText: params.approvalText,
   };
 }
 

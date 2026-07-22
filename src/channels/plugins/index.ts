@@ -25,4 +25,8 @@ export {
 } from "../allowlist-match.js";
 export type { ChannelId } from "./types.public.js";
 export type { ChannelPlugin } from "./types.plugin.js";
-export { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";
+export {
+  resolveChannelApprovalAdapter,
+  resolveChannelApprovalCapability,
+  resolveChannelApprovalTextMode,
+} from "./approvals.js";

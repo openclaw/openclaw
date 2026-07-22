@@ -1,6 +1,10 @@
 // Approval tests cover channel plugin approval request formatting and dispatch.
 import { describe, expect, it, vi } from "vitest";
-import { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";
+import {
+  resolveChannelApprovalAdapter,
+  resolveChannelApprovalCapability,
+  resolveChannelApprovalTextMode,
+} from "./approvals.js";
 
 function createNativeRuntimeStub() {
   return {
@@ -48,6 +52,34 @@ describe("resolveChannelApprovalCapability", () => {
       render: undefined,
       native: undefined,
     });
+  });
+});
+
+describe("resolveChannelApprovalTextMode", () => {
+  it("defaults to plaintext when nothing is declared", () => {
+    expect(resolveChannelApprovalTextMode({})).toBe("plaintext");
+    expect(resolveChannelApprovalTextMode({ approvalCapability: {} })).toBe("plaintext");
+  });
+
+  it("returns the declared mode", () => {
+    expect(
+      resolveChannelApprovalTextMode({ approvalCapability: { approvalText: "markdown" } }),
+    ).toBe("markdown");
+  });
+
+  it("resolves for auth-only capabilities that project no adapter", () => {
+    // Regression guard: resolveChannelApprovalAdapter returns undefined for
+    // auth-only capabilities and copies a fixed field list, so reading the mode
+    // through that projection would fail on exactly the channels the default
+    // exists to protect.
+    const plugin = {
+      approvalCapability: {
+        authorizeActorAction: () => ({ authorized: true }),
+        approvalText: "markdown" as const,
+      },
+    };
+    expect(resolveChannelApprovalAdapter(plugin)).toBeUndefined();
+    expect(resolveChannelApprovalTextMode(plugin)).toBe("markdown");
   });
 });
 

@@ -322,6 +322,8 @@ const matrixNativeAdapter = matrixBaseNativeApprovalAdapter && {
 };
 
 export const matrixApprovalCapability = createChannelApprovalCapability({
+  // Matrix send path renders the canonical subset into formatted_body.
+  approvalText: "markdown",
   authorizeActorAction: (
     params: Parameters<NonNullable<ChannelApprovalCapability["authorizeActorAction"]>>[0],
   ) => {

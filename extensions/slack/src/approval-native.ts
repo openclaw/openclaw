@@ -173,6 +173,8 @@ const baseSlackNativeAdapter = baseSlackApprovalCapability.native;
 
 export const slackApprovalCapability: ChannelApprovalCapability = {
   ...baseSlackApprovalCapability,
+  // Slack authors native mrkdwn/Block Kit approval payloads of its own.
+  approvalText: "markdown",
   delivery: {
     ...baseSlackApprovalCapability.delivery,
     shouldSuppressForwardingFallback: (input) => {

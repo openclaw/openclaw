@@ -151,7 +151,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +2: shared Teams reply-style and TTS schema leaves.
       // +2: generic inbound-root and SCP-host schema validators.
       // +2: attributed-range renderer and its options contract.
-      4689,
+      // +3: approval markdown downgrade, default text mode, and text-mode type.
+      4692,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -164,7 +165,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: plugin-owned sensitive-schema registration.
       // +2: generic inbound-root and SCP-host schema validators.
       // +1: attributed-range renderer.
-      2839,
+      // +1: approval markdown downgrade helper.
+      2840,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

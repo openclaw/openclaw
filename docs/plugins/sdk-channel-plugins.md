@@ -303,6 +303,44 @@ Use `approvalCapability.delivery` only for native approval routing or fallback
 suppression, and `approvalCapability.render` only when a channel truly needs
 custom approval payloads instead of the shared renderer.
 
+### Approval text formatting
+
+Core builds approval prompts once and every channel receives the same string.
+That string is markdown, in a fixed subset: `**bold**`, `_italic_`,
+`~~strikethrough~~`, `` `inline code` ``, and fenced code blocks with an
+advisory language hint (`sh` for a pending command, `txt` for a plain block).
+Underline is excluded because most transports cannot express it. A channel may
+honour a language hint for native highlighting and must drop an unsupported
+hint without altering the fenced content.
+
+Declare how your channel handles that subset with `approvalCapability.approvalText`:
+
+- `"markdown"` - the channel translates the subset into native styling and owns
+  any escaping its transport requires. Declare this if your send path already
+  converts markdown, or if your transport renders it server-side.
+- `"plaintext"` (the default) - core projects the text to plaintext before
+  delivery, so no markers reach the transport.
+
+There is no implicit pass-through. A channel either translates or downgrades;
+handing canonical markdown to a transport that will not render it is how
+approvers end up reading literal backticks.
+
+Two things to know when declaring:
+
+- The mode lives on the capability, not the adapter. Auth-only channels project
+  no adapter but still receive approval text through the forwarder fallback, so
+  core reads it with `resolveChannelApprovalTextMode`, never through
+  `resolveChannelApprovalAdapter`.
+- Core enforces the downgrade on the forwarder path. Channels with their own
+  native approval runtime build their own payloads, so a channel there that
+  declares `"plaintext"` must call `downgradeApprovalMarkdownToPlaintext` from
+  `openclaw/plugin-sdk/approval-reply-runtime` itself.
+
+Emphasis over content the builder does not control - a model-generated
+rationale, a command, a path - must escape the payload before wrapping it. An
+unescaped `*` or `_` breaks the span on a rendering channel, and on a
+parse-mode transport it fails the send outright.
+
 ### Approval auth
 
 - `approvalCapability.authorizeActorAction` and
