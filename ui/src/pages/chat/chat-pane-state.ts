@@ -20,25 +20,58 @@ export function applySelectedSessionProjection(
   return true;
 }
 
-export function resolveSessionParticipationBlocked(params: {
-  catalog: boolean;
-  session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
-}): boolean {
-  if (params.catalog) {
-    return false;
+const MAX_TRACKED_SESSION_ROWS = 256;
+
+export class SessionParticipationTracker {
+  private readonly states = new Map<string, { blocked: boolean; seen: boolean }>();
+
+  reset(): void {
+    this.states.clear();
   }
-  // A missing row may be a newly redacted draft; never reopen mutation controls.
-  if (!params.session) {
-    return true;
+
+  resolve(params: {
+    catalog: boolean;
+    listLoaded: boolean;
+    listLoading: boolean;
+    sessionKey: string;
+    session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
+  }): boolean {
+    if (params.catalog) {
+      return false;
+    }
+    const previous = this.states.get(params.sessionKey);
+    if (params.session) {
+      const blocked =
+        params.session.visibility === "draft"
+          ? params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner"
+          : params.session.visibility !== undefined &&
+            params.session.visibility !== "shared" &&
+            params.session.sharingRole === "viewer";
+      this.remember(params.sessionKey, { blocked, seen: true });
+      return blocked;
+    }
+    if (!params.listLoaded) {
+      return false;
+    }
+    if (params.listLoading) {
+      return previous?.blocked === true;
+    }
+    const blocked = previous?.seen === true;
+    this.remember(params.sessionKey, { blocked, seen: previous?.seen === true });
+    return blocked;
   }
-  if (params.session.visibility === "draft") {
-    return params.session.sharingRole !== "admin" && params.session.sharingRole !== "owner";
+
+  private remember(sessionKey: string, state: { blocked: boolean; seen: boolean }): void {
+    this.states.delete(sessionKey);
+    this.states.set(sessionKey, state);
+    if (this.states.size <= MAX_TRACKED_SESSION_ROWS) {
+      return;
+    }
+    const oldest = this.states.keys().next().value;
+    if (oldest) {
+      this.states.delete(oldest);
+    }
   }
-  return (
-    params.session.visibility !== undefined &&
-    params.session.visibility !== "shared" &&
-    params.session.sharingRole === "viewer"
-  );
 }
 
 export function resolveAssistantAttachmentAuthToken(state: {

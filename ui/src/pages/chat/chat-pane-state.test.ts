@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  applySelectedSessionProjection,
-  resolveSessionParticipationBlocked,
-} from "./chat-pane-state.ts";
+import { applySelectedSessionProjection, SessionParticipationTracker } from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -45,29 +42,69 @@ describe("applySelectedSessionProjection", () => {
   });
 });
 
-describe("resolveSessionParticipationBlocked", () => {
-  it("blocks when a selected row disappears, then reopens once it returns shared", () => {
+describe("SessionParticipationTracker", () => {
+  const resolve = (
+    tracker: SessionParticipationTracker,
+    patch: Partial<Parameters<SessionParticipationTracker["resolve"]>[0]> = {},
+  ) =>
+    tracker.resolve({
+      catalog: false,
+      listLoaded: true,
+      listLoading: false,
+      sessionKey: "agent:main:tracked",
+      session: undefined,
+      ...patch,
+    });
+
+  it("does not block before the list loads or while it is loading", () => {
+    const tracker = new SessionParticipationTracker();
+    expect(resolve(tracker, { listLoaded: false })).toBe(false);
+    expect(resolve(tracker, { listLoading: true })).toBe(false);
+  });
+
+  it("does not block a brand-new key that never had a row", () => {
+    expect(resolve(new SessionParticipationTracker())).toBe(false);
+  });
+
+  it("blocks after a previously visible row disappears and reopens when shared", () => {
+    const tracker = new SessionParticipationTracker();
+    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
+      false,
+    );
+    expect(resolve(tracker)).toBe(true);
+    expect(resolve(tracker, { listLoading: true })).toBe(true);
+    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
+      false,
+    );
+  });
+
+  it("blocks a member while a draft row is still cached", () => {
     expect(
-      resolveSessionParticipationBlocked({
-        catalog: false,
+      resolve(new SessionParticipationTracker(), {
         session: { visibility: "draft", sharingRole: "member" },
       }),
     ).toBe(true);
+  });
+
+  it("forgets disappeared rows when the gateway connection changes", () => {
+    const tracker = new SessionParticipationTracker();
+    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
+      false,
+    );
+    expect(resolve(tracker)).toBe(true);
+    tracker.reset();
+    expect(resolve(tracker)).toBe(false);
+  });
+
+  it("keeps agent-relative global session history separate", () => {
+    const tracker = new SessionParticipationTracker();
     expect(
-      resolveSessionParticipationBlocked({
-        catalog: false,
-        session: undefined,
-      }),
-    ).toBe(true);
-    expect(
-      resolveSessionParticipationBlocked({
-        catalog: false,
+      resolve(tracker, {
+        sessionKey: "main\0global",
         session: { visibility: "shared", sharingRole: "member" },
       }),
     ).toBe(false);
-  });
-
-  it("keeps catalog sessions on their separate capability path", () => {
-    expect(resolveSessionParticipationBlocked({ catalog: true, session: undefined })).toBe(false);
+    expect(resolve(tracker, { sessionKey: "work\0global" })).toBe(false);
+    expect(resolve(tracker, { sessionKey: "main\0global" })).toBe(true);
   });
 });
