@@ -45,6 +45,7 @@ export function resolveHeartbeatWakePayloadFlags(params: {
       source === "hook" ||
       source === "acp-spawn" ||
       source === "session-state" ||
+      source === "followup-queue-restore" ||
       reason === "wake",
   };
 }

@@ -728,6 +728,38 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("runs followup-queue recovery wakes for a valid session outside the routine heartbeat map", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "30m" } },
+          list: [{ id: "ops", heartbeat: { every: "30m" } }, { id: "main" }],
+        },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "followup-queue-restore",
+        intent: "immediate",
+        reason: "restored-followup-queue",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        reason: "restored-followup-queue",
+        source: "followup-queue-restore",
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    const opsCalls = runSpy.mock.calls.filter((call) => call[0]?.agentId === "ops");
+    expect(opsCalls).toStrictEqual([]);
+
+    runner.stop();
+  });
+
   // Regression for runaway heartbeat loop: backgrounded `process.start` exits
   // call `requestHeartbeat({reason: "exec-event"})` from
   // `bash-tools.exec-runtime.ts:347` (`maybeNotifyOnExit`). If a heartbeat run

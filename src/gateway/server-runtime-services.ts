@@ -15,6 +15,7 @@ import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-contin
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 import type { GatewayCronReconciliation } from "./server-cron-reconciled.js";
 import type { GatewayCronState } from "./server-cron.js";
+import { scheduleRestoredFollowupQueueRecovery } from "./server-followup-queue-recovery.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import {
   createNoopHeartbeatRunner,
@@ -300,6 +301,12 @@ function startPendingSessionDeliveryRuntime(params: {
   };
 }
 
+function recoverRestoredFollowupQueues(params: { log: GatewayRuntimeServiceLogger }): void {
+  scheduleRestoredFollowupQueueRecovery({
+    log: params.log.child("followup-queue-recovery"),
+  });
+}
+
 function startGatewayModelPricingRefreshOnDemand(params: {
   config: OpenClawConfig;
   pluginLookUpTable?: PluginMetadataRegistryView;
@@ -387,6 +394,7 @@ export function activateGatewayScheduledServices(params: {
     cfg: params.cfgAtStart,
     log: params.log,
   });
+  recoverRestoredFollowupQueues({ log: params.log });
   const stopModelPricingRefresh = !isVitestRuntimeEnv()
     ? startGatewayModelPricingRefreshOnDemand({
         config: params.cfgAtStart,
