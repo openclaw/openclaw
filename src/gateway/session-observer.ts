@@ -67,6 +67,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
+  const visibleConnections = new Set<string>();
   let disposed = false;
   const askRuntime = createSessionObserverAskRuntime({
     getConfig: deps.getConfig,
@@ -171,18 +172,47 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   const hasSubscribers = (sessionKey: string) => deps.subscribers.get(sessionKey).size > 0;
 
+  const hasObserverAudience = (sessionKey: string) => {
+    // Only the Control UI renders these model-backed digests. Fail closed for
+    // undeclared subscribers so TUI and script connections never spend unseen
+    // tokens. Accepted tradeoff: a pre-2026.7 Control UI tab left open across a
+    // gateway upgrade cannot declare visibility and misses live digests until
+    // reload; terminal digests still reach it, and a fail-open default would
+    // re-enable unseen spend for every non-rendering subscriber permanently.
+    for (const connId of deps.subscribers.get(sessionKey)) {
+      if (visibleConnections.has(connId)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  const suspendStatesWithoutAudience = () => {
+    // suspendState deletes from `states`; Map iteration tolerates removal of
+    // the entry being visited.
+    for (const state of states.values()) {
+      if (!hasObserverAudience(state.sessionKey)) {
+        suspendState(state);
+      }
+    }
+  };
+
   const markSuperseded = (runId: string, observedAt: number) =>
     markSessionObserverRunSuperseded(supersededRuns, runId, observedAt);
 
   const unsubscribeChanges = deps.subscribers.onChange((sessionKey) => {
     const state = states.get(sessionKey);
-    if (state && !hasSubscribers(sessionKey)) {
+    if (state && !hasObserverAudience(sessionKey)) {
       suspendState(state);
     }
   });
 
   const stateIsCurrent = (state: SessionObserverState) => {
-    if (disposed || states.get(state.sessionKey) !== state || !hasSubscribers(state.sessionKey)) {
+    if (
+      disposed ||
+      states.get(state.sessionKey) !== state ||
+      !hasObserverAudience(state.sessionKey)
+    ) {
       return false;
     }
     const cfg = deps.getConfig();
@@ -469,10 +499,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const admitState = (event: SessionObserverEvent): SessionObserverState | undefined => {
     const sessionKey = event.sessionKey?.trim();
     const agentId = event.agentId?.trim();
-    // Watching is the intentional cost gate: read-scope subscribers are the
-    // operator's own surfaces, and spend stays bounded by the session cap,
-    // digest thresholds, and the sessionObserver/utilityModel kill switches.
-    if (!sessionKey || !agentId || !hasSubscribers(sessionKey)) {
+    if (!sessionKey || !agentId || !hasObserverAudience(sessionKey)) {
       return undefined;
     }
     const cfg = deps.getConfig();
@@ -604,7 +631,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     if (
       state &&
-      (!hasSubscribers(sessionKey) ||
+      (!hasObserverAudience(sessionKey) ||
         deps.getConfig().gateway?.controlUi?.sessionObserver === false)
     ) {
       suspendState(state);
@@ -648,6 +675,19 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   return {
     handleEvent,
+    setConnectionVisibility(connId, visible) {
+      if (visible) {
+        visibleConnections.add(connId);
+        return;
+      }
+      visibleConnections.delete(connId);
+      suspendStatesWithoutAudience();
+    },
+    removeConnection(connId) {
+      if (visibleConnections.delete(connId)) {
+        suspendStatesWithoutAudience();
+      }
+    },
     getSnapshot: askRuntime.getSnapshot,
     ask: askRuntime.ask,
     dispose() {
@@ -661,6 +701,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       revisionFloors.clear();
       supersededRuns.clear();
       disabledRuns.clear();
+      visibleConnections.clear();
     },
   };
 }

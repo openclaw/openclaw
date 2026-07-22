@@ -4016,6 +4016,8 @@ export const en: TranslationMap = {
       title: "Session observer",
       expand: "Expand session observer",
       collapse: "Collapse session observer",
+      hide: "Hide session observer",
+      show: "Show session observer",
       plan: "Plan",
       progress: "{completed} of {total}",
       pullRequests: "Pull requests",

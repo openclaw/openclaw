@@ -61,6 +61,16 @@ export const SessionsObserverAskResultSchema = closedObject({
   digestRevision: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 
+/** Declares whether this connection currently renders session observer output. */
+export const SessionsObserverVisibilityParamsSchema = closedObject({
+  visible: Type.Boolean(),
+});
+
+/** Acknowledges a connection's observer visibility declaration. */
+export const SessionsObserverVisibilityResultSchema = closedObject({
+  ok: Type.Literal(true),
+});
+
 /**
  * Session protocol schemas.
  *
@@ -751,6 +761,12 @@ export type SessionObserverPlanProgress = Static<typeof SessionObserverPlanProgr
 export type SessionObserverDigest = Static<typeof SessionObserverDigestSchema>;
 export type SessionsObserverAskParams = Static<typeof SessionsObserverAskParamsSchema>;
 export type SessionsObserverAskResult = Static<typeof SessionsObserverAskResultSchema>;
+export type SessionsObserverVisibilityParams = Static<
+  typeof SessionsObserverVisibilityParamsSchema
+>;
+export type SessionsObserverVisibilityResult = Static<
+  typeof SessionsObserverVisibilityResultSchema
+>;
 export type SessionsCompactionListParams = Static<typeof SessionsCompactionListParamsSchema>;
 export type SessionsCompactionGetParams = Static<typeof SessionsCompactionGetParamsSchema>;
 export type SessionsCompactionBranchParams = Static<typeof SessionsCompactionBranchParamsSchema>;

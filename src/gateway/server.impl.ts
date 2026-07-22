@@ -2060,6 +2060,7 @@ export async function startGatewayServer(
           unsubscribeAllSessionEvents: (connId: string) => {
             sessionEventSubscribers.unsubscribe(connId);
             sessionMessageSubscribers.unsubscribeAll(connId);
+            sessionObserver.removeConnection(connId);
           },
           getSessionEventSubscriberConnIds: sessionEventSubscribers.getAll,
           registerToolEventRecipient: toolEventRecipients.add,

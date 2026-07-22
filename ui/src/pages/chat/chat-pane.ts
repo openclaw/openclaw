@@ -147,7 +147,7 @@ import {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
-import { requestSessionObserverAnswer } from "./chat-observer.ts";
+import { requestSessionObserverAnswer, sendSessionObserverVisibility } from "./chat-observer.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -457,6 +457,13 @@ class ChatPane extends OpenClawLightDomElement {
       return Promise.reject(new Error("Gateway is disconnected"));
     }
     return requestSessionObserverAnswer(state.client, sessionKey, question);
+  };
+  private readonly setSessionObserverVisibility = (visible: boolean) => {
+    const state = this.state;
+    if (state?.connected && state.client) {
+      void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
+    }
+    this.requestUpdate();
   };
   private resetConfirmation:
     | {
@@ -2396,10 +2403,17 @@ class ChatPane extends OpenClawLightDomElement {
         }
       });
     }
-    const projectedObserverDigest = this.state?.sessionsResult?.sessions.find((row) =>
+    const selectedSessionRow = this.state?.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
-    )?.observerDigest;
-    if (this.state?.observerDigest || projectedObserverDigest) {
+    );
+    // Active runs count even without a digest: a hidden observer generates
+    // none, and the HUD module owns the restore control for turning it back on.
+    const observerRunId = resolveChatPaneObserverRunId({
+      localRunId: this.state?.chatRunId ?? null,
+      session: selectedSessionRow,
+      digest: null,
+    });
+    if (this.state?.observerDigest || selectedSessionRow?.observerDigest || observerRunId) {
       this.ensureObserverHud();
     }
   }
@@ -3329,6 +3343,9 @@ class ChatPane extends OpenClawLightDomElement {
       observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
       observerLastReadAt: selectedSession?.lastReadAt,
       onObserverAsk: catalogKey ? undefined : this.askSessionObserver,
+      // Unconditional: catalog chats never render the HUD (observerHudReady is
+      // forced false), and a hide/show from any surface must reach the gateway.
+      onObserverVisibilityChange: this.setSessionObserverVisibility,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];

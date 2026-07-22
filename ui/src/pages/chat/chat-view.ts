@@ -107,6 +107,7 @@ export type ChatProps = {
   observerStartedAt?: number;
   observerLastReadAt?: number;
   onObserverAsk?: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>;
+  onObserverVisibilityChange?: (visible: boolean) => void;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
@@ -635,6 +636,7 @@ export function renderChat(props: ChatProps) {
                       .planStatus=${props.planStatus ?? null}
                       .pullRequests=${props.pullRequests ?? []}
                       .onAsk=${props.onObserverAsk}
+                      .onVisibilityChange=${props.onObserverVisibilityChange}
                     ></openclaw-chat-observer-hud>
                   `
                 : nothing}
