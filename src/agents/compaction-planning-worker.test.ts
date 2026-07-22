@@ -2,10 +2,8 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { serializeConversation } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  buildSummaryChunksWithWorker,
-  compactionPlanningWorkerTesting,
-} from "./compaction-planning-worker.js";
+import { buildSummaryChunksWithWorker } from "./compaction-planning-worker.js";
+import { compactionPlanningWorkerTesting } from "./compaction-planning-worker.test-support.js";
 import { estimateMessagesTokens } from "./compaction-planning.js";
 import { runCompactionPlanningWorkerInput } from "./compaction-planning.worker.js";
 import type { AgentMessage } from "./runtime/index.js";
