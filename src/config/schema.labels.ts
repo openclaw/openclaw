@@ -681,6 +681,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
   "agents.defaults.cliBackends": "CLI Backends",
   "agents.defaults.compaction": "Compaction",
+  "agents.defaults.compaction.enabled": "Auto-Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
   "agents.defaults.compaction.provider": "Compaction Provider",
   "agents.defaults.compaction.thinkingLevel": "Compaction Thinking Level",
