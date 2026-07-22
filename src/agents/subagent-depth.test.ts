@@ -73,6 +73,23 @@ describe("getSubagentDepthFromSessionStore", () => {
     expect(depth).toBe(1);
   });
 
+  it("prefers stored spawnDepth 0 over parentSessionKey ancestry for operator dashboard sessions", () => {
+    // Operator-created dashboard sessions are auto-parented to main for UI
+    // threading; the explicit spawnDepth 0 keeps them spawn-capable roots.
+    const depth = getSubagentDepthFromSessionStore("agent:main:dashboard:operator", {
+      store: {
+        "agent:main:main": { sessionId: "root" },
+        "agent:main:dashboard:operator": {
+          sessionId: "operator",
+          spawnDepth: 0,
+          parentSessionKey: "agent:main:main",
+        },
+      },
+    });
+
+    expect(depth).toBe(0);
+  });
+
   it("resolves depth when caller is identified by sessionId", () => {
     const key1 = "agent:main:subagent:one";
     const key2 = "agent:main:subagent:two";

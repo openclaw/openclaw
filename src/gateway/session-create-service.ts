@@ -790,10 +790,9 @@ export async function createGatewaySession(params: {
         };
         sessionEntries[target.canonicalKey] = initializedEntry;
         const initialized = { ...patched, entry: initializedEntry };
-        const storedParentSessionKey =
-          canonicalParentSessionKey ??
-          normalizeOptionalString(initializedEntry.parentSessionKey) ??
-          dashboardParentSessionKey;
+        const explicitParentSessionKey =
+          canonicalParentSessionKey ?? normalizeOptionalString(initializedEntry.parentSessionKey);
+        const storedParentSessionKey = explicitParentSessionKey ?? dashboardParentSessionKey;
         if (!storedParentSessionKey) {
           return initialized;
         }
@@ -805,6 +804,13 @@ export async function createGatewaySession(params: {
           ...initializedEntry,
           ...inheritedSelection,
           parentSessionKey: storedParentSessionKey,
+          // Auto-parenting to main is dashboard threading, not spawn lineage. Depth
+          // recovery walks parentSessionKey for visible spawn children, so record
+          // depth 0 explicitly or operator sessions classify as depth-1 subagents
+          // and lose spawn rights (maxSpawnDepth admission).
+          ...(!explicitParentSessionKey && initializedEntry.spawnDepth === undefined
+            ? { spawnDepth: 0 }
+            : {}),
         };
         if (params.fork !== true) {
           return { ...initialized, entry };
