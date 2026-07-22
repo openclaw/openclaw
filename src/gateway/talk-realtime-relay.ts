@@ -59,6 +59,7 @@ const RELAY_EVENT = "talk.event";
 const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
+const noFallbackRelayOutputFlush = () => {};
 
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
@@ -711,6 +712,8 @@ export function createTalkRealtimeRelaySession(
       transport: "gateway-relay",
       brain: "agent-consult",
       provider: params.provider.id,
+      // Keep the pre-harness steering window; other harness consumers use the shared default.
+      maxRecentEvents: 20,
     },
     talkPayloads: {
       turnStarted: () => ({}),
@@ -1078,7 +1081,10 @@ function scheduleForcedAgentConsult(session: RelaySession | undefined, question:
     const callId = handle.id;
     const itemId = `forced-consult-item-${randomUUID()}`;
     session.harness.forcedConsults.markStarted(handle);
-    session.harness.handleBargeIn({ audioPlaybackActive: true, force: true });
+    session.harness.handleBargeIn(
+      { audioPlaybackActive: true, force: true },
+      noFallbackRelayOutputFlush,
+    );
     broadcastToOwner(session.context, session.connId, {
       relaySessionId: session.id,
       type: "toolCall",
@@ -1579,7 +1585,10 @@ export function cancelTalkRealtimeRelayTurn(params: {
       }
     }
   }
-  session.harness.handleBargeIn({ audioPlaybackActive: true });
+  session.harness.handleBargeIn(
+    { audioPlaybackActive: true },
+    noFallbackRelayOutputFlush,
+  );
   abortRelayAgentRuns(session, reason);
   const cancelled = session.harness.talk.cancelTurn({
     turnId,

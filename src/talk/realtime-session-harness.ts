@@ -92,7 +92,7 @@ export type RealtimeVoiceSessionHarness<TForcedConsultContext = unknown> = {
     providerConnected: boolean;
     realtimeReady: boolean;
   }): RealtimeVoiceSessionHarnessHealth;
-  handleBargeIn(options: RealtimeVoiceBargeInOptions, flushOutput?: () => void): void;
+  handleBargeIn(options: RealtimeVoiceBargeInOptions, flushOutput: () => void): void;
   isLikelyAssistantEchoTranscript(text: string): boolean;
   isOutputPlaybackWindowActive(): boolean;
   recordInputAudio(audio: Buffer): boolean;
@@ -129,7 +129,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     params.forcedConsults,
   );
   const talk = createTalkSessionController(
-    { ...params.talk, maxRecentEvents: 40 },
+    { maxRecentEvents: 40, ...params.talk },
     {
       onEvent: (event) => {
         recordTalkObservabilityEvent(event);
@@ -224,7 +224,7 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
       suppressInputUntilMs = 0;
       const flushGeneration = outputFlushGeneration;
       bridge?.handleBargeIn(options);
-      if (fallbackFlush && flushGeneration === outputFlushGeneration) {
+      if (flushGeneration === outputFlushGeneration) {
         flushOutput(fallbackFlush);
       }
     },
