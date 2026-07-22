@@ -57,21 +57,33 @@ export async function forceAbandonWorkerEnvironment(params: {
     placement: { sessionId: string; sessionKey: string; agentId: string };
     journal: NonNullable<ReturnType<typeof placements.loadWorkspaceReconciliation>>;
   }> = [];
+  const retainedJournalSessions = new Set<string>();
   for (const owner of journalOwners) {
     const placement = placements.get(owner.sessionId);
-    if (
+    const isCurrentOwner =
       (placement?.state === "active" || placement?.state === "draining") &&
+      placement.generation === owner.placementGeneration;
+    const isForceFailedOwner =
+      placement?.state === "failed" &&
+      placement.recoveryError.startsWith(recoveryError) &&
+      placement.generation > owner.placementGeneration;
+    if (
+      placement &&
+      (isCurrentOwner || isForceFailedOwner) &&
       placement.environmentId === owner.environmentId &&
-      placement.activeOwnerEpoch === owner.ownerEpoch &&
-      placement.generation === owner.placementGeneration
+      placement.activeOwnerEpoch === owner.ownerEpoch
     ) {
       try {
-        const journal = placements.loadWorkspaceReconciliation(owner);
+        const journal = placements.loadWorkspaceReconciliation(
+          owner,
+          isForceFailedOwner ? { allowFailedOwner: true } : undefined,
+        );
         if (journal) {
           journalCleanups.push({ owner, placement, journal });
         }
       } catch (error) {
         reportCleanupError(params.onCleanupError, error);
+        retainedJournalSessions.add(owner.sessionId);
       }
     }
   }
@@ -129,7 +141,6 @@ export async function forceAbandonWorkerEnvironment(params: {
 
   // The durable fence is now closed. Filesystem rollback and ref cleanup are
   // useful hygiene, but a changed or missing workspace must not revive it.
-  const retainedJournalSessions = new Set<string>();
   for (const cleanup of journalCleanups) {
     if (cleanup.journal.appliedManifestRef) {
       continue;

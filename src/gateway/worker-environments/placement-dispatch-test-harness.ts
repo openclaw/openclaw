@@ -59,7 +59,8 @@ export function createHarness(
   };
   const placements: WorkerDispatchPlacementStore = {
     get: (sessionId) => placementStore.get(sessionId),
-    loadWorkspaceReconciliation: (owner) => placementStore.loadWorkspaceReconciliation(owner),
+    loadWorkspaceReconciliation: (owner, loadOptions) =>
+      placementStore.loadWorkspaceReconciliation(owner, loadOptions),
     beginWorkspaceReconciliation: (owner, journal) =>
       placementStore.beginWorkspaceReconciliation(owner, journal),
     abortWorkspaceReconciliation: (owner, abortOptions) =>

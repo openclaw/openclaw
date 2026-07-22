@@ -172,19 +172,71 @@ describe("forced worker environment abandonment", () => {
     });
     const onCleanupError = vi.fn();
 
-    await forceAbandonWorkerEnvironment({
-      placements: store,
-      environmentId,
-      resolveWorkspacePath: async () => {
-        throw new Error("workspace temporarily unavailable");
-      },
-      onCleanupError,
+    const resolveWorkspacePath = vi.fn(async () => {
+      throw new Error("workspace temporarily unavailable");
     });
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await forceAbandonWorkerEnvironment({
+        placements: store,
+        environmentId,
+        resolveWorkspacePath,
+        onCleanupError,
+      });
+    }
 
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
     expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(resolveWorkspacePath).toHaveBeenCalledTimes(2);
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "workspace temporarily unavailable" }),
+    );
+  });
+
+  it("retains a current journal when loading it fails", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "d".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"e".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    const onCleanupError = vi.fn();
+    vi.spyOn(store, "loadWorkspaceReconciliation").mockImplementation(() => {
+      throw new Error("journal temporarily unreadable");
+    });
+
+    const resolveWorkspacePath = vi.fn(async () => root);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await forceAbandonWorkerEnvironment({
+        placements: store,
+        environmentId,
+        resolveWorkspacePath,
+        onCleanupError,
+      });
+    }
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(resolveWorkspacePath).not.toHaveBeenCalled();
+    expect(onCleanupError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "journal temporarily unreadable" }),
     );
   });
 });
