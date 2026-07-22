@@ -1,5 +1,6 @@
 // Setup finalize tests cover writing final onboarding config and artifacts.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
@@ -734,7 +735,7 @@ describe("finalizeSetupWizard", () => {
       routeVariants: catalog,
     });
     expect(resolveDefaultModelAuthStatus).toHaveBeenCalledWith(nextConfig, {
-      agentDir: "/tmp/custom-agent",
+      agentDir: path.resolve("/tmp/custom-agent"),
       observedRoutes,
     });
   });
@@ -783,7 +784,7 @@ describe("finalizeSetupWizard", () => {
           list: [{ id: "main", agentDir: "/tmp/custom-agent" }],
         },
       }),
-      { agentDir: "/tmp/custom-agent" },
+      { agentDir: path.resolve("/tmp/custom-agent") },
     );
     expectNoteContains(
       prompter,
