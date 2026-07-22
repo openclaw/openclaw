@@ -460,19 +460,26 @@ function hasCompletionReportUserTail(messages: readonly unknown[]): boolean {
 
 async function reconcileInterruptedCompletionReport(params: {
   entry: SessionEntry;
+  source: "announce_runs" | "transcript";
   storePath: string;
   sessionKey: string;
-}): Promise<boolean> {
-  const reconciled = await updateSessionEntry(
+}): Promise<{ outcome: "reconciled" } | { outcome: "changed"; entry: SessionEntry | null }> {
+  let didReconcile = false;
+  const current = await updateSessionEntry(
     { sessionKey: params.sessionKey, storePath: params.storePath },
     (entry) => {
+      const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
+      const stillMatchesSource =
+        params.source === "announce_runs" ? hasOnlyAnnounceRecoveryRuns(entry) : !hasRecoveryRuns;
       if (
         entry.sessionId !== params.entry.sessionId ||
         entry.status !== "running" ||
-        entry.abortedLastRun !== true
+        entry.abortedLastRun !== true ||
+        !stillMatchesSource
       ) {
         return null;
       }
+      didReconcile = true;
       const endedAt = Date.now();
       return {
         ...buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: false }),
@@ -488,10 +495,11 @@ async function reconcileInterruptedCompletionReport(params: {
     },
     { requireWriteSuccess: true },
   );
-  if (reconciled) {
+  if (didReconcile) {
     log.info(`reconciled interrupted completion report to non-running: ${params.sessionKey}`);
+    return { outcome: "reconciled" };
   }
-  return Boolean(reconciled);
+  return { outcome: "changed", entry: current };
 }
 
 function findSourceTurnRange(params: {
@@ -1866,20 +1874,29 @@ async function recoverStore(params: {
     // rotation retains their announce run ids; a full restart can recover the
     // same fact from the already-persisted user-message provenance.
     const hasRecoveryRuns = Boolean(entry.restartRecoveryRuns?.length);
-    if (
-      hasOnlyAnnounceRecoveryRuns(entry) ||
-      (!hasRecoveryRuns && hasCompletionReportUserTail(messages))
-    ) {
-      if (
-        await reconcileInterruptedCompletionReport({
-          entry,
-          storePath: params.storePath,
-          sessionKey,
-        })
-      ) {
+    const completionSource = hasOnlyAnnounceRecoveryRuns(entry)
+      ? "announce_runs"
+      : !hasRecoveryRuns && hasCompletionReportUserTail(messages)
+        ? "transcript"
+        : undefined;
+    if (completionSource) {
+      const reconciliation = await reconcileInterruptedCompletionReport({
+        entry,
+        source: completionSource,
+        storePath: params.storePath,
+        sessionKey,
+      });
+      if (reconciliation.outcome === "reconciled") {
         params.resumedSessionKeys.add(resumeDedupeKey);
+        result.skipped++;
+      } else if (
+        reconciliation.entry?.status === "running" &&
+        reconciliation.entry.abortedLastRun === true
+      ) {
+        result.failed++;
+      } else {
+        result.skipped++;
       }
-      result.skipped++;
       continue;
     }
 
