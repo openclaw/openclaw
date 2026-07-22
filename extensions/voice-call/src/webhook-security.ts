@@ -300,7 +300,6 @@ function buildTwilioVerificationUrl(
   try {
     const base = new URL(publicUrl);
     const requestUrl = new URL(ctx.url);
-    base.pathname = requestUrl.pathname;
     base.search = requestUrl.search;
     return base.toString();
   } catch {
