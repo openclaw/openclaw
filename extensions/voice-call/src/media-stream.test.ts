@@ -401,6 +401,7 @@ describe("MediaStreamHandler security hardening", () => {
       for (const payload of ["!!!not-valid-base64!!!", "   \t\n  "]) {
         ws.send(JSON.stringify({ event: "media", media: { payload } }));
       }
+      ws.send(JSON.stringify({ event: "media", media: { payload: "-_8" } }));
       ws.send(
         JSON.stringify({
           event: "media",
@@ -409,7 +410,7 @@ describe("MediaStreamHandler security hardening", () => {
       );
 
       await vi.waitFor(() => {
-        expect(sentAudio).toEqual([Buffer.from("valid")]);
+        expect(sentAudio).toEqual([Buffer.from([0xfb, 0xff]), Buffer.from("valid")]);
       });
       expect(ws.readyState).toBe(WebSocket.OPEN);
 

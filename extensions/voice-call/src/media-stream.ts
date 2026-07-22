@@ -10,7 +10,6 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -26,6 +25,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { type RawData, WebSocket, WebSocketServer } from "ws";
+import { canonicalizeVoiceCallMediaBase64 } from "./media-base64.js";
 
 /**
  * Configuration for the media stream handler.
@@ -252,7 +252,7 @@ export class MediaStreamHandler {
 
           case "media":
             if (session && message.media?.payload) {
-              const canonicalPayload = canonicalizeBase64(message.media.payload);
+              const canonicalPayload = canonicalizeVoiceCallMediaBase64(message.media.payload);
               if (!canonicalPayload) {
                 break;
               }
