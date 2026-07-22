@@ -401,20 +401,61 @@ function isAgentPrimarySessionKey(sessionKey: string): boolean {
   return normalizeLowercaseStringOrEmpty(parsed?.rest) === "main";
 }
 
-function isProtectedSessionMaintenanceEntry(
-  sessionKey: string,
-  entry: SessionEntry | undefined,
-): boolean {
-  // Human conversation surfaces are protected; synthetic automation sessions are disposable.
-  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
-    return false;
+/**
+ * Which maintenance pass is asking whether an entry may be reclaimed.
+ * - `age`: opportunistic staleness pruning (`pruneAfter`). Durable human conversation
+ *   surfaces are preserved here: being old is not sufficient reason to delete a real
+ *   thread/channel conversation.
+ * - `capacity`: hard resource-limit enforcement (`maxEntries` / `maxDiskBytes`). These are
+ *   configured caps that must actually bound the store, so durable conversations become
+ *   evictable oldest-first as a last resort. Only always-protected entries survive.
+ */
+type SessionMaintenanceReclaimScope = "age" | "capacity";
+
+/**
+ * Entries that no maintenance pass may reclaim, regardless of age or resource pressure:
+ * the operator's primary `main` session, user-shelved archives, harness-locked sessions,
+ * and runtime-provided active/preserve keys (in-flight runs).
+ */
+function isAlwaysProtectedMaintenanceEntry(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+  preserveKeys?: ReadonlySet<string>;
+}): boolean {
+  // Archived sessions are user-shelved; only an explicit sessions.delete may remove them.
+  if (params.entry?.archivedAt !== undefined) {
+    return true;
+  }
+  // A model lock is durable harness ownership, not merely a UI restriction.
+  // Evicting the row can strand its native runtime binding and later recreate
+  // the same conversation under an incompatible model, so pressure may exceed
+  // configured retention limits while the lock remains.
+  if (params.entry?.modelSelectionLocked === true) {
+    return true;
+  }
+  // Runtime-provided keys cover the active session and other in-flight runs; evicting them
+  // corrupts the session file a live prompt still holds.
+  if (params.preserveKeys?.has(params.key) === true) {
+    return true;
   }
   // The agent's own primary `main` session is the operator's live interactive conversation.
   // Evicting it out from under an in-flight run corrupts the session file the runtime still
   // holds (surfacing as `session file changed while embedded prompt lock was released`), so it
   // is always durable regardless of entry-cap/disk pressure from other sessions.
-  if (isAgentPrimarySessionKey(sessionKey)) {
-    return true;
+  return isAgentPrimarySessionKey(params.key);
+}
+
+/**
+ * Durable human conversation surfaces (threads, telegram topics, group/channel roots).
+ * Preserved from age-based pruning, but reclaimable under hard capacity/disk limits so the
+ * configured caps stay enforceable. Synthetic automation sessions are never durable.
+ */
+function isDurableConversationMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
   }
   if (parseSessionThreadInfoFast(sessionKey).threadId) {
     return true;
@@ -433,20 +474,24 @@ export function shouldPreserveMaintenanceEntry(params: {
   key: string;
   entry: SessionEntry | undefined;
   preserveKeys?: ReadonlySet<string>;
+  /** Defaults to `age` so callers that only prune staleness keep durable conversations. */
+  scope?: SessionMaintenanceReclaimScope;
 }): boolean {
-  // Archived sessions are user-shelved; only an explicit sessions.delete may remove them.
-  if (params.entry?.archivedAt !== undefined) {
+  if (
+    isAlwaysProtectedMaintenanceEntry({
+      key: params.key,
+      entry: params.entry,
+      preserveKeys: params.preserveKeys,
+    })
+  ) {
     return true;
   }
-  // A model lock is durable harness ownership, not merely a UI restriction.
-  // Evicting the row can strand its native runtime binding and later recreate
-  // the same conversation under an incompatible model, so pressure may exceed
-  // configured retention limits while the lock remains.
-  return (
-    params.entry?.modelSelectionLocked === true ||
-    params.preserveKeys?.has(params.key) === true ||
-    isProtectedSessionMaintenanceEntry(params.key, params.entry)
-  );
+  // Under hard capacity/disk enforcement, durable conversations are reclaimable oldest-first;
+  // only age-based pruning preserves them.
+  if ((params.scope ?? "age") === "capacity") {
+    return false;
+  }
+  return isDurableConversationMaintenanceEntry(params.key, params.entry);
 }
 
 export function getActiveSessionMaintenanceWarning(params: {
@@ -556,8 +601,16 @@ export function capEntryCount(
     preserveKeys?: ReadonlySet<string>;
   } = {},
 ): number {
+  // `maxEntries` is a hard cap: only always-protected entries (main / archived / model-locked /
+  // active preserve-keys) are exempt. Durable conversations are evictable oldest-first here so the
+  // configured limit actually bounds the store instead of being silently exceeded.
   const preservedCount = Object.entries(store).filter(([key, entry]) =>
-    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
+    shouldPreserveMaintenanceEntry({
+      key,
+      entry,
+      preserveKeys: opts.preserveKeys,
+      scope: "capacity",
+    }),
   ).length;
   const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
   // Protected entries reduce the removable budget instead of being counted as deletion targets.
@@ -567,6 +620,7 @@ export function capEntryCount(
         key,
         entry: store[key],
         preserveKeys: opts.preserveKeys,
+        scope: "capacity",
       }),
   );
   if (keys.length <= maxRemovableEntries) {

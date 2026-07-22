@@ -837,7 +837,17 @@ export async function enforceSessionDiskBudget(params: {
       if (!entry) {
         continue;
       }
-      if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
+      // `maxDiskBytes` is a hard cap: only always-protected entries survive. Durable
+      // conversations are evictable oldest-first (keys are sorted ascending by updatedAt above)
+      // so the disk budget actually bounds the store.
+      if (
+        shouldPreserveMaintenanceEntry({
+          key,
+          entry,
+          preserveKeys: params.preserveKeys,
+          scope: "capacity",
+        })
+      ) {
         continue;
       }
       const previousProjectedBytes = projectedStoreBytes;

@@ -1465,7 +1465,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded["session-74"]).toBeUndefined();
   });
 
-  it("explicit loadSessionStore maintenance preserves channel, thread, and topic session pointers", async () => {
+  it("explicit loadSessionStore maintenance evicts oldest durable pointers under the entry cap (#112638)", async () => {
     const now = Date.now();
     const channelKey = "agent:main:slack:channel:C123";
     const threadKey = "agent:main:discord:channel:123456:thread:987654";
@@ -1473,6 +1473,9 @@ describe("Integration: saveSessionStore with pruning", () => {
     const store = Object.fromEntries(
       Array.from({ length: 75 }, (_, index) => [`session-${index}`, makeEntry(now - index)]),
     );
+    // Durable conversation pointers are the oldest entries here. With age-pruning disabled they
+    // used to be exempt from the cap, letting the store exceed maxEntries indefinitely. They are
+    // now reclaimable oldest-first so the hard cap is honored.
     store[channelKey] = makeEntry(now - 99 * DAY_MS);
     store[threadKey] = makeEntry(now - 100 * DAY_MS);
     store[topicKey] = makeEntry(now - 101 * DAY_MS);
@@ -1489,9 +1492,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     });
 
     expect(Object.keys(loaded)).toHaveLength(50);
-    expect(loaded).toHaveProperty(channelKey);
-    expect(loaded).toHaveProperty(threadKey);
-    expect(loaded).toHaveProperty(topicKey);
+    expect(loaded[channelKey]).toBeUndefined();
+    expect(loaded[threadKey]).toBeUndefined();
+    expect(loaded[topicKey]).toBeUndefined();
+    expect(loaded).toHaveProperty("session-0");
     expect(loaded["session-74"]).toBeUndefined();
   });
 

@@ -648,22 +648,25 @@ describe("enforceSessionDiskBudget", () => {
     });
   });
 
-  it("does not evict protected thread session entries under store pressure", async () => {
+  it("evicts durable thread session entries under store pressure, keeping always-protected (#112638)", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
-      const protectedKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
-      const removableKey = "agent:main:subagent:old-worker";
+      // A durable thread is exempt from age pruning but must be reclaimable under the hard disk
+      // budget; only always-protected entries (model-locked harness + primary main) survive.
+      const threadKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+      const lockedKey = "agent:main:harness-owned:locked";
       const activeKey = "agent:main:main";
       const store: Record<string, SessionEntry> = {
-        [protectedKey]: {
-          sessionId: "protected-thread",
+        [threadKey]: {
+          sessionId: "durable-thread",
           updatedAt: 1,
           displayName: "p".repeat(2000),
         },
-        [removableKey]: {
-          sessionId: "removable-worker",
+        [lockedKey]: {
+          sessionId: "locked-harness",
           updatedAt: 2,
-          displayName: "r".repeat(2000),
+          displayName: "l".repeat(2000),
+          modelSelectionLocked: true,
         },
         [activeKey]: {
           sessionId: "active",
@@ -683,8 +686,8 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      expect(store).toHaveProperty(protectedKey);
-      expect(store[removableKey]).toBeUndefined();
+      expect(store[threadKey]).toBeUndefined();
+      expect(store).toHaveProperty(lockedKey);
       expect(store).toHaveProperty(activeKey);
       expectBudgetResult(result);
       expect(result.removedEntries).toBe(1);
