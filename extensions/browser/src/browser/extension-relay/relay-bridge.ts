@@ -8,8 +8,8 @@
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
+import { PAGE_SHARE_GATEWAY_REQUIRED_ERROR } from "./page-share.js";
 import {
   type ExtensionToRelayMessage,
   PAGE_SHARE_MAX_NOTE_CHARS,
