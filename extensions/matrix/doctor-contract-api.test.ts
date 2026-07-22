@@ -1,6 +1,7 @@
 // Matrix tests cover doctor contract state migrations.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -14,7 +15,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { openMatrixStorageMetaStoreOptions } from "./src/matrix/client/storage.js";
@@ -73,6 +74,7 @@ describe("matrix doctor contract state migrations", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     resetPluginStateStoreForTests();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -690,6 +692,64 @@ describe("matrix doctor contract state migrations", () => {
       changes: [],
       warnings: [],
     });
+  });
+
+  it("withholds completion after a directory read failure and imports the source on retry", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-doctor-"));
+    tempDirs.push(stateDir);
+    const blockedDir = path.join(stateDir, "matrix", "accounts", "home");
+    const jsonRoot = path.join(blockedDir, "matrix.example.org__bot", "token-a");
+    const jsonPath = path.join(jsonRoot, "inbound-dedupe.json");
+    const roomId = "!room:example.org";
+    const eventId = "$found-on-retry";
+    fs.mkdirSync(jsonRoot, { recursive: true });
+    fs.writeFileSync(
+      jsonPath,
+      JSON.stringify({
+        version: 1,
+        entries: [{ key: `${roomId}|${eventId}`, ts: Date.now() - 60_000 }],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(jsonRoot, "storage-meta.json"),
+      JSON.stringify({ accountId: "home", userId: "@home:example.org" }),
+    );
+
+    const originalReaddir = fsPromises.readdir.bind(fsPromises);
+    const readdirSpy = vi.spyOn(fsPromises, "readdir").mockImplementation(async (...args) => {
+      if (path.resolve(String(args[0])) === path.resolve(blockedDir)) {
+        throw Object.assign(new Error("injected directory read failure"), { code: "EACCES" });
+      }
+      return originalReaddir(...args);
+    });
+    const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
+    const params = createMigrationParams(stateDir);
+
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [],
+      warnings: [
+        `Failed scanning Matrix inbound dedupe sources under ${blockedDir}: Error: injected directory read failure`,
+      ],
+    });
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+    });
+
+    readdirSpy.mockRestore();
+    await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+      changes: [
+        "Migrated Matrix inbound dedupe markers to the claimable dedupe store (1 of 1 entries)",
+        `Archived Matrix inbound dedupe legacy source -> ${jsonPath}.migrated`,
+        "Recorded Matrix inbound dedupe migration completion (0 SQLite roots, 1 JSON roots scanned)",
+      ],
+      warnings: [],
+    });
+    const deduper = createMatrixInboundEventDeduper({
+      auth: { accountId: "home" },
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    await expect(deduper.claim({ roomId, eventId })).resolves.toEqual({ kind: "duplicate" });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
   });
 
   it("ignores an invalid legacy-scan completion receipt", async () => {

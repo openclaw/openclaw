@@ -54,6 +54,15 @@ export type LegacyInboundDedupeMarker = {
   ts: number;
 };
 
+type MatrixInboundDedupeSourceRoots = {
+  sqliteRoots: string[];
+  jsonRoots: string[];
+};
+
+export type MatrixInboundDedupeSourceCensus =
+  | ({ status: "complete" } & MatrixInboundDedupeSourceRoots)
+  | ({ status: "incomplete"; warnings: string[] } & MatrixInboundDedupeSourceRoots);
+
 type LegacySqliteRow = {
   namespace: string;
   entry_key: string;
@@ -109,18 +118,22 @@ function loadNodeSqlite(): typeof import("node:sqlite") {
   return req("node:sqlite") as typeof import("node:sqlite");
 }
 
-export async function collectMatrixInboundDedupeSources(stateDir: string): Promise<{
-  sqliteRoots: string[];
-  jsonRoots: string[];
-}> {
+export async function collectMatrixInboundDedupeSources(
+  stateDir: string,
+): Promise<MatrixInboundDedupeSourceCensus> {
   const matrixRoot = path.join(stateDir, "matrix");
   const sqliteRoots = new Set<string>();
   const jsonRoots = new Set<string>();
-  async function visit(dir: string): Promise<void> {
+  const warnings: string[] = [];
+  async function visit(dir: string, allowMissing = false): Promise<void> {
     let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
+    } catch (err) {
+      if (allowMissing && (err as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      warnings.push(`Failed scanning Matrix inbound dedupe sources under ${dir}: ${String(err)}`);
       return;
     }
     for (const entry of entries) {
@@ -139,13 +152,16 @@ export async function collectMatrixInboundDedupeSources(stateDir: string): Promi
       }
     }
   }
-  await visit(matrixRoot);
+  await visit(matrixRoot, true);
   const matrixRootResolved = path.resolve(matrixRoot);
   const isAccountRoot = (root: string) => path.resolve(root) !== matrixRootResolved;
-  return {
+  const roots = {
     sqliteRoots: [...sqliteRoots].filter(isAccountRoot).toSorted(),
     jsonRoots: [...jsonRoots].filter(isAccountRoot).toSorted(),
   };
+  return warnings.length === 0
+    ? { status: "complete", ...roots }
+    : { status: "incomplete", ...roots, warnings };
 }
 
 function selectLegacySqliteRows(db: DatabaseSync): LegacySqliteRow[] {
@@ -282,6 +298,9 @@ export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string
 export async function verifyMatrixInboundDedupeSourcesRetired(stateDir: string): Promise<string[]> {
   const warnings: string[] = [];
   const remaining = await collectMatrixInboundDedupeSources(stateDir);
+  if (remaining.status === "incomplete") {
+    warnings.push(...remaining.warnings);
+  }
   for (const storageRootDir of remaining.sqliteRoots) {
     try {
       if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {

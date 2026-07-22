@@ -322,6 +322,9 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         return { changes, warnings };
       }
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
+      if (sources.status === "incomplete") {
+        warnings.push(...sources.warnings);
+      }
 
       const recordCompletionIfClean = async (verifyRetirement = false) => {
         if (warnings.length > 0) {
