@@ -314,7 +314,7 @@ export async function runPrCiSweeper({
           repo,
           headSha: listed.head.sha,
         });
-        if (!currentChecks.some((check) => workflowRunIdForCheck(check) === runId)) {
+        if (!currentChecks.some((current) => workflowRunIdForCheck(current) === runId)) {
           core.info(
             `pr-ci-sweeper: run ${runId} for #${listed.number} is no longer the latest cancelled check; skipping`,
           );
@@ -325,7 +325,7 @@ export async function runPrCiSweeper({
         // it via workflow concurrency. Auto-merge waits for every check anyway,
         // so deferring to the next sweep loses nothing.
         const active = currentChecks.some(
-          (check) => check.app?.slug === "github-actions" && check.status !== "completed",
+          (current) => current.app?.slug === "github-actions" && current.status !== "completed",
         );
         if (active) {
           core.info(
