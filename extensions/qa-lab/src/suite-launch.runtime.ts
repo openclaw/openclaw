@@ -1,11 +1,13 @@
 // Qa Lab plugin module implements suite launch behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
 import {
   QA_EVIDENCE_FILENAME,
   QA_EVIDENCE_SUMMARY_KIND,
   QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
+  buildQaSuiteEvidenceSummary,
   validateQaEvidenceSummaryJson,
   type QaEvidenceSummaryJson,
 } from "./evidence-summary.js";
@@ -77,6 +79,7 @@ type QaSuiteExecutionPlan =
 const MAX_SHARED_FLOW_PARTITIONS = 4;
 const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
 const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 1_500;
+const CREDENTIAL_POOL_UNAVAILABLE_CODES = new Set(["NO_CREDENTIAL_AVAILABLE", "POOL_EXHAUSTED"]);
 
 type QaUnifiedPartitionResult = {
   evidenceSummaries: QaEvidenceSummaryJson[];
@@ -466,6 +469,30 @@ function mergeQaEvidenceSummaries(params: {
   });
 }
 
+function hasCredentialPoolUnavailableCode(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    ("code" in error && CREDENTIAL_POOL_UNAVAILABLE_CODES.has(String(error.code))) ||
+    hasCredentialPoolUnavailableCode(error.cause)
+  );
+}
+
+function isChannelCredentialPoolUnavailable(
+  error: unknown,
+  channelId: string | undefined,
+): boolean {
+  if (!channelId || !(error instanceof Error)) {
+    return false;
+  }
+  return (
+    (error.message.startsWith(`failed to create QA transport live:${channelId}:`) &&
+      hasCredentialPoolUnavailableCode(error.cause)) ||
+    isChannelCredentialPoolUnavailable(error.cause, channelId)
+  );
+}
+
 function testFileScenarioResultToSuiteScenario(
   result: QaTestFileScenarioRunResult["results"][number],
   repoRoot: string,
@@ -721,7 +748,50 @@ async function runUnifiedQaSuite(params: {
                   ))
                 : params.runParams?.workerStartStaggerMs,
               scenarioIds: partition.scenarios.map((scenario) => scenario.id),
+            }).catch((error: unknown) => {
+              if (!isChannelCredentialPoolUnavailable(error, channelGroup.channelId)) {
+                throw error;
+              }
+              // Preserve other channels' evidence, but keep the suite failed: maturity
+              // docs must not publish until every required channel can run.
+              const details = `channel credential unavailable: ${formatErrorMessage(error)}`;
+              const blockedResults = partition.scenarios.map((scenario) => ({
+                name: scenario.title,
+                status: "blocked" as const,
+                details,
+              }));
+              return {
+                evidenceSummaries: [
+                  buildQaSuiteEvidenceSummary({
+                    artifactPaths: [],
+                    evidenceMode: params.runParams?.evidenceMode,
+                    channelId: channelGroup.channelId ?? transportId,
+                    channelDriver:
+                      params.runParams?.channelDriver ??
+                      channelGroup.channelDriverSelection?.channelDriver,
+                    env: process.env,
+                    generatedAt: new Date().toISOString(),
+                    primaryModel,
+                    providerMode,
+                    repoRoot,
+                    scenarioDefinitions: partition.scenarios,
+                    scenarioResults: blockedResults,
+                  }),
+                ],
+                scenarioResults: partition.scenarios.map((scenario) => ({
+                  scenarioId: scenario.id,
+                  result: {
+                    name: scenario.title,
+                    status: "fail",
+                    details,
+                    steps: [{ name: "Acquire channel credential", status: "fail", details }],
+                  },
+                })),
+              } satisfies QaUnifiedPartitionResult;
             });
+            if ("evidenceSummaries" in result) {
+              return result;
+            }
             const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
             for (const [index, scenario] of partition.scenarios.entries()) {
               const scenarioResult = result.scenarios[index];
