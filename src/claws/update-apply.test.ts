@@ -484,7 +484,7 @@ describe("applyClawUpdatePlan", () => {
           rollback: vi.fn(async () => undefined),
         })),
         applyCron: vi.fn(async () => ({
-          appliedNames: [],
+          appliedIds: [],
           rollback: vi.fn(async () => undefined),
         })),
         applyPackage,
