@@ -23,24 +23,21 @@ export function applySelectedSessionProjection(
 const MAX_TRACKED_SESSION_ROWS = 256;
 
 export class SessionParticipationTracker {
-  private readonly states = new Map<string, { blocked: boolean; seen: boolean }>();
+  private readonly lastBlocked = new Map<string, boolean>();
 
   reset(): void {
-    this.states.clear();
+    this.lastBlocked.clear();
   }
 
   resolve(params: {
     catalog: boolean;
-    listLoaded: boolean;
     listLoading: boolean;
-    sharingSupported: boolean;
     sessionKey: string;
     session: Pick<GatewaySessionRow, "sharingRole" | "visibility"> | undefined;
   }): boolean {
     if (params.catalog) {
       return false;
     }
-    const previous = this.states.get(params.sessionKey);
     if (params.session) {
       const blocked =
         params.session.visibility === "draft"
@@ -48,41 +45,32 @@ export class SessionParticipationTracker {
           : params.session.visibility !== undefined &&
             params.session.visibility !== "shared" &&
             params.session.sharingRole === "viewer";
-      this.remember(params.sessionKey, { blocked, seen: true });
+      this.remember(params.sessionKey, blocked);
       return blocked;
     }
-    // Row absence is only a revocation signal on a sharing-capable gateway. On
-    // older or sharing-less gateways a missing row means pagination, filtering,
-    // deletion, or an unsupported feature — never a participation block, so we
-    // must not disable the composer for an otherwise writable session.
-    if (!params.sharingSupported || !params.listLoaded) {
-      return false;
-    }
+    // The selected session has no row. Absence is NOT a revocation signal:
+    // filtering, search, pagination, and deletion all remove a row the caller
+    // can still write to, so inferring a block would wrongly disable a valid
+    // session. Block only on a positively observed restricted state above.
+    // During an in-flight refresh, hold the last known block so a restricted
+    // session does not flicker enabled; a completed absence never blocks. The
+    // redaction case (a session hidden from a non-owner) is handled once the
+    // explicit revocation signal lands (openclaw/openclaw#112760).
     if (params.listLoading) {
-      return previous?.blocked === true;
+      return this.lastBlocked.get(params.sessionKey) === true;
     }
-    // A session we could previously see vanishing from the authoritative loaded
-    // list while still selected is treated as a redaction (owner switched it to
-    // draft): the gateway rejects our mutations, so fail closed rather than
-    // leave an enabled composer whose sends will fail. Accepted tradeoff: a
-    // session deleted while viewed is also briefly blocked until navigation or
-    // reconnect (both clear this state), since the gateway sends no explicit
-    // per-connection revocation signal to distinguish redaction from deletion.
-    // An explicit signal is tracked as a follow-up (openclaw/openclaw#112760).
-    const blocked = previous?.seen === true;
-    this.remember(params.sessionKey, { blocked, seen: previous?.seen === true });
-    return blocked;
+    return false;
   }
 
-  private remember(sessionKey: string, state: { blocked: boolean; seen: boolean }): void {
-    this.states.delete(sessionKey);
-    this.states.set(sessionKey, state);
-    if (this.states.size <= MAX_TRACKED_SESSION_ROWS) {
+  private remember(sessionKey: string, blocked: boolean): void {
+    this.lastBlocked.delete(sessionKey);
+    this.lastBlocked.set(sessionKey, blocked);
+    if (this.lastBlocked.size <= MAX_TRACKED_SESSION_ROWS) {
       return;
     }
-    const oldest = this.states.keys().next().value;
+    const oldest = this.lastBlocked.keys().next().value;
     if (oldest) {
-      this.states.delete(oldest);
+      this.lastBlocked.delete(oldest);
     }
   }
 }

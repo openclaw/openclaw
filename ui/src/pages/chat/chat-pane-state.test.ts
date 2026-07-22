@@ -49,60 +49,65 @@ describe("SessionParticipationTracker", () => {
   ) =>
     tracker.resolve({
       catalog: false,
-      listLoaded: true,
       listLoading: false,
-      sharingSupported: true,
       sessionKey: "agent:main:tracked",
       session: undefined,
       ...patch,
     });
 
-  it("does not block before the list loads or while it is loading", () => {
-    const tracker = new SessionParticipationTracker();
-    expect(resolve(tracker, { listLoaded: false })).toBe(false);
-    expect(resolve(tracker, { listLoading: true })).toBe(false);
-  });
-
   it("does not block a brand-new key that never had a row", () => {
     expect(resolve(new SessionParticipationTracker())).toBe(false);
   });
 
-  it("blocks after a previously visible row disappears and reopens when shared", () => {
-    const tracker = new SessionParticipationTracker();
-    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
-      false,
-    );
-    expect(resolve(tracker)).toBe(true);
-    expect(resolve(tracker, { listLoading: true })).toBe(true);
-    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
-      false,
-    );
-  });
-
-  it("never blocks on absence when the gateway does not support sharing", () => {
-    const tracker = new SessionParticipationTracker();
-    expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
-      false,
-    );
-    expect(resolve(tracker, { sharingSupported: false })).toBe(false);
-  });
-
-  it("blocks a member while a draft row is still cached", () => {
+  it("blocks only on a positively observed restricted state", () => {
     expect(
       resolve(new SessionParticipationTracker(), {
         session: { visibility: "draft", sharingRole: "member" },
       }),
     ).toBe(true);
+    expect(
+      resolve(new SessionParticipationTracker(), {
+        session: { visibility: "read-only", sharingRole: "viewer" },
+      }),
+    ).toBe(true);
+    expect(
+      resolve(new SessionParticipationTracker(), {
+        session: { visibility: "shared", sharingRole: "member" },
+      }),
+    ).toBe(false);
   });
 
-  it("forgets disappeared rows when the gateway connection changes", () => {
+  it("never blocks a session that is absent from a completed list (filter/pagination/deletion)", () => {
     const tracker = new SessionParticipationTracker();
+    // Even a previously restricted session that drops out of a filtered or
+    // paginated list must not stay blocked once the load completes.
+    expect(resolve(tracker, { session: { visibility: "draft", sharingRole: "member" } })).toBe(
+      true,
+    );
+    expect(resolve(tracker)).toBe(false);
+  });
+
+  it("holds the last known block across an in-flight refresh to avoid flicker", () => {
+    const tracker = new SessionParticipationTracker();
+    expect(resolve(tracker, { session: { visibility: "draft", sharingRole: "member" } })).toBe(
+      true,
+    );
+    expect(resolve(tracker, { listLoading: true })).toBe(true);
+    // A session last known unrestricted is not held blocked during a refresh.
     expect(resolve(tracker, { session: { visibility: "shared", sharingRole: "member" } })).toBe(
       false,
     );
-    expect(resolve(tracker)).toBe(true);
+    expect(resolve(tracker, { listLoading: true })).toBe(false);
+  });
+
+  it("forgets held state when the gateway connection changes", () => {
+    const tracker = new SessionParticipationTracker();
+    expect(resolve(tracker, { session: { visibility: "draft", sharingRole: "member" } })).toBe(
+      true,
+    );
+    expect(resolve(tracker, { listLoading: true })).toBe(true);
     tracker.reset();
-    expect(resolve(tracker)).toBe(false);
+    expect(resolve(tracker, { listLoading: true })).toBe(false);
   });
 
   it("keeps agent-relative global session history separate", () => {
@@ -110,10 +115,10 @@ describe("SessionParticipationTracker", () => {
     expect(
       resolve(tracker, {
         sessionKey: "main\0global",
-        session: { visibility: "shared", sharingRole: "member" },
+        session: { visibility: "draft", sharingRole: "member" },
       }),
-    ).toBe(false);
-    expect(resolve(tracker, { sessionKey: "work\0global" })).toBe(false);
-    expect(resolve(tracker, { sessionKey: "main\0global" })).toBe(true);
+    ).toBe(true);
+    expect(resolve(tracker, { sessionKey: "work\0global", listLoading: true })).toBe(false);
+    expect(resolve(tracker, { sessionKey: "main\0global", listLoading: true })).toBe(true);
   });
 });

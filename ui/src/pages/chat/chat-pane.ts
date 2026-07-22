@@ -3500,10 +3500,7 @@ class ChatPane extends OpenClawLightDomElement {
       ) === true;
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
       catalog: catalogKey !== null,
-      listLoaded: state.sessionsResult !== null,
       listLoading: state.sessionsLoading,
-      sharingSupported:
-        isGatewayMethodAdvertised(this.context.gateway.snapshot, "session.visibility.set") === true,
       sessionKey: `${currentAgentId ?? ""}\0${state.sessionKey}`,
       session: selectedSession,
     });
