@@ -131,6 +131,62 @@ describe("runGcloud", () => {
     60_000,
   );
 
+  itUnix(
+    "skips Python 3.9 candidates in favour of a 3.10+ interpreter for gcloud compatibility",
+    async () => {
+      const { runGcloud } = await loadGmailSetupUtils();
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-version-"));
+      try {
+        const py310 = path.join(tmp, "python3.10");
+        await fs.writeFile(py310, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(py310, 0o755);
+
+        const shimDir = path.join(tmp, "shims");
+        await fs.mkdir(shimDir, { recursive: true });
+        const shim = path.join(shimDir, "python3");
+        await fs.writeFile(shim, "#!/bin/sh\nexit 0\n", "utf-8");
+        await fs.chmod(shim, 0o755);
+
+        await withEnvAsync({ PATH: `${shimDir}${path.delimiter}/usr/bin` }, async () => {
+          // First candidate: Python 3.9 (should be skipped)
+          runCommandWithTimeoutMock.mockResolvedValueOnce({
+            stdout: `ignored-python39\n3.9`,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          });
+          // Second candidate: Python 3.10 (should be accepted)
+          runCommandWithTimeoutMock.mockResolvedValueOnce({
+            stdout: `${py310}\n3.10`,
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          });
+          // runGcloud mock
+          runCommandWithTimeoutMock.mockResolvedValueOnce({
+            stdout: "",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          });
+
+          await runGcloud(["config", "list"]);
+
+          expect(runCommandWithTimeoutMock).toHaveBeenLastCalledWith(["gcloud", "config", "list"], {
+            timeoutMs: 120_000,
+            env: { CLOUDSDK_PYTHON: py310, CLOUDSDK_PYTHON_ARGS: undefined },
+          });
+        });
+      } finally {
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
   itUnix("unsets inherited CLOUDSDK_PYTHON when no trusted interpreter is found", async () => {
     const { runGcloud } = await loadGmailSetupUtils();
     await withEnvAsync(
