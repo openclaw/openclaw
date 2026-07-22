@@ -207,6 +207,16 @@ function resolveSqliteTranscriptArchiveWorkerUrl(currentModuleUrl = import.meta.
   return new URL(`./session-accessor.sqlite-archive.worker${extension}`, currentModuleUrl);
 }
 
+function resolveSourceWorkerExecArgv(): string[] {
+  // Node 22 can strip the .ts entrypoint itself, but `--import tsx` does not
+  // register tsx's ESM resolver inside a Worker. Explicitly register the
+  // supported programmatic API so source-tree .js specifiers map back to .ts.
+  // Built .js workers do not use this development/test-only preload.
+  const tsxApiUrl = import.meta.resolve("tsx/esm/api");
+  const registerTsx = `import { register } from ${JSON.stringify(tsxApiUrl)}; register();`;
+  return ["--import", `data:text/javascript,${encodeURIComponent(registerTsx)}`];
+}
+
 function normalizeArchiveWorkerError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -215,9 +225,11 @@ function spawnSqliteTranscriptArchiveWorker(
   plans: readonly SqliteTranscriptArchiveWorkerPlan[],
 ): Promise<SqliteTranscriptArchiveWorkerResult[]> {
   const workerUrl = resolveSqliteTranscriptArchiveWorkerUrl();
-  const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
   let worker: Worker;
   try {
+    const sourceWorkerExecArgv = workerUrl.pathname.endsWith(".ts")
+      ? resolveSourceWorkerExecArgv()
+      : undefined;
     worker = new Worker(workerUrl, {
       workerData: { type: "sqlite-transcript-archive-v1", plans },
       execArgv: sourceWorkerExecArgv,
