@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
+import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -21,7 +22,6 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
   commandName: string;
   logScope: string;
   logPrefix: string;
-  decodeInputAudioBase64?(base64: string, action: string): Buffer;
 }): MeetingRealtimeAudioTransport {
   let stopped = false;
   let inputStarted = false;
@@ -64,11 +64,7 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
             const result = asRecord(asRecord(raw).payload ?? raw);
             const base64 = readString(result.base64);
             if (base64) {
-              onAudio(
-                params.decodeInputAudioBase64
-                  ? params.decodeInputAudioBase64(base64, "pullAudio")
-                  : Buffer.from(base64, "base64"),
-              );
+              onAudio(decodeMeetingAudioBase64(base64, "pullAudio"));
             }
             consecutiveInputErrors = 0;
             lastInputError = undefined;

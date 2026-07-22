@@ -1,6 +1,5 @@
 import { createMeetingBrowserNodeInvokePolicy } from "openclaw/plugin-sdk/meeting-runtime";
 import type { OpenClawPluginNodeInvokePolicy } from "openclaw/plugin-sdk/plugin-entry";
-import { isGoogleMeetAudioBase64 } from "./audio-base64.js";
 import type { GoogleMeetConfig } from "./config.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./transports/google-meet-platform-adapter.js";
 import { GOOGLE_MEET_NODE_COMMAND } from "./transports/google-meet-platform-constants.js";
@@ -18,7 +17,6 @@ export function createGoogleMeetChromeNodeInvokePolicy(
     deniedCode: "GOOGLE_MEET_NODE_POLICY_DENIED",
     supportedModes: START_MODES,
     normalizeUrl: (url) => GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(url),
-    validateAudioBase64: isGoogleMeetAudioBase64,
     start: config.chrome,
   });
 }
