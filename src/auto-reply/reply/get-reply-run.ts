@@ -43,7 +43,7 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { resolveMediaFacts } from "../../media/media-facts.js";
+import { resolveMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -932,6 +932,7 @@ export async function runPreparedReply(
     queuedBody: string;
     transcriptBody: string;
     transcriptCommandBody: string;
+    media?: MediaFact[];
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
     if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
@@ -964,6 +965,7 @@ export async function runPreparedReply(
       sourceReplyDeliveryMode,
       threadContextNote,
       systemEventBlocks: drainedSystemEventBlocks,
+      media: opts?.media,
     });
   };
   const skillResult = isFastTestRuntimeEnv()
@@ -998,6 +1000,7 @@ export async function runPreparedReply(
     queuedBody,
     transcriptBody,
     transcriptCommandBody,
+    media: promptMedia,
     currentInboundContext,
   } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies());
   const isRoomEvent = inboundEventKind === "room_event";
@@ -1376,6 +1379,7 @@ export async function runPreparedReply(
           queuedBody,
           transcriptBody,
           transcriptCommandBody,
+          media: promptMedia,
           currentInboundContext,
         } = await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
       },
@@ -1462,7 +1466,7 @@ export async function runPreparedReply(
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const userTurnMediaForPersistence = resolveMediaFacts(ctx);
+  const userTurnMediaForPersistence = [...resolveMediaFacts(ctx), ...(opts?.media ?? [])];
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
@@ -1577,6 +1581,7 @@ export async function runPreparedReply(
     enqueuedAt: Date.now(),
     images: currentTurnImages.images,
     imageOrder: currentTurnImages.imageOrder,
+    media: promptMedia,
     // Originating channel for reply routing.
     originatingChannel: replyRoute.channel,
     originatingTo: replyRoute.to,

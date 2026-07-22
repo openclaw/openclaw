@@ -36,6 +36,8 @@ export type SidebarLifecycleState = HTMLElement & {
   activeWorkboardBoardId: string;
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
+  offline: boolean;
+  lastError: string | null;
   terminalAvailable: boolean;
   catalogOpenTarget: "viewer" | "terminal";
   canPairDevice: boolean;
@@ -61,6 +63,7 @@ export type SidebarLifecycleState = HTMLElement & {
   updateAvailable: { currentVersion: string; latestVersion: string; channel: string } | null;
   updateRunning: boolean;
   onUpdate: () => void;
+  onRetryConnect?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };
@@ -79,6 +82,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
     connected: true,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     assistantAgentId: "main",

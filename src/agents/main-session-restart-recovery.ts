@@ -76,6 +76,7 @@ import {
 import { tombstoneMainRestartRecoveryWithNotice } from "./main-session-restart-recovery-failure.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
+import { isAgentToolReplaySafe } from "./tool-replay-safety.js";
 
 const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
@@ -886,6 +887,62 @@ function isPendingAssistantToolCall(message: unknown): boolean {
   return hasToolCall;
 }
 
+type DanglingToolCallClassification =
+  | { kind: "none" }
+  | { kind: "code-mode" }
+  | { kind: "resumable"; forceRestartSafeTools: boolean };
+
+// A dangling call may have committed before its result persisted, so anything
+// outside the audited replay-safe allowlist keeps the restart-safe tool
+// restriction: the continuation can inspect and report, but never silently
+// re-execute the ambiguous side effect. Name-only classification is enough
+// here because the concrete tool instance is gone with the old process.
+function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassification | undefined {
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  let allReplaySafe = true;
+  let hasToolCall = false;
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const type = normalizeOptionalString((block as { type?: unknown }).type);
+    if (type !== "toolCall" && type !== "toolUse" && type !== "tool_use") {
+      continue;
+    }
+    const name = normalizeOptionalString((block as { name?: unknown }).name);
+    if (name === CODE_MODE_EXEC_TOOL_NAME || name === CODE_MODE_WAIT_TOOL_NAME) {
+      return { kind: "code-mode" };
+    }
+    if (!isAgentToolReplaySafe({ name })) {
+      allReplaySafe = false;
+    }
+    hasToolCall = true;
+  }
+  return hasToolCall
+    ? { kind: "resumable", forceRestartSafeTools: !allReplaySafe }
+    : { kind: "none" };
+}
+
+// Unlike isPendingAssistantToolCall, visible text beside the call is fine —
+// the tail is not replayed, only continued past. Code Mode control calls are
+// excluded so their replay-safe checkpoint gating stays authoritative.
+function readResumablePendingToolCallTail(
+  message: unknown,
+): { forceRestartSafeTools: boolean } | undefined {
+  if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
+    return undefined;
+  }
+  if (normalizeOptionalString((message as { stopReason?: unknown }).stopReason) !== "toolUse") {
+    return undefined;
+  }
+  const classified = classifyDanglingToolCalls((message as { content?: unknown }).content);
+  return classified?.kind === "resumable"
+    ? { forceRestartSafeTools: classified.forceRestartSafeTools }
+    : undefined;
+}
+
 function readCodeModeCheckpoint(
   message: unknown,
 ): { replaySafe: boolean; runId?: string } | undefined {
@@ -942,7 +999,16 @@ function hasReplaySafeCodeModeCheckpointInCurrentTurn(messages: readonly unknown
   return false;
 }
 
-function isRestartAbortTailArtifact(message: unknown): boolean {
+// Generic fetch/undici abort strings plus the gateway's own restart abort
+// reason (run-termination.ts); which one lands depends on whether the provider
+// stream throws or surfaces the abort as an error event.
+const RESTART_ABORT_ERROR_MESSAGES = new Set([
+  "Request was aborted",
+  "This operation was aborted",
+  "agent run aborted for restart",
+]);
+
+function isRestartAbortAssistantMessage(message: unknown): boolean {
   if (!message || typeof message !== "object" || getMessageRole(message) !== "assistant") {
     return false;
   }
@@ -953,12 +1019,15 @@ function isRestartAbortTailArtifact(message: unknown): boolean {
   const errorMessage = normalizeOptionalString(
     (message as { errorMessage?: unknown }).errorMessage,
   );
+  return errorMessage !== undefined && RESTART_ABORT_ERROR_MESSAGES.has(errorMessage);
+}
+
+function isRestartAbortTailArtifact(message: unknown): boolean {
+  if (!isRestartAbortAssistantMessage(message)) {
+    return false;
+  }
   const content = (message as { content?: unknown }).content;
-  return (
-    Array.isArray(content) &&
-    content.length === 0 &&
-    (errorMessage === "Request was aborted" || errorMessage === "This operation was aborted")
-  );
+  return Array.isArray(content) && content.length === 0;
 }
 
 function isRestartAbortedWaitFailure(message: unknown): boolean {
@@ -1069,8 +1138,21 @@ function resolveMainSessionResumePolicy(
   // `admitted` means no optional hook started. The dispatch boundary reloads
   // the current hook set before it permits this transcript to resume.
   const meaningfulMessages = messages.toReversed().filter(isMeaningfulTailMessage);
-  if (isRestartAbortTailArtifact(meaningfulMessages[0])) {
-    meaningfulMessages.shift();
+  // A restart abort tail without tool calls is lifecycle noise whether or not
+  // partial streamed text was persisted with it; the partial output stays in
+  // the transcript for the continuation, and the message beneath decides
+  // resume safety. Persisted dangling tool calls instead classify like a
+  // pending toolUse tail so ambiguous side effects stay restricted.
+  if (isRestartAbortAssistantMessage(meaningfulMessages[0])) {
+    const dangling = classifyDanglingToolCalls(
+      (meaningfulMessages[0] as { content?: unknown }).content,
+    );
+    if (dangling?.kind === "resumable") {
+      return { action: "resume", forceRestartSafeTools: dangling.forceRestartSafeTools };
+    }
+    if (dangling?.kind === "none") {
+      meaningfulMessages.shift();
+    }
   }
   if (isRestartAbortedWaitResultArtifact(meaningfulMessages[0], meaningfulMessages[1])) {
     meaningfulMessages.shift();
@@ -1101,6 +1183,14 @@ function resolveMainSessionResumePolicy(
     return tailCheckpoint.replaySafe
       ? { action: "resume", forceRestartSafeTools: true }
       : { action: "fail", reason: "Code Mode wait checkpoint is not replay-safe" };
+  }
+  // A tool call interrupted mid-execution resumes like the manual re-send the
+  // failure notice used to demand: the dangling call is dropped from the next
+  // provider payload and the continuation prompt lets the model re-decide.
+  // Code Mode control calls keep the stricter checkpoint gating above.
+  const pendingToolCallTail = readResumablePendingToolCallTail(lastMeaningful);
+  if (pendingToolCallTail) {
+    return { action: "resume", forceRestartSafeTools: pendingToolCallTail.forceRestartSafeTools };
   }
   if (!lastMeaningful || !isResumableTailMessage(lastMeaningful)) {
     return { action: "fail", reason: "transcript tail is not resumable" };

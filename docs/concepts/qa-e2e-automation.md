@@ -63,10 +63,11 @@ the selected profile instead of defining separate lanes. The resulting
 counts and missing coverage IDs; the individual evidence entries remain the
 source of truth for the tests, coverage roles, and results. Taxonomy feature
 coverage IDs are exact proof targets, not aliases: primary scenario coverage
-fulfills matching IDs, secondary coverage stays advisory. Coverage IDs use
-dotted `namespace.behavior` form with lowercase alphanumeric/dash segments;
-profile, surface, and category IDs may still use the existing dashed or dotted
-taxonomy IDs.
+fulfills matching IDs, while secondary coverage stays advisory. Every coverage
+ID is exactly `taxonomy-surface.feature`, using the short surface ID from
+`taxonomy.yaml`. A scenario's separate `surface` field is an execution/reporting
+label (for example, `channel` or `runtime-tool`); it does not define taxonomy
+ownership.
 
 Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 `smoke-ci` defaults to slim, and `--evidence-mode full` restores full entries:
@@ -74,7 +75,7 @@ Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 ```bash
 pnpm openclaw qa run \
   --qa-profile smoke-ci \
-  --category channel-framework.conversation-routing-and-delivery \
+  --category channels.conversation-routing-and-delivery \
   --provider-mode mock-openai \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```

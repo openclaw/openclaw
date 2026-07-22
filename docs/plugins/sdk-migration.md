@@ -96,13 +96,28 @@ permanently. Channel-specific fields remain typed in a deprecated compatibility
 tier so existing external plugins still compile while plugin authors move those
 fields into plugin-local setup input types.
 
+OpenClaw does not ship major releases. A registry sweep on 2026-07-22 inspected
+426 published out-of-tree channel plugins and removed 21 fields with no readers.
+The 22 retained fields each have a known published reader. Each further field is
+deleted as soon as no published plugin reads it; the retained set shrinks as
+plugin authors migrate to plugin-local setup input types.
+
+The same sweep removed 23 legacy undeclared-adapter promotion keys with no
+published dependents. Six common keys and the setup-only `rooms` key remain.
+That set also shrinks as published plugins declare `singleAccountKeysToMove`.
+
 The shared type has no index signature. Plugin-owned keys can still be present
 on runtime input objects; declare them in a plugin-local intersection or narrow
 them through the owning plugin's setup schema.
 
-| `code`                                  | `owner`   | `replacement`                                                                                    | `removeAfter`           | Removal condition                                                                                                                        |
-| --------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk-channel-setup-input-fields` | `channel` | Intersect `ChannelSetupInput` with a plugin-local type that declares the owning channel's fields | `next-plugin-sdk-major` | Remove at the first Plugin SDK major after the bundled-plugin migration in [#112238](https://github.com/openclaw/openclaw/issues/112238) |
+| `code`                                  | `owner`   | `replacement`                                                                                    | Removal condition                                                     |
+| --------------------------------------- | --------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
+| `plugin-sdk-channel-setup-input-fields` | `channel` | Intersect `ChannelSetupInput` with a plugin-local type that declares the owning channel's fields | Delete a field when the published-plugin registry sweep has no reader |
+
+The legacy undeclared-adapter promotion tier follows the same reader-driven
+policy. Declare `singleAccountKeysToMove`, including an empty array when the
+plugin needs no extra promotion keys, so the shared fallback can be retired one
+key at a time.
 
 This is a source/type compatibility record only. It has no runtime adapter or
 compatibility-registry entry because runtime setup input objects and setup

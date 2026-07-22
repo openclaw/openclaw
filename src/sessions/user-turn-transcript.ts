@@ -6,7 +6,12 @@ import {
   persistSessionTranscriptTurn,
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
-import { projectMediaFacts, resolveMediaFacts, type MediaFactInput } from "../media/media-facts.js";
+import {
+  projectMediaFacts,
+  resolveMediaFacts,
+  type MediaFact,
+  type MediaFactInput,
+} from "../media/media-facts.js";
 import { applyInputProvenanceToUserMessage, normalizeInputProvenance } from "./input-provenance.js";
 import type {
   CreateUserTurnTranscriptRecorderParams,
@@ -143,18 +148,26 @@ export function buildPersistedUserTurnMediaInputsFromFields(
   return normalizedMedia.some((entry) => entry.path || entry.url) ? normalizedMedia : [];
 }
 
-export function buildLateMediaAttachedText(message: AgentMessage): string | undefined {
-  const text = (
-    readOpenClawMessageMeta(message)?.lateMedia === true
-      ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
-      : []
-  )
+export function buildLateMediaAttachedProjection(message: AgentMessage): {
+  text?: string;
+  media: MediaFact[];
+} {
+  const isLateMedia = readOpenClawMessageMeta(message)?.lateMedia === true;
+  const entries = isLateMedia
+    ? buildPersistedUserTurnMediaInputsFromFields(message as PersistedUserTurnMediaFieldSource)
+    : [];
+  const text = entries
     .flatMap((entry) => {
       const mediaRef = entry.path ?? entry.url;
       return mediaRef ? [`[media attached: ${mediaRef}]`] : [];
     })
     .join("\n");
-  return text || undefined;
+  const media = isLateMedia
+    ? resolveMediaFacts(message as unknown as Parameters<typeof resolveMediaFacts>[0]).filter(
+        (entry) => entry.path || entry.url,
+      )
+    : [];
+  return { ...(text ? { text } : {}), media };
 }
 
 function buildPersistedUserTurnMediaFields(

@@ -62,7 +62,7 @@ import { ADMIN_SCOPE } from "./operator-scopes.js";
 import { buildForkedGatewaySessionEntry } from "./session-create-fork-entry.js";
 import { shouldPreserveSessionAuthProfileOverride } from "./session-model-patch-origin.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import { loadSessionEntry, resolveGatewaySessionStoreTarget } from "./session-utils.js";
+import { loadSessionEntryReadOnly, resolveGatewaySessionStoreTarget } from "./session-utils.js";
 import { applySessionsPatchToStore, resolveSessionPatchModelSelection } from "./sessions-patch.js";
 
 type TrustedCatalogSessionTarget = {
@@ -463,7 +463,7 @@ export async function createGatewaySession(params: {
       }
       parentSelectedAgentId = parentRequestedAgent.agentId;
     }
-    const parent = loadSessionEntry(
+    const parent = loadSessionEntryReadOnly(
       parentSessionKey,
       parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
     );
@@ -564,7 +564,7 @@ export async function createGatewaySession(params: {
       parentSessionTarget &&
       (params.emitCommandHooks === true || params.fork === true)
     ) {
-      const currentParent = loadSessionEntry(
+      const currentParent = loadSessionEntryReadOnly(
         canonicalParentSessionKey,
         parentSelectedAgentId ? { agentId: parentSelectedAgentId } : undefined,
       );

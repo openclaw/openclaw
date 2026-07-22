@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import {
+  buildLateMediaAttachedProjection,
   createUserTurnTranscriptRecorder,
   mergePreparedUserTurnMessageForRuntime,
   resolvePersistedUserTurnText,
@@ -435,7 +436,8 @@ describe("user turn transcript persistence", () => {
 
       await persistence;
 
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
+      const messages = await readTranscriptMessages(target);
+      expect(messages).toEqual([
         expect.objectContaining({
           content: "describe this",
           idempotencyKey: "chat-run-late:user",
@@ -448,6 +450,15 @@ describe("user turn transcript persistence", () => {
           MediaType: "image/png",
           MediaTypes: ["image/png"],
           __openclaw: { hookOwned: true, lateMedia: true },
+        }),
+      ]);
+      const lateProjection = buildLateMediaAttachedProjection(castAgentMessage(messages[1]));
+      expect(lateProjection.text).toBe(`[media attached: ${path.join(dir, "image.png")}]`);
+      expect(lateProjection.media).toEqual([
+        expect.objectContaining({
+          path: path.join(dir, "image.png"),
+          contentType: "image/png",
+          kind: "image",
         }),
       ]);
     });

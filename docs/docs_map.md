@@ -3312,7 +3312,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
-  - H3: agents.defaults.cliBackends
+  - H3: CLI backend selection
   - H3: agents.defaults.promptOverlays
   - H3: agents.defaults.heartbeat
   - H3: agents.defaults.compaction
@@ -4815,6 +4815,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Recommended: openclaw update
   - H2: Switch between npm and git installs
+  - H2: Source-checkout servers (reference script)
   - H2: Alternative: re-run the installer
   - H2: Alternative: manual npm, pnpm, or bun
   - H3: Advanced npm install topics
@@ -5713,7 +5714,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Advanced backend hooks
   - H3: ownsNativeCompaction: opting out of OpenClaw compaction
   - H2: MCP tool bridge
-  - H2: User configuration
+  - H2: Selecting the backend
   - H2: Verification
   - H2: Checklist
   - H2: Related
@@ -7456,6 +7457,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
   - H3: Terminal tool outcomes
+  - H3: Settled tool finalization
   - H2: Current limitations
   - H2: Related
 

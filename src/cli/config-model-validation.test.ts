@@ -346,54 +346,56 @@ describe("config model validation", () => {
     });
   });
 
-  it("accepts a configured CLI backend model without an embedded catalog row", async () => {
-    const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "acme-cli/foo" },
-            cliBackends: { "acme-cli": { command: "acme" } },
-          },
-        },
-      },
-      touchedPaths: [["agents", "defaults", "model", "primary"]],
-    });
-
-    expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
-  });
-
-  it("infers a configured provider for a bare primary model", async () => {
+  it("passes a configured bare primary model to runtime resolution", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
           defaults: {
             model: { primary: "foo" },
             models: { "acme-cli/foo": {} },
-            cliBackends: { "acme-cli": { command: "acme" } },
           },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
     });
 
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "foo",
+        fallback: false,
+      },
+    });
   });
 
   it("keeps an explicit qualified primary ahead of a same-named bare alias", async () => {
+    const resolveModelRef = vi.fn(async () => undefined);
     const result = await checkTouchedTextModelRefs({
       config: {
         agents: {
           defaults: {
             model: { primary: "acme-cli/foo" },
             models: { bar: { alias: "acme-cli/foo" } },
-            cliBackends: { "acme-cli": { command: "acme" } },
           },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
+      resolveModelRef,
     });
 
     expect(result).toEqual({ refsChecked: 1, refsTotal: 1, errors: [] });
+    expect(resolveModelRef).toHaveBeenCalledWith({
+      config: expect.any(Object),
+      ref: {
+        path: "agents.defaults.model.primary",
+        value: "acme-cli/foo",
+        fallback: false,
+      },
+    });
   });
 
   it("reports resolver setup failures without claiming refs were checked", async () => {

@@ -9,14 +9,17 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatDurationCompact } from "../../../lib/format.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { getSafeLocalStorage } from "../../../local-storage.ts";
+import {
+  type ChatObserverDisplayPreference,
+  loadChatObserverDisplayPreference,
+  storeChatObserverDisplayPreference,
+} from "../chat-observer-display.ts";
 import type { PlanStatus } from "../tool-stream.ts";
 
-const EXPANDED_STORAGE_KEY = "openclaw.chat.observerHud.expanded";
 const MAX_ASK_EXCHANGES = 6;
 const OBSERVER_BUSY_DETAIL_CODE = "SESSION_OBSERVER_BUSY";
 
-export type ObserverHudMode = "hidden" | "pill" | "card";
+export type ObserverHudMode = "hidden" | "restore" | "pill" | "card";
 export type ObserverAskHint = "busy" | "unavailable";
 export type ObserverAskExchange = {
   question: string;
@@ -114,11 +117,22 @@ export class ChatObserverHudState {
   private autoExpandedRunIds = new Set<string>();
   private autoExpandedRunId: string | null = null;
 
-  constructor(private expandedPreference = loadExpandedPreference()) {}
+  constructor(
+    private displayPreference: ChatObserverDisplayPreference = loadChatObserverDisplayPreference(),
+  ) {}
 
   mode(input: ObserverHudInput): ObserverHudMode {
     const digest = visibleDigest(input);
-    if (!digest || (!input.running && !unreadFinalDigest(digest, input.lastReadAt))) {
+    const renderable =
+      digest !== null && (input.running || unreadFinalDigest(digest, input.lastReadAt));
+    if (this.displayPreference === "off") {
+      this.autoExpandedRunId = null;
+      // A running chat keeps the restore control even before any digest exists:
+      // hidden visibility stops generation, so waiting for a digest would leave
+      // no rendered way to turn the observer back on.
+      return input.running || renderable ? "restore" : "hidden";
+    }
+    if (!renderable) {
       // The transient critical-expansion latch must not survive the HUD hiding,
       // or a later benign digest under a reused run id reopens as a card.
       this.autoExpandedRunId = null;
@@ -133,33 +147,33 @@ export class ChatObserverHudState {
     if (input.sideChatOpen) {
       return "pill";
     }
-    return this.expandedPreference || (runId !== null && this.autoExpandedRunId === runId)
+    return this.displayPreference === "card" || (runId !== null && this.autoExpandedRunId === runId)
       ? "card"
       : "pill";
   }
 
   expand(): void {
-    this.expandedPreference = true;
+    this.displayPreference = "card";
     this.autoExpandedRunId = null;
-    storeExpandedPreference(true);
+    storeChatObserverDisplayPreference("card");
   }
 
   collapse(): void {
-    this.expandedPreference = false;
+    this.displayPreference = "pill";
     this.autoExpandedRunId = null;
-    storeExpandedPreference(false);
+    storeChatObserverDisplayPreference("pill");
   }
-}
 
-function loadExpandedPreference(): boolean {
-  return getSafeLocalStorage()?.getItem(EXPANDED_STORAGE_KEY) === "true";
-}
+  hide(): void {
+    this.displayPreference = "off";
+    this.autoExpandedRunId = null;
+    storeChatObserverDisplayPreference("off");
+  }
 
-function storeExpandedPreference(expanded: boolean): void {
-  try {
-    getSafeLocalStorage()?.setItem(EXPANDED_STORAGE_KEY, String(expanded));
-  } catch {
-    // Privacy mode can make localStorage unavailable; the in-memory choice still works.
+  show(): void {
+    this.displayPreference = "pill";
+    this.autoExpandedRunId = null;
+    storeChatObserverDisplayPreference("pill");
   }
 }
 
@@ -213,6 +227,7 @@ export class ChatObserverHudElement extends OpenClawLightDomElement {
     sessionKey: string,
     question: string,
   ) => Promise<SessionsObserverAskResult>;
+  @property({ attribute: false }) onVisibilityChange?: (visible: boolean) => void;
   @state() private now = Date.now();
   @state() private question = "";
   @state() private askRevision = 0;
@@ -276,6 +291,26 @@ export class ChatObserverHudElement extends OpenClawLightDomElement {
   private expand() {
     this.hudState.expand();
     this.requestUpdate();
+  }
+
+  private hide() {
+    this.hudState.hide();
+    this.onVisibilityChange?.(false);
+    this.requestUpdate();
+  }
+
+  private show() {
+    this.hudState.show();
+    this.onVisibilityChange?.(true);
+    this.requestUpdate();
+  }
+
+  private renderStatus(health: SessionObserverDigest["health"], label: string) {
+    return html`
+      <span class="chat-observer-hud__status" data-health=${health}>
+        <span class="chat-observer-hud__status-dot"></span>${label}
+      </span>
+    `;
   }
 
   private async submitQuestion() {
@@ -357,8 +392,26 @@ export class ChatObserverHudElement extends OpenClawLightDomElement {
   override render() {
     const input = this.input();
     const mode = this.hudState.mode(input);
+    if (mode === "hidden") {
+      return nothing;
+    }
+    if (mode === "restore") {
+      // Renders digest-free: while hidden, generation is off and a running chat
+      // may never receive one.
+      return html`
+        <button
+          class="btn btn--ghost btn--icon chat-icon-btn chat-observer-hud chat-observer-hud--restore"
+          type="button"
+          aria-label=${t("chat.observer.show")}
+          title=${t("chat.observer.show")}
+          @click=${() => this.show()}
+        >
+          ${icons.activity}
+        </button>
+      `;
+    }
     const digest = visibleDigest(input);
-    if (mode === "hidden" || !digest) {
+    if (!digest) {
       return nothing;
     }
     const headline = digest.headline;
@@ -366,17 +419,33 @@ export class ChatObserverHudElement extends OpenClawLightDomElement {
     const label = healthLabel(health);
     if (mode === "pill") {
       return html`
-        <button
-          class="chat-observer-hud chat-observer-hud--pill"
-          type="button"
-          aria-live="polite"
-          aria-label=${t("chat.observer.expand")}
-          @click=${() => this.expand()}
-        >
-          <span class="chat-observer-hud__dot" data-health=${health} title=${label}></span>
-          <span class="chat-observer-hud__headline">${headline}</span>
-          <span class="chat-observer-hud__chevron" aria-hidden="true">⌄</span>
-        </button>
+        <div class="chat-observer-hud chat-observer-hud--pill" aria-live="polite">
+          ${this.renderStatus(health, label)}
+          <button
+            class="chat-observer-hud__expand"
+            type="button"
+            aria-label=${t("chat.observer.expand")}
+            @click=${() => this.expand()}
+          >
+            <span class="chat-observer-hud__headline">${headline}</span>
+          </button>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-observer-hud__hide"
+            type="button"
+            aria-label=${t("chat.observer.hide")}
+            @click=${() => this.hide()}
+          >
+            ${icons.x}
+          </button>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-observer-hud__toggle"
+            type="button"
+            aria-label=${t("chat.observer.expand")}
+            @click=${() => this.expand()}
+          >
+            ${icons.chevronDown}
+          </button>
+        </div>
       `;
     }
 
@@ -399,17 +468,23 @@ export class ChatObserverHudElement extends OpenClawLightDomElement {
         }}
       >
         <header class="chat-observer-hud__header">
-          <div class="chat-observer-hud__heading">
-            <span class="chat-observer-hud__dot" data-health=${health} title=${label}></span>
-            <strong>${headline}</strong>
-          </div>
+          ${this.renderStatus(health, label)}
+          <strong class="chat-observer-hud__headline">${headline}</strong>
           <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-observer-hud__collapse"
+            class="btn btn--ghost btn--icon chat-icon-btn chat-observer-hud__hide"
+            type="button"
+            aria-label=${t("chat.observer.hide")}
+            @click=${() => this.hide()}
+          >
+            ${icons.x}
+          </button>
+          <button
+            class="btn btn--ghost btn--icon chat-icon-btn chat-observer-hud__toggle"
             type="button"
             aria-label=${t("chat.observer.collapse")}
             @click=${() => this.collapse()}
           >
-            ${icons.arrowUp}
+            ${icons.chevronUp}
           </button>
         </header>
         ${digest.assessment
@@ -438,11 +513,18 @@ export class ChatObserverHudElement extends OpenClawLightDomElement {
             `
           : nothing}
         ${this.renderPullRequests()}
-        <footer class="chat-observer-hud__footer">
-          <span class="chat-observer-hud__run-dot" ?data-running=${this.running}></span>
-          <span>${this.running ? t("chat.observer.running") : label}</span>
-          ${elapsed ? html`<span aria-hidden="true">·</span><span>${elapsed}</span>` : nothing}
-        </footer>
+        ${this.running || elapsed
+          ? html`
+              <footer class="chat-observer-hud__footer">
+                ${this.running
+                  ? html`<span class="chat-observer-hud__run-dot" data-running></span>
+                      <span>${t("chat.observer.running")}</span>`
+                  : nothing}
+                ${this.running && elapsed ? html`<span aria-hidden="true">·</span>` : nothing}
+                ${elapsed ? html`<span>${elapsed}</span>` : nothing}
+              </footer>
+            `
+          : nothing}
         ${this.renderAskThread()}
         <form
           class="chat-observer-hud__ask-form"

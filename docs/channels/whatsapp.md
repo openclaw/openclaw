@@ -132,7 +132,6 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 - Direct chats use DM session rules (`session.dmScope`; default `main` collapses DMs into the agent main session). Group sessions are isolated per JID (`agent:<agentId>:whatsapp:group:<jid>`).
 - WhatsApp Channels/Newsletters can be explicit outbound targets via their native `@newsletter` JID, using channel session metadata (`agent:<agentId>:whatsapp:channel:<jid>`) rather than DM semantics.
 - WhatsApp Web transport honors standard proxy environment variables on the gateway host (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, lowercase variants). Prefer host-level proxy config over per-channel settings.
-- With `messages.removeAckAfterReply` enabled, OpenClaw clears the ack reaction once a visible reply is delivered.
 
 ## Call the current requester with MeowCaller (experimental)
 
@@ -482,17 +481,12 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
   messages: {
     statusReactions: {
       enabled: true,
-      emojis: {
-        deploy: "🛫",
-        build: "🏗️",
-        concierge: "💁",
-      },
     },
   },
 }
 ```
 
-Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place; `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold; tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
+Notes: `channels.whatsapp.ackReaction` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain ack reactions; WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the ack after the final done/error state.
 
 ## Multi-account and credentials
 

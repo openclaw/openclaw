@@ -1,8 +1,5 @@
 // Whatsapp plugin module implements inbound dispatch behavior.
-import {
-  DEFAULT_TIMING,
-  type StatusReactionController,
-} from "openclaw/plugin-sdk/channel-feedback";
+import type { StatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import {
   buildChannelInboundEventContext,
   type CommandFacts,
@@ -545,8 +542,6 @@ export function createWhatsAppReplyPlan(params: {
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const statusReactionController = params.statusReactionController ?? null;
-  const statusReactionTiming = DEFAULT_TIMING;
-  const removeAckAfterReply = false;
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({
@@ -794,9 +789,6 @@ export function createWhatsAppReplyPlan(params: {
           void finalizeWhatsAppStatusReaction({
             controller: statusReactionController,
             outcome: "error",
-            hasFinalResponse: false,
-            removeAckAfterReply,
-            timing: statusReactionTiming,
           });
         }
         if (params.shouldClearGroupHistory) {
@@ -810,9 +802,6 @@ export function createWhatsAppReplyPlan(params: {
         void finalizeWhatsAppStatusReaction({
           controller: statusReactionController,
           outcome: didDeliverVisibleReply ? "done" : "error",
-          hasFinalResponse: didDeliverVisibleReply,
-          removeAckAfterReply,
-          timing: statusReactionTiming,
         });
       }
       if (params.shouldClearGroupHistory) {
@@ -826,38 +815,11 @@ export function createWhatsAppReplyPlan(params: {
 async function finalizeWhatsAppStatusReaction(params: {
   controller: StatusReactionController;
   outcome: "done" | "error";
-  hasFinalResponse: boolean;
-  removeAckAfterReply: boolean;
-  timing: typeof DEFAULT_TIMING;
 }): Promise<void> {
   if (params.outcome === "done") {
     await params.controller.setDone();
-    if (params.removeAckAfterReply) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, params.timing.doneHoldMs);
-      });
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-  await params.controller.setError();
-  if (params.hasFinalResponse) {
-    if (params.removeAckAfterReply) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, params.timing.errorHoldMs);
-      });
-      await params.controller.clear();
-    } else {
-      await params.controller.restoreInitial();
-    }
-    return;
-  }
-  if (params.removeAckAfterReply) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, params.timing.errorHoldMs);
-    });
+  } else {
+    await params.controller.setError();
   }
   await params.controller.restoreInitial();
 }

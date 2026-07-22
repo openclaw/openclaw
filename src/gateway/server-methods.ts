@@ -715,7 +715,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSessionDiscussionHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.observer.ask"],
+    methods: ["sessions.observer.ask", "sessions.observer.visibility"],
     loadHandlers: loadSessionObserverHandlers,
   }),
   ...createLazyCoreHandlers({

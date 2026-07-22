@@ -28,7 +28,7 @@
  *     via buildClaudeLiveArgs) — covered here.
  */
 import { describe, expect, it } from "vitest";
-import type { CliBackendConfig } from "../../config/types.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { buildClaudeLiveArgs } from "./claude-live-session.test-support.js";
 import { buildCliArgs, resolveSystemPromptUsage } from "./helpers.js";
 

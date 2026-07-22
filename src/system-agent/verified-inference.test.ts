@@ -475,55 +475,6 @@ describe("verified OpenClaw inference binding", () => {
     ).resolves.toBeNull();
   });
 
-  it("invalidates an opaque CLI owner after backend config drift", async () => {
-    const cliConfig = {
-      agents: {
-        defaults: {
-          model: "claude-cli/claude-opus-4-8",
-          cliBackends: { "claude-cli": { command: "claude" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const changedConfig = {
-      agents: {
-        defaults: {
-          ...cliConfig.agents.defaults,
-          cliBackends: { "claude-cli": { command: "/opt/other/claude" } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const route = await resolveSystemAgentConfiguredRouteFromConfig(cliConfig);
-    if (!route || route.runner !== "cli") {
-      throw new Error("missing test CLI route");
-    }
-    const binding = await createSystemAgentVerifiedInferenceBinding({
-      configuredRoute: route,
-      executionRoute: route,
-      auth: {
-        runtimeOwnerFingerprint: "opaque-cli-owner",
-        runtimeOwnerKind: "cli-runtime",
-        runtimeOwnerId: "claude-cli",
-        ...cliRuntimeArtifactAuth,
-      },
-      deps: {
-        ...pluginArtifactDeps(),
-        ...cliRuntimeArtifactDeps(),
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
-      },
-    });
-
-    await expect(
-      resolveSystemAgentVerifiedInferenceRoute(binding, {
-        readConfigFileSnapshot: vi.fn(async () => ({
-          exists: true,
-          valid: true,
-          config: changedConfig,
-        })) as never,
-        resolveCliRuntimeOwnerFingerprint: vi.fn(async () => "opaque-cli-owner"),
-      }),
-    ).resolves.toBeNull();
-  });
-
   it("invalidates a strict CLI credential when its package artifact changes", async () => {
     const cliConfig = {
       agents: { defaults: { model: "claude-cli/claude-opus-4-8" } },

@@ -3961,7 +3961,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
-    public let archived: Bool?
+    public let archived: AnyCodable?
 
     public init(
         limit: Int? = nil,
@@ -3978,7 +3978,7 @@ public struct SessionsListParams: Codable, Sendable {
         spawnedby: String? = nil,
         agentid: String? = nil,
         search: String? = nil,
-        archived: Bool? = nil)
+        archived: AnyCodable? = nil)
     {
         self.limit = limit
         self.offset = offset
@@ -4857,6 +4857,34 @@ public struct SessionsObserverAskResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case answer
         case digestrevision = "digestRevision"
+    }
+}
+
+public struct SessionsObserverVisibilityParams: Codable, Sendable {
+    public let visible: Bool
+
+    public init(
+        visible: Bool)
+    {
+        self.visible = visible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case visible
+    }
+}
+
+public struct SessionsObserverVisibilityResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
     }
 }
 

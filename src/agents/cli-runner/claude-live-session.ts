@@ -4,7 +4,6 @@
 import crypto from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import { createAbortError as createNamedAbortError } from "../../infra/abort-signal.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -24,6 +23,7 @@ import {
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
 import { BLOCKED_TOOL_CALL_ABORT_FLOOR_MS } from "../../logging/diagnostic-run-activity.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,

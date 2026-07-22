@@ -4514,7 +4514,6 @@ describe("prepareSlackMessage sender prefix", () => {
       textLimit: 2000,
       ackReactionScope: "off",
       mediaMaxBytes: 1000,
-      removeAckAfterReply: false,
       logger: { info: vi.fn(), warn: vi.fn() },
       shouldDropMismatchedSlackEvent: () => false,
       resolveSlackSystemEventSessionKey: () => "agent:main:slack:channel:c1",

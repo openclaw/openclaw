@@ -433,6 +433,8 @@ import {
   SessionObserverPlanProgressSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -775,6 +777,9 @@ export const validateSessionsFilesSetParams = lazyCompile(SessionsFilesSetParams
 export const validateSessionsFilesRevealParams = lazyCompile(SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = lazyCompile(SessionsDiffParamsSchema);
 export const validateSessionsObserverAskParams = lazyCompile(SessionsObserverAskParamsSchema);
+export const validateSessionsObserverVisibilityParams = lazyCompile(
+  SessionsObserverVisibilityParamsSchema,
+);
 export const validateSessionsCreateParams = lazyCompile(SessionsCreateParamsSchema);
 export const validateSessionsSendParams = lazyCompile(SessionsSendParamsSchema);
 export const validateSessionsDispatchParams = lazyCompile(SessionsDispatchParamsSchema);
@@ -1154,6 +1159,8 @@ export {
   SessionObserverPlanProgressSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -1809,6 +1816,8 @@ export type {
   SessionObserverPlanProgress,
   SessionsObserverAskParams,
   SessionsObserverAskResult,
+  SessionsObserverVisibilityParams,
+  SessionsObserverVisibilityResult,
   SessionPlacementState,
   SessionPlacement,
   SessionWorktreeInfo,

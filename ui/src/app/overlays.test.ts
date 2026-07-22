@@ -40,6 +40,7 @@ function createGatewayHarness(
     assistantAgentId: "main",
     client: initialClient,
     connected: initialConnected,
+    offlineStable: false,
     reconnecting: false,
     hello: null,
     lastError: null,

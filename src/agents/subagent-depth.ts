@@ -5,7 +5,7 @@
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { listSessionEntries } from "../config/sessions/session-accessor.js";
+import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
@@ -30,10 +30,9 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
 function readSessionStore(storePath: string, agentId: string): Record<string, SessionDepthEntry> {
   try {
     return Object.fromEntries(
-      listSessionEntries({ agentId, storePath, clone: false }).map(({ sessionKey, entry }) => [
-        sessionKey,
-        entry,
-      ]),
+      listSessionEntriesReadOnly({ agentId, storePath, clone: false }).map(
+        ({ sessionKey, entry }) => [sessionKey, entry],
+      ),
     );
   } catch {
     // ignore missing/unavailable stores

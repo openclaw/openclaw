@@ -1,6 +1,6 @@
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { projectMediaFacts } from "../../media/media-facts.js";
+import { projectMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { SavedMedia } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -97,6 +97,18 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
     path: entry.path,
     contentType: entry.contentType,
   }));
+}
+
+function buildChatSendPromptMedia(
+  attachments: PreparedChatSendAttachments,
+): MediaFact[] | undefined {
+  if (!attachments.imageOrder.includes("offloaded")) {
+    return undefined;
+  }
+  const media = attachments.offloadedRefs
+    .filter((ref) => ref.mimeType.startsWith("image/"))
+    .map((ref) => ({ path: ref.path, url: ref.mediaRef, contentType: ref.mimeType }));
+  return media.length > 0 ? media : undefined;
 }
 
 function buildChatSendMessageContext(params: {
@@ -273,5 +285,6 @@ export function prepareChatSendUserTurn(params: {
       : attachments.parsedImages.length > 0
         ? attachments.parsedImages
         : undefined,
+    replyOptionMedia: buildChatSendPromptMedia(attachments),
   };
 }
