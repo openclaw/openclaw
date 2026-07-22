@@ -46,6 +46,15 @@ function createPendingCompletion(
   };
 }
 
+function mergeFinalizedCompletion(
+  finalized: FeishuReplyDeliveryResult,
+  completion: FeishuReplyDeliveryResult,
+): FeishuReplyDeliveryResult {
+  const merged = mergeFeishuReplyDeliveryResults([finalized, completion]);
+  // Finalization owns the card identity; the logical completion owns its content snapshot.
+  return completion.content === undefined ? merged : { ...merged, content: completion.content };
+}
+
 export function createFeishuStreamingDeliveryCompletionQueue(
   attachDeliveryCompletion: <T extends object>(result: T, completion: Promise<unknown>) => T,
   finalize: (options?: { markClosedForReply?: boolean }) => Promise<FeishuReplyDeliveryResult>,
@@ -79,7 +88,7 @@ export function createFeishuStreamingDeliveryCompletionQueue(
         try {
           const finalized = await finalize(options);
           for (const completion of completions) {
-            const result = mergeFeishuReplyDeliveryResults([finalized, completion.result]);
+            const result = mergeFinalizedCompletion(finalized, completion.result);
             if (completion.failure) {
               completion.reject(
                 createFeishuPartialReplyDeliveryError(

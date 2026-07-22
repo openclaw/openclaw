@@ -1118,6 +1118,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               createFeishuReplyDeliveryResult({
                 results: deliveryResults,
                 visibleReplySent: payloadVisibleReplySent,
+                content: text,
               }),
             );
           }

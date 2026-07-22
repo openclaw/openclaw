@@ -40,6 +40,33 @@ describe("Feishu streaming delivery completion", () => {
     });
   });
 
+  it("retains each deferred payload content when one card finalizes them together", async () => {
+    const completions: Promise<unknown>[] = [];
+    const queue = createFeishuStreamingDeliveryCompletionQueue(
+      (placeholder, pending) => {
+        completions.push(pending);
+        return placeholder;
+      },
+      async () =>
+        createFeishuReplyDeliveryResult({
+          results: [{ messageId: "om_card" }],
+          visibleReplySent: true,
+          content: "first\n\nsecond",
+          kind: "card",
+        }),
+      vi.fn(),
+    );
+
+    queue.defer(createFeishuReplyDeliveryResult({ visibleReplySent: false, content: "first" }));
+    queue.defer(createFeishuReplyDeliveryResult({ visibleReplySent: false, content: "second" }));
+    await queue.queueIdle();
+
+    await expect(Promise.all(completions)).resolves.toMatchObject([
+      { visibleReplySent: true, messageId: "om_card", content: "first" },
+      { visibleReplySent: true, messageId: "om_card", content: "second" },
+    ]);
+  });
+
   it("rejects deferred observers when provider finalization fails", async () => {
     let completion: Promise<unknown> | undefined;
     const queue = createFeishuStreamingDeliveryCompletionQueue(
