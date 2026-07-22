@@ -692,7 +692,10 @@ function createQueuedRun(
 describe("createFollowupRunner reply-lane admission", () => {
   it("drops stale active-goal context after the persisted goal completes", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const storePath = "/tmp/openclaw-followup-completed-goal.json";
+    const storePath = path.join(
+      tmpdir(),
+      `openclaw-followup-completed-goal-${crypto.randomUUID()}.json`,
+    );
     const activeEntry: SessionEntry = {
       sessionId: "session-completed-goal",
       updatedAt: 1,
