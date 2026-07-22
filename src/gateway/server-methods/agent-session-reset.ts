@@ -55,7 +55,7 @@ export function sessionResetAckText(reason: "new" | "reset"): string {
   return formatSessionResetAck({ reason });
 }
 
-export function resolveSessionResetAckText(params: {
+function resolveSessionResetAckText(params: {
   cfg: OpenClawConfig;
   reason: "new" | "reset";
   sessionKey: string;
