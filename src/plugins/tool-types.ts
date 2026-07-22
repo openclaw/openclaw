@@ -63,6 +63,14 @@ export type OpenClawPluginToolContext = {
   conversationReadOrigin?: ConversationReadInvocationOrigin;
   sandboxed?: boolean;
   /**
+   * Key to look up a live sandbox-exec bridge (see exec-bridge-registry.ts) when
+   * the agent is sandboxed. Identifies the sandbox container/backend, not the raw
+   * per-turn session key: default sandbox scope shares one container across many
+   * session keys, so plugin tools must look up the bridge by this key rather than
+   * `sessionKey` above.
+   */
+  sandboxExecKey?: string;
+  /**
    * True for explicit one-shot local CLI runs that must release plugin-owned
    * process resources before the command exits.
    */

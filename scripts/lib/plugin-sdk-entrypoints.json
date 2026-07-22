@@ -68,6 +68,7 @@
   "ssrf-policy",
   "ssrf-runtime",
   "ssrf-runtime-internal",
+  "sandboxed-fetch-runtime",
   "media-runtime",
   "media-store",
   "media-mime",

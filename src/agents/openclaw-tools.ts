@@ -136,6 +136,8 @@ export function createOpenClawTools(
     sandboxFsBridge?: SandboxFsBridge;
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
+    /** Sandbox-exec bridge lookup key for this run (see OpenClawPluginToolContext.sandboxExecKey). */
+    sandboxExecKey?: string;
     config?: OpenClawConfig;
     /** Capabilities declared by the gateway client that originated this run. */
     clientCaps?: string[];

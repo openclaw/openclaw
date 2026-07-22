@@ -203,6 +203,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/ssrf-policy` | Host allowlist and private-network SSRF policy helpers |
     | `plugin-sdk/ssrf-dispatcher` | Private-local after July 2026; Narrow pinned-dispatcher helpers without the broad infra runtime surface |
     | `plugin-sdk/ssrf-runtime` | Pinned-dispatcher, SSRF-guarded fetch, SSRF error, and SSRF policy helpers |
+    | `plugin-sdk/sandboxed-fetch-runtime` | `fetchAndExtractSandboxed({ url, maxChars, sandboxExecKey? })`: fetches and extracts clean text from an untrusted external URL, routing the fetch + HTML parsing through the calling agent's Docker sandbox when one exists, falling back to in-process SSRF-guarded fetch+extract otherwise. Prefer this over a plugin's own in-process fetch when parsing untrusted external response bodies for a sandboxed agent |
     | `plugin-sdk/secret-input` | Secret input parsing helpers |
     | `plugin-sdk/webhook-ingress` | Webhook request/target helpers and raw websocket/body coercion |
     | `plugin-sdk/webhook-request-guards` | Request body size/timeout helpers and `runDetachedWebhookWork` for tracked post-ack processing |

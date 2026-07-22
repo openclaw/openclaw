@@ -20,6 +20,7 @@ import { getSandboxBackendWorkdirResolver, requireSandboxBackendFactory } from "
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
+import { registerSandboxExecBridge } from "./exec-bridge-registry.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { updateRegistry } from "./registry.js";
 import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
@@ -248,6 +249,13 @@ export async function resolveSandboxContext(params: {
     image: backend.configLabel ?? resolvedCfg.docker.image,
     configLabelKind: backend.configLabelKind ?? "Image",
   });
+  // Registered here (not paired with the browser-bridge registration in
+  // browser.ts) because exec capability applies to every sandboxed run, not
+  // only browser-enabled ones. Keyed by the container id so it matches the
+  // general registry's containerName field prune.ts reads, since default
+  // sandbox scope ("agent") shares one container/backend across many
+  // per-turn session keys.
+  registerSandboxExecBridge(backend.runtimeId, backend);
 
   const resolvedBrowserConfig = resolvedCfg.browser.enabled
     ? resolveBrowserConfig(params.config?.browser, params.config)

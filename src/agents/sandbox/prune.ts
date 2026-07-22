@@ -9,6 +9,7 @@ import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { getSandboxBackendManager } from "./backend.js";
 import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
+import { pruneSandboxExecBridge } from "./exec-bridge-registry.js";
 import {
   readBrowserRegistry,
   readRegistry,
@@ -91,6 +92,12 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
         entry,
         config,
       });
+    },
+    beforeRemove: async (entry) => {
+      // Drops the sandbox-exec bridge registered in sandbox/context.ts for this
+      // container, same pairing pattern as stopCachedBrowserBridgesForContainer
+      // below, since registerSandboxExecBridge is keyed by containerName too.
+      pruneSandboxExecBridge(entry.containerName);
     },
   });
 }

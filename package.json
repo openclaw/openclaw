@@ -597,6 +597,10 @@
       "types": "./dist/plugin-sdk/ssrf-runtime.d.ts",
       "default": "./dist/plugin-sdk/ssrf-runtime.js"
     },
+    "./plugin-sdk/sandboxed-fetch-runtime": {
+      "types": "./dist/plugin-sdk/sandboxed-fetch-runtime.d.ts",
+      "default": "./dist/plugin-sdk/sandboxed-fetch-runtime.js"
+    },
     "./plugin-sdk/media-runtime": {
       "types": "./dist/plugin-sdk/media-runtime.d.ts",
       "default": "./dist/plugin-sdk/media-runtime.js"

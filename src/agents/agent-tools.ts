@@ -881,6 +881,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             sandboxed: Boolean(sandbox),
+            // Container-scoped, not the raw per-turn session key: default sandbox
+            // scope shares one container across many sessions (see
+            // exec-bridge-registry.ts), and this must match the key
+            // registerSandboxExecBridge used in sandbox/context.ts.
+            sandboxExecKey: sandbox ? sandbox.containerName : undefined,
             pluginToolAllowlist,
             pluginToolDenylist,
             currentChannelId: options?.currentChannelId,
@@ -984,6 +989,11 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
               ? (capabilityProfile.workspace.spawnWorkspaceRoot ?? runtimeRoot)
               : runtimeRoot,
             sandboxed: Boolean(sandbox),
+            // Container-scoped, not the raw per-turn session key: default sandbox
+            // scope shares one container across many sessions (see
+            // exec-bridge-registry.ts), and this must match the key
+            // registerSandboxExecBridge used in sandbox/context.ts.
+            sandboxExecKey: sandbox ? sandbox.containerName : undefined,
             config: options?.config,
             clientCaps: options?.clientCaps,
             toolBindings: options?.toolBindings,

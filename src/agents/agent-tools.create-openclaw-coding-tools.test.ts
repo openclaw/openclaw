@@ -782,6 +782,39 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().cwd).toBe("/task/repo");
   });
 
+  it("passes the sandbox-exec bridge key to OpenClaw tool construction for a sandboxed run", () => {
+    // Regression coverage: sandboxExecKey must reach createOpenClawTools (the
+    // path unrestricted/default agent runs use) exactly like sandboxed does,
+    // keyed by the container id so it matches registerSandboxExecBridge.
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const sandboxDir = "/sandbox/workspace";
+    const sandbox = createAgentToolsSandboxContext({
+      workspaceDir: sandboxDir,
+      fsBridge: createHostSandboxFsBridge(sandboxDir),
+      containerName: "openclaw-sbx-exec-key-test",
+    });
+
+    createOpenClawCodingTools({ sandbox });
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      sandboxed: true,
+      sandboxExecKey: "openclaw-sbx-exec-key-test",
+    });
+  });
+
+  it("omits the sandbox-exec bridge key for an unsandboxed run", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({});
+
+    expect(latestCreateOpenClawToolsOptions()).toMatchObject({
+      sandboxed: false,
+      sandboxExecKey: undefined,
+    });
+  });
+
   it("skips unrelated tool families when construction is planned from a narrow allowlist", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

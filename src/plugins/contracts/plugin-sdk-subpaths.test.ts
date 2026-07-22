@@ -1176,6 +1176,7 @@ describe("plugin-sdk subpath exports", () => {
       "ssrfPolicyFromDangerouslyAllowPrivateNetwork",
       "ssrfPolicyFromAllowPrivateNetwork",
     ]);
+    expectSourceMentions("sandboxed-fetch-runtime", ["fetchAndExtractSandboxed"]);
 
     expectSourceContract("provider-setup", {
       mentions: [
