@@ -1,9 +1,10 @@
 // Control UI tests cover agents behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ChannelAccountSnapshot } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { renderAgentFiles } from "./panels-status-files.ts";
+import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
 
 type AgentsProps = Parameters<typeof renderAgents>[0];
@@ -459,6 +460,78 @@ describe("renderAgents", () => {
       await i18n.setLocale("en");
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("renderAgentChannels", () => {
+  function renderChannelStatus(accounts: ChannelAccountSnapshot[]) {
+    const container = document.createElement("div");
+    render(
+      renderAgentChannels({
+        context: {
+          workspace: "default",
+          model: "—",
+          runtime: "pi",
+          identityName: "Alpha",
+          identityAvatar: "—",
+          skillsLabel: "all skills",
+          isDefault: true,
+        },
+        configForm: null,
+        snapshot: {
+          ts: Date.now(),
+          channelOrder: ["discord"],
+          channelLabels: { discord: "Discord" },
+          channels: {},
+          channelAccounts: { discord: accounts },
+          channelDefaultAccountId: { discord: "default" },
+        },
+        loading: false,
+        error: null,
+        lastSuccess: Date.now(),
+        onRefresh: () => undefined,
+        onSelectPanel: () => undefined,
+      }),
+      container,
+    );
+    const row = Array.from(container.querySelectorAll(".settings-row")).find(
+      (candidate) => candidate.querySelector(".settings-row__title")?.textContent === "Discord",
+    );
+    const status = row?.querySelector(".settings-status");
+    return {
+      className: status?.className,
+      label: status?.textContent?.trim(),
+    };
+  }
+
+  it("does not let a successful probe override an explicitly stopped runtime", () => {
+    expect(
+      renderChannelStatus([
+        {
+          accountId: "stopped",
+          connected: false,
+          running: false,
+          probe: { ok: true },
+        },
+      ]),
+    ).toEqual({
+      className: "settings-status settings-status--warn",
+      label: "0/1 connected",
+    });
+  });
+
+  it("counts live runtimes and preserves probe fallback for passive channels", () => {
+    expect(
+      renderChannelStatus([
+        { accountId: "connected", connected: true, probe: { ok: false } },
+        { accountId: "running", running: true, probe: { ok: false } },
+        { accountId: "passive", probe: { ok: true } },
+        { accountId: "unreachable", probe: { ok: false } },
+      ]),
+    ).toEqual({
+      className: "settings-status settings-status--ok",
+      label: "3/4 connected",
+    });
   });
 });
 
