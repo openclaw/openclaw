@@ -12,12 +12,15 @@ import type { ChatRunStartupPhase } from "../chat-run-startup.ts";
 // The default stance just claws in place; the busier stances stay rare on purpose.
 const STANCE_SALT = Math.trunc(Math.random() * 0xffffffff);
 const STANCES: Array<[stance: string, weight: number]> = [
-  ["", 66],
-  ["chat-reading-indicator--southpaw", 20],
+  ["", 63],
+  ["chat-reading-indicator--southpaw", 19],
   ["chat-reading-indicator--flurry", 5],
   ["chat-reading-indicator--spin", 4],
   ["chat-reading-indicator--shadowbox", 3],
   ["chat-reading-indicator--backflip", 2],
+  ["chat-reading-indicator--zen", 2],
+  ["chat-reading-indicator--drummer", 1],
+  ["chat-reading-indicator--peekaboo", 1],
 ];
 const STARTUP_STATUS_LABEL_KEYS = {
   preparing_workspace: "chat.startupStatus.preparingWorkspace",

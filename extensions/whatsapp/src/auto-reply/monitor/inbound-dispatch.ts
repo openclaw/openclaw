@@ -302,6 +302,7 @@ export async function buildWhatsAppInboundContext(params: {
   combinedBody: string;
   command?: CommandFacts;
   groupHistory?: GroupHistoryEntry[];
+  groupHistoryLimit?: number;
   groupMemberRoster?: Map<string, string>;
   groupSystemPrompt?: string;
   msg: AdmittedWebInboundMessage;
@@ -387,6 +388,12 @@ export async function buildWhatsAppInboundContext(params: {
       inboundHistory,
       rawBody: params.rawBody ?? params.msg.payload.body,
       commandBody: params.command?.body ?? params.msg.payload.body,
+    },
+    sessionTranscript: {
+      historyLimit:
+        conversationKind === "group"
+          ? (params.groupHistoryLimit ?? params.groupHistory?.length ?? 0)
+          : 0,
     },
     access: {
       ...(wasMentioned !== undefined

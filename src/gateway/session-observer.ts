@@ -1,4 +1,11 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import {
+  createSessionActivityNoteState,
+  flushSessionActivityAssistantNote,
+  noteSessionActivityEvent,
+  readFiniteNumber,
+  terminalHealthFor,
+} from "../agents/session-activity-notes.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,15 +21,12 @@ import {
   isTerminalLifecycleEvent,
   markSessionObserverRunSuperseded,
   normalizeSessionObserverModelOutput,
-  readFiniteNumber,
   rememberSessionObserverDisabledRun,
   rememberSessionObserverDormantRun,
-  rememberSessionObserverItemStatus,
   rememberSessionObserverRevisionFloor,
   SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
   synthesizeSessionObserverTerminalDigest,
-  terminalHealthFor,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
@@ -31,10 +35,6 @@ import type {
   SessionObserverRevisionFloor,
   SessionObserverState,
 } from "./session-observer-model.js";
-import {
-  flushSessionObserverAssistantNote,
-  noteSessionObserverEvent,
-} from "./session-observer-notes.js";
 
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
@@ -44,7 +44,6 @@ const MODEL_TIMEOUT_MS = 10_000;
 const MAX_DIGESTS_PER_RUN = 40;
 const MAX_LIVE_DIGESTS_PER_RUN = MAX_DIGESTS_PER_RUN - 1;
 const MAX_CONSECUTIVE_FAILURES = 2;
-const MAX_ITEM_STATUSES = 160;
 const FINAL_DIGEST_MIN_RUN_MS = 30_000;
 const PERSIST_INTERVAL_MS = 60_000;
 // The Control UI opens at most six live session subscriptions; matching that cap
@@ -192,9 +191,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     }
     return resolveUtilityModelRef({ cfg, agentId: state.agentId }) === state.utilityModelRef;
   };
-
-  const rememberItemStatus = (state: SessionObserverState, itemId: string, status: string) =>
-    rememberSessionObserverItemStatus(state.itemStatuses, itemId, status, MAX_ITEM_STATUSES);
 
   const ensurePrepared = async (state: SessionObserverState): Promise<PreparedModel> => {
     state.preparedPromise ??= prepareModel({
@@ -372,7 +368,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (state.digestCount >= digestLimit) {
       return;
     }
-    flushSessionObserverAssistantNote(state);
+    flushSessionActivityAssistantNote(state);
     const selectedNotes = pendingNotes(state);
     if (!final && selectedNotes.length < MIN_NOTES_PER_DIGEST) {
       return;
@@ -501,16 +497,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (dormant) {
       dormantRuns.delete(event.runId);
       const state: SessionObserverState = {
+        ...createSessionActivityNoteState(),
         ...dormant,
         utilityModelRef,
         lastActivityAt: event.ts,
         lastRunAt: now(),
-        noteSequence: 0,
         lastDigestNoteSequence: 0,
-        notes: [],
-        noteBytes: 0,
-        itemStatuses: new Map(),
-        assistantBuffer: "",
         inFlight: false,
         finalPending: false,
       };
@@ -521,6 +513,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     const startedAt =
       readFiniteNumber(event.data.startedAt) ?? session?.startedAt ?? event.ts ?? now();
     const state: SessionObserverState = {
+      ...createSessionActivityNoteState(),
       sessionKey,
       sessionId: event.sessionId ?? session?.sessionId,
       runId: event.runId,
@@ -533,12 +526,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       revision: session?.observerDigest?.revision ?? 0,
       digestCount: 0,
       consecutiveFailures: 0,
-      noteSequence: 0,
       lastDigestNoteSequence: 0,
-      notes: [],
-      noteBytes: 0,
-      itemStatuses: new Map(),
-      assistantBuffer: "",
       previousDigest: session?.observerDigest,
       inFlight: false,
       finalPending: false,
@@ -642,7 +630,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     if (eventStartedAt !== undefined) {
       state.startedAt = Math.min(state.startedAt, eventStartedAt);
     }
-    noteSessionObserverEvent(state, event, rememberItemStatus);
+    noteSessionActivityEvent(state, event);
     if (terminal) {
       state.terminalHealth = terminalHealthFor(event);
       const endedAt = readFiniteNumber(event.data.endedAt) ?? now();
