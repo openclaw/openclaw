@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { listAgentEntries } from "../agents/agent-scope.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listConfiguredMcpServers, unsetConfiguredMcpServer } from "../config/mcp-config.js";

@@ -2028,4 +2028,4 @@ CREATE TABLE IF NOT EXISTS outbound_media_provenance (
   sha256 TEXT NOT NULL,
   size_bytes INTEGER NOT NULL,
   created_at_ms INTEGER NOT NULL
-) STRICT;) STRICT;\n`;
+) STRICT;\n`;
