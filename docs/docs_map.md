@@ -7566,6 +7566,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Why
   - H2: Compatibility policy
   - H3: Channel setup input field compatibility
+  - H4: Verifying readers
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces
