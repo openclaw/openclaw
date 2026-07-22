@@ -46,7 +46,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: { mcp: { servers: {} } },
-      uiHints: {},
+      uiHints: { "mcp.servers": { advanced: false } },
     });
 
     expect(matches).toEqual([
@@ -98,7 +98,7 @@ describe("findSettingsSearchBlocks", () => {
     expect(matches).toEqual([
       expect.objectContaining({
         routeId: "advanced",
-        search: "?section=secrets",
+        search: "?section=secrets&advanced=1",
         hash: "#config-section-secrets",
       }),
     ]);
@@ -123,7 +123,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: {},
-      uiHints: {},
+      uiHints: { "tools.profile": { advanced: false } },
     });
 
     expect(matches).toEqual([
@@ -154,7 +154,7 @@ describe("findSettingsSearchBlocks", () => {
         },
       },
       value: {},
-      uiHints: {},
+      uiHints: { "tools.profile": { advanced: false } },
     });
 
     expect(matches).toEqual([

@@ -913,6 +913,8 @@ export const en: TranslationMap = {
     noEvents: "No events yet.",
   },
   configForm: {
+    showAdvanced: "Show advanced",
+    advancedCount: "Advanced ({count})",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
