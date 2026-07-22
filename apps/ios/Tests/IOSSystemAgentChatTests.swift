@@ -105,10 +105,12 @@ struct IOSSystemAgentChatTests {
                 supportsSystemAgent: false) == .missingSystemAgentMethod)
     }
 
-    @Test func `pending method support check blocks the chat`() async {
-        let recorder = RequestRecorder(responses: [.success(Self.reply("Ready"))])
+    @Test func `pending method support check blocks the chat without losing secure state`() async {
+        let recorder = RequestRecorder(responses: [.success(Self.reply("Enter a secret", sensitive: true))])
         let model = self.makeModel(recorder: recorder)
 
+        await Self.start(model)
+        #expect(model.expectsSensitiveReply)
         model.updateAccess(
             connected: true,
             hasAdminScope: true,
@@ -117,7 +119,8 @@ struct IOSSystemAgentChatTests {
         await Self.start(model)
 
         #expect(model.accessState == .checkingSystemAgentMethod)
-        #expect(await recorder.allRequests().isEmpty)
+        #expect(model.expectsSensitiveReply)
+        #expect(await recorder.allRequests().count == 1)
     }
 
     @Test func `route change invalidates suspended generation and ignores its reply`() async {
@@ -393,6 +396,8 @@ struct IOSSystemAgentChatTests {
         #expect(source.contains("self.isScreenActive"))
         #expect(source.contains("guard let support else"))
         #expect(source.contains("String(localized: \"Gateway Update Required\")"))
+        #expect(source.contains("String(localized: \"Skip for now\")"))
+        #expect(source.contains("String(localized: \"<redacted secret>\")"))
         #expect(!source.contains("SecureField(\"Enter secret"))
     }
 

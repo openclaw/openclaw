@@ -202,9 +202,6 @@ final class IOSSystemAgentChatModel {
             self.invalidateCurrentRequest()
             self.routeLease = nil
             self.input = ""
-            self.expectsSensitiveReply = false
-            self.pendingHandoff = nil
-            self.errorMessage = nil
             return
         }
         guard nextAccess != .ready else { return }
@@ -267,7 +264,9 @@ final class IOSSystemAgentChatModel {
     func skipQuestion(messageID: UUID) -> Task<Void, Never>? {
         guard let message = self.messages.first(where: { $0.id == messageID }),
               self.canAnswerQuestion(message),
-              let task = self.send(message: "Skip for now", displayText: "Skip for now")
+              let task = self.send(
+                  message: "Skip for now",
+                  displayText: String(localized: "Skip for now"))
         else { return nil }
         self.dismissedQuestionMessageIDs.insert(messageID)
         return task
@@ -363,7 +362,7 @@ final class IOSSystemAgentChatModel {
         self.input = ""
         self.messages.append(Message(
             role: .user,
-            text: displayText ?? (self.expectsSensitiveReply ? "<redacted secret>" : message)))
+            text: displayText ?? (self.expectsSensitiveReply ? String(localized: "<redacted secret>") : message)))
         let task = Task { [weak self] in
             guard let self else { return }
             await self.requestReply(message: message, generation: generation)
