@@ -677,7 +677,6 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
   private renderSessionCatalogs(
     navigationState: ReturnType<AppSidebarSessionListElement["getSessionNavigationState"]>,
   ) {
-    const creatorRows = this.sessionCreatorCatalogRows();
     return renderSessionCatalogGroups({
       catalogs: this.sessionCatalogs,
       connected: this.connected,
@@ -687,9 +686,11 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       collapsedSections: this.collapsedSessionSections,
       loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
       projectGrouping: this.catalogProjectGrouping,
-      liveRows: creatorRows.liveRows,
-      hiddenLiveSessionKeys: creatorRows.hiddenLiveSessionKeys,
-      hideUnownedSessions: this.sessionCreatorFilterActive,
+      liveRows: [
+        ...(this.sessionsResult?.sessions ?? []),
+        ...Object.values(this.sessionRowsByAgent).flat(),
+      ],
+      creatorId: this.activeSessionCreatorId,
       renderLiveRow: (row, display) =>
         this.renderRecentSession(navigationState.toSidebarSession(row), display),
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),

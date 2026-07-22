@@ -106,7 +106,7 @@ describe("AppSidebar session ownership", () => {
     expect(sidebar.querySelector('[data-session-section="category:Operations"]')).toBeNull();
   });
 
-  it("includes adopted catalog rows in creator filtering", async () => {
+  it("filters catalog rows by authoritative creator ownership", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const backingSessionKey = "agent:main:claude-bound";
     const harness = createSessionsHarness("main", [
@@ -125,6 +125,10 @@ describe("AppSidebar session ownership", () => {
     }
     ada.createdBy = { id: "profile-ada", label: "Ada" };
     adopted.createdBy = { id: "profile-bob", label: "Bob" };
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+    ];
 
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
     sidebar.sessionCatalogs = [
@@ -145,6 +149,7 @@ describe("AppSidebar session ownership", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: backingSessionKey,
+                createdBy: { id: "profile-bob", label: "Bob" },
                 canContinue: true,
                 canArchive: false,
               },
@@ -175,6 +180,15 @@ describe("AppSidebar session ownership", () => {
 
     expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).toBeNull();
     expect(sidebar.textContent).not.toContain("External unowned session");
+
+    harness.publishList({
+      result: { ...result, count: 1, sessions: [ada] },
+      agentId: "main",
+    });
+    await sidebar.updateComplete;
+
+    expect(sidebar.querySelector(`[data-session-key="${backingSessionKey}"]`)).toBeNull();
+    expect(sidebar.textContent).not.toContain("External unowned session");
   });
 
   it("keeps catalog rows whose backing ownership is outside the loaded page", async () => {
@@ -195,6 +209,10 @@ describe("AppSidebar session ownership", () => {
     }
     ada.createdBy = { id: "profile-ada", label: "Ada" };
     bob.createdBy = { id: "profile-bob", label: "Bob" };
+    result.creators = [
+      { id: "profile-ada", label: "Ada" },
+      { id: "profile-bob", label: "Bob" },
+    ];
 
     const unloadedSessionKey = "agent:main:beyond-loaded-page";
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
@@ -216,6 +234,7 @@ describe("AppSidebar session ownership", () => {
                 status: "stored",
                 archived: false,
                 sessionKey: unloadedSessionKey,
+                createdBy: { id: "profile-ada", label: "Ada" },
                 canContinue: true,
                 canArchive: false,
               },

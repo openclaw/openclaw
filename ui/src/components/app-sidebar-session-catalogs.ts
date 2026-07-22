@@ -101,8 +101,7 @@ type SessionCatalogGroupsParams = {
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  hiddenLiveSessionKeys?: ReadonlySet<string>;
-  hideUnownedSessions?: boolean;
+  creatorId?: string | null;
   renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
   onToggleSection: (sectionId: string) => void;
   onToggleProjectGrouping: () => void;
@@ -171,21 +170,9 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
     const hosts = catalog.hosts;
     const visibleHosts: SessionCatalogHost[] = [];
     for (const host of hosts) {
-      const sessions = host.sessions.filter((session) => {
-        if (session.sessionKey && params.hiddenLiveSessionKeys?.has(session.sessionKey)) {
-          // Hidden backing keys are loaded, positively known creator nonmatches.
-          return false;
-        }
-        if (!params.hideUnownedSessions) {
-          return true;
-        }
-        if (!session.sessionKey) {
-          return false;
-        }
-        // Remaining keys are loaded matches or absent from both sets. The latter
-        // are merely unloaded; unknown ownership is not a nonmatch, so they fail open.
-        return true;
-      });
+      const sessions = host.sessions.filter(
+        (session) => !params.creatorId || session.createdBy?.id === params.creatorId,
+      );
       if (sessions.length > 0) {
         visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
       }

@@ -1,5 +1,4 @@
 import { state } from "lit/decorators.js";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { AppSidebarSessionProjectionElement } from "./app-sidebar-session-projection.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import {
@@ -100,30 +99,5 @@ export abstract class AppSidebarSessionOwnershipElement extends AppSidebarSessio
 
   protected hideEmptyCreatorFilteredGroup(category: string | undefined, rowCount: number): boolean {
     return this.sessionCreatorFilterActive && Boolean(category) && rowCount === 0;
-  }
-
-  protected filterRowsBySessionCreator<T extends { createdBy?: SessionCreatedBy }>(
-    rows: readonly T[],
-  ): T[] {
-    const creatorId = this.activeSessionCreatorId;
-    return creatorId ? rows.filter((row) => row.createdBy?.id === creatorId) : [...rows];
-  }
-
-  protected sessionCreatorCatalogRows(): {
-    liveRows: GatewaySessionRow[];
-    hiddenLiveSessionKeys: ReadonlySet<string>;
-  } {
-    const all = [
-      ...(this.sessionsResult?.sessions ?? []),
-      ...Object.values(this.sessionRowsByAgent).flat(),
-    ];
-    const liveRows = this.filterRowsBySessionCreator(all);
-    const visible = new Set(liveRows.map((row) => row.key));
-    return {
-      liveRows,
-      hiddenLiveSessionKeys: new Set(
-        all.filter((row) => !visible.has(row.key)).map((row) => row.key),
-      ),
-    };
   }
 }
