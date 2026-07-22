@@ -1,5 +1,8 @@
 import type { ToolCallRecord } from "../logging/diagnostic-session-state.js";
 
+const MIN_STABLE_CALLS_PER_VARIANT = 3;
+const MAX_PROBE_CALL_SHARE = 0.2;
+
 export function getArgumentChurnNoProgressStreak(
   history: readonly ToolCallRecord[],
   toolName: string,
@@ -20,10 +23,19 @@ export function getArgumentChurnNoProgressStreak(
     });
   }
 
-  // Do not classify one-shot batches or changing results as no progress.
-  const variantCount = outcomes.size;
-  const repeatedStableVariants =
-    variantCount > 1 && Array.from(outcomes.values()).every((outcome) => outcome.count >= 2);
-  const count = Array.from(outcomes.values()).reduce((sum, outcome) => sum + outcome.count, 0);
-  return repeatedStableVariants ? { count, variantCount } : { count: 0, variantCount: 0 };
+  const allOutcomes = Array.from(outcomes.values());
+  const count = allOutcomes.reduce((sum, outcome) => sum + outcome.count, 0);
+  const stableOutcomes = allOutcomes.filter(
+    (outcome) => outcome.count >= MIN_STABLE_CALLS_PER_VARIANT,
+  );
+  const stableCallCount = stableOutcomes.reduce((sum, outcome) => sum + outcome.count, 0);
+  const probeCallCount = count - stableCallCount;
+  const maxProbeCallCount = Math.max(1, Math.floor(count * MAX_PROBE_CALL_SHARE));
+
+  // Three observations distinguish sustained churn from an ordinary two-pass batch.
+  // A small share of novel probes may interrupt the loop without erasing its evidence.
+  const hasStableChurn = stableOutcomes.length > 1 && probeCallCount <= maxProbeCallCount;
+  return hasStableChurn
+    ? { count, variantCount: stableOutcomes.length }
+    : { count: 0, variantCount: 0 };
 }

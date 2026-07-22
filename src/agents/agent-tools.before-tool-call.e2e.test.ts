@@ -445,7 +445,13 @@ describe("before_tool_call loop detection behavior", () => {
       };
     });
     const tool = createWrappedTool("write", execute);
-    const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
+    const paths = Array.from({ length: GLOBAL_CIRCUIT_BREAKER_THRESHOLD }, (_, index) =>
+      index === 8 || index === 19
+        ? `/tmp/probe-${index}.md`
+        : index % 2 === 0
+          ? "/tmp/a.md"
+          : "/tmp/b.md",
+    );
 
     for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
       const targetPath = paths[index % paths.length]!;
@@ -471,6 +477,35 @@ describe("before_tool_call loop detection behavior", () => {
     });
 
     expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+  });
+
+  it("allows a two-pass same-tool batch through the wrapped tool runtime", async () => {
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, params: unknown) => {
+      const targetPath =
+        typeof params === "object" && params !== null && "path" in params
+          ? String(params.path)
+          : "unknown";
+      return {
+        content: [{ type: "text", text: `wrote ${targetPath}` }],
+        details: { ok: true, path: targetPath },
+      };
+    });
+    const tool = createWrappedTool("write", execute);
+    const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
+
+    for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+      const targetPath = paths[index % paths.length]!;
+      await expectUnblockedToolExecution(tool, `write-batch-${index}`, {
+        path: targetPath,
+        content: "same content",
+      });
+    }
+
+    await expectUnblockedToolExecution(tool, "write-batch-next", {
+      path: "/tmp/batch-next.md",
+      content: "same content",
+    });
+    expect(execute).toHaveBeenCalledTimes(GLOBAL_CIRCUIT_BREAKER_THRESHOLD + 1);
   });
 
   it("does not carry loop history across run ids", async () => {

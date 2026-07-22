@@ -526,6 +526,40 @@ describe("tool-loop-detection", () => {
       }
     });
 
+    it("blocks stable argument churn despite bounded singleton probes", () => {
+      const state = createState();
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath =
+          index === 8 || index === 19 ? `/tmp/probe-${index}.md` : `/tmp/${index % 2}.md`;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next-probe.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+        expect(loopResult.detector).toBe("global_circuit_breaker");
+        expect(loopResult.count).toBe(GLOBAL_CIRCUIT_BREAKER_THRESHOLD);
+        expect(loopResult.message).toContain("2 repeated argument patterns");
+      }
+    });
+
     it("does not block a one-shot batch of distinct arguments", () => {
       const state = createState();
 
@@ -537,6 +571,34 @@ describe("tool-loop-detection", () => {
           {
             content: [{ type: "text", text: "write complete" }],
             details: { ok: true },
+          },
+          index,
+        );
+      }
+
+      const loopResult = detectToolCallLoop(
+        state,
+        "write",
+        { path: "/tmp/next.md", content: "same content" },
+        enabledLoopDetectionConfig,
+      );
+
+      expect(loopResult.stuck).toBe(false);
+    });
+
+    it("does not block a legitimate two-pass batch", () => {
+      const state = createState();
+      const paths = Array.from({ length: 15 }, (_, index) => `/tmp/batch-${index}.md`);
+
+      for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
+        const targetPath = paths[index % paths.length]!;
+        recordSuccessfulCall(
+          state,
+          "write",
+          { path: targetPath, content: "same content" },
+          {
+            content: [{ type: "text", text: `wrote ${targetPath}` }],
+            details: { ok: true, path: targetPath },
           },
           index,
         );
