@@ -525,7 +525,10 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
   const markdownHtml =
     content?.kind === "markdown" && content.content.trim()
-      ? toSanitizedMarkdownHtml(content.content, { fileLinks: true })
+      ? toSanitizedMarkdownHtml(content.content, {
+          fileLinks: true,
+          interactiveImages: props.onOpenImage !== undefined,
+        })
       : "";
   const canvasSandbox =
     content?.kind === "canvas"
@@ -1305,6 +1308,23 @@ class ChatDetailPanel extends OpenClawLightDomElement {
   };
 
   private readonly handlePanelClick = (event: Event) => {
+    const imageButton = event
+      .composedPath()
+      .find(
+        (target): target is HTMLElement =>
+          target instanceof HTMLElement &&
+          target.classList.contains("markdown-inline-image-button"),
+      );
+    const image = imageButton?.querySelector<HTMLImageElement>(".markdown-inline-image");
+    if (image) {
+      event.preventDefault();
+      openSidebarImage(
+        this.onOpenImage ?? undefined,
+        image.currentSrc || image.src,
+        image.alt.trim() || t("chat.imageLightbox.untitled"),
+      );
+      return;
+    }
     handleMarkdownCodeBlockCopy(event);
     const target = markdownFileLinkFromEvent(event);
     if (target) {

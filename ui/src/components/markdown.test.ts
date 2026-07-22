@@ -395,7 +395,7 @@ describe("toSanitizedMarkdownHtml", () => {
     it("preserves base64 data URI images (#15437)", () => {
       const html = toSanitizedMarkdownHtml("![Chart](data:image/png;base64,iVBORw0KGgo=)");
       expect(html).toBe(
-        '<p><button class="markdown-inline-image-button" type="button" aria-label="Open image Chart"><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></button></p>\n',
+        '<p><img class="markdown-inline-image" src="data:image/png;base64,iVBORw0KGgo=" alt="Chart"></p>\n',
       );
     });
 
@@ -403,6 +403,7 @@ describe("toSanitizedMarkdownHtml", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
           "[![Preview](data:image/png;base64,iVBORw0KGgo=)](https://example.com/full.png)",
+          { interactiveImages: true },
         ),
       );
 
@@ -414,6 +415,7 @@ describe("toSanitizedMarkdownHtml", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml(
           "[Before ![Preview](data:image/png;base64,iVBORw0KGgo=) after](https://example.com/full.png)",
+          { interactiveImages: true },
         ),
       );
 
@@ -423,7 +425,9 @@ describe("toSanitizedMarkdownHtml", () => {
 
     it("labels unlabeled inline data image buttons", () => {
       const fragment = htmlFragment(
-        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)"),
+        toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)", {
+          interactiveImages: true,
+        }),
       );
 
       expect(

@@ -70,9 +70,10 @@ export function installAssistantTranscriptRoleImageRenderer(
     normalizeLabel: (value: string) => string;
     assistantLabel: () => string;
     openImageLabel: (alt: string, hasAlt: boolean) => string;
+    interactiveImages: (env: unknown) => boolean;
   },
 ): void {
-  md.renderer.rules.image = (tokens, index) => {
+  md.renderer.rules.image = (tokens, index, _rendererOptions, env) => {
     const token = tokens[index];
     if (!token) {
       return "";
@@ -89,9 +90,10 @@ export function installAssistantTranscriptRoleImageRenderer(
     }
     const image = `<img class="markdown-inline-image" src="${options.escapeHtml(src)}" alt="${options.escapeHtml(alt)}">`;
     const linkedImage = isImageWithinLink(tokens, index);
-    const interactiveImage = linkedImage
-      ? image
-      : `<button class="markdown-inline-image-button" type="button" aria-label="${options.escapeHtml(options.openImageLabel(alt, token.content.trim().length > 0))}">${image}</button>`;
+    const interactiveImage =
+      linkedImage || !options.interactiveImages(env)
+        ? image
+        : `<button class="markdown-inline-image-button" type="button" aria-label="${options.escapeHtml(options.openImageLabel(alt, token.content.trim().length > 0))}">${image}</button>`;
     return roleMeta
       ? `${renderAssistantTranscriptRoleMarker(`${options.assistantLabel()}:`, options.escapeHtml)} ${interactiveImage}`
       : interactiveImage;
