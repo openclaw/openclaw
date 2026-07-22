@@ -851,7 +851,7 @@ export function isPendingSendMessage(message: unknown): boolean {
 /** Every projection of one composer submit (pending queue row, locally
  * materialized turn, authoritative history) shares this identity so the
  * rendered bubble keeps one Lit key and never remounts mid-handoff. */
-export function userTurnSendIdentity(message: unknown): string | null {
+function userTurnSendIdentity(message: unknown): string | null {
   const record = asRecord(message);
   if (typeof record?.role !== "string" || record.role.toLowerCase() !== "user") {
     return null;
