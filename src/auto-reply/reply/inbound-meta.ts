@@ -15,10 +15,10 @@ import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatEnvelopeTimestamp } from "../envelope.js";
 import type { TemplateContext } from "../templating.js";
 import {
-  formatUntrustedJsonBlock,
-  MAX_UNTRUSTED_JSON_STRING_CHARS,
+  formatContextJsonBlock,
+  MAX_CONTEXT_JSON_STRING_CHARS,
   neutralizeMarkdownFences,
-} from "./untrusted-context.js";
+} from "./channel-prompt-context.js";
 
 const MAX_UNTRUSTED_HISTORY_ENTRIES = 20;
 const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
@@ -212,12 +212,12 @@ const MIN_HEAD_TAIL_CHARS = 20;
 
 /**
  * Applies head+tail truncation so the result is ≤ maxChars and the downstream
- * {@link truncateUntrustedJsonString} (prefix-only 2000-char cap) is a no-op.
+ * {@link truncateContextJsonString} (prefix-only 2000-char cap) is a no-op.
  * Head and tail portions are sized to keep the body within
- * {@link MAX_UNTRUSTED_JSON_STRING_CHARS}, preserving actionable tail content
+ * {@link MAX_CONTEXT_JSON_STRING_CHARS}, preserving actionable tail content
  * that prefix-only truncation would drop.
  */
-function truncateBodyHeadTail(body: string, maxChars = MAX_UNTRUSTED_JSON_STRING_CHARS): string {
+function truncateBodyHeadTail(body: string, maxChars = MAX_CONTEXT_JSON_STRING_CHARS): string {
   if (body.length <= maxChars) {
     return body;
   }
@@ -225,7 +225,7 @@ function truncateBodyHeadTail(body: string, maxChars = MAX_UNTRUSTED_JSON_STRING
   if (available < MIN_HEAD_TAIL_CHARS * 2) {
     return `${truncateUtf16Safe(body, Math.max(0, maxChars - 14)).trimEnd()}…[truncated]`;
   }
-  // Budget in UTF-16 code units because truncateUntrustedJsonString enforces
+  // Budget in UTF-16 code units because truncateContextJsonString enforces
   // that same cap after JSON serialization.
   const headChars = Math.floor(available * 0.6);
   const tailChars = available - headChars;
@@ -265,7 +265,7 @@ function sanitizeTranscriptBody(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
-function formatUntrustedStructuredContextLabel(label: unknown): string {
+function formatChannelStructuredContextLabel(label: unknown): string {
   const normalized = normalizePromptMetadataString(label);
   return normalized ? `${normalized}:` : "Structured object:";
 }
@@ -334,7 +334,7 @@ function formatChatWindowMessage(
 }
 
 function formatChatWindowStructuredContext(
-  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+  entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
   envelope?: EnvelopeFormatOptions,
 ): string | undefined {
   if (!isChatWindowStructuredContext(entry)) {
@@ -356,15 +356,15 @@ function formatChatWindowStructuredContext(
 }
 
 function isChatWindowStructuredContext(
-  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
-): entry is NonNullable<TemplateContext["UntrustedStructuredContext"]>[number] & {
+  entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
+): entry is NonNullable<TemplateContext["ChannelStructuredContext"]>[number] & {
   payload: Record<string, unknown>;
 } {
   return normalizePromptMetadataString(entry.type) === "chat_window" && isRecord(entry.payload);
 }
 
 function collectChatWindowMessageIds(
-  entries: NonNullable<TemplateContext["UntrustedStructuredContext"]>,
+  entries: NonNullable<TemplateContext["ChannelStructuredContext"]>,
 ): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries) {
@@ -386,7 +386,7 @@ function collectChatWindowMessageIds(
 }
 
 function isChatWindowHistoryContext(
-  entry: NonNullable<TemplateContext["UntrustedStructuredContext"]>[number],
+  entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
 ): boolean {
   if (!isChatWindowStructuredContext(entry)) {
     return false;
@@ -640,8 +640,8 @@ export function buildInboundUserContextPrefix(
     0,
   );
   const replyChainPayload = buildReplyChainPayload(ctx);
-  const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
-    ? ctx.UntrustedStructuredContext
+  const structuredContext = Array.isArray(ctx.ChannelStructuredContext)
+    ? ctx.ChannelStructuredContext
     : [];
   const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
@@ -705,13 +705,13 @@ export function buildInboundUserContextPrefix(
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
-    blocks.push(formatUntrustedJsonBlock("Conversation info:", conversationInfo));
+    blocks.push(formatContextJsonBlock("Conversation info:", conversationInfo));
   }
 
   const threadStarterBody = sanitizePromptBody(ctx.ThreadStarterBody);
   if (threadStarterBody) {
     blocks.push(
-      formatUntrustedJsonBlock("Thread starter:", {
+      formatContextJsonBlock("Thread starter:", {
         body: threadStarterBody,
       }),
     );
@@ -721,14 +721,14 @@ export function buildInboundUserContextPrefix(
   const replyToBody = rawReplyToBody ? truncateBodyHeadTail(rawReplyToBody) : rawReplyToBody;
   if (replyChainPayload.length > 0 && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
-      formatUntrustedJsonBlock(
+      formatContextJsonBlock(
         "Reply chain of current user message (nearest first):",
         replyChainPayload,
       ),
     );
   } else if (replyToBody && !chatWindowCoversReplyContext && !currentMessageContext) {
     blocks.push(
-      formatUntrustedJsonBlock("Reply target of current user message:", {
+      formatContextJsonBlock("Reply target of current user message:", {
         sender_label: normalizePromptMetadataString(ctx.ReplyToSender),
         is_quote: ctx.ReplyToIsQuote === true ? true : undefined,
         body: replyToBody,
@@ -747,12 +747,12 @@ export function buildInboundUserContextPrefix(
     date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
   };
   if (forwardedFrom) {
-    blocks.push(formatUntrustedJsonBlock("Forwarded message context:", forwardedContext));
+    blocks.push(formatContextJsonBlock("Forwarded message context:", forwardedContext));
   }
 
   const locationContext = buildLocationContextPayload(ctx);
   if (locationContext) {
-    blocks.push(formatUntrustedJsonBlock("Location:", locationContext));
+    blocks.push(formatContextJsonBlock("Location:", locationContext));
   }
 
   for (const entry of structuredContext) {
@@ -765,7 +765,7 @@ export function buildInboundUserContextPrefix(
       continue;
     }
     blocks.push(
-      formatUntrustedJsonBlock(formatUntrustedStructuredContextLabel(entry.label), {
+      formatContextJsonBlock(formatChannelStructuredContextLabel(entry.label), {
         source: normalizePromptMetadataString(entry.source),
         type: normalizePromptMetadataString(entry.type),
         payload: entry.payload,

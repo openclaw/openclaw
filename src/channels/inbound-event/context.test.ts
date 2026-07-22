@@ -349,7 +349,7 @@ describe("buildChannelInboundEventContext", () => {
     );
 
     expect(ctx.GroupSystemPrompt).toBeUndefined();
-    expect(ctx.UntrustedStructuredContext).toEqual([
+    expect(ctx.ChannelStructuredContext).toEqual([
       {
         label: "Group prompt context",
         type: "group_prompt_context",
@@ -365,7 +365,7 @@ describe("buildChannelInboundEventContext", () => {
           untrustedGroupSystemPrompt: "room guidance",
         },
         extra: {
-          UntrustedStructuredContext: [
+          ChannelStructuredContext: [
             {
               label: "Channel metadata",
               source: "test",
@@ -377,7 +377,7 @@ describe("buildChannelInboundEventContext", () => {
       }),
     );
 
-    expect(ctx.UntrustedStructuredContext).toEqual([
+    expect(ctx.ChannelStructuredContext).toEqual([
       {
         label: "Channel metadata",
         source: "test",

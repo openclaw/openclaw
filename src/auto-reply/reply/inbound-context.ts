@@ -44,11 +44,32 @@ function countMediaEntries(ctx: MsgContext): number {
   return Math.max(pathCount, urlCount, single);
 }
 
+function foldDeprecatedPromptContextFields(ctx: MsgContext): void {
+  // Deprecated SDK field names fold here so third-party channel plugins keep working.
+  // Runtime reads only the channel-named fields; remove this with the deprecated fields.
+  if (ctx.ChannelPromptContext === undefined && ctx.UntrustedContext !== undefined) {
+    ctx.ChannelPromptContext = ctx.UntrustedContext;
+  }
+  delete ctx.UntrustedContext;
+  if (ctx.ChannelStructuredContext === undefined && ctx.UntrustedStructuredContext !== undefined) {
+    ctx.ChannelStructuredContext = ctx.UntrustedStructuredContext;
+  }
+  delete ctx.UntrustedStructuredContext;
+}
+
 function applySupplementalContext(ctx: MsgContext): void {
   const supplemental = ctx.SupplementalContext;
   if (!supplemental) {
     return;
   }
+  if (
+    supplemental.channelStructuredContext === undefined &&
+    supplemental.untrustedContext !== undefined
+  ) {
+    // Fold the deprecated supplemental SDK key before projecting the canonical context shape.
+    supplemental.channelStructuredContext = supplemental.untrustedContext;
+  }
+  delete supplemental.untrustedContext;
   const fields = {
     ReplyToId: supplemental.quote?.id,
     ReplyToIdFull: supplemental.quote?.fullId,
@@ -63,7 +84,7 @@ function applySupplementalContext(ctx: MsgContext): void {
     ThreadHistoryBody: supplemental.thread?.historyBody,
     ThreadLabel: supplemental.thread?.label,
     GroupSystemPrompt: supplemental.groupSystemPrompt,
-    UntrustedStructuredContext: supplemental.untrustedContext,
+    ChannelStructuredContext: supplemental.channelStructuredContext,
   };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined && ctx[key as keyof MsgContext] === undefined) {
@@ -78,6 +99,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   opts: FinalizeInboundContextOptions = {},
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
+  foldDeprecatedPromptContextFields(normalized);
   applySupplementalContext(normalized);
 
   normalized.Body = normalizeInboundTextNewlines(
@@ -89,11 +111,11 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
   normalized.GroupSystemPrompt = normalizeTrustedTextField(normalized.GroupSystemPrompt);
-  if (Array.isArray(normalized.UntrustedContext)) {
-    const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
+  if (Array.isArray(normalized.ChannelPromptContext)) {
+    const normalizedChannelPromptContext = normalized.ChannelPromptContext.map((entry) =>
       normalizeInboundTextNewlines(entry),
     ).filter((entry) => Boolean(entry));
-    normalized.UntrustedContext = normalizedUntrusted;
+    normalized.ChannelPromptContext = normalizedChannelPromptContext;
   }
 
   const chatType = normalizeChatType(normalized.ChatType);

@@ -1,6 +1,6 @@
 // Covers bounded, untrusted channel metadata construction.
 import { describe, expect, it } from "vitest";
-import { buildUntrustedChannelMetadata } from "./channel-metadata.js";
+import { buildChannelMetadata, buildUntrustedChannelMetadata } from "./channel-metadata.js";
 
 function normalizeMarkerIds(value: string): string {
   return value.replace(/id="[a-f0-9]{16}"/g, 'id="<id>"');
@@ -17,10 +17,14 @@ function wrapExpected(content: string): string {
   ].join("\n");
 }
 
-describe("buildUntrustedChannelMetadata", () => {
+describe("buildChannelMetadata", () => {
+  it("keeps the deprecated SDK alias identical", () => {
+    expect(buildUntrustedChannelMetadata).toBe(buildChannelMetadata);
+  });
+
   it("keeps per-entry truncation UTF-16 safe", () => {
     const entryPrefix = "a".repeat(396);
-    const result = buildUntrustedChannelMetadata({
+    const result = buildChannelMetadata({
       source: "test",
       label: "Test channel",
       entries: [`${entryPrefix}🎉tail`],
@@ -34,7 +38,7 @@ describe("buildUntrustedChannelMetadata", () => {
   it("keeps the combined metadata limit UTF-16 safe", () => {
     const header = "Channel metadata (test)\nTest channel:\n";
     const entryPrefix = "short";
-    const result = buildUntrustedChannelMetadata({
+    const result = buildChannelMetadata({
       source: "test",
       label: "Test channel",
       entries: [`${entryPrefix}🎉tail`],

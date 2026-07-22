@@ -459,7 +459,7 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
     MessageSid: "1503084621145964846",
     Body: body,
     BodyStripped: body,
-    UntrustedStructuredContext: [
+    ChannelStructuredContext: [
       {
         label: "Discord channel metadata",
         source: "discord",

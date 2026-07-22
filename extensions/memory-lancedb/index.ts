@@ -709,7 +709,7 @@ function cleanMemorySearchResults(results: MemorySearchResult[]): Array<{
  * `INBOUND_META_LABEL_RE` below instead of this list, because
  * `buildInboundUserContextPrefix` in core also injects label variants such as
  * `Location:`, `Structured object:`, and arbitrary `<custom-label>:` blocks
- * (from `UntrustedStructuredContext`). Detection must stay forward-compatible
+ * (from `ChannelStructuredContext`). Detection must stay forward-compatible
  * with those without bloating this explicit list every time core adds a new
  * label.
  */
@@ -763,7 +763,7 @@ const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
  * Line-anchored pattern matching any inbound-meta block header injected by
  * `buildInboundUserContextPrefix`. Labels are now plain (`Conversation info:`,
  * `Location:`, plus any future `<label>:` produced from
- * `UntrustedStructuredContext`), so real injections are distinguished from
+ * `ChannelStructuredContext`), so real injections are distinguished from
  * user content by the required ```json fence on the following line. Anchoring
  * the label and fence to their own lines avoids flagging a user message that
  * quotes a label phrase mid-sentence.
@@ -787,7 +787,7 @@ const CONTEXT_HEADER_RE = /^Context:[ \t]*$/m;
 /**
  * Matches JSON blobs that look like OpenClaw transport envelope metadata.
  * Allows `{` on its own line so pretty-printed JSON (the `JSON.stringify(..., null, 2)`
- * output produced by `formatUntrustedJsonBlock` in core) is also caught when it
+ * output produced by `formatContextJsonBlock` in core) is also caught when it
  * leaks outside its ```json fence. Key list mirrors envelope identifiers used
  * by `buildInboundUserContextPrefix` and stays narrow to avoid false-positives
  * on legitimate user JSON with bare keys like "conversation" or "sender".

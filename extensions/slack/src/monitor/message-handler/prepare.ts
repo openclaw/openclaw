@@ -1440,7 +1440,7 @@ export async function prepareSlackMessage(params: {
 
   const slackTo = isDirectMessage ? `user:${message.user}` : `channel:${message.channel}`;
 
-  const { untrustedChannelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
+  const { channelMetadata, groupSystemPrompt } = resolveSlackRoomContextHints({
     isRoomish,
     channelInfo,
     channelConfig,
@@ -1561,7 +1561,7 @@ export async function prepareSlackMessage(params: {
     },
     extra: {
       GroupSubject: isRoomish ? roomLabel : undefined,
-      UntrustedContext: untrustedChannelMetadata ? [untrustedChannelMetadata] : undefined,
+      ChannelPromptContext: channelMetadata ? [channelMetadata] : undefined,
       TransportThreadId: directThreadRoutedToDmSession ? threadContext.messageThreadId : undefined,
       SlackAssistantThread: assistantThreadContext ? true : undefined,
       SlackAssistantThreadContextChannelId: assistantThreadContext?.channelId,

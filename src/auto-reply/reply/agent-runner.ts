@@ -694,7 +694,7 @@ function derivePromptSegments(prompt: string | undefined): TracePromptSegmentVie
       const start = index;
       const fence = lines[index + 1] ?? "";
       // Generated metadata blocks always use ```json fences (inbound-meta.ts,
-      // untrusted-context.ts); other fence languages are user content and must
+      // channel-prompt-context.ts); other fence languages are user content and must
       // stay attributed to user_message.
       if (fence.trim() === "```json") {
         let end = index + 2;

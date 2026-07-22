@@ -37,12 +37,15 @@ type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
-type UntrustedStructuredContextEntry = {
+export type ChannelStructuredContextEntry = {
   label: string;
   source?: string;
   type?: string;
   payload: unknown;
 };
+
+/** @deprecated Use ChannelStructuredContextEntry. Removal: next SDK major. */
+export type UntrustedStructuredContextEntry = ChannelStructuredContextEntry;
 
 /** Structured supplemental facts projected into prompt context by inbound finalization. */
 export type SupplementalContextFacts = {
@@ -71,7 +74,9 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  channelStructuredContext?: ChannelStructuredContextEntry[];
+  /** @deprecated Use channelStructuredContext. Removal: next SDK major. */
+  untrustedContext?: ChannelStructuredContextEntry[];
   groupSystemPrompt?: string;
   /** Prompt-like group metadata from user-controlled sources; never enters the system prompt. */
   untrustedGroupSystemPrompt?: string;
@@ -249,9 +254,13 @@ export type MsgContext = {
    * projects these to the existing flat reply/forward/thread/group prompt fields.
    */
   SupplementalContext?: SupplementalContextFacts;
-  /** Untrusted metadata that must not be treated as system instructions. */
+  /** Channel-provided metadata that must not be treated as system instructions. */
+  ChannelPromptContext?: string[];
+  /** @deprecated Use ChannelPromptContext. Removal: next SDK major. */
   UntrustedContext?: string[];
-  /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
+  /** Structured channel metadata rendered by prompt assembly as fenced JSON. */
+  ChannelStructuredContext?: ChannelStructuredContextEntry[];
+  /** @deprecated Use ChannelStructuredContext. Removal: next SDK major. */
   UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;

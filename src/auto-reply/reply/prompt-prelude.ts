@@ -9,7 +9,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
 import { buildInboundMediaNote } from "../media-note.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { appendUntrustedContext } from "./untrusted-context.js";
+import { appendChannelPromptContext } from "./channel-prompt-context.js";
 
 const REPLY_MEDIA_HINT =
   "To send an image back, use the message tool with structured media fields such as media, mediaUrl, path, or filePath. Keep caption in the text body.";
@@ -41,9 +41,9 @@ function buildReplyPromptBodies(params: {
     combinedEventsBlock ? `${combinedEventsBlock}\n\n${body}` : body;
   const rawPrefixedBody = params.prefixedBody ?? params.effectiveBaseBody;
   const bodyWithEvents = prependEvents(params.effectiveBaseBody);
-  const prefixedBodyWithEvents = appendUntrustedContext(
+  const prefixedBodyWithEvents = appendChannelPromptContext(
     prependEvents(rawPrefixedBody),
-    params.sessionCtx.UntrustedContext,
+    params.sessionCtx.ChannelPromptContext,
   );
   const prefixedBody = [params.threadContextNote, prefixedBodyWithEvents]
     .filter(Boolean)

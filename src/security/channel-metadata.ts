@@ -25,7 +25,7 @@ function truncateText(value: string, maxChars: number): string {
  * Build bounded, externally wrapped channel metadata for prompt context.
  * Channel-provided labels can be user-controlled, so keep the result externally wrapped.
  */
-export function buildUntrustedChannelMetadata(params: {
+export function buildChannelMetadata(params: {
   source: string;
   label: string;
   entries: Array<string | null | undefined>;
@@ -51,3 +51,6 @@ export function buildUntrustedChannelMetadata(params: {
     includeWarning: false,
   });
 }
+
+/** @deprecated Use buildChannelMetadata. Removal: next SDK major. */
+export const buildUntrustedChannelMetadata = buildChannelMetadata;

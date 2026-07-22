@@ -355,7 +355,7 @@ export async function buildWhatsAppInboundContext(params: {
           }
         : undefined,
       groupSystemPrompt: params.groupSystemPrompt,
-      untrustedContext: params.msg.payload.untrustedStructuredContext,
+      channelStructuredContext: params.msg.payload.channelStructuredContext,
     },
     media,
     messageId: params.msg.event.id,

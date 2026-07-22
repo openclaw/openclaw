@@ -349,11 +349,11 @@ export function withDeprecatedWebInboundMessageFlatAliases<T extends WebInboundC
       get: () => msg.payload.media?.url,
       set: (value) => setMediaField(msg, "url", value as string | undefined),
     },
-    untrustedStructuredContext: {
-      get: () => msg.payload.untrustedStructuredContext,
+    channelStructuredContext: {
+      get: () => msg.payload.channelStructuredContext,
       set: (value) =>
-        (msg.payload.untrustedStructuredContext =
-          value as typeof msg.payload.untrustedStructuredContext),
+        (msg.payload.channelStructuredContext =
+          value as typeof msg.payload.channelStructuredContext),
     },
     isBatched: {
       get: () => msg.event.isBatched,
@@ -384,7 +384,7 @@ function normalizeLegacyFlatWebInboundMessage(msg: LegacyFlatWebInboundMessage):
       body: msg.body,
       media,
       location: msg.location,
-      untrustedStructuredContext: msg.untrustedStructuredContext,
+      channelStructuredContext: msg.channelStructuredContext,
     },
     platform: {
       chatJid: msg.chatId,

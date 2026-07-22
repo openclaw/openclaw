@@ -623,7 +623,7 @@ describe("whatsapp inbound dispatch", () => {
       msg: makeMsg({
         payload: {
           body: "<contact>",
-          untrustedStructuredContext: [
+          channelStructuredContext: [
             {
               label: "WhatsApp contact",
               source: "whatsapp",
@@ -639,7 +639,7 @@ describe("whatsapp inbound dispatch", () => {
       },
     });
 
-    expect(ctx.UntrustedStructuredContext).toEqual([
+    expect(ctx.ChannelStructuredContext).toEqual([
       {
         label: "WhatsApp contact",
         source: "whatsapp",

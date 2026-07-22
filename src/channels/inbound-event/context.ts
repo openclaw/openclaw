@@ -100,9 +100,7 @@ export type BuildChannelInboundEventContextParams = {
 export type BuildChannelInboundEventContextAsyncParams = BuildChannelInboundEventContextParams &
   ChannelInboundSupplementalResolutionOptions;
 
-type UntrustedStructuredContextEntries = NonNullable<
-  FinalizedMsgContext["UntrustedStructuredContext"]
->;
+type ChannelStructuredContextEntries = NonNullable<FinalizedMsgContext["ChannelStructuredContext"]>;
 
 export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
@@ -353,7 +351,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
     SupplementalContext: params.supplemental,
     ...mediaPayload,
   };
-  const untrustedStructuredContext = resolveUntrustedStructuredContext({
+  const channelStructuredContext = resolveChannelStructuredContext({
     supplemental: params.supplemental,
     extra: baseContext,
   });
@@ -361,7 +359,7 @@ function finalizePreparedChannelInboundContext<T extends Record<string, unknown>
   const context = finalize(
     {
       ...baseContext,
-      UntrustedStructuredContext: untrustedStructuredContext,
+      ChannelStructuredContext: channelStructuredContext,
     },
     params.finalizeOptions,
   ) as T & FinalizedMsgContext;
@@ -432,16 +430,16 @@ function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
   return normalized.trim().length > 0 ? normalized : undefined;
 }
 
-function resolveUntrustedStructuredContext(params: {
+function resolveChannelStructuredContext(params: {
   supplemental?: SupplementalContextFacts;
   extra?: Record<string, unknown>;
-}): UntrustedStructuredContextEntries | undefined {
-  const entries: UntrustedStructuredContextEntries = [];
-  const extraEntries = params.extra?.UntrustedStructuredContext;
+}): ChannelStructuredContextEntries | undefined {
+  const entries: ChannelStructuredContextEntries = [];
+  const extraEntries = params.extra?.ChannelStructuredContext;
   if (Array.isArray(extraEntries)) {
-    entries.push(...(extraEntries as UntrustedStructuredContextEntries));
+    entries.push(...(extraEntries as ChannelStructuredContextEntries));
   }
-  entries.push(...(params.supplemental?.untrustedContext ?? []));
+  entries.push(...(params.supplemental?.channelStructuredContext ?? []));
 
   // User-controlled group prompt metadata must stay out of GroupSystemPrompt.
   // Keeping it with untrusted context preserves its user-role boundary.

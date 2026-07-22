@@ -3468,7 +3468,7 @@ describe("memory plugin e2e", () => {
   test("looksLikeEnvelopeSludge detects pretty-printed envelope JSON with brace on its own line", () => {
     // JSON.stringify(payload, null, 2) puts `{` on its own line. The regex must
     // catch this shape because envelope JSON inside ```json fences is always
-    // pretty-printed by formatUntrustedJsonBlock in core.
+    // pretty-printed by formatContextJsonBlock in core.
     const prettyJson = '{\n  "chat_id": "chat-123",\n  "message_id": "m-1"\n}';
     expect(looksLikeEnvelopeSludge(prettyJson)).toBe(true);
     const indentedPretty = '  {\n    "sender_name": "alex"\n  }';

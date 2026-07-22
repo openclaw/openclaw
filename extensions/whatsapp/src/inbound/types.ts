@@ -102,7 +102,7 @@ type WhatsAppInboundPayload = {
     kind?: ChannelInboundMediaInput["kind"];
   };
   location?: NormalizedLocation;
-  untrustedStructuredContext?: Array<{
+  channelStructuredContext?: Array<{
     label: string;
     source?: string;
     type?: string;
@@ -201,8 +201,8 @@ export type DeprecatedWebInboundMessageFlatAliases = {
   mediaFileName?: string;
   /** @deprecated Use `payload.media.url`. */
   mediaUrl?: string;
-  /** @deprecated Use `payload.untrustedStructuredContext`. */
-  untrustedStructuredContext?: Array<{
+  /** @deprecated Use `payload.channelStructuredContext`. */
+  channelStructuredContext?: Array<{
     label: string;
     source?: string;
     type?: string;

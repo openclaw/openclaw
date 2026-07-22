@@ -1,4 +1,4 @@
-import { formatUntrustedJsonBlock } from "../../../auto-reply/reply/untrusted-context.js";
+import { formatContextJsonBlock } from "../../../auto-reply/reply/channel-prompt-context.js";
 import {
   hasInterSessionUserProvenance,
   INTER_SESSION_PROMPT_PREFIX_BASE,
@@ -183,7 +183,7 @@ function readPersistedSender(message: AgentMessage): PersistedSender | undefined
 }
 
 function formatPersistedSenderContext(sender: PersistedSender): string {
-  return formatUntrustedJsonBlock(CONVERSATION_INFO_LABEL, { sender });
+  return formatContextJsonBlock(CONVERSATION_INFO_LABEL, { sender });
 }
 
 function mergeSenderIntoLeadingConversationInfo(
@@ -209,7 +209,7 @@ function mergeSenderIntoLeadingConversationInfo(
     return undefined;
   }
   const suffix = body.slice(jsonEnd + "\n```".length);
-  return `${envelope}${formatUntrustedJsonBlock(CONVERSATION_INFO_LABEL, {
+  return `${envelope}${formatContextJsonBlock(CONVERSATION_INFO_LABEL, {
     ...(payload as Record<string, unknown>),
     sender,
   })}${suffix}`;

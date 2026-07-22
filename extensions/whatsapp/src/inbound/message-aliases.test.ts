@@ -26,7 +26,7 @@ function createCanonicalMessage(overrides: Partial<WebInboundCallbackMessage> = 
         fileName: "image.jpg",
         url: "https://example.com/image.jpg",
       },
-      untrustedStructuredContext: [
+      channelStructuredContext: [
         {
           label: "WhatsApp contact",
           source: "whatsapp",

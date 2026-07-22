@@ -151,7 +151,7 @@ function firstNonEmptyString(...values: unknown[]): string | null {
   return null;
 }
 
-function shouldStripTrailingUntrustedContext(lines: string[], index: number): boolean {
+function shouldStripTrailingContextBlock(lines: string[], index: number): boolean {
   if (lines[index]?.trim() !== CONTEXT_HEADER) {
     return false;
   }
@@ -159,9 +159,9 @@ function shouldStripTrailingUntrustedContext(lines: string[], index: number): bo
   return /<<<EXTERNAL_UNTRUSTED_CONTENT|Channel metadata \(|Source:\s+/.test(probe);
 }
 
-function stripTrailingUntrustedContextSuffix(lines: string[]): string[] {
+function stripTrailingContextBlockSuffix(lines: string[]): string[] {
   for (let i = 0; i < lines.length; i++) {
-    if (!shouldStripTrailingUntrustedContext(lines, i)) {
+    if (!shouldStripTrailingContextBlock(lines, i)) {
       continue;
     }
     let end = i;
@@ -243,7 +243,7 @@ export function stripInboundMetadata(text: string): string {
     }
     // Channel context is appended by OpenClaw as a terminal metadata suffix.
     // When this structured header appears, drop it and everything that follows.
-    if (!inMetaBlock && shouldStripTrailingUntrustedContext(strippedLeadingPrefixLines, i)) {
+    if (!inMetaBlock && shouldStripTrailingContextBlock(strippedLeadingPrefixLines, i)) {
       break;
     }
 
@@ -339,7 +339,7 @@ export function stripLeadingInboundMetadata(text: string): string {
     !isInboundMetaSentinelLine(firstContentLine) &&
     !isChatWindowContextHeaderLine(firstContentLine)
   ) {
-    const strippedNoLeading = stripTrailingUntrustedContextSuffix(
+    const strippedNoLeading = stripTrailingContextBlockSuffix(
       strippedDeliveryHint ? lines.slice(index) : lines,
     );
     return strippedNoLeading.join("\n");
@@ -381,7 +381,7 @@ export function stripLeadingInboundMetadata(text: string): string {
     }
   }
 
-  const strippedRemainder = stripTrailingUntrustedContextSuffix(lines.slice(index));
+  const strippedRemainder = stripTrailingContextBlockSuffix(lines.slice(index));
   return strippedRemainder.join("\n");
 }
 

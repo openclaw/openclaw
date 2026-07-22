@@ -883,7 +883,7 @@ describe("buildInboundUserContextPrefix", () => {
       ReplyToId: "34971",
       ReplyToBody: "quoted status body",
       SenderName: "obviyus",
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           source: "telegram",
@@ -1075,7 +1075,7 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
       OriginatingChannel: "whatsapp",
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "WhatsApp contact",
           source: "whatsapp",
@@ -1102,7 +1102,7 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix(
       {
         ChatType: "group",
-        UntrustedStructuredContext: [
+        ChannelStructuredContext: [
           {
             label: "Current local chat window",
             source: "telegram",
@@ -1176,7 +1176,7 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix(
       {
         ChatType: "group",
-        UntrustedStructuredContext: [
+        ChannelStructuredContext: [
           {
             label: "Conversation context",
             source: "telegram",
@@ -1206,7 +1206,7 @@ describe("buildInboundUserContextPrefix", () => {
   it("canonicalizes untrusted chat-window media paths before transcript rendering", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "private",
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Current local chat window",
           source: "telegram",
@@ -1238,7 +1238,7 @@ describe("buildInboundUserContextPrefix", () => {
     const render = () =>
       buildInboundUserContextPrefix({
         ChatType: "private",
-        UntrustedStructuredContext: [
+        ChannelStructuredContext: [
           {
             label: "Current local chat window",
             source: "telegram",
@@ -1267,7 +1267,7 @@ describe("buildInboundUserContextPrefix", () => {
   it("keeps canonical encoded chat-window media paths stable", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "private",
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Current local chat window",
           source: "telegram",
@@ -1308,7 +1308,7 @@ describe("buildInboundUserContextPrefix", () => {
         },
       ],
       InboundHistory: [{ sender: "Sam", timestamp: 1_736_380_700_000, body: "Expected" }],
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           source: "telegram",
@@ -1431,7 +1431,7 @@ describe("buildInboundUserContextPrefix", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
       ReplyToId: "msg-1",
-      UntrustedStructuredContext: [
+      ChannelStructuredContext: [
         {
           label: "Conversation context",
           type: "chat_window",
