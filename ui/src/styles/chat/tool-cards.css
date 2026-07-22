@@ -837,6 +837,21 @@
   padding: 0;
 }
 
+.chat-tool-card__preview-image-button {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  cursor: zoom-in;
+}
+
+.chat-tool-card__preview-image-button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 3px;
+}
+
 .chat-tool-card__preview-frame {
   display: block;
   width: 100%;

@@ -584,6 +584,9 @@ export const en: TranslationMap = {
     active: "Updated within",
     limit: "Limit",
     filters: "Filters",
+    createdBy: "Created by {name}",
+    filterByCreator: "Filter by creator",
+    allCreators: "All people",
     filterControls: "Thread filters",
     sourceFilters: "Thread source filters",
     global: "Global",
@@ -4021,6 +4024,13 @@ export const en: TranslationMap = {
       unavailable: "Unavailable",
       expired: "Expired",
       cancelled: "Cancelled",
+    },
+    imageLightbox: {
+      label: "Image preview: {title}",
+      open: "Open image {title}",
+      openOriginal: "Open original",
+      close: "Close image preview",
+      untitled: "Image",
     },
     messages: {
       activity: "Activity",

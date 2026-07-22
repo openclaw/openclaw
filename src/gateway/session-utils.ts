@@ -7,7 +7,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionCreatorIdentity,
+  SessionsListParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   readAcpSessionMeta,
   readAcpSessionMetaForEntry,
@@ -2234,6 +2237,7 @@ export function buildGatewaySessionRow(params: {
 
   return {
     key,
+    createdBy: entry?.createdBy,
     spawnedBy: subagentOwner || entry?.spawnedBy,
     swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
@@ -2535,6 +2539,7 @@ const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 
 type SessionEntrySelection = {
   entries: SessionEntryPair[];
+  creatorEntries: SessionEntryPair[];
   totalCount: number;
   limitApplied?: number;
   offset: number;
@@ -2724,7 +2729,11 @@ function selectSessionEntries(params: {
   getRowContext?: SessionListRowContextProvider;
   defaultLimit?: number;
 }): SessionEntrySelection {
-  const filtered = filterSessionEntries(params);
+  const creatorEntries = filterSessionEntries(params);
+  const creatorId = normalizeOptionalString(params.opts.creatorId);
+  const filtered = creatorId
+    ? creatorEntries.filter(([, entry]) => entry.createdBy?.id === creatorId)
+    : creatorEntries;
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
@@ -2735,12 +2744,34 @@ function selectSessionEntries(params: {
   const hasMore = nextOffset < filtered.length;
   return {
     entries,
+    creatorEntries,
     totalCount: filtered.length,
     limitApplied: limit,
     offset,
     nextOffset: hasMore ? nextOffset : null,
     hasMore,
   };
+}
+
+function listSessionCreatorIdentities(
+  entries: readonly SessionEntryPair[],
+): SessionCreatorIdentity[] {
+  const creators = new Map<string, SessionCreatorIdentity>();
+  for (const [, entry] of entries) {
+    const id = normalizeOptionalString(entry.createdBy?.id);
+    if (!id) {
+      continue;
+    }
+    const label = normalizeOptionalString(entry.createdBy?.label);
+    const existing = creators.get(id);
+    if (!existing || (label && (!existing.label || label.localeCompare(existing.label) < 0))) {
+      creators.set(id, { id, ...(label ? { label } : {}) });
+    }
+  }
+  return [...creators.values()].toSorted((a, b) => {
+    const byLabel = (a.label ?? a.id).localeCompare(b.label ?? b.id);
+    return byLabel || a.id.localeCompare(b.id);
+  });
 }
 
 export function filterAndSortSessionEntries(params: {
@@ -2785,7 +2816,8 @@ export function listSessionsFromStore(params: {
         : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
-  const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
+  const { entries, creatorEntries, totalCount, limitApplied, offset, nextOffset, hasMore } =
+    selection;
   const fullRowContext =
     rowContext || hasSpawnedByFilter || entries.length > SESSIONS_LIST_YIELD_BATCH_SIZE
       ? getRowContext()
@@ -2829,6 +2861,7 @@ export function listSessionsFromStore(params: {
     offset: offset > 0 ? offset : undefined,
     nextOffset,
     hasMore,
+    creators: listSessionCreatorIdentities(creatorEntries),
     defaults: getSessionDefaults(cfg, params.modelCatalog, { allowPluginNormalization: false }),
     sessions,
   };

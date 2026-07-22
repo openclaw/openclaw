@@ -18,6 +18,7 @@ import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatSendShortcut } from "../../app/settings.ts";
 import { renderExecApprovalCard } from "../../components/exec-approval-card.ts";
 import { icons } from "../../components/icons.ts";
+import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type {
@@ -32,16 +33,17 @@ import type { ProviderUsageDisplayProps } from "../../lib/provider-quota-summary
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupStatus } from "./chat-run-startup.ts";
 import { renderChatViewNotices } from "./chat-view-notices.ts";
-import {
-  handleChatAttachmentDrop,
-  isEditableDropTarget,
-  isFileDrag,
-} from "./components/chat-attachments.ts";
+import { createChatAttachmentDropHandlers } from "./components/chat-attachments.ts";
 import {
   renderBackgroundTasksRail,
   type BackgroundTasksProps,
 } from "./components/chat-background-tasks.ts";
 import { isChatRunWorking, renderChatComposer } from "./components/chat-composer.ts";
+import {
+  inlineChatImageFromEvent,
+  openInlineChatImage,
+  renderChatImageLightbox,
+} from "./components/chat-image-lightbox.ts";
 import { renderChatPullRequests } from "./components/chat-pull-requests.ts";
 import {
   renderSessionWorkspaceRail,
@@ -182,6 +184,10 @@ export type ChatProps = {
   getAttachments?: () => ChatAttachment[];
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   onAssistantAttachmentLoaded?: () => void;
+  imageLightbox?: ImageLightboxItem | null;
+  onRequestOpenImage?: () => number;
+  onOpenImage?: (item: ImageLightboxItem, requestVersion?: number) => void;
+  onCloseImage?: () => void;
   showNewMessages?: boolean;
   onScrollToBottom?: (options?: { smooth?: boolean }) => void;
   onRefresh: () => void;
@@ -278,6 +284,14 @@ export function renderChatResizableDivider(props: {
   ></resizable-divider>`;
 }
 
+function isImageLightboxEvent(event: Event): boolean {
+  return event
+    .composedPath()
+    .some(
+      (target) => target instanceof HTMLElement && target.localName === "openclaw-image-lightbox",
+    );
+}
+
 export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -296,34 +310,21 @@ export function renderChat(props: ChatProps) {
     pending: props.sideChatPending ?? null,
     hidden: props.sideChatHidden === true,
   };
-  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
-  let chatSection: HTMLElement | null = null;
-  // Nested dragenter/dragleave events must stay balanced so crossing transcript
-  // children does not flicker the pane-level file drop affordance.
-  let attachmentDragDepth = 0;
-  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
-    const target = event.currentTarget;
-    if (!(target instanceof HTMLElement)) {
-      return;
-    }
-    if (active) {
-      if (!canCompose || !isFileDrag(event.dataTransfer)) {
-        return;
+  const openImage = props.onOpenImage
+    ? (item: ImageLightboxItem, requestVersion?: number) => {
+        if (requestVersion === undefined) {
+          props.onOpenImage?.(item);
+        } else {
+          props.onOpenImage?.(item, requestVersion);
+        }
       }
-      attachmentDragDepth += 1;
-    } else {
-      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
-    }
-    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
-  };
-  const clearAttachmentDropActive = (event: DragEvent) => {
-    attachmentDragDepth = 0;
-    const target = event.currentTarget;
-    if (target instanceof HTMLElement) {
-      target.removeAttribute("data-attachment-drop-active");
-    }
-  };
-
+    : undefined;
+  const openImmediateImage = props.onOpenImage
+    ? (item: ImageLightboxItem) => openImage?.(item, props.onRequestOpenImage?.())
+    : undefined;
+  const sideChatVisible = isSideChatPanelVisible(sideChatProps);
+  const attachmentDropHandlers = createChatAttachmentDropHandlers({ ...props, canCompose });
+  let chatSection: HTMLElement | null = null;
   const thread = renderChatThread(
     {
       paneId: props.paneId,
@@ -370,6 +371,8 @@ export function renderChat(props: ChatProps) {
       onOpenWorkspaceFile: props.onOpenWorkspaceFile,
       onOpenSessionCheckpoints: props.onOpenSessionCheckpoints,
       onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
+      onRequestOpenImage: props.onRequestOpenImage,
+      onOpenImage: openImage,
       onRequestUpdate: requestUpdate,
       onChatScroll: props.onChatScroll,
       onHistoryIntent: props.onHistoryIntent,
@@ -489,40 +492,19 @@ export function renderChat(props: ChatProps) {
             }
           : {},
       )}
-      @drop=${(event: DragEvent) => {
-        // Text/URL drops stay native only inside editable controls; anywhere
-        // else they are cancelled so a dropped link cannot navigate the app
-        // away. Session drags are handled by the parent chat page either way.
-        if (!isFileDrag(event.dataTransfer)) {
-          if (!isEditableDropTarget(event)) {
-            event.preventDefault();
-          }
-          return;
-        }
-        event.preventDefault();
-        clearAttachmentDropActive(event);
-        if (canCompose) {
-          handleChatAttachmentDrop(event, props);
-        }
-      }}
-      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
-      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
-      @dragover=${(event: DragEvent) => {
-        if (!isFileDrag(event.dataTransfer)) {
-          if (!isEditableDropTarget(event)) {
-            event.preventDefault();
-            if (event.dataTransfer) {
-              event.dataTransfer.dropEffect = "none";
-            }
-          }
-          return;
-        }
-        event.preventDefault();
-        if (event.dataTransfer) {
-          event.dataTransfer.dropEffect = canCompose ? "copy" : "none";
-        }
-      }}
+      @drop=${attachmentDropHandlers.onDrop}
+      @dragenter=${attachmentDropHandlers.onDragenter}
+      @dragleave=${attachmentDropHandlers.onDragleave}
+      @click=${(event: Event) => openInlineChatImage(event, openImmediateImage)}
+      @dragover=${attachmentDropHandlers.onDragover}
       @keydown=${(event: KeyboardEvent) => {
+        if (isImageLightboxEvent(event)) {
+          return;
+        }
+        if ((event.key === "Enter" || event.key === " ") && inlineChatImageFromEvent(event)) {
+          openInlineChatImage(event, openImmediateImage);
+          return;
+        }
         if (event.key === "Escape" && props.replyTarget && !event.defaultPrevented) {
           event.preventDefault();
           props.onClearReply?.();
@@ -667,12 +649,14 @@ export function renderChat(props: ChatProps) {
                     .allowExternalEmbedUrls=${props.allowExternalEmbedUrls ?? false}
                     .onOpenWorkspaceFile=${props.onOpenWorkspaceFile ?? null}
                     .onRevealInWorkspace=${props.onRevealWorkspaceFile ?? null}
+                    .onOpenImage=${props.onOpenImage ? openImmediateImage : null}
                     @chat-detail-panel-close=${() => props.onCloseSidebar?.()}
                   ></openclaw-chat-detail-panel> `
               : nothing}
           </div>
         </div>
       </div>
+      ${renderChatImageLightbox(props.imageLightbox, props.onCloseImage)}
     </section>
   `;
 }

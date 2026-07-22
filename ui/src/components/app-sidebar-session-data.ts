@@ -24,7 +24,6 @@ import {
   type SidebarSessionStatusFilter,
   type SidebarSessionsScrollState,
 } from "./app-sidebar-session-types.ts";
-
 /** Gateway-backed session and external-catalog synchronization. */
 export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCatalogDataElement {
   @state() protected visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
@@ -45,7 +44,6 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
 
   protected sessionRowsByAgent: Record<string, SessionsListResult["sessions"]> = {};
   protected sessionCreatedOrder = new Map<string, number>();
-
   private readonly subscriptions = new SubscriptionsController(this);
   private sessionsSource: SessionCapability | null = null;
   private childSessionGeneration = 0;
@@ -59,8 +57,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
   private gatewaySource: ApplicationContext<RouteId>["gateway"] | null = null;
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
-  // Mutation completions belong to one context/capability/connection epoch.
-  // Bumping this prevents old failures or batch tails crossing a reconnect.
+  // Bind mutation completions to one epoch so stale failures cannot cross reconnects.
   private sessionMutationEpoch = 0;
   private sessionsScrollElement: HTMLElement | null = null;
   private sessionsScrollResizeObserver: ResizeObserver | null = null;
@@ -182,8 +179,7 @@ export abstract class AppSidebarSessionDataElement extends AppSidebarSessionCata
     }
   }
 
-  // Reading scrollHeight/scrollTop inside updated() forces a layout flush per
-  // render; one rAF-coalesced read rides the layout computed for paint anyway.
+  // One rAF-coalesced scroll read rides paint layout instead of flushing every update.
   private scheduleSessionsScrollStateSync() {
     if (this.sessionsScrollStateFrame !== null) {
       return;

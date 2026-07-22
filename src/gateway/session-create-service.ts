@@ -6,6 +6,7 @@ import {
 import {
   ErrorCodes,
   type ErrorShape,
+  type SessionCreatorIdentity,
   errorShape,
   missingScopeErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -260,6 +261,7 @@ export async function createGatewaySession(params: {
   thinkingLevel?: string;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
+  createdBy?: SessionCreatorIdentity;
   parentSessionKey?: string;
   /**
    * Spawn-lineage depth declared by spawn-owned creations (visible subagent
@@ -535,6 +537,7 @@ export async function createGatewaySession(params: {
           : {}),
         reason: "new",
         commandSource: params.commandSource,
+        createdBy: params.createdBy,
         ...(spawnedCwd ? { spawnedCwd } : {}),
         ...(params.worktree ? { worktree: params.worktree } : {}),
         ...(params.execNode ? { execNode: params.execNode } : {}),
@@ -768,6 +771,9 @@ export async function createGatewaySession(params: {
           : undefined;
         const initializedEntry: SessionEntry = {
           ...patched.entry,
+          ...(existingEntry === undefined && params.createdBy
+            ? { createdBy: { ...params.createdBy } }
+            : {}),
           ...(catalogResolvedModel && catalogAgentRuntime
             ? {
                 providerOverride: catalogResolvedModel.provider,
