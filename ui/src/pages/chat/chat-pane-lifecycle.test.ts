@@ -1,5 +1,12 @@
 /* @vitest-environment jsdom */
+/* @vitest-environment-options {"url":"http://chat-pane-lifecycle.test/"} */
 
+// customElements is shared by every file in one jsdom context, but module
+// instances are not. A sibling file that registers openclaw-chat-pane and a
+// later vi.resetModules() leave this file creating panes from a stale module
+// graph, whose dismisser WeakMap and chat-thread bindings differ from the ones
+// imported here. The dedicated context keeps tag registration and imports on
+// one graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
