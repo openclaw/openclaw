@@ -14,6 +14,11 @@ export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/;
+// Session archives are named like `<id>.jsonl.reset.YYYY-MM-DDTHH-MM-SS.<ms>Z`.
+// Time component uses dashes instead of colons because the filename can't
+// contain colons. The trailing literal `Z` matches the UTC suffix.
+const SESSION_RESET_PATH_RE =
+  /\.reset\.(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})\.(\d{1,3})Z$/;
 
 function toDecayLambda(halfLifeDays: number): number {
   if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0) {
@@ -69,6 +74,48 @@ function parseMemoryDateFromPath(filePath: string): Date | null {
   return parsed;
 }
 
+function parseSessionResetDateFromPath(filePath: string): Date | null {
+  const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
+  const match = SESSION_RESET_PATH_RE.exec(normalized);
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const ms = Number(match[7]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    !Number.isInteger(hour) ||
+    !Number.isInteger(minute) ||
+    !Number.isInteger(second) ||
+    !Number.isInteger(ms)
+  ) {
+    return null;
+  }
+
+  const timestamp = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  const parsed = new Date(timestamp);
+  if (
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day ||
+    parsed.getUTCHours() !== hour ||
+    parsed.getUTCMinutes() !== minute ||
+    parsed.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
 function isEvergreenMemoryPath(filePath: string): boolean {
   const normalized = filePath.replaceAll("\\", "/").replace(/^\.\//, "");
   if (normalized === "MEMORY.md") {
@@ -88,6 +135,14 @@ async function extractTimestamp(params: {
   const fromPath = parseMemoryDateFromPath(params.filePath);
   if (fromPath) {
     return fromPath;
+  }
+
+  // Session-reset archives encode the archive moment in their filename.
+  // Parsing it directly avoids fs.stat (faster + works regardless of how the
+  // chunks DB indexes the path vs. where the file actually lives on disk).
+  const fromResetSuffix = parseSessionResetDateFromPath(params.filePath);
+  if (fromResetSuffix) {
+    return fromResetSuffix;
   }
 
   // Memory root/topic files are evergreen knowledge and should not decay.

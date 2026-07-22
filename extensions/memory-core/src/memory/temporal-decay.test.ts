@@ -134,4 +134,55 @@ describe("temporal decay", () => {
 
     expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
   });
+
+  it("parses date from session-reset archive filename without touching disk", async () => {
+    // Real chunks DB stores paths like `sessions/main/<id>.jsonl.reset.<ISO>.Z`
+    // but the actual files live at a different on-disk path. fs.stat fallback
+    // therefore returns null and decay is silently skipped for archived
+    // sessions. The .reset suffix encodes the archive moment exactly, so we
+    // should parse it directly from the filename without filesystem access.
+    const dir = await createTempWorkspace("openclaw-temporal-decay-");
+    // Deliberately do NOT create the file on disk — proves no fs.stat needed.
+    const archiveTimestamp = Date.UTC(2026, 0, 11, 0, 0, 0); // 30 days before NOW_MS
+    expect(archiveTimestamp).toBe(NOW_MS - 30 * DAY_MS);
+
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        {
+          path: "sessions/main/65322d89-f445-4e3f-8f40-7f99a5ee6cee.jsonl.reset.2026-01-11T00-00-00.000Z",
+          score: 1,
+          source: "sessions",
+        },
+      ],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 30 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeCloseTo(0.5, 2);
+  });
+
+  it("ranks fresh session-reset archives ahead of stale ones via filename parsing", async () => {
+    const dir = await createTempWorkspace("openclaw-temporal-decay-");
+    const decayed = await applyTemporalDecayToHybridResults({
+      results: [
+        {
+          path: "sessions/main/aaaa.jsonl.reset.2026-02-09T00-00-00.000Z", // 1 day old
+          score: 0.5,
+          source: "sessions",
+        },
+        {
+          path: "sessions/main/bbbb.jsonl.reset.2025-08-13T00-00-00.000Z", // ~6 months old
+          score: 0.5,
+          source: "sessions",
+        },
+      ],
+      workspaceDir: dir,
+      temporalDecay: { enabled: true, halfLifeDays: 7 },
+      nowMs: NOW_MS,
+    });
+
+    expect(decayed[0]?.score).toBeGreaterThan(0.4);
+    expect(decayed[1]?.score).toBeLessThan(0.001);
+  });
 });
