@@ -64,38 +64,38 @@ export type SessionListRenderContext = {
     owners: boolean;
   };
   cb: {
-    startDrag: (session: SidebarRecentSession) => void;
-    endDrag: () => void;
-    openMenu: (session: SidebarRecentSession, x: number, y: number, trigger?: HTMLElement) => void;
-    rowClick: (event: MouseEvent, session: SidebarRecentSession) => void;
-    children: (session: SidebarRecentSession) => void;
+    sd: (session: SidebarRecentSession) => void;
+    ed: () => void;
+    om: (session: SidebarRecentSession, x: number, y: number, trigger?: HTMLElement) => void;
+    rc: (event: MouseEvent, session: SidebarRecentSession) => void;
+    ch: (session: SidebarRecentSession) => void;
     pin: (session: SidebarRecentSession) => void;
-    menuClick: (
+    mc: (
       session: SidebarRecentSession,
       menuSession: SidebarRecentSession,
       trigger: HTMLElement,
     ) => void;
-    show: (sessionKey: string) => void;
-    over: (event: DragEvent, sectionId: string, group?: string) => void;
-    leave: (event: DragEvent, sectionId: string, group?: string) => void;
-    sectionDrop: (event: DragEvent, sectionId: string, group?: string) => void;
-    groupStart: (group: string) => void;
-    groupEnd: () => void;
-    groupMenu: (group: string, x: number, y: number, trigger: HTMLElement | null) => void;
+    sh: (sessionKey: string) => void;
+    ov: (event: DragEvent, sectionId: string, group?: string) => void;
+    lv: (event: DragEvent, sectionId: string, group?: string) => void;
+    sp: (event: DragEvent, sectionId: string, group?: string) => void;
+    gs: (group: string) => void;
+    ge: () => void;
+    gm: (group: string, x: number, y: number, trigger: HTMLElement | null) => void;
     section: (sectionId: string) => void;
     sort: (trigger: HTMLElement) => void;
-    newSession: () => void;
-    setLimit: (limit: number) => void;
-    clear: () => void;
-    listOver: (event: DragEvent) => void;
-    listLeave: (event: DragEvent) => void;
-    listDrop: (event: DragEvent) => void;
-    dismiss: () => void;
-    catGroup: () => void;
-    more: (catalogId: string) => Promise<void>;
-    target?: (agentId: string, target?: NewSessionTarget) => void;
-    nav?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-    cat: (request: CatalogSessionMenuRequest, x: number, y: number, trigger?: HTMLElement) => void;
+    ns: () => void;
+    sl: (limit: number) => void;
+    cl: () => void;
+    lo: (event: DragEvent) => void;
+    ll: (event: DragEvent) => void;
+    ld: (event: DragEvent) => void;
+    di: () => void;
+    cg: () => void;
+    mo: (catalogId: string) => Promise<void>;
+    tg?: (agentId: string, target?: NewSessionTarget) => void;
+    nv?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+    ct: (request: CatalogSessionMenuRequest, x: number, y: number, trigger?: HTMLElement) => void;
   };
 };
 
@@ -169,19 +169,19 @@ export function renderRecentSession(params: {
         : (event: DragEvent) => {
             if (event.dataTransfer) {
               writeSessionDragData(event.dataTransfer, session.key);
-              cb.startDrag(session);
+              cb.sd(session);
             }
           }}
       @dragend=${session.isChild
         ? nothing
         : () => {
-            cb.endDrag();
+            cb.ed();
           }}
       @contextmenu=${session.isChild
         ? nothing
         : (event: MouseEvent) => {
             event.preventDefault();
-            cb.openMenu(menuSession, event.clientX, event.clientY);
+            cb.om(menuSession, event.clientX, event.clientY);
           }}
       @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
@@ -193,7 +193,7 @@ export function renderRecentSession(params: {
         title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
         aria-describedby=${metaId ?? nothing}
-        @click=${(event: MouseEvent) => cb.rowClick(event, session)}
+        @click=${(event: MouseEvent) => cb.rc(event, session)}
       >
         <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
           data.owners ? session.createdBy : undefined,
@@ -251,7 +251,7 @@ export function renderRecentSession(params: {
                 : "sessionsView.showChildSessions",
               { count: String(session.childSessionKeys.length), session: label },
             )}
-            @click=${() => cb.children(session)}
+            @click=${() => cb.ch(session)}
           >
             <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
               >${childrenExpanded ? icons.chevronDown : icons.chevronRight}</span
@@ -307,7 +307,7 @@ export function renderRecentSession(params: {
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   const trigger = event.currentTarget as HTMLElement;
-                  cb.menuClick(session, menuSession, trigger);
+                  cb.mc(session, menuSession, trigger);
                 }}
               >
                 ${icons.moreHorizontal}
@@ -348,7 +348,7 @@ export function renderSessionTree(params: {
                 aria-label=${t("sessionsView.showMoreChildren", {
                   count: String(hiddenChildCount),
                 })}
-                @click=${() => cb.show(session.key)}
+                @click=${() => cb.sh(session.key)}
               >
                 ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
               </button>`

@@ -80,19 +80,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
         owners: this.sessionOwnershipVisible,
       },
       cb: {
-        startDrag: (session) => {
+        sd: (session) => {
           this.draggingSessionKey = session.key;
           this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
         },
-        endDrag: () => {
+        ed: () => {
           this.finishSidebarEntryDrag();
           this.sessionDropTarget = null;
         },
-        openMenu: this.openSessionMenuForRow.bind(this),
-        rowClick: this.handleSessionRowClick.bind(this),
-        children: this.toggleSessionChildren.bind(this),
+        om: this.openSessionMenuForRow.bind(this),
+        rc: this.handleSessionRowClick.bind(this),
+        ch: this.toggleSessionChildren.bind(this),
         pin: (session) => void this.patchSession(session, { pinned: !session.pinned }),
-        menuClick: (session, menuSession, trigger) => {
+        mc: (session, menuSession, trigger) => {
           if (this.sessionMenu?.session.key === session.key) {
             this.closeSessionMenu();
             return;
@@ -100,42 +100,42 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           const rect = trigger.getBoundingClientRect();
           this.openSessionMenuForRow(menuSession, rect.right, rect.bottom + 4, trigger);
         },
-        show: this.showAllSessionChildren.bind(this),
-        over: this.handleSessionSectionDragOver.bind(this),
-        leave: this.handleSessionSectionDragLeave.bind(this),
-        sectionDrop: this.handleSessionSectionDrop.bind(this),
-        groupStart: (group) => {
+        sh: this.showAllSessionChildren.bind(this),
+        ov: this.handleSessionSectionDragOver.bind(this),
+        lv: this.handleSessionSectionDragLeave.bind(this),
+        sp: this.handleSessionSectionDrop.bind(this),
+        gs: (group) => {
           this.draggingSessionGroup = group;
         },
-        groupEnd: () => {
+        ge: () => {
           this.draggingSessionGroup = null;
           this.sessionGroupDropTarget = null;
         },
-        groupMenu: this.openSessionGroupMenu.bind(this),
+        gm: this.openSessionGroupMenu.bind(this),
         section: this.toggleSessionSection.bind(this),
         sort: this.toggleSessionSortMenu.bind(this),
-        newSession: () => {
+        ns: () => {
           this.onOpenNewSession?.(this.expandedAgentId());
         },
-        setLimit: (limit) => {
+        sl: (limit) => {
           this.visibleSessionLimit = limit;
         },
-        clear: this.clearSessionSelection.bind(this),
-        listOver: this.handleSessionListDragOver.bind(this),
-        listLeave: this.handleSessionListDragLeave.bind(this),
-        listDrop: this.handleSessionListDrop.bind(this),
-        dismiss: () => {
+        cl: this.clearSessionSelection.bind(this),
+        lo: this.handleSessionListDragOver.bind(this),
+        ll: this.handleSessionListDragLeave.bind(this),
+        ld: this.handleSessionListDrop.bind(this),
+        di: () => {
           this.sessionMutationError = null;
         },
-        catGroup: () => {
+        cg: () => {
           const next = this.catalogProjectGrouping === "project" ? "none" : "project";
           storeSidebarCatalogGrouping(next);
           this.catalogProjectGrouping = next;
         },
-        more: this.loadMoreSessionCatalog.bind(this),
-        target: this.onOpenNewSession,
-        nav: this.onNavigate,
-        cat: this.catalogMenu.open.bind(this.catalogMenu),
+        mo: this.loadMoreSessionCatalog.bind(this),
+        tg: this.onOpenNewSession,
+        nv: this.onNavigate,
+        ct: this.catalogMenu.open.bind(this.catalogMenu),
       },
     };
   }
@@ -169,7 +169,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
 
     return renderSessionList({
       context,
-      visibleSessions,
+      empty: visibleSessions.length === 0,
       sections,
       expandedRows,
       visibleRowCount: visibleRows.length,
@@ -186,11 +186,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       }),
       catalogs: {
         catalogs: this.sessionCatalogs,
-        online: context.data.online,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
-        collapsedSections: context.data.collapsed,
         loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,

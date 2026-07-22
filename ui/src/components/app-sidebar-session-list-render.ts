@@ -30,11 +30,9 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
-  online: boolean;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
-  collapsedSections: ReadonlySet<string>;
   loadingMoreCatalogIds: ReadonlySet<string>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
@@ -94,13 +92,13 @@ function renderSessionSection(params: {
       class=${sectionClass}
       data-session-section=${section.id}
       @dragover=${acceptsSessions || group
-        ? (event: DragEvent) => cb.over(event, section.id, group)
+        ? (event: DragEvent) => cb.ov(event, section.id, group)
         : nothing}
       @dragleave=${acceptsSessions || group
-        ? (event: DragEvent) => cb.leave(event, section.id, group)
+        ? (event: DragEvent) => cb.lv(event, section.id, group)
         : nothing}
       @drop=${acceptsSessions || group
-        ? (event: DragEvent) => cb.sectionDrop(event, section.id, group)
+        ? (event: DragEvent) => cb.sp(event, section.id, group)
         : nothing}
     >
       ${html`
@@ -113,19 +111,19 @@ function renderSessionSection(params: {
             ? (event: DragEvent) => {
                 if (event.dataTransfer) {
                   writeSessionGroupDragData(event.dataTransfer, group);
-                  cb.groupStart(group);
+                  cb.gs(group);
                 }
               }
             : nothing}
           @dragend=${group
             ? () => {
-                cb.groupEnd();
+                cb.ge();
               }
             : nothing}
           @contextmenu=${group
             ? (event: MouseEvent) => {
                 event.preventDefault();
-                cb.groupMenu(group, event.clientX, event.clientY, null);
+                cb.gm(group, event.clientX, event.clientY, null);
               }
             : nothing}
         >
@@ -189,7 +187,7 @@ function renderSessionSection(params: {
                   ?disabled=${!data.online}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
-                    cb.newSession();
+                    cb.ns();
                   }}
                 >
                   ${icons.plus}
@@ -209,7 +207,7 @@ function renderSessionSection(params: {
                     event.stopPropagation();
                     const trigger = event.currentTarget as HTMLElement;
                     const rect = trigger.getBoundingClientRect();
-                    cb.groupMenu(group, rect.right, rect.bottom + 4, trigger);
+                    cb.gm(group, rect.right, rect.bottom + 4, trigger);
                   }}
                 >
                   ${icons.moreHorizontal}
@@ -269,7 +267,7 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              cb.setLimit(visible + SIDEBAR_SESSION_PAGE_SIZE);
+              cb.sl(visible + SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -281,8 +279,8 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("usage.details.collapse")}
             @click=${() => {
-              cb.clear();
-              cb.setLimit(SIDEBAR_SESSION_PAGE_SIZE);
+              cb.cl();
+              cb.sl(SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("usage.details.collapse")}
@@ -300,11 +298,11 @@ function renderSessionCatalogs(params: {
   const { cb } = context;
   return renderSessionCatalogGroups({
     catalogs: snapshot.catalogs,
-    connected: snapshot.online,
+    connected: context.data.online,
     basePath: snapshot.basePath,
     routeSessionKey: snapshot.routeSessionKey,
     newSessionAgentId: snapshot.newSessionAgentId,
-    collapsedSections: snapshot.collapsedSections,
+    collapsedSections: context.data.collapsed,
     loadingMoreCatalogIds: snapshot.loadingMoreCatalogIds,
     projectGrouping: snapshot.projectGrouping,
     liveRows: snapshot.liveRows,
@@ -316,14 +314,14 @@ function renderSessionCatalogs(params: {
         display,
       }),
     onToggleSection: (sectionId) => cb.section(sectionId),
-    onToggleProjectGrouping: () => cb.catGroup(),
-    onLoadMore: (catalogId) => void cb.more(catalogId),
-    onOpenNewSession: cb.target,
-    onNavigate: cb.nav,
+    onToggleProjectGrouping: () => cb.cg(),
+    onLoadMore: (catalogId) => void cb.mo(catalogId),
+    onOpenNewSession: cb.tg,
+    onNavigate: cb.nv,
     catalogOpenTarget: snapshot.catalogOpenTarget,
     terminalAvailable: snapshot.terminalAvailable,
     onOpenTerminal: openCatalogSessionInTerminal,
-    onOpenMenu: (request, x, y, trigger) => cb.cat(request, x, y, trigger),
+    onOpenMenu: (request, x, y, trigger) => cb.ct(request, x, y, trigger),
   });
 }
 
@@ -376,7 +374,7 @@ function renderSessionListBody(params: {
 
 export function renderSessionList(params: {
   context: SessionListRenderContext;
-  visibleSessions: SidebarRecentSession[];
+  empty: boolean;
   sections: RenderableSessionSection[];
   expandedRows: SidebarRecentSession[];
   visibleRowCount: number;
@@ -389,9 +387,9 @@ export function renderSessionList(params: {
   return html`
     <section
       class="sidebar-sessions ${data.remove ? "sidebar-sessions--removal-drop" : ""}"
-      @dragover=${(event: DragEvent) => cb.listOver(event)}
-      @dragleave=${(event: DragEvent) => cb.listLeave(event)}
-      @drop=${(event: DragEvent) => cb.listDrop(event)}
+      @dragover=${(event: DragEvent) => cb.lo(event)}
+      @dragleave=${(event: DragEvent) => cb.ll(event)}
+      @drop=${(event: DragEvent) => cb.ld(event)}
     >
       ${data.error
         ? html`
@@ -405,7 +403,7 @@ export function renderSessionList(params: {
                 <button
                   class="callout__dismiss"
                   type="button"
-                  @click=${() => cb.dismiss()}
+                  @click=${() => cb.di()}
                   aria-label=${t("chat.actions.dismissError")}
                 >
                   ${icons.x}
@@ -428,7 +426,7 @@ export function renderSessionList(params: {
               : html`${renderSessionCatalogs({ context, snapshot: params.catalogs })}`,
           codingTrailingPresent: data.status !== "archived" && params.catalogs.catalogs.length > 0,
         })}
-        ${data.status === "archived" && params.visibleSessions.length === 0
+        ${data.status === "archived" && params.empty
           ? html`<span class="sidebar-session-empty-hint"
               >${t("sessionsView.noArchivedSessions")}</span
             >`
