@@ -248,7 +248,7 @@ export function loadBundledMemoryPluginRegistry(options?: {
       config: {
         plugins: {
           slots: {
-            memory: "memory-core",
+            "memory.recall": "memory-core",
           },
         },
       },
@@ -298,7 +298,7 @@ export function loadBundledMemoryPluginRegistry(options?: {
     config: {
       plugins: {
         slots: {
-          memory: "memory-core",
+          "memory.recall": "memory-core",
         },
       },
     },

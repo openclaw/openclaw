@@ -1933,159 +1933,173 @@ export default definePluginEntry({
     // ========================================================================
 
     // Auto-recall: inject relevant memories during prompt build
-    api.on("before_prompt_build", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoRecall) {
-        return undefined;
-      }
-      const agentId = resolveEnabledAgentId(ctx.agentId);
-      if (!agentId) {
-        return undefined;
-      }
-      if (!event.prompt || event.prompt.length < 5) {
-        return undefined;
-      }
+    api.on(
+      "before_prompt_build",
+      async (event, ctx) => {
+        const currentCfg = resolveCurrentHookConfig();
+        if (!currentCfg.autoRecall) {
+          return undefined;
+        }
+        const agentId = resolveEnabledAgentId(ctx.agentId);
+        if (!agentId) {
+          return undefined;
+        }
+        if (!event.prompt || event.prompt.length < 5) {
+          return undefined;
+        }
 
-      try {
-        const recallQuery = normalizeRecallQuery(
-          extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
-            event.prompt,
-          currentCfg.recallMaxChars,
-        );
-        const recall = await runWithTimeout({
-          timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-          task: async () => {
-            const vector = await embeddings.embed(recallQuery, {
-              timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
-            });
-            // Overfetch to compensate for sludge filtering: if contaminated
-            // entries occupy the top slots we still surface enough clean ones.
-            return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
-          },
-        });
-        if (recall.status === "timeout") {
-          api.logger.warn?.(
-            `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+        try {
+          const recallQuery = normalizeRecallQuery(
+            extractLatestUserText(Array.isArray(event.messages) ? event.messages : []) ??
+              event.prompt,
+            currentCfg.recallMaxChars,
           );
-          return undefined;
+          const recall = await runWithTimeout({
+            timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+            task: async () => {
+              const vector = await embeddings.embed(recallQuery, {
+                timeoutMs: DEFAULT_AUTO_RECALL_TIMEOUT_MS,
+              });
+              // Overfetch to compensate for sludge filtering: if contaminated
+              // entries occupy the top slots we still surface enough clean ones.
+              return await db.search(agentId, vector, DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT, 0.3);
+            },
+          });
+          if (recall.status === "timeout") {
+            api.logger.warn?.(
+              `memory-lancedb: auto-recall timed out after ${DEFAULT_AUTO_RECALL_TIMEOUT_MS}ms; skipping memory injection to avoid stalling agent startup`,
+            );
+            return undefined;
+          }
+
+          // Filter contaminated memories, then cap at the prompt-budget bound.
+          const cleanResults = cleanMemorySearchResults(recall.value)
+            .map(({ result, text }) => ({ category: result.entry.category, text }))
+            .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
+
+          if (cleanResults.length === 0) {
+            return undefined;
+          }
+
+          api.logger.info?.(
+            `memory-lancedb: injecting ${cleanResults.length} memories into context`,
+          );
+
+          const context = formatRelevantMemoriesContext(cleanResults);
+          if (!context) {
+            return undefined;
+          }
+
+          return {
+            prependContext: context,
+          };
+        } catch (err) {
+          api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
         }
-
-        // Filter contaminated memories, then cap at the prompt-budget bound.
-        const cleanResults = cleanMemorySearchResults(recall.value)
-          .map(({ result, text }) => ({ category: result.entry.category, text }))
-          .slice(0, DEFAULT_AUTO_RECALL_RESULT_CAP);
-
-        if (cleanResults.length === 0) {
-          return undefined;
-        }
-
-        api.logger.info?.(`memory-lancedb: injecting ${cleanResults.length} memories into context`);
-
-        const context = formatRelevantMemoriesContext(cleanResults);
-        if (!context) {
-          return undefined;
-        }
-
-        return {
-          prependContext: context,
-        };
-      } catch (err) {
-        api.logger.warn(`memory-lancedb: recall failed: ${String(err)}`);
-      }
-      return undefined;
-    });
+        return undefined;
+      },
+      { memoryRole: "recall" },
+    );
 
     // Auto-capture: analyze and store important information after agent ends
-    api.on("agent_end", async (event, ctx) => {
-      const currentCfg = resolveCurrentHookConfig();
-      if (!currentCfg.autoCapture) {
-        return;
-      }
-      const agentId = resolveEnabledAgentId(ctx.agentId);
-      if (!agentId) {
-        return;
-      }
-      if (!event.success || !event.messages || event.messages.length === 0) {
-        return;
-      }
+    api.on(
+      "agent_end",
+      async (event, ctx) => {
+        const currentCfg = resolveCurrentHookConfig();
+        if (!currentCfg.autoCapture) {
+          return;
+        }
+        const agentId = resolveEnabledAgentId(ctx.agentId);
+        if (!agentId) {
+          return;
+        }
+        if (!event.success || !event.messages || event.messages.length === 0) {
+          return;
+        }
 
-      try {
-        const rawCursorKey = ctx.sessionKey ?? ctx.sessionId;
-        const cursorKey = rawCursorKey ? `${agentId}:${rawCursorKey}` : undefined;
-        const startIndex = resolveAutoCaptureStartIndex(
-          event.messages,
-          cursorKey ? autoCaptureCursors.get(cursorKey) : undefined,
-        );
-        let stored = 0;
-        let capturableSeen = 0;
-        for (let index = startIndex; index < event.messages.length; index++) {
-          const message = event.messages[index];
-          let messageProcessed = false;
+        try {
+          const rawCursorKey = ctx.sessionKey ?? ctx.sessionId;
+          const cursorKey = rawCursorKey ? `${agentId}:${rawCursorKey}` : undefined;
+          const startIndex = resolveAutoCaptureStartIndex(
+            event.messages,
+            cursorKey ? autoCaptureCursors.get(cursorKey) : undefined,
+          );
+          let stored = 0;
+          let capturableSeen = 0;
+          for (let index = startIndex; index < event.messages.length; index++) {
+            const message = event.messages[index];
+            let messageProcessed = false;
 
-          try {
-            for (const text of extractUserTextContent(message)) {
-              // Sanitize envelope metadata before checking and storing
-              const sanitized = sanitizeForMemoryCapture(text);
-              if (
-                !sanitized ||
-                !shouldCapture(sanitized, {
-                  customTriggers: currentCfg.customTriggers,
-                  maxChars: currentCfg.captureMaxChars,
-                })
-              ) {
-                continue;
+            try {
+              for (const text of extractUserTextContent(message)) {
+                // Sanitize envelope metadata before checking and storing
+                const sanitized = sanitizeForMemoryCapture(text);
+                if (
+                  !sanitized ||
+                  !shouldCapture(sanitized, {
+                    customTriggers: currentCfg.customTriggers,
+                    maxChars: currentCfg.captureMaxChars,
+                  })
+                ) {
+                  continue;
+                }
+                capturableSeen++;
+                if (capturableSeen > 3) {
+                  continue;
+                }
+
+                const category = detectCategory(sanitized);
+                const vector = await embeddings.embed(sanitized);
+
+                const existing = await findCleanDuplicateMemory(db, agentId, vector);
+                if (existing) {
+                  continue;
+                }
+
+                await db.store(agentId, {
+                  text: sanitized,
+                  vector,
+                  importance: 0.7,
+                  category,
+                });
+                stored++;
               }
-              capturableSeen++;
-              if (capturableSeen > 3) {
-                continue;
+              messageProcessed = true;
+            } finally {
+              if (messageProcessed && cursorKey) {
+                autoCaptureCursors.set(cursorKey, {
+                  nextIndex: index + 1,
+                  lastMessageFingerprint: messageFingerprint(message),
+                });
               }
-
-              const category = detectCategory(sanitized);
-              const vector = await embeddings.embed(sanitized);
-
-              const existing = await findCleanDuplicateMemory(db, agentId, vector);
-              if (existing) {
-                continue;
-              }
-
-              await db.store(agentId, {
-                text: sanitized,
-                vector,
-                importance: 0.7,
-                category,
-              });
-              stored++;
-            }
-            messageProcessed = true;
-          } finally {
-            if (messageProcessed && cursorKey) {
-              autoCaptureCursors.set(cursorKey, {
-                nextIndex: index + 1,
-                lastMessageFingerprint: messageFingerprint(message),
-              });
             }
           }
-        }
 
-        if (stored > 0) {
-          api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+          if (stored > 0) {
+            api.logger.info(`memory-lancedb: auto-captured ${stored} memories`);
+          }
+        } catch (err) {
+          api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
         }
-      } catch (err) {
-        api.logger.warn(`memory-lancedb: capture failed: ${String(err)}`);
-      }
-    });
+      },
+      { memoryRole: "capture" },
+    );
 
-    api.on("session_end", (event, ctx) => {
-      const agentId = ctx.agentId ? normalizeAgentId(ctx.agentId) : undefined;
-      const rawCursorKey = ctx.sessionKey ?? event.sessionKey ?? ctx.sessionId ?? event.sessionId;
-      if (agentId && rawCursorKey) {
-        autoCaptureCursors.delete(`${agentId}:${rawCursorKey}`);
-      }
-      const nextCursorKey = event.nextSessionKey ?? event.nextSessionId;
-      if (agentId && nextCursorKey) {
-        autoCaptureCursors.delete(`${agentId}:${nextCursorKey}`);
-      }
-    });
+    api.on(
+      "session_end",
+      (event, ctx) => {
+        const agentId = ctx.agentId ? normalizeAgentId(ctx.agentId) : undefined;
+        const rawCursorKey = ctx.sessionKey ?? event.sessionKey ?? ctx.sessionId ?? event.sessionId;
+        if (agentId && rawCursorKey) {
+          autoCaptureCursors.delete(`${agentId}:${rawCursorKey}`);
+        }
+        const nextCursorKey = event.nextSessionKey ?? event.nextSessionId;
+        if (agentId && nextCursorKey) {
+          autoCaptureCursors.delete(`${agentId}:${nextCursorKey}`);
+        }
+      },
+      { memoryRole: "capture" },
+    );
 
     // ========================================================================
     // Service

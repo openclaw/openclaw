@@ -35,6 +35,7 @@ import type {
   PluginHeartbeatPromptContributionEvent,
   PluginHeartbeatPromptContributionResult,
 } from "./host-hook-turn-types.js";
+import type { MemoryPluginRole } from "./memory-role.contract.js";
 
 export type {
   PluginHookBeforeModelResolveAttachment,
@@ -1358,6 +1359,7 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   handler: PluginHookHandlerMap[K];
   priority?: number;
   timeoutMs?: number;
+  memoryRole?: MemoryPluginRole;
   source: string;
 };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,6 +1,8 @@
 // Context-engine delegates bridge custom engines to built-in compaction and memory prompt paths.
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildMemoryPromptSection,
   getActivePreparedMemoryPromptSection,
@@ -136,13 +138,14 @@ export async function delegateCompactionToRuntime(
  * assembly, without reimplementing memory prompt formatting.
  */
 function renderMemorySystemPromptAddition(
-  params: MemoryPromptSectionParams,
+  params: MemoryPromptSectionParams & { cfg?: OpenClawConfig },
   prepared?: PreparedMemoryPromptSection,
 ): string | undefined {
   const lines = buildMemoryPromptSection(
     {
       availableTools: params.availableTools,
       citationsMode: params.citationsMode,
+      cfg: params.cfg,
       agentId: params.agentId,
       agentSessionKey: params.agentSessionKey,
       sandboxed: params.sandboxed,
@@ -156,16 +159,22 @@ function renderMemorySystemPromptAddition(
   return normalized || undefined;
 }
 
-export function buildMemorySystemPromptAddition(
-  params: MemoryPromptSectionParams,
-): string | undefined {
+export function buildMemorySystemPromptAddition(params: {
+  availableTools: Set<string>;
+  citationsMode?: MemoryCitationsMode;
+  cfg?: OpenClawConfig;
+  agentId?: string;
+  agentSessionKey?: string;
+  sandboxed?: boolean;
+}): string | undefined {
   const prepared = getActivePreparedMemoryPromptSection();
   if (!prepared) {
     return renderMemorySystemPromptAddition(params);
   }
-  const contextParams: MemoryPromptSectionParams = {
+  const contextParams: MemoryPromptSectionParams & { cfg?: OpenClawConfig } = {
     availableTools: params.availableTools,
     citationsMode: params.citationsMode ?? prepared.context.citationsMode,
+    cfg: params.cfg,
     agentId: params.agentId ?? prepared.context.agentId,
     agentSessionKey: params.agentSessionKey ?? prepared.context.agentSessionKey,
     sandboxed: params.sandboxed ?? prepared.context.sandboxed,

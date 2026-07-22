@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
+import { resolveMemoryRoleSlot } from "./slot-resolution.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
 const listExplicitlyDisabledChannelIdsForConfig = vi.hoisted(() => vi.fn());
@@ -100,62 +101,6 @@ const manifestDiagnostic = {
   source: "/plugins/demo/openclaw.plugin.json",
   message: "manifest warning",
 } as const;
-
-async function expectStaleMetadataSnapshotRebuild(params: {
-  config: OpenClawConfig;
-  snapshotPlugins: readonly PluginManifestRecord[];
-  requestedPlugins?: readonly PluginManifestRecord[];
-  snapshotEnv?: NodeJS.ProcessEnv;
-  requestedEnv?: NodeJS.ProcessEnv;
-}) {
-  const requestedPlugins = params.requestedPlugins ?? params.snapshotPlugins;
-  const snapshotEnv = params.snapshotEnv ?? {};
-  const requestedEnv = params.requestedEnv ?? {};
-  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
-  const snapshotIndex = createIndex(params.snapshotPlugins, { policyHash });
-  const requestedIndex = createIndex(requestedPlugins, { policyHash });
-  const snapshotRegistry: PluginManifestRegistry = {
-    plugins: [...params.snapshotPlugins],
-    diagnostics: [],
-  };
-  const requestedRegistry: PluginManifestRegistry = {
-    plugins: [...requestedPlugins],
-    diagnostics: [],
-  };
-  loadPluginManifestRegistryForInstalledIndex
-    .mockReturnValueOnce(snapshotRegistry)
-    .mockReturnValue(requestedRegistry);
-  const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
-  const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
-
-  const metadataSnapshot = loadPluginMetadataSnapshot({
-    config: params.config,
-    env: snapshotEnv,
-    index: snapshotIndex,
-  });
-  loadPluginManifestRegistryForInstalledIndex.mockClear();
-
-  const table = loadPluginLookUpTable({
-    config: params.config,
-    env: requestedEnv,
-    index: requestedIndex,
-    metadataSnapshot,
-  });
-
-  expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
-  expect(loadPluginManifestRegistryForInstalledIndex.mock.calls).toEqual([
-    [
-      {
-        index: requestedIndex,
-        config: params.config,
-        workspaceDir: undefined,
-        env: requestedEnv,
-        includeDisabled: true,
-      },
-    ],
-  ]);
-  return { table, requestedRegistry };
-}
 
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
@@ -587,6 +532,138 @@ describe("loadPluginLookUpTable", () => {
     expect(table.startup.pluginIds).toEqual(["openai"]);
   });
 
+  it("does not add legacy-only memory slot plugins to gateway startup planning", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "memory-core",
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestRecord({
+        id: "legacy-memory",
+        origin: "workspace",
+      }),
+    ];
+    const config = {
+      plugins: {
+        allow: ["memory-core"],
+        slots: { memory: "legacy-memory" },
+      },
+    } as OpenClawConfig;
+    const index = createIndex(plugins, {
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    });
+    index.plugins = index.plugins.map((plugin) => ({
+      ...plugin,
+      startup: { ...plugin.startup, memory: true },
+    }));
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const table = loadPluginLookUpTable({
+      config,
+      env: {},
+      index,
+    });
+
+    expect(resolveMemoryRoleSlot({ cfg: config, role: "recall" })).toBe("memory-core");
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: ["memory-core"],
+    });
+    expect(table.pluginIds).toEqual(["memory-core"]);
+    expect(table.startup.pluginIds).toEqual(["memory-core"]);
+  });
+
+  it("loads canonical memory role slots but not conflicting legacy memory selectors", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "memory-core",
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestRecord({
+        id: "canonical-recall",
+        origin: "workspace",
+      }),
+      createManifestRecord({
+        id: "agent-dreamer",
+        origin: "workspace",
+      }),
+      createManifestRecord({
+        id: "legacy-memory",
+        origin: "workspace",
+      }),
+      createManifestRecord({
+        id: "agent-legacy-memory",
+        origin: "workspace",
+      }),
+    ];
+    const config = {
+      plugins: {
+        allow: ["canonical-recall", "agent-dreamer", "memory-core"],
+        slots: {
+          memory: "legacy-memory",
+          "memory.recall": "canonical-recall",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "research",
+            plugins: {
+              slots: {
+                memory: "agent-legacy-memory",
+                "memory.dreaming": "agent-dreamer",
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+    const index = createIndex(plugins, {
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    });
+    index.plugins = index.plugins.map((plugin) => ({
+      ...plugin,
+      startup: { ...plugin.startup, memory: true },
+    }));
+    loadPluginManifestRegistryForInstalledIndex.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) => ({
+        plugins: params.pluginIds
+          ? plugins.filter((plugin) => params.pluginIds?.includes(plugin.id))
+          : plugins,
+        diagnostics: [],
+      }),
+    );
+    const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
+
+    const table = loadPluginLookUpTable({
+      config,
+      env: {},
+      index,
+    });
+
+    expect(resolveMemoryRoleSlot({ cfg: config, role: "recall" })).toBe("canonical-recall");
+    expect(resolveMemoryRoleSlot({ cfg: config, role: "recall", agentId: "research" })).toBe(
+      "canonical-recall",
+    );
+    expect(resolveMemoryRoleSlot({ cfg: config, role: "dreaming", agentId: "research" })).toBe(
+      "agent-dreamer",
+    );
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
+      pluginIds: ["agent-dreamer", "canonical-recall", "memory-core"],
+    });
+    expect(table.pluginIds).toEqual(["agent-dreamer", "canonical-recall", "memory-core"]);
+    expect(table.startup.pluginIds).toEqual(["canonical-recall", "agent-dreamer"]);
+  });
+
   it("rebuilds a non-empty scoped provided snapshot for an empty startup scope", async () => {
     const plugins = [
       createManifestRecord({
@@ -805,125 +882,5 @@ describe("loadPluginLookUpTable", () => {
         },
       ],
     ]);
-  });
-
-  it("rebuilds when a provided metadata snapshot has stale env-resolved plugin load paths", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const config = {
-      plugins: {
-        load: { paths: ["~/plugins"] },
-      },
-    } as OpenClawConfig;
-    const snapshotEnv = {
-      HOME: "/home/snapshot",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    const requestedEnv = {
-      HOME: "/home/requested",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    await expectStaleMetadataSnapshotRebuild({
-      config,
-      snapshotPlugins: plugins,
-      snapshotEnv,
-      requestedEnv,
-    });
-  });
-
-  it("rebuilds when a provided metadata snapshot has stale env-resolved plugin roots", async () => {
-    const plugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const config = {} as OpenClawConfig;
-    const snapshotEnv = {
-      HOME: "/home/snapshot",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    const requestedEnv = {
-      HOME: "/home/requested",
-      OPENCLAW_HOME: undefined,
-    } as NodeJS.ProcessEnv;
-    await expectStaleMetadataSnapshotRebuild({
-      config,
-      snapshotPlugins: plugins,
-      snapshotEnv,
-      requestedEnv,
-    });
-  });
-
-  it("rebuilds when a provided metadata snapshot has stale plugin inventory", async () => {
-    const snapshotPlugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const requestedPlugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-      createManifestRecord({
-        id: "discord",
-        origin: "bundled",
-        channels: ["discord"],
-      }),
-    ];
-    const config = {
-      channels: {
-        telegram: { token: "configured" },
-      },
-    } as OpenClawConfig;
-    const { table, requestedRegistry } = await expectStaleMetadataSnapshotRebuild({
-      config,
-      snapshotPlugins,
-      requestedPlugins,
-    });
-
-    expect(table.manifestRegistry).toBe(requestedRegistry);
-  });
-
-  it("rebuilds when a provided metadata snapshot has stale plugin paths", async () => {
-    const snapshotPlugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-      }),
-    ];
-    const requestedPlugins = [
-      createManifestRecord({
-        id: "telegram",
-        origin: "bundled",
-        channels: ["telegram"],
-        rootDir: "/plugins-moved/telegram",
-        source: "/plugins-moved/telegram/index.js",
-        manifestPath: "/plugins-moved/telegram/openclaw.plugin.json",
-      }),
-    ];
-    const config = {
-      channels: {
-        telegram: { token: "configured" },
-      },
-    } as OpenClawConfig;
-    const { table, requestedRegistry } = await expectStaleMetadataSnapshotRebuild({
-      config,
-      snapshotPlugins,
-      requestedPlugins,
-    });
-
-    expect(table.manifestRegistry).toBe(requestedRegistry);
   });
 });

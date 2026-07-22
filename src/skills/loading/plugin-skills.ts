@@ -11,6 +11,7 @@ import {
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolveMemoryRoleLoadScope } from "../../plugins/slot-resolution.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 import { CONFIG_DIR } from "../../utils.js";
@@ -51,7 +52,16 @@ export function resolvePluginSkillDirs(params: {
     metadataSnapshot.normalizePluginId,
   );
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
-  const memorySlot = normalizedPlugins.slots.memory;
+  const { selectedMemoryRolePluginIds, memorySlots } = resolveMemoryRoleLoadScope({
+    cfg: config,
+    slotValues: [
+      normalizedPlugins.slots["memory.recall"],
+      normalizedPlugins.slots["memory.compaction"],
+      normalizedPlugins.slots["memory.capture"],
+      normalizedPlugins.slots["memory.dreaming"],
+      normalizedPlugins.slots["memory.userModel"],
+    ],
+  });
   let selectedMemoryPluginId: string | null = null;
   const seen = new Set<string>();
   const resolved: string[] = [];
@@ -68,7 +78,14 @@ export function resolvePluginSkillDirs(params: {
       enabledByDefault: record.enabledByDefault,
     });
     if (!activationState.activated) {
-      continue;
+      if (
+        !selectedMemoryRolePluginIds.has(record.id) ||
+        !normalizedPlugins.enabled ||
+        normalizedPlugins.deny.includes(record.id) ||
+        normalizedPlugins.entries[record.id]?.enabled === false
+      ) {
+        continue;
+      }
     }
     // ACP router skills should not be attached unless ACP can actually spawn.
     if (!acpRuntimeAvailable && record.id === "acpx") {
@@ -77,7 +94,7 @@ export function resolvePluginSkillDirs(params: {
     const memoryDecision = resolveMemorySlotDecision({
       id: record.id,
       kind: record.kind,
-      slot: memorySlot,
+      slot: memorySlots,
       selectedId: selectedMemoryPluginId,
     });
     if (!memoryDecision.enabled) {

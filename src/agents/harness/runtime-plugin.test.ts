@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   ensurePluginRegistryLoaded: vi.fn(),
   resolveActivatableProviderOwnerPluginIds: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
+  loadPluginRegistrySnapshot: vi.fn(),
   resolveManifestActivationPlan: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
 }));
@@ -25,6 +26,39 @@ vi.mock("../../plugins/activation-planner.js", () => ({
   resolveManifestActivationPlan: mocks.resolveManifestActivationPlan,
 }));
 
+vi.mock("../../plugins/plugin-registry.js", async (importActual) => ({
+  ...(await importActual<typeof import("../../plugins/plugin-registry.js")>()),
+  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
+}));
+
+function createPluginRegistrySnapshot(pluginIds: readonly string[] = []) {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    diagnostics: [],
+    plugins: ["memory-core", ...pluginIds].map((pluginId) => ({
+      pluginId,
+      manifestPath: `/tmp/${pluginId}/openclaw.plugin.json`,
+      manifestHash: "test",
+      rootDir: `/tmp/${pluginId}`,
+      origin: pluginId === "memory-core" ? "bundled" : "user",
+      enabled: true,
+      startup: {
+        sidecar: false,
+        memory: true,
+        deferConfiguredChannelFullLoadUntilAfterListen: false,
+        agentHarnesses: [],
+      },
+      compat: [],
+    })),
+  };
+}
+
 describe("ensureSelectedAgentHarnessPlugin", () => {
   let ensureSelectedAgentHarnessPlugin: typeof import("./runtime-plugin.js").ensureSelectedAgentHarnessPlugin;
   let resolveAgentHarnessRuntimeAvailability: typeof import("./runtime-plugin.js").resolveAgentHarnessRuntimeAvailability;
@@ -39,8 +73,10 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     mocks.ensurePluginRegistryLoaded.mockReset();
     mocks.resolveActivatableProviderOwnerPluginIds.mockReset();
     mocks.resolveBundledProviderCompatPluginIds.mockReset();
+    mocks.loadPluginRegistrySnapshot.mockReset();
     mocks.resolveManifestActivationPlan.mockReset();
     mocks.resolveOwningPluginIdsForProvider.mockReset();
+    mocks.loadPluginRegistrySnapshot.mockReturnValue(createPluginRegistrySnapshot());
     mocks.resolveManifestActivationPlan.mockImplementation(
       ({
         trigger,
@@ -75,6 +111,26 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
         pluginIds.filter((pluginId) => pluginId === "memory-core"),
     );
   });
+
+  async function ensureOpenAiHarnessLoaded(params: { config: OpenClawConfig; agentId?: string }) {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      config: params.config,
+      workspaceDir: "/tmp/workspace",
+    });
+  }
+
+  function expectScopedPluginLoad(onlyPluginIds: string[]) {
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds,
+      }),
+    );
+  }
 
   it("loads Codex and the provider owner when an explicit runtime override forces the Codex harness", async () => {
     await ensureSelectedAgentHarnessPlugin({
@@ -448,13 +504,151 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+  it("activates agent-scoped memory role slots for harness scoped loads", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "openai",
+      modelId: "gpt-5.5-pro",
+      agentId: "agent-a",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "agent-a",
+              plugins: { slots: { "memory.capture": "memory-core" } },
+            },
+          ],
+        },
+        plugins: {
+          allow: ["codex", "openai", "memory-core"],
+          slots: { "memory.recall": "none" },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "memory-core": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai", "memory-core"],
+      }),
+    );
+  });
+
+  it("uses agent memory.recall overrides for harness scoped loads", async () => {
+    await ensureOpenAiHarnessLoaded({
+      agentId: "agent-a",
+      config: {
+        agents: {
+          list: [{ id: "agent-a", plugins: { slots: { "memory.recall": "memory-core" } } }],
+        },
+        plugins: {
+          allow: ["codex", "openai", "memory-core"],
+          slots: { "memory.recall": "other-memory" },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "memory-core": { enabled: true },
+            "other-memory": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectScopedPluginLoad(["codex", "openai", "memory-core"]);
+  });
+
+  it("activates a trusted canonical memory.recall plugin for harness scoped loads", async () => {
+    mocks.loadPluginRegistrySnapshot.mockReturnValueOnce(
+      createPluginRegistrySnapshot(["some-memory-plugin"]),
+    );
+
+    await ensureOpenAiHarnessLoaded({
+      config: {
+        plugins: {
+          allow: ["codex", "openai", "some-memory-plugin"],
+          slots: { "memory.recall": "some-memory-plugin" },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "some-memory-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["codex", "openai", "some-memory-plugin"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            entries: expect.objectContaining({
+              "some-memory-plugin": expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    {
+      name: "global legacy slot",
+      config: {
+        plugins: {
+          allow: ["codex", "openai", "some-memory-plugin"],
+          slots: { memory: "some-memory-plugin" },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "some-memory-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    },
+    {
+      name: "agent-scoped legacy slot",
+      agentId: "agent-a",
+      config: {
+        agents: { list: [{ id: "agent-a", plugins: { slots: { memory: "some-memory-plugin" } } }] },
+        plugins: {
+          allow: ["codex", "openai", "some-memory-plugin"],
+          slots: { "memory.recall": "none" },
+          entries: {
+            codex: { enabled: true },
+            openai: { enabled: true },
+            "some-memory-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+    },
+  ])(
+    "does not activate a deprecated legacy-only plugins.slots.memory plugin for $name",
+    async ({ config, agentId }) => {
+      mocks.loadPluginRegistrySnapshot.mockReturnValueOnce(
+        createPluginRegistrySnapshot(["some-memory-plugin"]),
+      );
+
+      await ensureOpenAiHarnessLoaded({ config, agentId });
+
+      expectScopedPluginLoad(["codex", "openai"]);
+    },
+  );
+
   it("does not auto-activate an untrusted workspace memory slot plugin", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5-pro",
       config: {
         plugins: {
-          slots: { memory: "workspace-memory" },
+          slots: { "memory.recall": "workspace-memory" },
         },
       } as OpenClawConfig,
       workspaceDir: "/tmp/workspace",

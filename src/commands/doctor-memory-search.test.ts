@@ -490,7 +490,7 @@ describe("noteMemorySearchHealth", () => {
     expect(firstNoteMessage()).toContain("No active memory plugin is registered");
   });
 
-  it("does not warn when an enabled alternate memory plugin owns the memory slot", async () => {
+  it("does not warn when an enabled alternate memory plugin owns the canonical recall slot", async () => {
     resolveActiveMemoryBackendConfig.mockReturnValue(null);
     resolveMemorySearchConfig.mockReturnValue({
       provider: "auto",
@@ -500,7 +500,7 @@ describe("noteMemorySearchHealth", () => {
     const cfgWithLancedb = {
       session: { dmScope: "per-peer" },
       plugins: {
-        slots: { memory: "memory-lancedb" },
+        slots: { "memory.recall": "memory-lancedb" },
         entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
       },
     } as unknown as OpenClawConfig;
@@ -510,6 +510,28 @@ describe("noteMemorySearchHealth", () => {
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
     expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when an enabled alternate memory plugin only owns the deprecated legacy slot", async () => {
+    resolveActiveMemoryBackendConfig.mockReturnValue(null);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+    const cfgWithLegacyLancedb = {
+      plugins: {
+        slots: { memory: "memory-lancedb" },
+        entries: { "memory-lancedb": { enabled: true, config: { dbPath: ".openclaw/memory" } } },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(cfgWithLegacyLancedb, {});
+
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain("No active memory plugin is registered");
   });
 
   it("still warns when an alternate memory slot has no configured plugin entry", async () => {
@@ -709,7 +731,7 @@ describe("noteMemorySearchHealth", () => {
           list: [{ id: "personal", memory: { search: { rememberAcrossConversations: true } } }],
         },
         plugins: {
-          slots: { memory: memoryProvider },
+          slots: { "memory.recall": memoryProvider },
           entries: {
             "active-memory": {
               enabled: true,

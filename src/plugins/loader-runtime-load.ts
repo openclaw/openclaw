@@ -32,6 +32,7 @@ import {
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
+import { resolveMemoryRoleLoadScope } from "./slot-resolution.js";
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
@@ -129,7 +130,10 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         warningCacheKey: context.cacheKey,
         suppliedManifestRegistry: options.manifestRegistry,
       });
-    const memorySlot = context.normalized.slots.memory;
+    const { selectedMemoryRolePluginIds, memorySlots, memorySlot } = resolveMemoryRoleLoadScope({
+      cfg: context.cfg,
+      selectionCfg: context.activationSource.rootConfig ?? context.cfg,
+    });
     const state: PluginLoadLoopState = {
       seenIds: new Map(),
       selectedMemoryPluginId: null,
@@ -156,6 +160,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         options,
         onlyPluginIdSet,
         dreamingSidecar,
+        selectedMemoryRolePluginIds,
+        memorySlots,
+        memorySlot,
         validateOnly,
         registryBuilder,
         loadPluginModule,
@@ -170,7 +177,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       );
     }
     // Scoped snapshots may omit the configured memory plugin intentionally.
-    if (!onlyPluginIdSet && typeof memorySlot === "string" && !state.memorySlotMatched) {
+    if (
+      !onlyPluginIdSet &&
+      typeof memorySlot === "string" &&
+      selectedMemoryRolePluginIds.has(memorySlot) &&
+      !state.memorySlotMatched
+    ) {
       registry.diagnostics.push({
         level: "warn",
         message: `memory slot plugin not found or not marked as memory: ${memorySlot}`,

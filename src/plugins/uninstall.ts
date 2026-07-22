@@ -18,7 +18,12 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey, resetPluginSlotsToDefaults } from "./slots.js";
+import {
+  MEMORY_PLUGIN_SLOT_KEYS,
+  defaultSlotIdForKey,
+  resetAgentMemoryPluginSlotReferences,
+  resetPluginSlotReferences,
+} from "./slots.js";
 
 type UninstallActions = {
   entry: boolean;
@@ -434,17 +439,27 @@ export function removePluginFromConfig(
     }
   }
 
-  // Reset slots if this plugin was selected.
-  let slots = pluginsConfig.slots;
-  if (slots?.memory === pluginId) {
+  // Reset root slots if this plugin was selected.
+  let slots = pluginsConfig.slots ? { ...pluginsConfig.slots } : undefined;
+  const rootMemorySlotReset = resetPluginSlotReferences(slots, pluginId, MEMORY_PLUGIN_SLOT_KEYS);
+  slots = rootMemorySlotReset.slots;
+  if (rootMemorySlotReset.changed) {
     actions.memorySlot = true;
   }
   if (slots?.contextEngine === pluginId) {
+    slots = {
+      ...slots,
+      contextEngine: defaultSlotIdForKey("contextEngine"),
+    };
     actions.contextEngineSlot = true;
   }
-  slots = resetPluginSlotsToDefaults(slots, pluginId);
   if (slots && Object.keys(slots).length === 0) {
     slots = undefined;
+  }
+
+  const agentSlotReset = resetAgentMemoryPluginSlotReferences(cfg.agents, pluginId);
+  if (agentSlotReset.changed) {
+    actions.memorySlot = true;
   }
 
   const newPlugins = {
@@ -498,6 +513,7 @@ export function removePluginFromConfig(
   const config: OpenClawConfig = {
     ...cfg,
     plugins: Object.keys(cleanedPlugins).length > 0 ? cleanedPlugins : undefined,
+    agents: agentSlotReset.agents,
     channels: channels as OpenClawConfig["channels"],
   };
 

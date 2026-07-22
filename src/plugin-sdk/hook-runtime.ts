@@ -27,3 +27,4 @@ export {
   toPluginMessageSentEvent,
 } from "../hooks/message-hook-mappers.js";
 export { fireAndForgetHook } from "../hooks/fire-and-forget.js";
+export type { MemoryPluginRole } from "../plugins/memory-role.contract.js";

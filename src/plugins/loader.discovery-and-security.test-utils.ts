@@ -116,7 +116,7 @@ describe("loadOpenClawPlugins", () => {
                 config: {
                   plugins: {
                     load: { paths: [memoryA.file, memoryB.file] },
-                    slots: { memory: "memory-b" },
+                    slots: { "memory.recall": "memory-b" },
                   },
                 },
               }),
@@ -182,7 +182,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: ["memory-a", "memory-b"],
-                slots: { memory: "memory-b" },
+                slots: { "memory.recall": "memory-b" },
                 entries: {
                   "memory-a": { enabled: true },
                   "memory-b": { enabled: true },
@@ -210,7 +210,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: [selectedId],
-                slots: { memory: selectedId },
+                slots: { "memory.recall": selectedId },
                 entries: {
                   [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
                 },
@@ -241,7 +241,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: [selectedId],
-                slots: { memory: selectedId },
+                slots: { "memory.recall": selectedId },
                 entries: {
                   [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
                 },
@@ -270,7 +270,7 @@ describe("loadOpenClawPlugins", () => {
               plugins: {
                 allow: [selectedId],
                 deny: ["memory-core"],
-                slots: { memory: selectedId },
+                slots: { "memory.recall": selectedId },
                 entries: {
                   [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
                 },
@@ -298,7 +298,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: [selectedId],
-                slots: { memory: selectedId },
+                slots: { "memory.recall": selectedId },
                 entries: {
                   "memory-core": { enabled: false },
                   [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
@@ -328,7 +328,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: [selectedId],
-                slots: { memory: selectedId },
+                slots: { "memory.recall": selectedId },
                 entries: {
                   [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
                 },
@@ -391,7 +391,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: ["memory-core", "memory-lancedb"],
-                slots: { memory: "memory-lancedb" },
+                slots: { "memory.recall": "memory-lancedb" },
                 entries: {
                   "memory-core": { enabled: true },
                   "memory-lancedb": { enabled: true, config: { dreaming: { enabled: true } } },
@@ -454,7 +454,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: ["memory-core", "memory-lancedb"],
-                slots: { memory: "memory-lancedb" },
+                slots: { "memory.recall": "memory-lancedb" },
                 entries: {
                   "memory-core": { enabled: true },
                   "memory-lancedb": { enabled: true },
@@ -498,7 +498,7 @@ describe("loadOpenClawPlugins", () => {
             config: {
               plugins: {
                 allow: ["memory-core"],
-                slots: { memory: "none" },
+                slots: { "memory.recall": "none" },
                 entries: {
                   "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
                 },
@@ -530,7 +530,7 @@ describe("loadOpenClawPlugins", () => {
                 config: {
                   plugins: {
                     load: { paths: [memory.file] },
-                    slots: { memory: "none" },
+                    slots: { "memory.recall": "none" },
                   },
                 },
               }),
@@ -554,7 +554,7 @@ describe("loadOpenClawPlugins", () => {
       config: {
         plugins: {
           allow: [selectedId],
-          slots: { memory: selectedId },
+          slots: { "memory.recall": selectedId },
           entries: {
             [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
           },
@@ -789,7 +789,7 @@ describe("loadOpenClawPlugins", () => {
               config: {
                 plugins: {
                   allow: ["memory-lancedb"],
-                  slots: { memory: "memory-lancedb" },
+                  slots: { "memory.recall": "memory-lancedb" },
                   entries: {
                     "memory-lancedb": { enabled: true },
                   },

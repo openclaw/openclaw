@@ -149,7 +149,8 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: channel-owned setup contract factory.
       // +18: generic schema primitives needed by plugin-owned channel config schemas.
       // +2: shared Teams reply-style and TTS schema leaves.
-      4698,
+      // +15: memory-role hook type plus plugin host facade types restored for SDK/API consistency.
+      4713,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

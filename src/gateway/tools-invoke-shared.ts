@@ -18,8 +18,10 @@ import { resolveSessionEntryAccessTarget } from "../config/sessions/session-acce
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
+import { resolveMemoryRoleSlot } from "../plugins/slot-resolution.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
@@ -75,13 +77,13 @@ function resolveSessionKey(params: { cfg: OpenClawConfig; input: ToolsInvokeInpu
   return resolveMainSessionKey(params.cfg);
 }
 
-function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
+function resolveMemoryToolDisableReasons(cfg: OpenClawConfig, agentId?: string): string[] {
   if (!process.env.VITEST) {
     return [];
   }
   const reasons: string[] = [];
   const plugins = cfg.plugins;
-  const slotRaw = plugins?.slots?.memory;
+  const slotRaw = resolveMemoryRoleSlot({ cfg, role: "recall", agentId });
   const slotDisabled = slotRaw === null || normalizeOptionalLowercaseString(slotRaw) === "none";
   const pluginsDisabled = plugins?.enabled === false;
   const defaultDisabled = isTestDefaultMemorySlotDisabled(cfg);
@@ -90,7 +92,9 @@ function resolveMemoryToolDisableReasons(cfg: OpenClawConfig): string[] {
     reasons.push("plugins.enabled=false");
   }
   if (slotDisabled) {
-    reasons.push(slotRaw === null ? "plugins.slots.memory=null" : 'plugins.slots.memory="none"');
+    reasons.push(
+      slotRaw === null ? "plugins.slots.memory.recall=null" : 'plugins.slots.memory.recall="none"',
+    );
   }
   if (!pluginsDisabled && !slotDisabled && defaultDisabled) {
     reasons.push("memory plugin disabled by test default");
@@ -183,8 +187,20 @@ export async function invokeGatewayTool(params: {
     };
   }
 
+  const action = normalizeOptionalString(params.input.action);
+  const argsRaw = params.input.args;
+  const args =
+    argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
+      ? (argsRaw as Record<string, unknown>)
+      : {};
+  const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
+  const requestedAgentId = normalizeOptionalString(params.input.agentId);
+
   if (process.env.VITEST && MEMORY_TOOL_NAMES.has(toolName)) {
-    const reasons = resolveMemoryToolDisableReasons(params.cfg);
+    const reasons = resolveMemoryToolDisableReasons(
+      params.cfg,
+      requestedAgentId ?? parseAgentSessionKey(sessionKey)?.agentId,
+    );
     if (reasons.length > 0) {
       const suffix = ` (${reasons.join(", ")})`;
       return {
@@ -195,7 +211,7 @@ export async function invokeGatewayTool(params: {
           type: "invalid_request",
           message:
             `memory tools are disabled in tests${suffix}. ` +
-            `Enable by setting plugins.slots.memory="${defaultSlotIdForKey("memory")}" (and ensure plugins.enabled is not false).`,
+            `Enable by setting plugins.slots.memory.recall="${defaultSlotIdForKey("memory.recall")}" (and ensure plugins.enabled is not false).`,
         },
       };
     }
@@ -203,14 +219,6 @@ export async function invokeGatewayTool(params: {
 
   const knownCoreTool = isKnownCoreToolId(toolName);
   const gatewayRequestedTools = knownCoreTool ? [] : [toolName];
-
-  const action = normalizeOptionalString(params.input.action);
-  const argsRaw = params.input.args;
-  const args =
-    argsRaw && typeof argsRaw === "object" && !Array.isArray(argsRaw)
-      ? (argsRaw as Record<string, unknown>)
-      : {};
-  const sessionKey = resolveSessionKey({ cfg: params.cfg, input: params.input });
   const harnessEntry = isAgentHarnessSessionKey(sessionKey)
     ? resolveSessionEntryAccessTarget({ cfg: params.cfg, sessionKey }).entry
     : undefined;
@@ -250,7 +258,6 @@ export async function invokeGatewayTool(params: {
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools, workspaceDir } = resolveTools(false));
   }
-  const requestedAgentId = normalizeOptionalString(params.input.agentId);
   if (requestedAgentId && agentId && requestedAgentId !== agentId) {
     return {
       ok: false,

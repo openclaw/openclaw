@@ -1032,7 +1032,7 @@ module.exports = {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["memory-external"],
-          slots: { memory: "memory-other" },
+          slots: { "memory.recall": "memory-other" },
         },
       },
     });
@@ -1072,7 +1072,7 @@ module.exports = {
         plugins: {
           load: { paths: [plugin.file] },
           allow: ["memory-export-only"],
-          slots: { memory: "memory-other" },
+          slots: { "memory.recall": "memory-other" },
         },
       },
     });
