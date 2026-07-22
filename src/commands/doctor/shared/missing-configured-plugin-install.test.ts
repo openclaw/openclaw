@@ -11,6 +11,7 @@ import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
+import { hasRetainedManagedNpmInstallMarker } from "../../../plugins/managed-npm-retention.js";
 import type { BundledProviderPolicySurface } from "../../../plugins/provider-policy-surface.js";
 import { VERSION } from "../../../version.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
@@ -3580,6 +3581,610 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(updateRecord.resolvedSpec).toBeUndefined();
     expect(updateRecord.resolvedVersion).toBeUndefined();
     expect(result.changes).toEqual(['Repaired broken installed plugin "demo".']);
+  });
+
+  it("detects an installed plugin whose required dependencies are missing on disk", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const {
+      configuredPluginInstallIssueToHealthFinding,
+      configuredPluginInstallIssueToRepairEffect,
+      detectConfiguredPluginInstallHealthIssues,
+    } = await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([
+      {
+        kind: "repairable-installed-plugin",
+        pluginId: "demo",
+        installPath: pluginDir,
+        installSpec: "@openclaw/plugin-demo@1.0.0",
+        missingDependencies: ["@example/required-runtime"],
+      },
+    ]);
+    const issue = issues[0];
+    if (!issue) {
+      throw new Error("expected a repairable-installed-plugin issue");
+    }
+    expect(configuredPluginInstallIssueToHealthFinding(issue).message).toContain(
+      "@example/required-runtime",
+    );
+    expect(configuredPluginInstallIssueToRepairEffect(issue)).toEqual({
+      kind: "package",
+      action: "would-repair-configured-plugin-install",
+      target: "demo",
+      dryRunSafe: false,
+    });
+  });
+
+  it("detects missing dependencies when the active npm record differs from the official catalog", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@example/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "npm",
+        spec: "@example/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "demo",
+        label: "Demo",
+        install: {
+          npmSpec: "@openclaw/plugin-demo",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({
+      cfg: { plugins: { entries: { demo: { enabled: true } } } },
+      env: {},
+    });
+
+    expect(issues).toEqual([
+      {
+        kind: "repairable-installed-plugin",
+        pluginId: "demo",
+        installPath: pluginDir,
+        installSpec: "@example/plugin-demo@1.0.0",
+        missingDependencies: ["@example/required-runtime"],
+      },
+    ]);
+  });
+
+  it("detects required dependencies whose package directories are empty", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    const dependencyDir = path.join(pluginDir, "node_modules", "@example", "required-runtime");
+    fs.mkdirSync(dependencyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([
+      {
+        kind: "repairable-installed-plugin",
+        pluginId: "demo",
+        installPath: pluginDir,
+        installSpec: "@openclaw/plugin-demo@1.0.0",
+        missingDependencies: ["@example/required-runtime"],
+      },
+    ]);
+  });
+
+  it("does not flag installed plugins whose declared dependencies resolve", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    const depDir = path.join(pluginDir, "node_modules", "@example", "required-runtime");
+    fs.mkdirSync(depDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(depDir, "package.json"),
+      JSON.stringify({ name: "@example/required-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([]);
+  });
+
+  it("does not advertise dependency repair for non-updateable install sources", async () => {
+    const pluginDir = path.join(makeTempDir(), "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "archive",
+        spec: "/tmp/plugin-demo.tgz",
+        installPath: pluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([]);
+  });
+
+  it("does not attribute a same-id config plugin's missing dependencies to an installed record", async () => {
+    const tempRoot = makeTempDir();
+    const installedPluginDir = path.join(tempRoot, "installed-demo");
+    const configuredPluginDir = path.join(tempRoot, "configured-demo");
+    const installedDependencyDir = path.join(
+      installedPluginDir,
+      "node_modules",
+      "@example",
+      "required-runtime",
+    );
+    fs.mkdirSync(installedDependencyDir, { recursive: true });
+    fs.mkdirSync(configuredPluginDir, { recursive: true });
+    for (const pluginDir of [installedPluginDir, configuredPluginDir]) {
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+        "utf8",
+      );
+    }
+    fs.writeFileSync(
+      path.join(installedDependencyDir, "package.json"),
+      JSON.stringify({ name: "@example/required-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: installedPluginDir,
+      },
+    });
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          origin: "config",
+          rootDir: configuredPluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const { detectConfiguredPluginInstallHealthIssues } =
+      await import("./missing-configured-plugin-install.js");
+    const issues = await detectConfiguredPluginInstallHealthIssues({ cfg: {}, env: {} });
+
+    expect(issues).toEqual([]);
+  });
+
+  it("repairs an installed plugin whose required dependencies are missing on disk", async () => {
+    const pluginDir = path.join(makeTempDir(), "node_modules", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    const records = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        resolvedName: "@openclaw/plugin-demo",
+        resolvedSpec: "@openclaw/plugin-demo@1.0.0",
+        resolvedVersion: "1.0.0",
+        installPath: pluginDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: true,
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@openclaw/plugin-demo@1.0.0",
+              installPath: pluginDir,
+            },
+          },
+        },
+      },
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "updated",
+          message: "Updated demo.",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {},
+      env: {},
+    });
+
+    const updateArg = expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
+      pluginIds: ["demo"],
+    });
+    const updateConfig = updateArg.config as { plugins?: { installs?: Record<string, unknown> } };
+    const updateRecord = expectRecordFields(updateConfig.plugins?.installs?.demo, {
+      source: "npm",
+      spec: "@openclaw/plugin-demo@1.0.0",
+      installPath: pluginDir,
+    });
+    expect(updateRecord.resolvedSpec).toBeUndefined();
+    expect(updateRecord.resolvedVersion).toBeUndefined();
+    expect(hasRetainedManagedNpmInstallMarker(pluginDir)).toBe(true);
+    expect(result.changes).toEqual(['Repaired broken installed plugin "demo".']);
+  });
+
+  it("reports skipped dependency repairs while completing other plugins", async () => {
+    const skippedPluginDir = path.join(makeTempDir(), "node_modules", "skipped");
+    const repairedPluginDir = path.join(makeTempDir(), "node_modules", "repaired");
+    for (const [pluginDir, packageName] of [
+      [skippedPluginDir, "@openclaw/plugin-skipped"],
+      [repairedPluginDir, "@openclaw/plugin-repaired"],
+    ] as const) {
+      fs.mkdirSync(pluginDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(pluginDir, "package.json"),
+        JSON.stringify({ name: packageName, version: "1.0.0" }),
+        "utf8",
+      );
+    }
+    const records = {
+      skipped: {
+        source: "npm",
+        installPath: skippedPluginDir,
+      },
+      repaired: {
+        source: "npm",
+        spec: "@openclaw/plugin-repaired@1.0.0",
+        installPath: repairedPluginDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "skipped",
+          channels: [],
+          rootDir: skippedPluginDir,
+          packageDependencies: { "@example/skipped-runtime": "^1.0.0" },
+        },
+        {
+          id: "repaired",
+          channels: [],
+          rootDir: repairedPluginDir,
+          packageDependencies: { "@example/repaired-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    const skippedMessage = 'Skipping "skipped" (missing npm spec).';
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: true,
+      config: { plugins: { installs: records } },
+      outcomes: [
+        {
+          pluginId: "skipped",
+          status: "skipped",
+          message: skippedMessage,
+        },
+        {
+          pluginId: "repaired",
+          status: "updated",
+          message: "Updated repaired.",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({ cfg: {}, env: {} });
+
+    expectRecordFields(mockCallArg(mocks.updateNpmInstalledPlugins), {
+      pluginIds: ["skipped", "repaired"],
+    });
+    expect(hasRetainedManagedNpmInstallMarker(skippedPluginDir)).toBe(false);
+    expect(hasRetainedManagedNpmInstallMarker(repairedPluginDir)).toBe(true);
+    expect(result.changes).toEqual(['Repaired broken installed plugin "repaired".']);
+    expect(result.warnings).toEqual([skippedMessage]);
+    expect(result.repairedPluginIds).toEqual(["repaired"]);
+    expect(result.failedPluginIds).toEqual(["skipped"]);
+  });
+
+  it("routes official missing-dependency repairs through retained npm update", async () => {
+    const pluginDir = path.join(makeTempDir(), "node_modules", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    const records = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        resolvedName: "@openclaw/plugin-demo",
+        resolvedSpec: "@openclaw/plugin-demo@1.0.0",
+        resolvedVersion: "1.0.0",
+        installPath: pluginDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "demo",
+        label: "Demo",
+        install: { npmSpec: "@openclaw/plugin-demo@1.0.0" },
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: pluginDir,
+      version: "1.0.0",
+      npmResolution: {
+        name: "@openclaw/plugin-demo",
+        version: "1.0.0",
+        resolvedSpec: "@openclaw/plugin-demo@1.0.0",
+        integrity: "sha512-demo",
+        resolvedAt: "2026-07-10T00:00:00.000Z",
+      },
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: true,
+      config: {
+        plugins: {
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "@openclaw/plugin-demo@1.0.0",
+              installPath: pluginDir,
+            },
+          },
+        },
+      },
+      outcomes: [{ pluginId: "demo", status: "updated", message: "Updated demo." }],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    await repairMissingConfiguredPluginInstalls({
+      cfg: { plugins: { entries: { demo: {} } } },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(hasRetainedManagedNpmInstallMarker(pluginDir)).toBe(true);
+  });
+
+  it("skips dependency repair when retention marker setup fails", async () => {
+    const projectRoot = makeTempDir();
+    const pluginDir = path.join(projectRoot, "node_modules", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(projectRoot, ".openclaw-retained-npm-installs"), "blocked");
+    const records = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: { plugins: { installs: records } },
+      outcomes: [],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({ cfg: {}, env: {} });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(result.changes).toEqual([]);
+    expect(
+      result.warnings.some((warning) =>
+        warning.includes('Failed to prepare a fresh dependency-repair generation for "demo"'),
+      ),
+    ).toBe(true);
+  });
+
+  it("clears dependency-repair retention when the npm update fails", async () => {
+    const pluginDir = path.join(makeTempDir(), "node_modules", "demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ name: "@openclaw/plugin-demo", version: "1.0.0" }),
+      "utf8",
+    );
+    const records = {
+      demo: {
+        source: "npm",
+        spec: "@openclaw/plugin-demo@1.0.0",
+        installPath: pluginDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "demo",
+          channels: [],
+          rootDir: pluginDir,
+          packageDependencies: { "@example/required-runtime": "^1.0.0" },
+        },
+      ],
+      diagnostics: [],
+    });
+    mocks.updateNpmInstalledPlugins.mockResolvedValue({
+      changed: false,
+      config: { plugins: { installs: records } },
+      outcomes: [
+        {
+          pluginId: "demo",
+          status: "error",
+          message: "update failed",
+        },
+      ],
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({ cfg: {}, env: {} });
+
+    expect(hasRetainedManagedNpmInstallMarker(pluginDir)).toBe(false);
+    expect(result.warnings).toContain("update failed");
   });
 
   it("reinstalls a known configured plugin from the catalog when its recorded install path is missing", async () => {

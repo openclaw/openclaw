@@ -49,10 +49,12 @@ export function normalizePluginDependencySpecs(params: {
   dependencies: PluginDependencySpecMap;
   optionalDependencies: PluginDependencySpecMap;
 } {
-  return {
-    dependencies: normalizeDependencyMap(params.dependencies),
-    optionalDependencies: normalizeDependencyMap(params.optionalDependencies),
-  };
+  const optionalDependencies = normalizeDependencyMap(params.optionalDependencies);
+  const dependencies = normalizeDependencyMap(params.dependencies);
+  for (const name of Object.keys(optionalDependencies)) {
+    delete dependencies[name];
+  }
+  return { dependencies, optionalDependencies };
 }
 
 function dependencyPathSegments(name: string): string[] | null {
@@ -74,7 +76,7 @@ function findDependencyPackageDir(params: { fromDir: string; name: string }): st
   let current = path.resolve(params.fromDir);
   while (true) {
     const candidate = path.join(current, "node_modules", ...segments);
-    if (fs.existsSync(candidate)) {
+    if (fs.existsSync(path.join(candidate, "package.json"))) {
       return candidate;
     }
     const parent = path.dirname(current);

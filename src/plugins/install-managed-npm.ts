@@ -66,6 +66,10 @@ import type {
 } from "./install-types.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
+import {
+  buildPluginDependencyStatus,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
 
 export async function installPluginFromManagedNpmRoot(
   params: InstallSafetyOverrides & {
@@ -530,6 +534,24 @@ export async function installPluginFromManagedNpmRoot(
       return await rollbackFailedManagedNpmInstall({
         ok: false,
         error: `npm install metadata remained incomplete after managed npm project recovery (quarantine: ${recovery.quarantine.quarantineDir}): ${resolutionVerification.error}`,
+      });
+    }
+
+    // npm can exit 0 while leaving the plugin's declared dependencies
+    // unmaterialized (interrupted or cache-corrupted installs); the hollow tree
+    // loads at startup but dies at import time, so reject it while rollback can
+    // still restore the managed root.
+    const installedDependencyStatus = buildPluginDependencyStatus({
+      rootDir: installRoot,
+      ...normalizePluginDependencySpecs({
+        dependencies: packageManifestResult.manifest?.dependencies,
+        optionalDependencies: packageManifestResult.manifest?.optionalDependencies,
+      }),
+    });
+    if (!installedDependencyStatus.requiredInstalled) {
+      return await rollbackFailedManagedNpmInstall({
+        ok: false,
+        error: `npm install reported success but required dependencies of ${params.packageName} are missing from the installed tree: ${installedDependencyStatus.missing.join(", ")}`,
       });
     }
 
