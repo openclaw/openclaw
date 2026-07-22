@@ -1234,7 +1234,6 @@ export async function fetchClawHubSkillDetail(params: {
 export async function fetchClawHubSkillInstallResolution(params: {
   slug: string;
   ownerHandle?: string;
-  requestedReference?: string;
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
@@ -1249,7 +1248,6 @@ export async function fetchClawHubSkillInstallResolution(params: {
     fetchImpl: params.fetchImpl,
     search: {
       ownerHandle: params.ownerHandle,
-      reference: params.requestedReference,
       forceInstall: params.forceInstall ? "1" : undefined,
     },
   });
@@ -1267,7 +1265,6 @@ export async function fetchClawHubSkillInstallResolution(params: {
 export async function fetchClawHubSkillVerification(params: {
   slug: string;
   ownerHandle?: string;
-  requestedReference?: string;
   version?: string;
   tag?: string;
   baseUrl?: string;
@@ -1281,10 +1278,7 @@ export async function fetchClawHubSkillVerification(params: {
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
-    search: {
-      ...buildVersionOrTagSearch(params),
-      ...(params.requestedReference ? { reference: params.requestedReference } : {}),
-    },
+    search: buildVersionOrTagSearch(params),
   });
 }
 
@@ -1605,7 +1599,6 @@ export async function reportClawHubSkillInstallTelemetry(params: {
   token?: string;
   slug: string;
   ownerHandle?: string;
-  requestedReference?: string;
   version?: string | null;
   timeoutMs?: number;
   fetchImpl?: FetchLike;
@@ -1630,7 +1623,6 @@ export async function reportClawHubSkillInstallTelemetry(params: {
       event: "install",
       slug,
       ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-      ...(params.requestedReference ? { reference: params.requestedReference } : {}),
       version: params.version ?? undefined,
     },
   });

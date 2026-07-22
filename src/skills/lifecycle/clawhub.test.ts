@@ -129,7 +129,6 @@ async function writeClawHubOriginFixture(params: {
   slug: string;
   originSlug?: string;
   ownerHandle?: string;
-  requestedReference?: string;
   registry?: string;
   installedVersion?: string;
   installedAt?: number;
@@ -148,7 +147,6 @@ async function writeClawHubOriginFixture(params: {
         registry,
         slug: params.originSlug ?? params.slug,
         ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-        ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
         installedVersion,
         installedAt,
       },
@@ -170,9 +168,6 @@ async function writeClawHubOriginFixture(params: {
               installedAt,
               registry,
               ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-              ...(params.requestedReference
-                ? { requestedReference: params.requestedReference }
-                : {}),
             },
           },
         },
@@ -334,102 +329,6 @@ describe("skills-clawhub", () => {
       slug: "agentreceipt",
       version: "1.0.0",
     });
-  });
-
-  it("installs skills-sh references via a ClawHub-approved pinned GitHub commit", async () => {
-    const commit = "a".repeat(40);
-    const reference = "skills-sh:openclaw/skills/weather";
-    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
-      ok: true,
-      slug: "weather",
-      installKind: "github",
-      github: {
-        repo: "openclaw/skills",
-        path: "skills/weather",
-        commit,
-        contentHash: "sha256:approved",
-        sourceUrl: `https://github.com/openclaw/skills/tree/${commit}/skills/weather`,
-      },
-    });
-    withExtractedArchiveRootMock.mockImplementationOnce(async (params) => {
-      expect(params.rootMarkers).toBeUndefined();
-      return await params.onExtracted("/tmp/extracted-github-repo");
-    });
-    installPackageDirMock.mockResolvedValueOnce({
-      ok: true,
-      targetDir: "/tmp/workspace/skills/weather",
-    });
-
-    const result = await installSkillFromClawHub({
-      workspaceDir: "/tmp/workspace",
-      slug: reference,
-    });
-
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-      slug: "weather",
-      baseUrl: undefined,
-      requestedReference: reference,
-    });
-    expect(downloadClawHubGitHubSkillArchiveMock).toHaveBeenCalledWith({
-      repo: "openclaw/skills",
-      commit,
-    });
-    expect(installPolicyInput()).toMatchObject({
-      requestedSpecifier: reference,
-      origin: {
-        slug: "weather",
-        version: commit,
-        repo: "openclaw/skills",
-        path: "skills/weather",
-        commit,
-      },
-    });
-    expectInstalledSkill(result, {
-      slug: "weather",
-      version: commit,
-      targetDir: "/tmp/workspace/skills/weather",
-    });
-    expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
-      baseUrl: undefined,
-      slug: "weather",
-      version: commit,
-      requestedReference: reference,
-    });
-  });
-
-  it.each([
-    "skills-sh:",
-    "skills-sh:owner/repo",
-    "skills-sh:owner/repo/slug/extra",
-    "skills-sh:-owner/repo/slug",
-    "skills-sh:owner/../slug",
-  ])("rejects invalid skills-sh reference %s before network access", async (reference) => {
-    const result = await installSkillFromClawHub({
-      workspaceDir: "/tmp/workspace",
-      slug: reference,
-    });
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("Invalid skills.sh skill reference"),
-    });
-    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
-    expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects versions for skills-sh references before network access", async () => {
-    const result = await installSkillFromClawHub({
-      workspaceDir: "/tmp/workspace",
-      slug: "skills-sh:openclaw/skills/weather",
-      version: "1.2.3",
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: "--version is not supported for skills-sh references.",
-    });
-    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
-    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
   it("resolves an exact skill artifact without mutating the workspace", async () => {
