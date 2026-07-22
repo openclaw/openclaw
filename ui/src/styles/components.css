@@ -2463,12 +2463,27 @@
   color: var(--muted);
 }
 
+/* Coarse pointers get a 40px tap target on the shared filter/search inputs;
+   16px keeps focus from triggering mobile zoom (matches settings inputs). */
+@media (hover: none) and (pointer: coarse) {
+  .data-table-search input,
+  .field-inline input[type="text"],
+  .field-inline input:not([type]) {
+    min-height: 40px;
+    font-size: 16px;
+  }
+}
+
 .data-table-container {
   overflow: auto;
   max-height: min(70vh, 860px);
   overscroll-behavior: contain;
   scrollbar-gutter: stable both-edges;
   -webkit-overflow-scrolling: touch;
+  /* As a flex/grid child (settings pages lay these out in a column) the default
+     min-width:auto would let a wide table push the container past the viewport
+     and clip; 0 keeps it at the column width so its own overflow scrolls. */
+  min-width: 0;
 }
 
 .data-table {
@@ -2553,6 +2568,18 @@
   justify-content: center;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+/* A table wider than the scrollport centers its colspan empty-state cell past
+   the viewport edge; pin the message to the visible scrollport so an empty
+   table never reads as blank until horizontally scrolled. */
+@media (max-width: 768px) {
+  .data-table-empty-state {
+    display: flex;
+    position: sticky;
+    left: 8px;
+    max-width: calc(100vw - 64px);
+  }
 }
 
 .data-table tbody tr {

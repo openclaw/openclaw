@@ -21,3 +21,51 @@
 .agents-main > .settings-section:not(:first-child) {
   margin-top: var(--space-4);
 }
+
+/* Mobile layout for the agents header controls. Base rules live in
+   components.css (off-limits here); these scope alignment to narrow widths so
+   the toolbar, tab strip, and core-file selector stop wrapping raggedly. */
+@media (max-width: 640px) {
+  /* Header actions read as a tidy left-aligned toolbar. The components.css
+     mobile rule right-aligns them, which strands Refresh past a dead gap once
+     the cluster wraps; pack them left and let them wrap in place instead. */
+  .agents-toolbar-actions {
+    margin-left: 0;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    gap: 4px 8px;
+    width: 100%;
+  }
+
+  /* Top panel tabs: one clean horizontally scrollable strip instead of a
+     ragged two-row wrap. */
+  .agents-main > .agent-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .agents-main > .agent-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .agents-main > .agent-tabs > .agent-tab {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  /* Core-file selector (rendered as .agent-tabs inside the Files panel): an
+     aligned grid of equal cells instead of content-width pills that wrap into
+     a ragged two-column shape. */
+  .agents-panel-body > .agent-tabs {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: 6px;
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .agents-panel-body > .agent-tabs > .agent-tab {
+    text-align: center;
+  }
+}

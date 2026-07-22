@@ -437,7 +437,10 @@ wa-radio-group.settings-segmented::part(radios) {
 select.settings-select {
   border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  /* background-color, not the shorthand: `.field select` supplies the chevron
+     background-image + no-repeat, and a shorthand here would reset
+     background-repeat to `repeat` and tile the chevron across the control. */
+  background-color: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
   color: var(--text);
   padding: 7px 10px;
   transition: border-color var(--duration-fast) var(--ease-out);
@@ -786,15 +789,71 @@ textarea.settings-input {
     padding-inline: var(--space-3);
   }
 
+  /* Header + its actions wrap under the heading instead of colliding. */
+  .settings-section__header {
+    flex-wrap: wrap;
+  }
+
+  .settings-section__actions {
+    flex-wrap: wrap;
+  }
+
   .settings-row {
     flex-wrap: wrap;
   }
 
+  /* Default wrapped rows: the control drops to its own full-width, LEFT-aligned
+     block under the label so a wrapped row reads as a clean stacked block
+     (no right-floating control stranded over dead space). */
   .settings-row__control {
-    /* Definite width makes flex-wrap size lines correctly (see desktop note). */
     width: 100%;
     max-width: 100%;
     flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  /* Short trailing affordances (plain values, counts, status, toggles, and the
+     nav chevron) stay on the label's line, right-aligned — stacking a lone "0"
+     or a switch onto its own line just orphans it over dead space. */
+  .settings-row--nav > .settings-row__control,
+  .settings-row--toggle > .settings-row__control,
+  .settings-row:has(> .settings-row__control > .settings-row__value) > .settings-row__control,
+  .settings-row:has(> .settings-row__control > .settings-status) > .settings-row__control,
+  .settings-row:has(> .settings-row__control > .settings-count) > .settings-row__control,
+  .settings-row:has(> .settings-row__control > .settings-toggle) > .settings-row__control,
+  .settings-row:has(> .settings-row__control wa-switch) > .settings-row__control {
+    width: auto;
+    max-width: 60%;
+    flex: 0 0 auto;
+    margin-left: auto;
+    justify-content: flex-end;
+  }
+
+  /* Form controls fill the stacked block edge to edge (number steppers keep
+     their compact width so they do not stretch into a bar). */
+  .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-select,
+  .settings-row:not(.settings-row--stacked)
+    .settings-row__control
+    > .settings-input:not([type="number"]),
+  .settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* Segmented spans the row with equal-width options. */
+  .settings-row__control > .settings-segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  wa-radio-group.settings-segmented::part(radios) {
+    width: 100%;
+  }
+
+  .settings-segmented > .settings-segmented__btn {
+    flex: 1 1 0;
+    justify-content: center;
+    text-align: center;
   }
 
   .settings-row__control:has(> .settings-select--media-device) {

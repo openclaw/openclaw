@@ -80,6 +80,37 @@
   min-height: 28px;
 }
 
+/* On mobile the section switcher (e.g. Security Policy / Approvals) is the
+   whole toolbar. Span the segmented full width with equal options so it reads
+   as a tab bar instead of a half-width box floating over the section header
+   below it. */
+@media (max-width: 640px) {
+  .config-toolbar {
+    gap: var(--space-2);
+  }
+
+  .config-toolbar > .settings-segmented {
+    display: flex;
+    width: 100%;
+  }
+
+  .config-toolbar > wa-radio-group.settings-segmented::part(radios) {
+    width: 100%;
+  }
+
+  .config-toolbar > .settings-segmented > .settings-segmented__btn {
+    flex: 1 1 0;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* An empty autosave slot must not reserve a stray flex row that reintroduces
+     the floating-box gap. */
+  .config-toolbar__status:empty {
+    display: none;
+  }
+}
+
 /* Restart affordance shown after a successful save until apply */
 .config-apply-banner {
   display: flex;
