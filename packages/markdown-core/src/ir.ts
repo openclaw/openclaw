@@ -1027,11 +1027,34 @@ function closeRemainingStyles(target: RenderTarget) {
 }
 
 export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
-  const annotations = sliceAnnotationSpans(ir.annotations ?? [], start, end);
+  const text = ir.text;
+  const len = text.length;
+  const isLS = (cp: number) => cp >= 0xdc00 && cp <= 0xdfff;
+  const isHS = (cp: number) => cp >= 0xd800 && cp <= 0xdbff;
+  let from = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
+  let to = end === undefined ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);
+
+  // Preserve normalized empty slices as insertion points;
+  // surrogate pair adjustment below would turn them into non-empty ranges.
+  if (from >= to) {
+    return {
+      text: "",
+      styles: [],
+      links: [],
+    };
+  }
+
+  // Extend slice boundaries to avoid splitting UTF-16 surrogate pairs,
+  // then use the same adjusted boundaries for text and all span types.
+  if (from > 0 && from < len && isLS(text.charCodeAt(from)) && isHS(text.charCodeAt(from - 1)))
+    from -= 1;
+  if (to > 0 && to < len && isHS(text.charCodeAt(to - 1)) && isLS(text.charCodeAt(to))) to += 1;
+
+  const annotations = sliceAnnotationSpans(ir.annotations ?? [], from, to);
   return {
-    text: ir.text.slice(start, end),
-    styles: sliceStyleSpans(ir.styles, start, end),
-    links: sliceLinkSpans(ir.links, start, end),
+    text: text.slice(from, to),
+    styles: sliceStyleSpans(ir.styles, from, to),
+    links: sliceLinkSpans(ir.links, from, to),
     ...(annotations.length > 0 ? { annotations } : {}),
   };
 }
