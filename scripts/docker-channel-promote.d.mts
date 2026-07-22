@@ -12,12 +12,6 @@ export type DockerChannelPromotionPlan = {
   version: string;
 };
 
-export type DockerChannelPromotionArgs = {
-  help: boolean;
-  images: string[];
-  version?: string;
-};
-
 export function createDockerChannelPromotionPlan(params: {
   version: string;
   images: string[];
@@ -30,5 +24,3 @@ export function promoteDockerChannel(
     log?: (message: string) => void;
   },
 ): DockerChannelPromotionPlan;
-
-export function parseDockerChannelPromotionArgs(argv: string[]): DockerChannelPromotionArgs;

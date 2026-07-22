@@ -81,6 +81,8 @@ jobs:
   approve:
     name: Approve ${{ inputs.tag }} to ${{ needs.resolve.outputs.channel }} (${{ needs.resolve.outputs.default_aliases }})
     needs: resolve
+    # Keep human approval outside the queued writer so waiting for approval
+    # cannot block a tag-driven Docker release in docker-release-publish.
     # WARNING: KEEP CHANNEL PROMOTION GATED BY THE docker-release ENVIRONMENT.
     runs-on: ubuntu-24.04
     environment: docker-release
@@ -159,6 +161,26 @@ jobs:
           registry: ${{ env.DOCKERHUB_REGISTRY }}
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Verify immutable source attestations
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          source_refs=(
+            "${GHCR_IMAGE}:${VERSION}"
+            "${GHCR_IMAGE}:${VERSION}-slim"
+            "${GHCR_IMAGE}:${VERSION}-browser"
+            "${DOCKERHUB_IMAGE}:${VERSION}"
+            "${DOCKERHUB_IMAGE}:${VERSION}-slim"
+            "${DOCKERHUB_IMAGE}:${VERSION}-browser"
+          )
+          node scripts/verify-docker-attestations.mjs \
+            --platform linux/amd64 \
+            --platform linux/arm64 \
+            "${source_refs[@]}"
 
       - name: Promote and verify channel aliases
         env:

@@ -28,6 +28,7 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import { classifyReleaseTrain } from "./lib/npm-publish-plan.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
@@ -283,9 +284,13 @@ function resolveNpmProvenanceVerificationPolicy(
   const workflow = statement.predicate?.buildDefinition?.externalParameters?.workflow;
   const workflowRef = workflow?.ref;
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
+  const isExpectedExtendedStableRef =
+    classifyReleaseTrain(parsedVersion) === "extended-stable" &&
+    workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
   const isTrustedRef =
     workflowRef === "refs/heads/main" ||
     workflowRef === expectedReleaseRef ||
+    isExpectedExtendedStableRef ||
     (parsedVersion.channel === "alpha" &&
       /^refs\/heads\/tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(
         workflowRef ?? "",

@@ -2,6 +2,7 @@
 
 import { execFileSync } from "node:child_process";
 import process from "node:process";
+import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { resolveDockerReleasePolicy } from "./lib/docker-release-policy.mjs";
 
@@ -104,37 +105,6 @@ export function promoteDockerChannel({ version, images }, options = {}) {
   return plan;
 }
 
-export function parseDockerChannelPromotionArgs(argv) {
-  let version;
-  const images = [];
-  for (let index = 0; index < argv.length; index += 1) {
-    const option = argv[index];
-    if (option === "--help" || option === "-h") {
-      return { help: true, images, version };
-    }
-    if (option !== "--version" && option !== "--image") {
-      throw new Error(`Unknown option: ${option}`);
-    }
-    const value = argv[index + 1];
-    if (!value || value.startsWith("-")) {
-      throw new Error(`${option} requires a value.`);
-    }
-    if (option === "--version") {
-      version = value;
-    } else {
-      images.push(value);
-    }
-    index += 1;
-  }
-  if (!version) {
-    throw new Error("--version is required.");
-  }
-  if (images.length === 0) {
-    throw new Error("At least one --image is required.");
-  }
-  return { help: false, images, version };
-}
-
 function printHelp() {
   console.log(
     "Usage: node scripts/docker-channel-promote.mjs --version YYYY.M.P --image REGISTRY/IMAGE [--image REGISTRY/IMAGE]",
@@ -142,12 +112,28 @@ function printHelp() {
 }
 
 function main() {
-  const parsed = parseDockerChannelPromotionArgs(process.argv.slice(2));
-  if (parsed.help) {
+  const { values } = parseArgs({
+    args: process.argv.slice(2),
+    options: {
+      help: { type: "boolean", short: "h" },
+      image: { type: "string", multiple: true },
+      version: { type: "string" },
+    },
+    strict: true,
+  });
+  if (values.help) {
     printHelp();
     return;
   }
-  const plan = promoteDockerChannel(parsed);
+  const version = values.version?.trim();
+  if (!version) {
+    throw new Error("--version is required.");
+  }
+  const images = (values.image ?? []).map((image) => image.trim());
+  if (images.length === 0 || images.some((image) => image.length === 0)) {
+    throw new Error("At least one non-empty --image is required.");
+  }
+  const plan = promoteDockerChannel({ version, images });
   console.log(`Promoted Docker ${plan.channel} aliases for ${plan.version}.`);
 }
 
