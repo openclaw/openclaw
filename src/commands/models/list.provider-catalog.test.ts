@@ -1,4 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  PluginMetadataSnapshot,
+  PluginMetadataSnapshotOwnerMaps,
+} from "../../plugins/plugin-metadata-snapshot.types.js";
 
 const mocks = vi.hoisted(() => ({
   loadAuthStore: vi.fn(() => ({ version: 1, profiles: {} })),
@@ -29,28 +33,30 @@ import {
   loadProviderCatalogModelsForList,
 } from "./list.provider-catalog.js";
 
+const emptyOwners: PluginMetadataSnapshotOwnerMaps = {
+  channels: new Map(),
+  channelConfigs: new Map(),
+  providers: new Map(),
+  modelCatalogProviders: new Map(),
+  cliBackends: new Map(),
+  setupProviders: new Map(),
+  commandAliases: new Map(),
+  contracts: new Map(),
+};
+
 const emptyMetadataSnapshot = {
   manifestRegistry: { plugins: [] },
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-  },
-} as never;
+  owners: emptyOwners,
+} as unknown as PluginMetadataSnapshot;
 
-function metadataWithCatalogOwner(provider: string, pluginId: string) {
+function metadataWithCatalogOwner(provider: string, pluginId: string): PluginMetadataSnapshot {
   return {
     ...emptyMetadataSnapshot,
     owners: {
-      ...emptyMetadataSnapshot.owners,
+      ...emptyOwners,
       modelCatalogProviders: new Map([[provider, [pluginId]]]),
     },
-  } as never;
+  };
 }
 
 function ownerSnapshot(modelCatalog: unknown, metadataSnapshot = emptyMetadataSnapshot) {
