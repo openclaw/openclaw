@@ -3,7 +3,7 @@ import { t } from "../i18n/index.ts";
 import { peekStoredDeviceIdentityId } from "../lib/nodes/index.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 
-export type DeviceAuthMigrationSnapshot = {
+type DeviceAuthMigrationSnapshot = {
   deviceAuthMigrationRequestId: string | null;
   deviceAuthMigrationBusy: boolean;
   deviceAuthMigrationError: string | null;
