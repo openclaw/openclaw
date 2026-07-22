@@ -15,17 +15,31 @@ function renderAssistantTranscriptRoleMarker(
   return `${ROLE_MARKER_OPEN}${escapeHtml(text)}${ROLE_MARKER_CLOSE}`;
 }
 
-function isImageWithinLink(tokens: readonly { type: string }[], index: number): boolean {
+const linkedImageIndicesByTokens = new WeakMap<readonly { type: string }[], ReadonlySet<number>>();
+
+function linkedImageIndices(tokens: readonly { type: string }[]): ReadonlySet<number> {
+  const cached = linkedImageIndicesByTokens.get(tokens);
+  if (cached) {
+    return cached;
+  }
+  const linked = new Set<number>();
   let linkDepth = 0;
-  for (let tokenIndex = 0; tokenIndex < index; tokenIndex += 1) {
-    const tokenType = tokens[tokenIndex]?.type;
+  for (let index = 0; index < tokens.length; index += 1) {
+    const tokenType = tokens[index]?.type;
     if (tokenType === "link_open") {
       linkDepth += 1;
     } else if (tokenType === "link_close") {
       linkDepth = Math.max(0, linkDepth - 1);
+    } else if (tokenType === "image" && linkDepth > 0) {
+      linked.add(index);
     }
   }
-  return linkDepth > 0;
+  linkedImageIndicesByTokens.set(tokens, linked);
+  return linked;
+}
+
+function isImageWithinLink(tokens: readonly { type: string }[], index: number): boolean {
+  return linkedImageIndices(tokens).has(index);
 }
 
 function renderAssistantTranscriptRoleImageLabel(

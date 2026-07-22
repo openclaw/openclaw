@@ -423,6 +423,18 @@ describe("toSanitizedMarkdownHtml", () => {
       expect(fragment.querySelector("a button")).toBeNull();
     });
 
+    it("tracks linked and standalone images across one inline token stream", () => {
+      const fragment = htmlFragment(
+        toSanitizedMarkdownHtml(
+          "[![Linked one](data:image/png;base64,QQ==)](https://example.com/one) ![Standalone](data:image/png;base64,Qg==) [![Linked two](data:image/png;base64,Qw==)](https://example.com/two)",
+          { interactiveImages: true },
+        ),
+      );
+
+      expect(fragment.querySelectorAll("a img.markdown-inline-image")).toHaveLength(2);
+      expect(fragment.querySelectorAll("button.markdown-inline-image-button")).toHaveLength(1);
+    });
+
     it("labels unlabeled inline data image buttons", () => {
       const fragment = htmlFragment(
         toSanitizedMarkdownHtml("![](data:image/png;base64,iVBORw0KGgo=)", {
