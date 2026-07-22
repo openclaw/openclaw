@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 @testable import OpenClaw
