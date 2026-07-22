@@ -1497,6 +1497,44 @@ function mockNdjsonReader(
   } as unknown as ReadableStreamDefaultReader<Uint8Array>;
 }
 
+function createPendingCancelNdjsonStream(lines: string[]) {
+  const encoder = new TextEncoder();
+  let markCancelStarted!: () => void;
+  let settleCancel!: () => void;
+  const cancelStarted = new Promise<void>((resolve) => {
+    markCancelStarted = resolve;
+  });
+  const cancelPending = new Promise<void>((resolve) => {
+    settleCancel = resolve;
+  });
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+    },
+    cancel() {
+      markCancelStarted();
+      return cancelPending;
+    },
+  });
+  return {
+    cancelPending,
+    cancelStarted,
+    reader: stream.getReader(),
+    settleCancel,
+    stream,
+  };
+}
+
+function createClosedNdjsonStream(lines: string[]) {
+  const encoder = new TextEncoder();
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(`${lines.join("\n")}\n`));
+      controller.close();
+    },
+  });
+}
+
 async function expectDoneEventContent(lines: string[], expectedContent: unknown) {
   await withMockNdjsonFetch(lines, async () => {
     const stream = await createOllamaTestStream({ baseUrl: "http://ollama-host:11434" });
@@ -1647,79 +1685,68 @@ describe("parseNdjsonStream", () => {
     expect(args?.delayMs).toBe(2500);
   });
 
-  it("cancels and releases the reader lock when the consumer breaks early", async () => {
-    const cancelFn = vi.fn(async () => undefined);
-    const releaseLockFn = vi.fn();
-    const reader = mockNdjsonReader([
+  it("unlocks a real stream before pending cancellation settles on early break", async () => {
+    const source = createPendingCancelNdjsonStream([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"two"},"done":true}',
     ]);
-    reader.cancel = cancelFn;
-    reader.releaseLock = releaseLockFn;
+    let iterationFinished = false;
 
-    const chunks = [];
-    for await (const chunk of parseNdjsonStream(reader)) {
-      chunks.push(chunk);
-      if ((chunk as { done?: boolean }).done) {
+    const iteration = (async () => {
+      for await (const chunk of parseNdjsonStream(source.reader)) {
+        expect(chunk.message.content).toBe("one");
         break;
       }
+      iterationFinished = true;
+    })();
+
+    await source.cancelStarted;
+    await iteration;
+    expect(iterationFinished).toBe(true);
+    expect(source.stream.locked).toBe(false);
+
+    source.settleCancel();
+    await source.cancelPending;
+  });
+
+  it("preserves a consumer error while unlocking a real stream", async () => {
+    const source = createPendingCancelNdjsonStream([
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
+    ]);
+    const testError = new Error("consumer abort");
+
+    const iteration = (async () => {
+      for await (const chunk of parseNdjsonStream(source.reader)) {
+        void chunk;
+        throw testError;
+      }
+    })();
+
+    await source.cancelStarted;
+    await expect(iteration).rejects.toBe(testError);
+    expect(source.stream.locked).toBe(false);
+
+    source.settleCancel();
+    await source.cancelPending;
+  });
+
+  it("skips malformed NDJSON and unlocks after a valid terminal record", async () => {
+    const stream = createClosedNdjsonStream([
+      "not-json",
+      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"done"},"done":true}',
+    ]);
+    const chunks = [];
+
+    for await (const chunk of parseNdjsonStream(stream.getReader())) {
+      chunks.push(chunk);
     }
 
-    expect(chunks).toHaveLength(2);
-    expect(cancelFn).toHaveBeenCalledOnce();
-    expect(releaseLockFn).toHaveBeenCalledOnce();
-  });
-
-  it("cancels and releases the reader lock when the consumer throws", async () => {
-    const cancelFn = vi.fn(async () => undefined);
-    const releaseLockFn = vi.fn();
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
-    ]);
-    reader.cancel = cancelFn;
-    reader.releaseLock = releaseLockFn;
-
-    const testError = new Error("consumer abort");
-    await expect(async () => {
-      for await (const chunk of parseNdjsonStream(reader)) {
-        void chunk;
-        throw testError;
-      }
-    }).rejects.toThrow(testError);
-
-    expect(cancelFn).toHaveBeenCalledOnce();
-    expect(releaseLockFn).toHaveBeenCalledOnce();
-  });
-
-  it("releases the reader lock immediately even when cancel is still pending", async () => {
-    // Simulate a slow cancel: releaseLock must fire without waiting for it.
-    let cancelResolve: () => void;
-    const cancelPromise = new Promise<void>((resolve) => {
-      cancelResolve = resolve;
-    });
-    const cancelFn = vi.fn(() => cancelPromise);
-    const releaseLockFn = vi.fn();
-    const reader = mockNdjsonReader([
-      '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
-    ]);
-    reader.cancel = cancelFn;
-    reader.releaseLock = releaseLockFn;
-
-    const testError = new Error("abort");
-    await expect(async () => {
-      for await (const chunk of parseNdjsonStream(reader)) {
-        void chunk;
-        throw testError;
-      }
-    }).rejects.toThrow(testError);
-
-    // releaseLock must be called even though cancel hasn't settled yet.
-    expect(cancelFn).toHaveBeenCalledOnce();
-    expect(releaseLockFn).toHaveBeenCalledOnce();
-
-    // Clean up — let the deferred cancel settle.
-    cancelResolve!();
-    await cancelPromise;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.done).toBe(true);
+    expect(ollamaStreamWarnMock).toHaveBeenCalledWith(
+      "Skipping malformed NDJSON line: not-json",
+    );
+    expect(stream.locked).toBe(false);
   });
 });
 
