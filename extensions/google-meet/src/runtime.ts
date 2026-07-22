@@ -127,6 +127,7 @@ export class GoogleMeetRuntime {
       logger: RuntimeLogger;
     },
   ) {
+    const adapter = GOOGLE_MEET_PLATFORM_ADAPTER;
     this.#agentId = resolveDefaultAgentId(params.fullConfig);
     this.#voiceCallGateway = createVoiceCallGateway(params);
     this.#sessions = new MeetingSessionRuntime({
@@ -165,28 +166,22 @@ export class GoogleMeetRuntime {
         },
       },
       resolveJoin: (request) => ({
-        url: GOOGLE_MEET_PLATFORM_ADAPTER.urls.validateAndNormalize(request.url),
+        url: adapter.urls.validateAndNormalize(request.url),
         transport: resolveTransport(request.transport, params.config),
         mode: resolveMode(request.mode, params.config),
         agentId: normalizeAgentId(
           request.agentId ?? params.config.realtime.agentId ?? this.#agentId,
         ),
       }),
-      createSession: ({ request: _request, resolved, createdAt }): GoogleMeetSession =>
-        createMeetingSession({
-          platform: GOOGLE_MEET_PLATFORM_ADAPTER,
-          config: params.config,
-          resolved,
-          createdAt,
-        }),
+      createSession: ({ resolved, createdAt }): GoogleMeetSession =>
+        createMeetingSession({ platform: adapter, config: params.config, resolved, createdAt }),
       resolveSpeechInstructions: (request) =>
         request.message ?? params.config.realtime.introMessage,
       isBrowserTransport,
       isTalkBackMode: isGoogleMeetTalkBackMode,
       isTranscribeMode: (mode) => mode === "transcribe",
-      sameMeetingUrl: (left, right) => GOOGLE_MEET_PLATFORM_ADAPTER.urls.isSameMeeting(left, right),
-      normalizeMeetingUrlForReuse: (url) =>
-        GOOGLE_MEET_PLATFORM_ADAPTER.urls.normalizeForReuse(url),
+      sameMeetingUrl: (left, right) => adapter.urls.isSameMeeting(left, right),
+      normalizeMeetingUrlForReuse: (url) => adapter.urls.normalizeForReuse(url),
       getBrowser: (session) =>
         session.chrome
           ? {
