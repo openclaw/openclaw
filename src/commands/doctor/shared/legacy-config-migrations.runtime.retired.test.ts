@@ -64,6 +64,25 @@ describe("retired runtime config migrations", () => {
     );
   });
 
+  it("removes a disabled retired device-auth bypass without requiring pairing", () => {
+    const migration = LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY.find(
+      (candidate) => candidate.id === "gateway.control-ui-device-auth-bypass->pairing-migration",
+    );
+    expect(migration).toBeDefined();
+    const raw = {
+      gateway: { controlUi: { dangerouslyDisableDeviceAuth: false } },
+    };
+    const changes: string[] = [];
+
+    expect(migration?.legacyRules?.[0]?.match?.(false, raw)).toBe(true);
+    migration?.apply(raw, changes);
+
+    expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
+    expect(changes).toEqual([
+      "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
+    ]);
+  });
+
   it("consolidates modality model lists with capability tags and exact deduplication", () => {
     const result = applyAll({
       tools: {
