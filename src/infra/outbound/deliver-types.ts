@@ -79,6 +79,14 @@ export function isPlatformMessageRejectedError(
   return error instanceof PlatformMessageNotDispatchedError && !error.retryable;
 }
 
+/** Concrete route used for one outbound payload delivery attempt. */
+export type OutboundPayloadDeliveryTarget = {
+  channel: string;
+  to: string;
+  accountId?: string | null;
+  threadId?: string | number | null;
+};
+
 /** Per-payload delivery status emitted to callers and channel send summaries. */
 export type OutboundPayloadDeliveryOutcome =
   | {
@@ -87,6 +95,7 @@ export type OutboundPayloadDeliveryOutcome =
       results: OutboundDeliveryResult[];
       /** Effective post-hook, post-render payload kind. */
       deliveryKind?: OutboundPayloadDeliveryKind;
+      target?: OutboundPayloadDeliveryTarget;
     }
   | {
       index: number;
@@ -107,6 +116,7 @@ export type OutboundPayloadDeliveryOutcome =
       results?: OutboundDeliveryResult[];
       /** Effective post-hook, post-render payload kind when platform delivery began. */
       deliveryKind?: OutboundPayloadDeliveryKind;
+      target?: OutboundPayloadDeliveryTarget;
     };
 
 /** Error carrying partial delivery results when an outbound send fails mid-batch. */
