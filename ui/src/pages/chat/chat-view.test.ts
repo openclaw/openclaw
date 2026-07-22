@@ -2890,8 +2890,16 @@ describe("chat composer sizing", () => {
     expect(textarea.style.overflowY).toBe("auto");
   });
 
-  it("rechecks overflow when responsive layout changes the textarea height", () => {
+  it("resizes the draft when responsive layout changes the textarea width", () => {
     let resizeCallback: ResizeObserverCallback | undefined;
+    let animationFrameCallback: FrameRequestCallback | undefined;
+    let nextAnimationFrameId = 0;
+    const requestAnimationFrameMock = vi.fn((callback: FrameRequestCallback) => {
+      animationFrameCallback = callback;
+      nextAnimationFrameId += 1;
+      return nextAnimationFrameId;
+    });
+    const cancelAnimationFrameMock = vi.fn();
     class TestResizeObserver {
       constructor(callback: ResizeObserverCallback) {
         resizeCallback = callback;
@@ -2904,26 +2912,59 @@ describe("chat composer sizing", () => {
       }
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
+    vi.stubGlobal("requestAnimationFrame", requestAnimationFrameMock);
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrameMock);
+
+    let width = 320;
+    let scrollHeight = 42;
+    let clientHeight = 42;
+    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
+      bottom: clientHeight,
+      height: clientHeight,
+      left: 0,
+      right: width,
+      top: 0,
+      width,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }));
+
     const container = renderChatView({});
     const textarea = requireElement(
       container,
       ".agent-chat__composer-combobox > textarea",
       "composer textarea",
     ) as HTMLTextAreaElement;
-    let scrollHeight = 42;
-    let clientHeight = 42;
     Object.defineProperties(textarea, {
       scrollHeight: { configurable: true, get: () => scrollHeight },
       clientHeight: { configurable: true, get: () => clientHeight },
     });
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(textarea.style.height).toBe("42px");
     expect(textarea.style.overflowY).toBe("hidden");
 
-    scrollHeight = 120;
-    clientHeight = 56;
+    scrollHeight = 180;
+    clientHeight = 150;
     resizeCallback?.([], {} as ResizeObserver);
-
     expect(textarea.style.overflowY).toBe("auto");
+    expect(requestAnimationFrameMock).not.toHaveBeenCalled();
+
+    width = 180;
+    scrollHeight = 120;
+    clientHeight = 120;
+    resizeCallback?.([], {} as ResizeObserver);
+    expect(requestAnimationFrameMock).toHaveBeenCalledOnce();
+    expect(textarea.style.height).toBe("42px");
+
+    animationFrameCallback?.(0);
+    expect(textarea.style.height).toBe("120px");
+    expect(textarea.style.overflowY).toBe("hidden");
+
+    width = 160;
+    resizeCallback?.([], {} as ResizeObserver);
+    render(html``, container);
+    expect(cancelAnimationFrameMock).toHaveBeenCalledWith(2);
   });
 });
 
@@ -5636,6 +5677,39 @@ describe("right-click Reply", () => {
     expect(onRequestUpdate).toHaveBeenCalledOnce();
   });
 
+  it("dismisses an inline confirmation before opening the reply context menu", () => {
+    const container = renderChatView({ onSetReply: vi.fn() });
+    document.body.appendChild(container);
+    const section = container.querySelector<HTMLElement>(".card.chat")!;
+    const confirmationOwner = document.createElement("span");
+    confirmationOwner.className = "chat-delete-wrap";
+    const confirmationTrigger = document.createElement("button");
+    confirmationOwner.appendChild(confirmationTrigger);
+    section.appendChild(confirmationOwner);
+    window.localStorage.removeItem("openclaw:skip-rewind-confirm");
+    chatMessage.openChatRewindConfirmation(confirmationTrigger, vi.fn());
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageText = "open message actions";
+    group.appendChild(bubble);
+    section.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    try {
+      expect(confirmationOwner.querySelector(".chat-delete-confirm")).not.toBeNull();
+      bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+      expect(confirmationOwner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    } finally {
+      chatMessage.dismissConfirmedActionPopovers(confirmationOwner);
+      confirmationOwner.remove();
+      container.remove();
+    }
+  });
+
   it("disables rewind and fork context actions during an active run", () => {
     const container = renderChatView({
       canAbort: true,
@@ -5809,6 +5883,112 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
   });
 
+  it("dismisses a context-menu Rewind confirmation with Escape before closing the menu", () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const flushFrames = () => {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    };
+    const container = renderChatView({
+      paneId: "pane-a",
+      onRewindMessage: vi.fn(),
+    });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushFrames();
+    const rewindButton = document.querySelector<HTMLButtonElement>(
+      '.chat-reply-context-menu [aria-label="Rewind to here"]',
+    );
+    expect(rewindButton).toBeInstanceOf(HTMLButtonElement);
+    rewindButton!.click();
+    flushFrames();
+
+    const cancel = document.querySelector<HTMLButtonElement>(
+      ".chat-reply-context-menu .chat-delete-confirm__cancel",
+    );
+    expect(cancel).toBeInstanceOf(HTMLButtonElement);
+    expect(document.activeElement).toBe(cancel);
+    const confirmationEscape = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    cancel!.dispatchEvent(confirmationEscape);
+
+    expect(confirmationEscape.defaultPrevented).toBe(true);
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    expect(document.activeElement).toBe(rewindButton);
+
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("removes a portaled Rewind confirmation only when its owning pane resets", () => {
+    const frameCallbacks: FrameRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => {
+        frameCallbacks.push(callback);
+        return frameCallbacks.length;
+      }),
+    );
+    const flushFrames = () => {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+    };
+    const removeDocumentListener = vi.spyOn(document, "removeEventListener");
+    const removeWindowListener = vi.spyOn(window, "removeEventListener");
+    const onRewindMessage = vi.fn();
+    const container = renderChatView({ paneId: "pane-a", onRewindMessage });
+    const group = document.createElement("div");
+    group.className = "chat-group user";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.entryId = "persisted-user";
+    bubble.dataset.messageText = "hello";
+    group.appendChild(bubble);
+    container.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    flushFrames();
+    document
+      .querySelector<HTMLButtonElement>('.chat-reply-context-menu [aria-label="Rewind to here"]')!
+      .click();
+    flushFrames();
+
+    resetChatThreadPresentationState("pane-b");
+    expect(document.querySelector(".chat-reply-context-menu")).not.toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).not.toBeNull();
+
+    resetChatThreadPresentationState("pane-a");
+
+    expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+    expect(document.querySelector(".chat-delete-confirm")).toBeNull();
+    expect(onRewindMessage).not.toHaveBeenCalled();
+    expect(removeDocumentListener).toHaveBeenCalledWith("click", expect.any(Function), true);
+    expect(removeWindowListener).toHaveBeenCalledWith("keydown", expect.any(Function), true);
+  });
+
   it("dismisses the reply context menu before a later context menu opens", () => {
     const frameCallbacks: FrameRequestCallback[] = [];
     vi.stubGlobal(
@@ -5937,6 +6117,65 @@ describe("right-click Reply", () => {
 
     // Without onSetReply, the handler returns early and no menu is created
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
+  });
+
+  it("adds Copy for an intersecting selection without changing the unselected menu", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = renderChatView({ onSetReply: vi.fn() });
+    const section = container.querySelector<HTMLElement>(".card.chat");
+    expect(section).not.toBeNull();
+
+    const group = document.createElement("div");
+    group.className = "chat-group";
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    bubble.dataset.messageId = "msg-1";
+    bubble.dataset.messageText = "selectable text";
+    bubble.textContent = "selectable text";
+    const otherBubble = document.createElement("div");
+    otherBubble.className = "chat-bubble";
+    otherBubble.dataset.messageText = "other text";
+    otherBubble.textContent = "other text";
+    group.append(bubble, otherBubble);
+    section!.querySelector(".chat-thread-inner")!.appendChild(group);
+
+    const bubbleText = expectDefined(bubble.firstChild, "bubble text node");
+    const otherText = expectDefined(otherBubble.firstChild, "other bubble text node");
+    let selectedRange = document.createRange();
+    selectedRange.setStart(bubbleText, 0);
+    selectedRange.setEnd(otherText, otherText.textContent?.length ?? 0);
+    const mockSelection = {
+      isCollapsed: false,
+      rangeCount: 1,
+      getRangeAt: () => selectedRange,
+      toString: () => "selectable",
+    } as unknown as Selection;
+    vi.spyOn(window, "getSelection").mockReturnValue(mockSelection);
+
+    const selectedEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(selectedEvent);
+
+    expect(selectedEvent.defaultPrevented).toBe(true);
+    expect(
+      [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Copy", "Reply"]);
+    document.querySelector<HTMLButtonElement>('[aria-label="Copy"]')!.click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("selectable"));
+
+    selectedRange = document.createRange();
+    selectedRange.selectNodeContents(otherBubble);
+    const disjointEvent = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    bubble.dispatchEvent(disjointEvent);
+
+    expect(disjointEvent.defaultPrevented).toBe(true);
+    expect(
+      [...document.querySelectorAll(".chat-reply-context-menu button")].map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Reply"]);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

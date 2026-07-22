@@ -142,9 +142,12 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let settled = false;
     let stdout = "";
     let stderr = "";
+    let stdoutListener = input.onStdout;
+    let stderrListener = input.onStderr;
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
     let forceKillTimer: NodeJS.Timeout | null = null;
+    let cancelRequested = false;
     const captureOutput = input.captureOutput !== false;
     const maxCapturedOutputChars = clampCapturedOutputChars(input.maxCapturedOutputChars);
 
@@ -227,8 +230,19 @@ export function createProcessSupervisor(): ProcessSupervisor {
         }
       };
 
-      cancelAdapter = (_reason: TerminationReason) => {
-        if (settled || forceKillTimer) {
+      cancelAdapter = (reason: TerminationReason) => {
+        if (settled || cancelRequested) {
+          return;
+        }
+        cancelRequested = true;
+        // Windows has no catchable SIGTERM equivalent: the adapter implements it
+        // with asynchronous taskkill, so waiting the cleanup grace only delays an
+        // already-expired deadline before the same forced tree termination.
+        if (
+          process.platform === "win32" &&
+          (reason === "overall-timeout" || reason === "no-output-timeout")
+        ) {
+          adapter.kill("SIGKILL");
           return;
         }
         adapter.kill("SIGTERM");
@@ -257,14 +271,14 @@ export function createProcessSupervisor(): ProcessSupervisor {
         if (captureOutput) {
           stdout = appendCapturedOutput(stdout, chunk, "stdout", maxCapturedOutputChars);
         }
-        input.onStdout?.(chunk);
+        stdoutListener?.(chunk);
         touchOutput();
       });
       adapter.onStderr((chunk) => {
         if (captureOutput) {
           stderr = appendCapturedOutput(stderr, chunk, "stderr", maxCapturedOutputChars);
         }
-        input.onStderr?.(chunk);
+        stderrListener?.(chunk);
         touchOutput();
       });
 
@@ -334,6 +348,10 @@ export function createProcessSupervisor(): ProcessSupervisor {
         wait: async () => await waitPromise,
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);
+        },
+        detachOutput: () => {
+          stdoutListener = undefined;
+          stderrListener = undefined;
         },
       };
 

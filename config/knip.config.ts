@@ -372,6 +372,7 @@ const config = {
         // Docker packaging stages @openclaw/ai without nested dependencies after
         // verifying the root owns its exact runtime dependency versions.
         "@mistralai/mistralai",
+        "openai",
         "cross-spawn",
         "file-type",
         // Loaded via createRequire in src/agents/utils/syntax-highlight.ts because its
@@ -478,6 +479,24 @@ const config = {
         "src/schema.ts!",
         "src/startup-unavailable.ts!",
         "src/version.ts!",
+      ],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/normalization-core": {
+      // Mirror package.json exports; root and UI builds consume these source subpaths directly.
+      entry: [
+        "src/index.ts!",
+        "src/agent-id.ts!",
+        "src/boolean-coercion.ts!",
+        "src/error-coercion.ts!",
+        "src/expect.ts!",
+        "src/number-coercion.ts!",
+        "src/phone-presentation.ts!",
+        "src/record-coerce.ts!",
+        "src/result.ts!",
+        "src/string-coerce.ts!",
+        "src/string-normalization.ts!",
+        "src/utf16-slice.ts!",
       ],
       project: ["src/**/*.ts!"],
     },
@@ -652,7 +671,11 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
+      ...bundledPluginWorkspace(),
+      // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "apache-arrow"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: bundledPluginWorkspace(),
@@ -719,6 +742,11 @@ const config = {
       "vault-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/whatsapp`]: {
+      ...bundledPluginWorkspace(),
+      // Baileys loads its optional audio decoder at runtime for supported media.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "audio-decode"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {

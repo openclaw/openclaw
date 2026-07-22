@@ -1292,25 +1292,29 @@ describe("config view", () => {
   });
 
   it("names the chat preference selects for assistive tech", () => {
+    const onMicrophoneRefresh = vi.fn();
+    const onCameraRefresh = vi.fn();
     const { container } = renderConfigView({
       activeSection: "__appearance__",
       includeSections: ["__appearance__"],
       microphone: {
         devices: [{ deviceId: "mic-1", label: "Desk Mic" }],
+        permissionRequired: false,
         selectedDeviceId: "mic-1",
         loading: false,
         error: null,
       },
       onMicrophoneSelect: vi.fn(),
-      onMicrophoneRefresh: vi.fn(),
+      onMicrophoneRefresh,
       camera: {
         devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
+        permissionRequired: false,
         selectedDeviceId: "camera-1",
         loading: false,
         error: null,
       },
       onCameraSelect: vi.fn(),
-      onCameraRefresh: vi.fn(),
+      onCameraRefresh,
       composerHoldToRecord: true,
       setComposerHoldToRecord: vi.fn(),
     });
@@ -1340,13 +1344,82 @@ describe("config view", () => {
       HTMLSelectElement,
     );
     expect(microphoneSelect.getAttribute("aria-label")).toBe("Microphone input");
+    expect(microphoneSelect.classList.contains("settings-select--media-device")).toBe(true);
     const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
     expect(cameraSelect.getAttribute("aria-label")).toBe("Camera");
+    expect(cameraSelect.classList.contains("settings-select--media-device")).toBe(true);
     expect(Array.from(cameraSelect.options, (option) => option.textContent?.trim())).toEqual([
       "System default",
       "Desk Camera",
     ]);
     expect(container.textContent).toContain("Hold microphone button to dictate");
+
+    microphoneSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    expect(onMicrophoneRefresh).not.toHaveBeenCalled();
+    expect(onCameraRefresh).not.toHaveBeenCalled();
+  });
+
+  it("requests media access for each native picker opening gesture", () => {
+    const cases = [
+      {
+        devices: [{ deviceId: "anonymous", label: "Microphone 1" }],
+        gesture: new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+      },
+      { devices: [], gesture: new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }) },
+      { devices: [], gesture: new KeyboardEvent("keydown", { key: "F4", bubbles: true }) },
+    ];
+
+    for (const { devices, gesture } of cases) {
+      const onMicrophoneRefresh = vi.fn();
+      const { container } = renderConfigView({
+        activeSection: "__appearance__",
+        includeSections: ["__appearance__"],
+        microphone: {
+          devices,
+          permissionRequired: true,
+          selectedDeviceId: "",
+          loading: false,
+          error: null,
+        },
+        onMicrophoneSelect: vi.fn(),
+        onMicrophoneRefresh,
+      });
+      const microphoneSelect = queryRequired(
+        container,
+        "[data-settings-microphone]",
+        HTMLSelectElement,
+      );
+
+      microphoneSelect.dispatchEvent(gesture);
+      expect(onMicrophoneRefresh).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("coalesces picker gestures while media access is starting", () => {
+    const onCameraRefresh = vi.fn();
+    const { container } = renderConfigView({
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+      camera: {
+        devices: [],
+        permissionRequired: true,
+        selectedDeviceId: "",
+        loading: true,
+        error: null,
+      },
+      onCameraSelect: vi.fn(),
+      onCameraRefresh,
+    });
+    const cameraSelect = queryRequired(container, "[data-settings-camera]", HTMLSelectElement);
+
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 2 }));
+    expect(onCameraRefresh).not.toHaveBeenCalled();
+
+    cameraSelect.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }));
+    cameraSelect.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+    cameraSelect.dispatchEvent(new KeyboardEvent("keydown", { key: "F4", bubbles: true }));
+    expect(onCameraRefresh).toHaveBeenCalledOnce();
   });
 
   it("previews lobster sounds only when the user enables them", () => {

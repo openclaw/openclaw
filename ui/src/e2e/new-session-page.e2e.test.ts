@@ -521,6 +521,10 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         await page.locator('.new-session-page__triggers [data-chat-model-select="true"]').count(),
       ).toBe(0);
       await modelSelect.click();
+      const pickerOpen = () =>
+        modelSelect.evaluate(
+          (element) => element.closest("details")?.hasAttribute("open") ?? false,
+        );
       const modelTriggerBox = await modelSelect.boundingBox();
       const modelMenuBox = await page
         .locator(".chat-controls__inline-select-menu--combined")
@@ -533,11 +537,16 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
         0,
       );
       await page.locator('[data-chat-model-provider="anthropic"]').click();
+      await expect.poll(pickerOpen).toBe(true);
       await page.locator('[data-chat-model-option="anthropic/claude-sonnet-4-6"]').click();
-      const pickerOpen = () =>
-        modelSelect.evaluate(
-          (element) => element.closest("details")?.hasAttribute("open") ?? false,
-        );
+      // Inside changes stay grouped; only explicit light-dismissal closes the picker.
+      await expect.poll(pickerOpen).toBe(true);
+      await page.keyboard.press("Escape");
+      await expect.poll(pickerOpen).toBe(false);
+      await expect
+        .poll(() => modelSelect.evaluate((element) => element === document.activeElement))
+        .toBe(true);
+      await modelSelect.click();
       await expect.poll(pickerOpen).toBe(true);
       await page.mouse.click(8, 8);
       await expect.poll(pickerOpen).toBe(false);
@@ -759,6 +768,181 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
       const place = page.locator("wa-popover.new-session-page__place-popover");
       expect(await place.getByText("Places", { exact: true }).count()).toBe(0);
       await place.getByText("Runs on Gateway · local", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("uses advertised system info for Gateway place labels", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      featureMethods: ["chat.metadata", "chat.startup", "system.info"],
+      methodResponses: {
+        "system.info": {
+          machineName: "Peters-Mac-Studio",
+          hostname: "peters-mac-studio.local",
+          platform: "darwin",
+        },
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "macbook",
+              displayName: "MacBook",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("system.info");
+      const trigger = page.locator("#new-session-place-trigger");
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw · Gateway · Peters-Mac-Studio");
+      await trigger.click();
+      const place = page.locator("wa-popover.new-session-page__place-popover");
+      await place.getByRole("button", { name: "Gateway · Peters-Mac-Studio" }).waitFor();
+      await place.getByRole("button", { name: "Browse folders" }).click();
+      await expect
+        .poll(() =>
+          page.locator("input.new-session-page__browser-path").getAttribute("placeholder"),
+        )
+        .toBe("Gateway · Peters-Mac-Studio");
+
+      await gateway.setMethodResponse("node.list", { nodes: [] });
+      const nodeRequests = (await gateway.getRequests("node.list")).length;
+      await replaceGatewayClient(page);
+      await expect
+        .poll(async () => (await gateway.getRequests("node.list")).length)
+        .toBeGreaterThan(nodeRequests);
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("openclaw");
+      await trigger.click();
+      await place.getByText("Runs on Gateway · Peters-Mac-Studio", { exact: true }).waitFor();
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("disambiguates duplicate node names without changing the selected chip", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": {
+          nodes: [
+            {
+              nodeId: "11111111aaaaaaaa",
+              displayName: "Mac Studio",
+              platform: "darwin",
+              modelIdentifier: "Mac14,12",
+              remoteIp: "192.168.1.11",
+              connected: true,
+              commands: ["system.run"],
+            },
+            {
+              nodeId: "22222222bbbbbbbb",
+              displayName: "Mac Studio",
+              platform: "darwin",
+              modelIdentifier: "Mac15,14",
+              remoteIp: "192.168.1.12",
+              connected: true,
+              commands: ["system.run"],
+            },
+            {
+              nodeId: "33333333cccccccc",
+              displayName: "iPhone",
+              platform: "iOS 26.4",
+              deviceFamily: "iPhone",
+              modelIdentifier: "iPhone17,2",
+              remoteIp: "192.168.1.30",
+              connected: true,
+              commands: ["system.run"],
+            },
+          ],
+        },
+        "environments.list": { environments: [], profiles: [] },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      const first = page.locator('[data-value="node:11111111aaaaaaaa"]');
+      const second = page.locator('[data-value="node:22222222bbbbbbbb"]');
+      const phone = page.locator('[data-value="node:33333333cccccccc"]');
+      await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("Mac14,12");
+      await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("Mac15,14");
+      await expect.poll(() => phone.locator(".session-menu__text").textContent()).toBe("iPhone");
+      expect(await first.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await second.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await phone.locator(".session-menu__icon svg").count()).toBe(1);
+      expect(await first.getAttribute("title")).toBe("macOS · Mac14,12 · 192.168.1.11");
+      expect(await second.getAttribute("title")).toContain("192.168.1.12");
+      await second.click();
+      await expect
+        .poll(() => trigger.locator(".new-session-page__trigger-label").textContent())
+        .toBe("Agent workspace · Mac Studio");
+      expect(await trigger.textContent()).not.toContain("Mac15,14");
+      expect(await trigger.textContent()).not.toContain("192.168.1.12");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("disambiguates duplicate recent basenames and applies the selected path", async () => {
+    const context = await browser.newContext({ locale: "en-US", serviceWorkers: "block" });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      workspace: WORKSPACE,
+      workspaceGit: true,
+      methodResponses: {
+        "node.list": { nodes: [] },
+        "environments.list": { environments: [], profiles: [] },
+        "sessions.list": {
+          count: 2,
+          defaults: SESSION_LIST_DEFAULTS,
+          path: "",
+          sessions: [
+            { key: "agent:main:a", kind: "direct", updatedAt: 2, execCwd: "/a/openclaw" },
+            { key: "agent:main:b", kind: "direct", updatedAt: 1, execCwd: "/b/openclaw" },
+          ],
+          ts: Date.now(),
+        },
+        "sessions.create": { key: "agent:main:recent-collision" },
+      },
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}new`);
+      await gateway.waitForRequest("node.list");
+      const trigger = page.locator("#new-session-place-trigger");
+      await trigger.click();
+      const first = page.locator('[data-value="recent::/a/openclaw"]');
+      const second = page.locator('[data-value="recent::/b/openclaw"]');
+      await expect.poll(() => first.locator(".session-menu__sub").textContent()).toBe("a");
+      await expect.poll(() => second.locator(".session-menu__sub").textContent()).toBe("b");
+      await second.click();
+      await page.locator(".new-session-page__message").fill("continue in work checkout");
+      await page.getByRole("button", { name: "Start thread" }).click();
+      const create = await gateway.waitForRequest("sessions.create");
+      expect(create.params).toMatchObject({
+        cwd: "/b/openclaw",
+        message: "continue in work checkout",
+      });
     } finally {
       await context.close();
     }

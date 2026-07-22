@@ -48,6 +48,7 @@ import {
   formatTimeAgo,
 } from "../../../lib/format.ts";
 import "../../../components/tooltip.ts";
+import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
 import { getMediaFileExtension } from "../../../lib/media-file-extension.ts";
 import {
   openExternalUrlSafe,
@@ -679,12 +680,10 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
   const avatar = workingOnly
     ? nothing
     : renderChatAvatar("assistant", assistant, undefined, basePath, authToken);
+  const groupClass = `chat-group assistant${workingOnly ? " chat-group--working" : ""}${footerStartedAt !== null ? " chat-group--with-footer" : ""}`;
 
   return html`
-    <div
-      class="chat-group assistant ${workingOnly ? "chat-group--working" : ""}"
-      data-chat-row-key=${parts[0]?.key ?? nothing}
-    >
+    <div class=${groupClass} data-chat-row-key=${parts[0]?.key ?? nothing}>
       ${avatar}
       <div class="chat-group-messages">
         ${parts.map((part) =>
@@ -708,17 +707,17 @@ export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOpt
                     onOpenSidebar,
                   ),
         )}
-        ${footerStartedAt !== null
-          ? html`
-              <div class="chat-group-footer">
-                <div class="chat-group-footer__meta">
-                  <span class="chat-sender-name">${name}</span>
-                  ${renderChatTimestamp(footerStartedAt)}
-                </div>
-              </div>
-            `
-          : nothing}
       </div>
+      ${footerStartedAt !== null
+        ? html`
+            <div class="chat-group-footer">
+              <div class="chat-group-footer__meta">
+                <span class="chat-sender-name">${name}</span>
+                ${renderChatTimestamp(footerStartedAt)}
+              </div>
+            </div>
+          `
+        : nothing}
     </div>
   `;
 }
@@ -922,7 +921,10 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
     return html`
-      <div class="chat-group tool chat-group--activity" data-chat-row-key=${group.key}>
+      <div
+        class="chat-group tool chat-group--activity chat-group--with-footer"
+        data-chat-row-key=${group.key}
+      >
         ${renderChatAvatar(
           group.role,
           {
@@ -984,11 +986,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
                 `
               : nothing}
           </div>
-          <div class="chat-group-footer">
-            <span class="chat-sender-name">${t("chat.messages.activity")}</span>
-            ${renderChatTimestamp(group.timestamp)}
-            ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
-          </div>
+        </div>
+        <div class="chat-group-footer">
+          <span class="chat-sender-name">${t("chat.messages.activity")}</span>
+          ${renderChatTimestamp(group.timestamp)}
+          ${opts.onDelete ? renderDeleteButton(opts.onDelete, "right") : nothing}
         </div>
       </div>
     `;
@@ -1006,8 +1008,21 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const lastMessageIndex = group.messages.length - 1;
   const footerActionDetails = messageActionDetails[lastMessageIndex] ?? null;
 
+  // Attributed (logged-in) senders tint their bubbles with the same stable
+  // identity hue as their avatar initials; CSS owns per-theme lightness so
+  // the tint stays readable in both light and dark modes. Unattributed local
+  // messages keep the accent skin.
+  const senderHue =
+    normalizedRole === "user" && group.sender ? resolveIdentityHue(group.sender) : null;
+
   return html`
-    <div class="chat-group ${roleClass}" data-chat-row-key=${group.key}>
+    <div
+      class="chat-group ${roleClass} chat-group--with-footer${senderHue === null
+        ? ""
+        : " chat-group--sender-tint"}"
+      style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
+      data-chat-row-key=${group.key}
+    >
       ${renderChatAvatar(
         group.role,
         {
@@ -1041,38 +1056,38 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           `;
         })}
-        <div class="chat-group-footer">
-          <div class="chat-group-footer__meta">
-            ${opts.onRewind && normalizedRole === "user"
-              ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
-              : nothing}
-            ${opts.onDelete && normalizedRole === "user"
-              ? renderDeleteButton(opts.onDelete, "left")
-              : nothing}
-            ${normalizedRole === "user" ? renderChatAuthorAvatar(group.sender) : nothing}
-            <span class="chat-sender-name">${who}</span>
-            ${renderMessageMeta(group.timestamp, meta)}
-          </div>
-          ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
-            ? html`
-                <div
-                  class="chat-group-footer-actions"
-                  data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
-                >
-                  ${footerActionDetails
-                    ? renderMessageActionButtons(
-                        footerActionDetails,
-                        opts,
-                        opts.onOpenSidebar,
-                        normalizedRole !== "user" ? opts.onDelete : undefined,
-                      )
-                    : opts.onDelete && normalizedRole !== "user"
-                      ? renderDeleteButton(opts.onDelete, "right")
-                      : nothing}
-                </div>
-              `
+      </div>
+      <div class="chat-group-footer">
+        <div class="chat-group-footer__meta">
+          ${opts.onRewind && normalizedRole === "user"
+            ? renderRewindButton(opts.onRewind, Boolean(opts.rewindDisabled), "left")
             : nothing}
+          ${opts.onDelete && normalizedRole === "user"
+            ? renderDeleteButton(opts.onDelete, "left")
+            : nothing}
+          ${normalizedRole === "user" ? renderChatAuthorAvatar(group.sender) : nothing}
+          <span class="chat-sender-name">${who}</span>
+          ${renderMessageMeta(group.timestamp, meta)}
         </div>
+        ${footerActionDetails || (opts.onDelete && normalizedRole !== "user")
+          ? html`
+              <div
+                class="chat-group-footer-actions"
+                data-message-actions-for=${group.messages[lastMessageIndex]?.key ?? nothing}
+              >
+                ${footerActionDetails
+                  ? renderMessageActionButtons(
+                      footerActionDetails,
+                      opts,
+                      opts.onOpenSidebar,
+                      normalizedRole !== "user" ? opts.onDelete : undefined,
+                    )
+                  : opts.onDelete && normalizedRole !== "user"
+                    ? renderDeleteButton(opts.onDelete, "right")
+                    : nothing}
+              </div>
+            `
+          : nothing}
       </div>
     </div>
   `;
@@ -1226,8 +1241,10 @@ const DELETE_CONFIRM_VIEWPORT_MARGIN_PX = 8;
 const DELETE_CONFIRM_TRIGGER_GAP_PX = 6;
 
 type DeleteConfirmSide = "left" | "right";
+type DeleteConfirmDismissOptions = { restoreFocus?: boolean };
+type DeleteConfirmDismisser = (options?: DeleteConfirmDismissOptions) => void;
 
-const deleteConfirmDismissers = new WeakMap<Element, () => void>();
+const deleteConfirmDismissers = new WeakMap<Element, DeleteConfirmDismisser>();
 
 function shouldSkipActionConfirm(preferenceName: string): boolean {
   try {
@@ -1237,13 +1254,19 @@ function shouldSkipActionConfirm(preferenceName: string): boolean {
   }
 }
 
-function dismissDeleteConfirm(element: Element) {
+function dismissDeleteConfirm(element: Element, options?: DeleteConfirmDismissOptions) {
   const dismiss = deleteConfirmDismissers.get(element);
   if (dismiss) {
-    dismiss();
+    dismiss(options);
     return;
   }
   element.remove();
+}
+
+export function dismissConfirmedActionPopovers(owner: ParentNode): void {
+  owner.querySelectorAll(".chat-delete-confirm").forEach((popover) => {
+    dismissDeleteConfirm(popover);
+  });
 }
 
 function resolveViewportBounds() {
@@ -1386,11 +1409,14 @@ function openConfirmedActionPopover(
   }
   const existing = wrap.querySelector(".chat-delete-confirm");
   if (existing) {
-    dismissDeleteConfirm(existing);
+    dismissDeleteConfirm(existing, { restoreFocus: true });
     return;
   }
   const popover = document.createElement("div");
   popover.className = `chat-delete-confirm chat-delete-confirm--${params.side}`;
+  popover.setAttribute("role", "dialog");
+  popover.setAttribute("aria-modal", "true");
+  popover.setAttribute("aria-label", params.confirmText);
   popover.innerHTML = `
     <p class="chat-delete-confirm__text"></p>
     <label class="chat-delete-confirm__remember">
@@ -1413,18 +1439,23 @@ function openConfirmedActionPopover(
   wrap.appendChild(popover);
   placeDeleteConfirmPopover(btn, popover, params.side);
 
-  const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
-  const yes = popover.querySelector(".chat-delete-confirm__yes")!;
-  const check = popover.querySelector(".chat-delete-confirm__check") as HTMLInputElement;
+  const cancel = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__cancel")!;
+  const yes = popover.querySelector<HTMLButtonElement>(".chat-delete-confirm__yes")!;
+  const check = popover.querySelector<HTMLInputElement>(".chat-delete-confirm__check")!;
   let dismissed = false;
-  function dismissPopover() {
+  function dismissPopover(options?: DeleteConfirmDismissOptions) {
     if (dismissed) {
       return;
     }
     dismissed = true;
     document.removeEventListener("click", closeOnOutside, true);
+    document.removeEventListener("contextmenu", closeOnContextMenu, true);
+    window.removeEventListener("keydown", closeOnEscape, true);
     deleteConfirmDismissers.delete(popover);
     popover.remove();
+    if (options?.restoreFocus && btn.isConnected) {
+      btn.focus({ preventScroll: true });
+    }
   }
   function closeOnOutside(evt: MouseEvent) {
     const target = evt.target;
@@ -1432,8 +1463,36 @@ function openConfirmedActionPopover(
       dismissPopover();
     }
   }
+  function closeOnContextMenu(evt: MouseEvent) {
+    const target = evt.target;
+    if (target instanceof Node && !popover.contains(target)) {
+      dismissPopover();
+    }
+  }
+  function closeOnEscape(evt: KeyboardEvent) {
+    if (evt.key !== "Escape" || !popover.contains(document.activeElement)) {
+      return;
+    }
+    evt.preventDefault();
+    evt.stopImmediatePropagation();
+    dismissPopover({ restoreFocus: true });
+  }
+  function containKeyboardFocus(evt: KeyboardEvent) {
+    if (evt.key !== "Tab") {
+      return;
+    }
+    const first = check;
+    const last = yes;
+    if (evt.shiftKey && document.activeElement === first) {
+      evt.preventDefault();
+      last.focus();
+    } else if (!evt.shiftKey && document.activeElement === last) {
+      evt.preventDefault();
+      first.focus();
+    }
+  }
   deleteConfirmDismissers.set(popover, dismissPopover);
-  cancel.addEventListener("click", dismissPopover);
+  cancel.addEventListener("click", () => dismissPopover({ restoreFocus: true }));
   yes.addEventListener("click", () => {
     if (check.checked) {
       try {
@@ -1443,6 +1502,10 @@ function openConfirmedActionPopover(
     dismissPopover();
     params.action();
   });
+  popover.addEventListener("keydown", containKeyboardFocus);
+  document.addEventListener("contextmenu", closeOnContextMenu, true);
+  window.addEventListener("keydown", closeOnEscape, true);
+  cancel.focus({ preventScroll: true });
   requestAnimationFrame(() => {
     if (!dismissed && popover.isConnected) {
       placeDeleteConfirmPopover(btn, popover, params.side);
@@ -2005,7 +2068,7 @@ function resolveAssistantAttachmentAvailability(
 }
 
 function renderAssistantAttachmentStatusCard(params: {
-  kind: "image" | "audio" | "video" | "document";
+  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   badge: string;
   reason?: string;

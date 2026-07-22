@@ -56,6 +56,7 @@ export type ResolvedCliBackend = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  resolveRuntimeToolAvailability?: CliBackendPlugin["resolveRuntimeToolAvailability"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
@@ -94,6 +95,7 @@ type FallbackCliBackendPolicy = {
   ownsNativeCompaction?: boolean;
   prepareExecution?: CliBackendPlugin["prepareExecution"];
   resolveExecutionArgs?: CliBackendPlugin["resolveExecutionArgs"];
+  resolveRuntimeToolAvailability?: CliBackendPlugin["resolveRuntimeToolAvailability"];
   nativeToolMode?: CliBackendNativeToolMode;
   sideQuestionToolMode?: CliBackendSideQuestionToolMode;
   runtimeArtifact?: CliBackendRuntimeArtifactPolicy;
@@ -138,6 +140,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     ownsNativeCompaction: entry.backend.ownsNativeCompaction,
     prepareExecution: entry.backend.prepareExecution,
     resolveExecutionArgs: entry.backend.resolveExecutionArgs,
+    resolveRuntimeToolAvailability: entry.backend.resolveRuntimeToolAvailability,
     nativeToolMode: entry.backend.nativeToolMode,
     sideQuestionToolMode: entry.backend.sideQuestionToolMode,
     runtimeArtifact: entry.backend.runtimeArtifact,
@@ -435,6 +438,7 @@ export function resolveCliBackendConfig(
       ownsNativeCompaction: registered.ownsNativeCompaction,
       prepareExecution: registered.prepareExecution,
       resolveExecutionArgs: registered.resolveExecutionArgs,
+      resolveRuntimeToolAvailability: registered.resolveRuntimeToolAvailability,
       nativeToolMode: registered.nativeToolMode,
       sideQuestionToolMode: registered.sideQuestionToolMode,
       runtimeArtifact: registered.runtimeArtifact,
@@ -471,6 +475,7 @@ export function resolveCliBackendConfig(
       ownsNativeCompaction: fallbackPolicy.ownsNativeCompaction,
       prepareExecution: fallbackPolicy.prepareExecution,
       resolveExecutionArgs: fallbackPolicy.resolveExecutionArgs,
+      resolveRuntimeToolAvailability: fallbackPolicy.resolveRuntimeToolAvailability,
       nativeToolMode: fallbackPolicy.nativeToolMode,
       sideQuestionToolMode: fallbackPolicy.sideQuestionToolMode,
       runtimeArtifact: fallbackPolicy.runtimeArtifact,
@@ -504,6 +509,7 @@ export function resolveCliBackendConfig(
     ownsNativeCompaction: fallbackPolicy?.ownsNativeCompaction,
     prepareExecution: fallbackPolicy?.prepareExecution,
     resolveExecutionArgs: fallbackPolicy?.resolveExecutionArgs,
+    resolveRuntimeToolAvailability: fallbackPolicy?.resolveRuntimeToolAvailability,
     nativeToolMode: fallbackPolicy?.nativeToolMode,
     sideQuestionToolMode: fallbackPolicy?.sideQuestionToolMode,
     runtimeArtifact: fallbackPolicy?.runtimeArtifact,

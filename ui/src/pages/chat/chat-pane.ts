@@ -5,10 +5,12 @@ import { property, state as litState } from "lit/decorators.js";
 import {
   GATEWAY_SERVER_CAPS,
   type SessionCatalogHost,
+  type SessionCatalogPullRequestSummary,
   type SessionCatalogSession,
   type SessionCatalogTranscriptItem,
   type SessionDiscussionInfo,
   type SessionDiscussionState,
+  type SessionObserverDigest,
   type SessionsCatalogContinueResult,
   type SessionsCatalogReadResult,
   type SessionsFilesRevealResult,
@@ -91,6 +93,10 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import {
+  pickFreshestObserverDigest,
+  resolveChatPaneObserverRunId,
+} from "../../lib/observer-digest.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -213,7 +219,10 @@ import {
   type SidebarContent,
   type SidebarFullMessageRequest,
 } from "./components/chat-sidebar.ts";
-import { ChatTranscriptController } from "./components/chat-thread.ts";
+import {
+  ChatTranscriptController,
+  resetChatThreadPresentationState,
+} from "./components/chat-thread.ts";
 import { WIDGET_PROMPT_EVENT, type WidgetPromptEventDetail } from "./components/chat-tool-cards.ts";
 import {
   CHAT_COMPOSER_DRAFT_STORAGE_ERROR,
@@ -324,7 +333,7 @@ type ChatPaneConnectionScope = {
   sessions: ChatPageContext["sessions"];
 };
 const CHAT_OPEN_DETAILS_SELECTOR =
-  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
+  ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open], details.msg-meta[open]:not([data-preview])";
 const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
 const CHAT_TEXT_ENTRY_SELECTOR =
   "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='listbox'], [role='textbox']";
@@ -353,6 +362,21 @@ const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Thread list is still refreshing. Try New Chat again in a moment.";
 const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+
+function summarizeSessionPullRequests(
+  pullRequests: readonly ControlUiSessionPullRequest[],
+): SessionCatalogPullRequestSummary | undefined {
+  const current = pullRequests[0];
+  if (!current) {
+    return undefined;
+  }
+  return {
+    numbers: [...new Set(pullRequests.map((pullRequest) => pullRequest.number))]
+      .slice(0, 20)
+      .toSorted((left, right) => left - right),
+    state: current.state,
+  };
+}
 
 function keyboardEventPathMatches(event: KeyboardEvent, selector: string): boolean {
   return event
@@ -419,6 +443,8 @@ class ChatPane extends OpenClawLightDomElement {
   } | null = null;
   @litState() private boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() private resetConfirmationOpen = false;
+  @litState() private observerHudReady = customElements.get("openclaw-chat-observer-hud") != null;
+  private observerHudLoad: Promise<void> | null = null;
   private resetConfirmation:
     | {
         sessionKey: string;
@@ -631,7 +657,7 @@ class ChatPane extends OpenClawLightDomElement {
       this.requestUpdate();
       return;
     }
-    const openPullRequestEpoch = scope.context.sessions.captureOpenPullRequestEpoch(sessionKey);
+    const pullRequestEpoch = scope.context.sessions.capturePullRequestEpoch(sessionKey);
     try {
       const result = await scope.client.request<ControlUiSessionPullRequests>(
         "controlUi.sessionPullRequests",
@@ -650,10 +676,10 @@ class ChatPane extends OpenClawLightDomElement {
       }
       this.sessionPullRequests = result.pullRequests;
       if (!result.rateLimited || result.pullRequests.length > 0) {
-        scope.context.sessions.setOpenPullRequest(
+        scope.context.sessions.setPullRequestSummary(
           sessionKey,
-          result.pullRequests.some((item) => item.state === "open" || item.state === "draft"),
-          openPullRequestEpoch,
+          summarizeSessionPullRequests(result.pullRequests),
+          pullRequestEpoch,
         );
       }
       this.sessionPullRequestsBranch = result.branch;
@@ -881,6 +907,9 @@ class ChatPane extends OpenClawLightDomElement {
     if (!state) {
       return;
     }
+    // Close old-session portals and listener-owning popovers before the next
+    // render detaches their DOM and makes owner-scoped cleanup impossible.
+    resetChatThreadPresentationState(this.paneId, this);
     const previousSessionKey = state.sessionKey;
     // An in-progress title edit belongs to the previous session; committing
     // it against the newly routed row would rename the wrong session.
@@ -2354,6 +2383,27 @@ class ChatPane extends OpenClawLightDomElement {
         }
       });
     }
+    const projectedObserverDigest = this.state?.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
+    )?.observerDigest;
+    if (this.state?.observerDigest || projectedObserverDigest) {
+      this.ensureObserverHud();
+    }
+  }
+
+  private ensureObserverHud() {
+    if (this.observerHudReady || this.observerHudLoad) {
+      return;
+    }
+    this.observerHudLoad = import("./components/chat-observer-hud.ts")
+      .then(() => {
+        if (this.isConnected) {
+          this.observerHudReady = true;
+        }
+      })
+      .finally(() => {
+        this.observerHudLoad = null;
+      });
   }
 
   override disconnectedCallback() {
@@ -2378,7 +2428,7 @@ class ChatPane extends OpenClawLightDomElement {
     this.headerWorktreePaths.clear();
     this.headerBranches.clear();
     this.announceCommandPaletteTarget(null);
-    resetChatViewState(this.paneId);
+    resetChatViewState(this.paneId, this);
     this.state = undefined;
     this.connectedClient = null;
     disposeQuestionPromptState(this.questionPromptState);
@@ -3123,6 +3173,25 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
+      ? {
+          sessionKey: selectedSession.key,
+          runId: selectedSession.observerDigest.runId,
+          revision: selectedSession.observerDigest.revision,
+          updatedAt: selectedSession.observerDigest.updatedAt,
+          headline: selectedSession.observerDigest.headline,
+          health: selectedSession.observerDigest.health,
+        }
+      : null;
+    const observerDigest = pickFreshestObserverDigest(
+      state.observerDigest,
+      projectedObserverDigest,
+    );
+    const observerRunId = resolveChatPaneObserverRunId({
+      localRunId: state.chatRunId,
+      session: selectedSession,
+      digest: observerDigest,
+    });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
     const visibleWorkspaceConflict =
       workspaceConflict &&
@@ -3229,6 +3298,11 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
+      observerDigest: catalogKey ? null : observerDigest,
+      observerHudReady: !catalogKey && this.observerHudReady,
+      observerRunId: catalogKey ? null : observerRunId,
+      observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+      observerLastReadAt: selectedSession?.lastReadAt,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];

@@ -3,8 +3,9 @@ import "../../styles/lobster-pet.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../src/auto-reply/reply/queue/types.js";
-import type { ConfigUiHints } from "../../api/types.ts";
+import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type { NativeNotificationsPermission } from "../../app/native-notifications.ts";
 import {
   normalizeChatFollowUpMode,
@@ -54,6 +55,10 @@ import type { ConfigAutoSaveStatus } from "../../lib/config/index.ts";
 import { isJson5Warm, parseJson5Text, warmJson5 } from "../../lib/json5-runtime.ts";
 import type { RealtimeTalkInputDevice } from "../chat/realtime-talk-input.ts";
 import { renderNotificationsSection, type WebPushUiState } from "./notifications-section.ts";
+import {
+  renderSessionObserverSettings,
+  type SessionObserverModelSelection,
+} from "./session-observer-settings.ts";
 import { renderSettingsSelectRow } from "./settings-select-row.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./settings-targets.ts";
 
@@ -71,6 +76,7 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
 
 type SettingsMediaDeviceState = {
   devices: RealtimeTalkInputDevice[];
+  permissionRequired: boolean;
   selectedDeviceId: string;
   loading: boolean;
   error: string | null;
@@ -178,6 +184,14 @@ export type ConfigProps = {
   setTextScale: (value: number) => void;
   sidebarLiveActivity: boolean;
   setSidebarLiveActivity: (enabled: boolean) => void;
+  sessionObserverEnabled?: boolean;
+  sessionObserverUtilityModel?: string;
+  sessionObserverResolvedModel?: SystemInfoResult["defaultAgentUtilityModel"];
+  sessionObserverModels?: readonly ModelCatalogEntry[];
+  sessionObserverModelsUnavailable?: boolean;
+  sessionObserverDisabled?: boolean;
+  setSessionObserverEnabled?: (enabled: boolean) => void;
+  setSessionObserverUtilityModel?: (selection: SessionObserverModelSelection) => void;
   lobsterPetVisits?: boolean;
   setLobsterPetVisits?: (enabled: boolean) => void;
   lobsterPetSounds?: boolean;
@@ -948,6 +962,24 @@ function renderSettingsMediaDeviceField(options: {
       : []),
   ];
   const refreshLabel = `${t("common.refresh")}: ${options.title}`;
+  let accessRequested = false;
+  const requestAccess = () => {
+    if (accessRequested || !state.permissionRequired) {
+      return;
+    }
+    accessRequested = true;
+    options.onRefresh?.();
+  };
+  const requestAccessFromPointer = (event: PointerEvent) => {
+    if (event.button === 0) {
+      requestAccess();
+    }
+  };
+  const requestAccessFromKeyboard = (event: KeyboardEvent) => {
+    if (["Enter", " ", "ArrowDown", "ArrowUp", "F4"].includes(event.key)) {
+      requestAccess();
+    }
+  };
   const note = state.error
     ? html`<span role="alert">${state.error}</span>`
     : !state.loading && state.devices.length === 0
@@ -958,11 +990,13 @@ function renderSettingsMediaDeviceField(options: {
     description: note,
     control: html`
       <select
-        class="settings-select"
+        class="settings-select settings-select--media-device"
         data-settings-microphone=${options.dataAttribute === "microphone" ? "" : nothing}
         data-settings-camera=${options.dataAttribute === "camera" ? "" : nothing}
         aria-label=${options.title}
         .value=${selectedDeviceId}
+        @pointerdown=${requestAccessFromPointer}
+        @keydown=${requestAccessFromKeyboard}
         @change=${(event: Event) =>
           options.onSelect?.((event.currentTarget as HTMLSelectElement).value)}
       >
@@ -1149,6 +1183,7 @@ function renderLobsterPetSection(props: ConfigProps) {
               ${LOBSTER_PET_PALETTES.map((palette) => {
                 const entry = getLobsterdexEntries().get(palette.id);
                 const seen = entry !== undefined;
+                const shinySeen = entry?.shinySeenAt != null;
                 const title = !seen
                   ? "?"
                   : entry.firstSeenAt !== null
@@ -1163,9 +1198,12 @@ function renderLobsterPetSection(props: ConfigProps) {
                       ? ""
                       : "lobsterdex__mini--unseen"}"
                     style="--lob-shell:${palette.shell};--lob-claw:${palette.claw}"
-                    title=${title}
+                    title=${shinySeen ? `${title} ✦` : title}
                   >
                     ${renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true })}
+                    ${shinySeen
+                      ? html`<span class="lobsterdex__mini-star" aria-hidden="true">✦</span>`
+                      : nothing}
                   </span>
                 `;
               })}
@@ -1194,6 +1232,20 @@ function renderSidebarPreferencesSection(props: ConfigProps) {
           onChange: props.setSidebarLiveActivity,
         })}
       </div>
+      <div class="settings-section__header settings-section__header--subsection">
+        <h3 class="settings-section__heading">${t("configView.sessionObserver.title")}</h3>
+      </div>
+      <p class="settings-section__desc">${t("configView.sessionObserver.hint")}</p>
+      ${renderSessionObserverSettings({
+        enabled: props.sessionObserverEnabled !== false,
+        utilityModel: props.sessionObserverUtilityModel,
+        resolvedUtilityModel: props.sessionObserverResolvedModel,
+        models: props.sessionObserverModels ?? [],
+        modelsUnavailable: props.sessionObserverModelsUnavailable === true,
+        disabled: props.sessionObserverDisabled === true,
+        onEnabledChange: (enabled) => props.setSessionObserverEnabled?.(enabled),
+        onUtilityModelChange: (selection) => props.setSessionObserverUtilityModel?.(selection),
+      })}
     </section>
   `;
 }

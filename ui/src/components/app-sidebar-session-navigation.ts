@@ -153,6 +153,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
         hasActiveRun: Boolean(row.hasActiveRun),
+        activeRunIds: row.activeRunIds,
         modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
@@ -173,10 +174,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
             : undefined,
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
-        hasOpenPullRequest: context?.sessions.hasOpenPullRequest?.(row.key) === true,
+        pullRequest: context?.sessions.pullRequestSummary(row.key),
         unread: row.unread === true,
+        lastReadAt: row.lastReadAt,
         attention: this.resolveSessionAttention(row),
         agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
+        observerDigest: row.observerDigest,
         spawnedBy: row.spawnedBy,
         status: row.status,
         startedAt: row.startedAt,
@@ -267,10 +270,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       pinnedRows,
       SIDEBAR_NAV_ROUTES,
       knownUnpinnedKeys,
+      this.workboardBoards,
+      this.enabledRouteIds?.includes("workboard") ?? true,
+      this.workboardBoardsReady,
     );
     return {
       ...reconciled,
       sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+      workboardRows: new Map(this.workboardBoards.map((board) => [board.id, board])),
     };
   }
 

@@ -22,7 +22,6 @@ function runningRow(key: string): SidebarRecentSession {
     pinned: false,
     cloudWorkerActive: false,
     hasAutomation: false,
-    hasOpenPullRequest: false,
     unread: false,
     attention: { kind: "none" },
     startedAt: 1,
@@ -67,6 +66,95 @@ describe("SidebarSessionNarrationController", () => {
     // isolate:false shares the worker clock: a leaked fake timer deterministically
     // times out unrelated later files (seen: chat-background-tasks 60s hangs).
     vi.useRealTimers();
+  });
+
+  it("hands subtitle ownership only to a run-identified digest", async () => {
+    const source = {
+      subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
+      unsubscribeMessages: vi.fn(() => Promise.resolve()),
+    } as unknown as SessionCapability;
+    const lines: Array<ReadonlyMap<string, string>> = [];
+    const digests: Array<ReadonlyMap<string, { headline: string }>> = [];
+    const controller = new SidebarSessionNarrationController(
+      (next) => lines.push(next),
+      (next) => digests.push(next),
+    );
+    controller.sync({
+      enabled: true,
+      connected: true,
+      connectionIdentity: {},
+      source,
+      rows: [runningRow("agent:main:run")],
+      openSessionKey: "",
+      agentId: "main",
+    });
+
+    controller.handleEvent(
+      gatewayEvent("agent", {
+        sessionKey: "agent:main:run",
+        runId: "run-1",
+        stream: "tool",
+        data: { name: "read" },
+      }),
+    );
+    expect(lines.at(-1)?.get("agent:main:run")).toBe("Using read");
+
+    controller.handleEvent(
+      gatewayEvent("session.observer", {
+        sessionKey: "agent:main:run",
+        revision: 1,
+        updatedAt: 10_000,
+        headline: "Run-less digest",
+        health: "on-track",
+      }),
+    );
+    expect(digests).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
+    controller.handleEvent(
+      gatewayEvent("agent", {
+        sessionKey: "agent:main:run",
+        runId: "run-1",
+        stream: "tool",
+        data: { name: "list" },
+      }),
+    );
+    expect(lines.at(-1)?.get("agent:main:run")).toBe("Using list");
+
+    controller.handleEvent(
+      gatewayEvent("session.observer", {
+        sessionKey: "agent:main:run",
+        runId: "run-1",
+        revision: 1,
+        updatedAt: 10_000,
+        headline: "Reviewing the current implementation",
+        health: "on-track",
+      }),
+    );
+    expect(lines.at(-1)?.has("agent:main:run")).toBe(false);
+    expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
+      "Reviewing the current implementation",
+    );
+
+    controller.handleEvent(
+      gatewayEvent("agent", {
+        sessionKey: "agent:main:run",
+        runId: "run-1",
+        stream: "tool",
+        data: { name: "test" },
+      }),
+    );
+    expect(lines.at(-1)?.has("agent:main:run")).toBe(false);
+
+    controller.handleEvent(
+      gatewayEvent("agent", {
+        sessionKey: "agent:main:run",
+        runId: "run-2",
+        stream: "tool",
+        data: { name: "test" },
+      }),
+    );
+    expect(digests.at(-1)?.has("agent:main:run")).toBe(false);
+    expect(lines.at(-1)?.get("agent:main:run")).toBe("Using test");
   });
 
   it("publishes assistant commentary and throttles a newer tool signal", async () => {

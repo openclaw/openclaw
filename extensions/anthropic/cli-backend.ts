@@ -16,6 +16,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 /** Build the Claude CLI backend plugin descriptor. */
@@ -111,5 +112,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       return env ? { env } : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
+    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
   };
 }

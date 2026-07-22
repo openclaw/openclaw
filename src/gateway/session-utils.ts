@@ -1916,6 +1916,13 @@ export function buildGatewaySessionRow(params: {
   const lightweight = params.lightweightListRow === true;
   const now = params.now ?? Date.now();
   const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  const observerDigest =
+    entry?.observerDigest &&
+    // Strictly newer: a run end and restart can share a millisecond, and the
+    // prior run's digest must not project onto the replacement run.
+    (entry.startedAt === undefined || entry.observerDigest.updatedAt > entry.startedAt)
+      ? entry.observerDigest
+      : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
@@ -2229,6 +2236,15 @@ export function buildGatewaySessionRow(params: {
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     agentStatus,
+    observerDigest: observerDigest
+      ? {
+          runId: observerDigest.runId,
+          headline: observerDigest.headline,
+          health: observerDigest.health,
+          updatedAt: observerDigest.updatedAt,
+          revision: observerDigest.revision,
+        }
+      : undefined,
     lastInteractionAt: entry?.lastInteractionAt,
     lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,

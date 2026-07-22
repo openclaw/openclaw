@@ -6,6 +6,7 @@ import type {
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-icon.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
@@ -268,6 +269,8 @@ export type SessionEntry = SessionRestartRecoveryState &
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
     agentStatus?: SessionAgentStatus;
+    /** Latest utility-model status judgment for idle session status surfaces. */
+    observerDigest?: SessionObserverDigest;
     /** Timestamp (ms) when an operator explicitly marked the session unread; cleared on read. */
     markedUnreadAt?: number;
     /** Timestamp (ms) of the latest completed agent run; metadata patches do not update it. */
