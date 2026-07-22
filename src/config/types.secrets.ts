@@ -324,6 +324,7 @@ export type ManualExecSecretProviderConfig = {
   env?: Record<string, string>;
   passEnv?: string[];
   trustedDirs?: string[];
+  allowInsecurePath?: boolean;
 };
 
 export type PluginIntegrationSecretProviderConfig = {
