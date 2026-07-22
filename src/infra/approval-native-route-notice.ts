@@ -1,5 +1,6 @@
 // Formats native-route approval notices shown when command approvals leave the current channel.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatHumanList } from "../shared/human-list.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 
@@ -37,7 +38,7 @@ export function resolveApprovalDeliveryFailedNoticeText(params: {
 }): string {
   const commandId =
     params.approvalKind === "exec" && params.approvalId.length > 8
-      ? params.approvalId.slice(0, 8)
+      ? sliceUtf16Safe(params.approvalId, 0, 8)
       : params.approvalId;
   // Exec approval ids are long command ids in chat UX; plugin ids can be short
   // semantic ids, so only shorten exec ids and keep the full-id fallback visible.
