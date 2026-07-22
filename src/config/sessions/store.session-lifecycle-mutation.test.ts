@@ -11,8 +11,10 @@ import {
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -24,6 +26,8 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { materializeSqliteTranscriptArchiveInWorker } from "./session-accessor.sqlite-archive.worker.js";
+import { planSqliteSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { searchSessionTranscripts } from "./session-transcript-search.js";
@@ -447,18 +451,14 @@ describe("session store lifecycle mutations", () => {
       return originalRenameSync(...args);
     });
 
+    let archivedPath: string | null = null;
     try {
-      const result = await deleteSessionEntryLifecycle({
-        archiveTranscript: true,
-        storePath,
-        target: {
-          canonicalKey: "agent:main:durable-delete",
-          storeKeys: ["agent:main:durable-delete"],
-        },
-      });
-
-      expect(result.deleted).toBe(true);
-      expect(result.archivedTranscripts).toHaveLength(1);
+      const database = openLifecycleTestDatabase(storePath);
+      const workerResult = materializeSqliteTranscriptArchiveInWorker(
+        planArchiveWorker(database, path.dirname(storePath), "durable-delete-session"),
+      );
+      archivedPath = workerResult.archivedPath;
+      expect(archivedPath).not.toBeNull();
       expect(entryObservedDuringArchiveRename).toEqual([true]);
       const archiveTempOpenIndexes = openSpy.mock.calls.flatMap((args, index) =>
         String(args[0]).includes("durable-delete-session.jsonl.deleted.") && args[1] === "wx"
@@ -474,70 +474,19 @@ describe("session store lifecycle mutations", () => {
       fsyncSpy.mockRestore();
       openSpy.mockRestore();
     }
-  });
 
-  it("probes duplicate SQLite transcript archives before deleting entry rows", async () => {
-    const now = Date.now();
-    await replaceSessionEntry(
-      { sessionKey: "agent:main:duplicate-archive", storePath },
-      {
-        sessionId: "duplicate-archive-session",
-        updatedAt: now,
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: true,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:durable-delete",
+        storeKeys: ["agent:main:durable-delete"],
       },
-    );
-    await replaceSqliteTranscriptEvents(
-      {
-        sessionKey: "agent:main:duplicate-archive",
-        sessionId: "duplicate-archive-session",
-        storePath,
-      },
-      [createTranscriptEvent("duplicate-archive-session", "reuse archive")],
-    );
-    const archivePath = path.join(
-      path.dirname(storePath),
-      "duplicate-archive-session.jsonl.deleted.2026-01-01T00-00-00.000Z",
-    );
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(
-      archivePath,
-      `${createTranscriptEventLine("duplicate-archive-session", "reuse archive")}\n`,
-      "utf-8",
-    );
-
-    const originalReaddirSync = fs.readdirSync;
-    const entryObservedDuringDuplicateProbe: boolean[] = [];
-    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation((...args) => {
-      const dirPath = String(args[0]);
-      if (dirPath === path.dirname(storePath)) {
-        entryObservedDuringDuplicateProbe.push(
-          loadSessionEntry({ sessionKey: "agent:main:duplicate-archive", storePath })?.sessionId ===
-            "duplicate-archive-session",
-        );
-      }
-      return originalReaddirSync(...args);
     });
-
-    try {
-      const result = await deleteSessionEntryLifecycle({
-        archiveTranscript: true,
-        storePath,
-        target: {
-          canonicalKey: "agent:main:duplicate-archive",
-          storeKeys: ["agent:main:duplicate-archive"],
-        },
-      });
-
-      expect(result.deleted).toBe(true);
-      expect(result.archivedTranscripts).toEqual([
-        {
-          archivedPath: archivePath,
-          sourcePath: path.join(path.dirname(storePath), "duplicate-archive-session.jsonl"),
-        },
-      ]);
-      expect(entryObservedDuringDuplicateProbe).toEqual([true]);
-    } finally {
-      readdirSpy.mockRestore();
-    }
+    expect(result.deleted).toBe(true);
+    expect(result.archivedTranscripts.map((archive) => archive.archivedPath)).toEqual([
+      archivedPath,
+    ]);
   });
 
   it("deletes a SQLite entry without deleting transcripts when archiveTranscript is false", async () => {
@@ -905,4 +854,21 @@ function openLifecycleTestDatabase(storePath: string) {
     agentId: target.agentId ?? "main",
     path: target.path,
   });
+}
+
+function planArchiveWorker(
+  database: ReturnType<typeof openLifecycleTestDatabase>,
+  archiveDirectory: string,
+  sessionId: string,
+) {
+  const plan = planSqliteSessionStateDeleteIfUnreferenced({
+    archiveDirectory,
+    database,
+    referencedSessionIds: new Set(),
+    sessionId,
+  });
+  if (!plan) {
+    throw new Error(`expected an archive plan for ${sessionId}`);
+  }
+  return plan;
 }
