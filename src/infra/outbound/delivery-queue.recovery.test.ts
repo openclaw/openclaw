@@ -1884,7 +1884,7 @@ describe("delivery-queue recovery", () => {
     }
   });
 
-  it("replays stored delivery options during recovery", async () => {
+  it("replays stored delivery options with a cross-agent policy key", async () => {
     await enqueueDelivery(
       {
         channel: "demo-channel-a",

@@ -301,6 +301,8 @@ async function applyRecoverySessionOwnership(params: {
   stateDir?: string;
   logLabel: string;
 }): Promise<"allowed" | "failed" | "not_pending"> {
+  // Old queued intents can predate this invariant. Fail them permanently instead
+  // of replaying across agent boundaries; the persisted queue shape is unchanged.
   const ownership = validateOutboundDeliverySessionOwnership({
     ownerLabel: "queued delivery",
     session: params.entry.session,
