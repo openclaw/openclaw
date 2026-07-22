@@ -874,7 +874,7 @@ export function createImageTool(options?: {
       maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
       maxImages: optionalPositiveIntegerSchema(),
     }),
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
 
       // MARK: - Normalize image + images input and dedupe while preserving order
@@ -979,6 +979,9 @@ export function createImageTool(options?: {
       const loadedImages: LoadedImageForTool[] = [];
 
       for (const imageRawInput of imageInputs) {
+        // Stop before starting the next sequential download/decode when the run
+        // was aborted, so a dead run cannot keep pulling up to maxImages remote images.
+        signal?.throwIfAborted();
         const trimmed = imageRawInput.trim();
         const imageRaw = trimmed.startsWith("@") ? trimmed.slice(1).trim() : trimmed;
         if (!imageRaw) {
@@ -1091,6 +1094,9 @@ export function createImageTool(options?: {
                 inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
                 ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
+                // Forward the run abort signal into the fetch layer so an abort
+                // mid-download disconnects the in-flight socket.
+                ...(signal ? { requestInit: { signal } } : {}),
                 imageCompression,
               });
         if (media.kind !== "image") {
@@ -1118,6 +1124,8 @@ export function createImageTool(options?: {
         return await buildNativeImageToolResult(loadedImages, options?.config);
       }
 
+      // Do not issue a paid vision-provider call for an already-aborted run.
+      signal?.throwIfAborted();
       // Text-only runs delegate image understanding to the configured fallback model.
       const result = await runImagePrompt({
         cfg: options?.config,
