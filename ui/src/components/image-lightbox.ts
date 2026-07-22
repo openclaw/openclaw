@@ -1,5 +1,5 @@
-import { css, html } from "lit";
-import { property, query } from "lit/decorators.js";
+import { css, html, nothing, type PropertyValues } from "lit";
+import { property, query, state } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
@@ -11,11 +11,32 @@ export type ImageLightboxItem = {
   release?: () => void;
 };
 
+const SAFE_DATA_IMAGE_BLOB_TYPES = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+
+function mimeTypeEssence(value: string): string {
+  return value.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+}
+
+function dataUrlMimeType(source: string): string | undefined {
+  const mediaType = /^data:([^,]*)/i.exec(source)?.[1];
+  return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
+}
+
 export class OpenClawImageLightbox extends OpenClawLitElement {
   @property() src = "";
   @property() override title = "";
   @query(".open-original") private openOriginal?: HTMLAnchorElement;
   @query(".close") private closeButton?: HTMLButtonElement;
+  @state() private openOriginalUrl = "";
+
+  private originalBlobUrl = "";
+  private originalUrlRequest = 0;
 
   static override styles = css`
     :host {
@@ -152,6 +173,25 @@ export class OpenClawImageLightbox extends OpenClawLitElement {
     }
   `;
 
+  override connectedCallback() {
+    super.connectedCallback();
+    if (this.hasUpdated) {
+      void this.resolveOriginalUrl();
+    }
+  }
+
+  override disconnectedCallback() {
+    this.originalUrlRequest += 1;
+    this.revokeOriginalBlobUrl();
+    super.disconnectedCallback();
+  }
+
+  protected override updated(changed: PropertyValues<this>) {
+    if (changed.has("src")) {
+      void this.resolveOriginalUrl();
+    }
+  }
+
   override render() {
     const title = this.title.trim() || t("chat.imageLightbox.untitled");
     return html`
@@ -164,9 +204,18 @@ export class OpenClawImageLightbox extends OpenClawLitElement {
           <header class="header">
             <strong class="title">${title}</strong>
             <div class="actions">
-              <a class="action open-original" href=${this.src} target="_blank" rel="noreferrer">
-                ${t("chat.imageLightbox.openOriginal")}
-              </a>
+              ${this.openOriginalUrl
+                ? html`
+                    <a
+                      class="action open-original"
+                      href=${this.openOriginalUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      ${t("chat.imageLightbox.openOriginal")}
+                    </a>
+                  `
+                : nothing}
               <button
                 class="action close"
                 type="button"
@@ -186,12 +235,59 @@ export class OpenClawImageLightbox extends OpenClawLitElement {
     `;
   }
 
+  private revokeOriginalBlobUrl() {
+    if (!this.originalBlobUrl) {
+      return;
+    }
+    URL.revokeObjectURL(this.originalBlobUrl);
+    this.originalBlobUrl = "";
+  }
+
+  private async resolveOriginalUrl() {
+    const request = ++this.originalUrlRequest;
+    this.revokeOriginalBlobUrl();
+    const source = this.src.trim();
+    if (!source) {
+      this.openOriginalUrl = "";
+      return;
+    }
+    if (source.slice(0, 5).toLowerCase() !== "data:") {
+      this.openOriginalUrl = source;
+      return;
+    }
+    this.openOriginalUrl = "";
+    const sourceType = dataUrlMimeType(source);
+    // Top-level blob documents inherit the app origin. Only inert raster formats
+    // may be promoted from opaque-origin data URLs into an original-image link.
+    if (!sourceType || !SAFE_DATA_IMAGE_BLOB_TYPES.has(sourceType)) {
+      return;
+    }
+    try {
+      const response = await fetch(source);
+      const blob = await response.blob();
+      if (
+        !this.isConnected ||
+        request !== this.originalUrlRequest ||
+        !SAFE_DATA_IMAGE_BLOB_TYPES.has(mimeTypeEssence(blob.type))
+      ) {
+        return;
+      }
+      this.originalBlobUrl = URL.createObjectURL(blob);
+      this.openOriginalUrl = this.originalBlobUrl;
+    } catch {
+      // The image remains viewable inline; omit an unusable original-link action.
+    }
+  }
+
   private handleKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Tab" || !this.openOriginal || !this.closeButton) {
+    if (event.key !== "Tab" || !this.closeButton) {
       return;
     }
     const source = event.composedPath()[0];
-    if (event.shiftKey && source === this.openOriginal) {
+    if (!this.openOriginal && source === this.closeButton) {
+      event.preventDefault();
+      this.closeButton.focus();
+    } else if (event.shiftKey && source === this.openOriginal) {
       event.preventDefault();
       this.closeButton.focus();
     } else if (!event.shiftKey && source === this.closeButton) {

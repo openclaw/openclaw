@@ -795,6 +795,7 @@ describe("grouped chat rendering", () => {
       assistantTranscriptRoleHeaders: false,
       codeBlockChrome: "none",
       fileLinks: true,
+      interactiveImages: false,
     });
   });
 
@@ -921,6 +922,7 @@ describe("grouped chat rendering", () => {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
+      interactiveImages: false,
     });
   });
 
@@ -1521,6 +1523,7 @@ describe("grouped chat rendering", () => {
       assistantTranscriptRoleHeaders: true,
       codeBlockChrome: "copy",
       fileLinks: true,
+      interactiveImages: false,
     });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");

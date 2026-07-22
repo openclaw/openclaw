@@ -121,6 +121,7 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const closeButton = page.getByRole("button", { name: "Close image preview" });
       const openOriginal = page.getByRole("link", { name: "Open original" });
       await openOriginal.waitFor({ state: "visible" });
+      await expect.poll(() => openOriginal.getAttribute("href")).toMatch(/^blob:/);
       const focusIsInsideLightbox = () =>
         page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
           let active: Element | null = document.activeElement;
@@ -151,6 +152,12 @@ describeControlUiE2e("Control UI image lightbox", () => {
       const desktopBox = await page.locator("openclaw-image-lightbox .lightbox").boundingBox();
       expect(desktopBox?.width ?? 0).toBeGreaterThan(1000);
       expect(desktopBox?.height ?? 0).toBeGreaterThan(700);
+      const originalPopup = page.waitForEvent("popup");
+      await openOriginal.click();
+      const originalPage = await originalPopup;
+      await expect.poll(() => originalPage.url()).toMatch(/^blob:/);
+      await originalPage.close();
+      await closeButton.focus();
       await page.keyboard.press("Tab");
       await expect.poll(focusIsInsideLightbox).toBe(true);
       await page.keyboard.press("Shift+Tab");
