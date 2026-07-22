@@ -725,6 +725,9 @@ async function* observeModelCallIterator<T>(
       observeResponseChunk(state, startedAt, next.value);
       maybeEmitModelCallStreamProgress(eventBase, state);
       yield next.value;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
     }
     emitModelCallCompleted(eventBase, startedAt, state);
   } catch (err) {
