@@ -2463,9 +2463,8 @@ describe("buildCodexMigrationProvider", () => {
       reason: "install failed",
     });
     expectRecordFields(findItem(result.items, "config:codex-plugins"), {
-      status: "skipped",
-      reason: "no selected Codex plugins",
-      deferredCompletion: true,
+      status: "warning",
+      reason: "selected Codex plugin activation is incomplete",
     });
     expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toBeUndefined();
   });

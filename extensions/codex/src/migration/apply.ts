@@ -422,6 +422,20 @@ async function applyCodexPluginConfigItem(
   item: MigrationItem,
   appliedItems: readonly MigrationItem[],
 ): Promise<MigrationItem> {
+  const incompletePluginItems = appliedItems.filter(
+    (candidate) =>
+      candidate.kind === "plugin" &&
+      candidate.action === "install" &&
+      readCodexPluginPolicy(candidate) !== undefined &&
+      !isCodexPluginConfigTerminal(candidate),
+  );
+  if (incompletePluginItems.length > 0) {
+    return {
+      ...item,
+      status: "warning",
+      reason: "selected Codex plugin activation is incomplete",
+    };
+  }
   const entries = appliedItems
     .map(readAppliedPluginConfigEntry)
     .filter((entry): entry is CodexPluginMigrationConfigEntry => entry !== undefined);
@@ -478,10 +492,20 @@ async function applyCodexPluginConfigItem(
   }
 }
 
+function isCodexPluginConfigTerminal(item: MigrationItem): boolean {
+  return (
+    item.status === "migrated" ||
+    (item.status === "skipped" &&
+      (item.deferredCompletion === true ||
+        item.reason === CODEX_PLUGIN_NOT_SELECTED_REASON ||
+        item.reason === CODEX_PLUGIN_AUTH_REQUIRED_REASON))
+  );
+}
+
 function readAppliedPluginConfigEntry(
   item: MigrationItem,
 ): CodexPluginMigrationConfigEntry | undefined {
-  if (item.status === "migrated") {
+  if (item.status === "migrated" || item.deferredCompletion === true) {
     return readCodexPluginMigrationConfigEntry(item, true);
   }
   if (

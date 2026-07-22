@@ -93,7 +93,12 @@ function buildPendingDeferredMigrationPlan(
   const deferredPlan = buildSetupMigrationPhasePlan(plan, "after-promotion");
   const items = deferredPlan.items.map((item) =>
     completedItemIds.has(item.id)
-      ? { ...item, status: "skipped" as const, reason: COMPLETED_AFTER_PROMOTION_REASON }
+      ? {
+          ...item,
+          status: "skipped" as const,
+          reason: COMPLETED_AFTER_PROMOTION_REASON,
+          deferredCompletion: true as const,
+        }
       : item,
   );
   return { ...deferredPlan, items, summary: summarizeMigrationItems(items) };
