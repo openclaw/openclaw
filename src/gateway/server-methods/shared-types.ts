@@ -49,7 +49,7 @@ import type {
 } from "../server-instance-runtime.types.js";
 import type { DedupeEntry } from "../server-shared.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
-import type { SessionObserverService } from "../session-observer.js";
+import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
 import type { TerminalSessionManager } from "../terminal/session-manager.js";
 import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";

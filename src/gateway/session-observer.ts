@@ -1,13 +1,10 @@
-import type {
-  SessionObserverDigest,
-  SessionsObserverAskResult,
-} from "../../packages/gateway-protocol/src/schema/sessions.js";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { getAgentRunContext, type AgentEventPayload } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSessionObserverAskRuntime } from "./session-observer-ask.js";
+import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import {
-  buildSessionObserverAskPrompt,
   buildSessionObserverPrompt,
   createDormantSessionObserverRun,
   defaultCompleteModel,
@@ -22,10 +19,6 @@ import {
   rememberSessionObserverDormantRun,
   rememberSessionObserverItemStatus,
   rememberSessionObserverRevisionFloor,
-  sanitizeSessionObserverModelText,
-  SESSION_OBSERVER_ASK_ANSWER_MAX_CHARS,
-  SESSION_OBSERVER_ASK_MODEL_MAX_TOKENS,
-  SESSION_OBSERVER_ASK_SYSTEM_PROMPT,
   SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
   synthesizeSessionObserverTerminalDigest,
@@ -43,6 +36,12 @@ import {
   noteSessionObserverEvent,
 } from "./session-observer-notes.js";
 
+export { SessionObserverAskError } from "./session-observer-contract.js";
+export type {
+  SessionObserverAskErrorReason,
+  SessionObserverService,
+} from "./session-observer-contract.js";
+
 const observerLog = createSubsystemLogger("gateway/session-observer");
 
 const MIN_NOTES_PER_DIGEST = 4;
@@ -57,49 +56,11 @@ const PERSIST_INTERVAL_MS = 60_000;
 // The Control UI opens at most six live session subscriptions; matching that cap
 // prevents background observer calls from outgrowing the surface consuming them.
 const MAX_CONCURRENT_OBSERVED_SESSIONS = 6;
-const MAX_CONCURRENT_ASKS = 6;
-const ASK_RATE_WINDOW_MS = 60_000;
-const MAX_ASKS_PER_RATE_WINDOW = 12;
-const MAX_ASKS_PER_CONNECTION_RATE_WINDOW = 4;
 
-type SessionObserverSnapshot = {
-  agentId: string;
-  runId?: string;
-  digest?: SessionObserverDigest;
-  notes: string[];
-};
+type SessionObserver = SessionObserverService &
+  Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot">;
 
-type SessionObserverAskErrorReason =
-  | "busy"
-  | "disabled"
-  | "not-subscribed"
-  | "rate-limited"
-  | "utility-model-unavailable"
-  | "model-unavailable";
-
-export class SessionObserverAskError extends Error {
-  constructor(
-    readonly reason: SessionObserverAskErrorReason,
-    message: string,
-    readonly retryAfterMs?: number,
-  ) {
-    super(message);
-    this.name = "SessionObserverAskError";
-  }
-}
-
-export type SessionObserverService = {
-  handleEvent: (event: AgentEventPayload) => void;
-  getSnapshot: (sessionKey: string) => SessionObserverSnapshot;
-  ask: (params: {
-    sessionKey: string;
-    question: string;
-    connId: string;
-  }) => Promise<SessionsObserverAskResult>;
-  dispose: () => void;
-};
-
-export function createSessionObserver(deps: SessionObserverDeps): SessionObserverService {
+export function createSessionObserver(deps: SessionObserverDeps): SessionObserver {
   const now = deps.now ?? Date.now;
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
@@ -113,9 +74,20 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   const revisionFloors = new Map<string, SessionObserverRevisionFloor>();
   const supersededRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
-  const askControllers = new Map<string, AbortController>();
-  const askAdmissions: Array<{ connId: string; admittedAt: number }> = [];
   let disposed = false;
+  const askRuntime = createSessionObserverAskRuntime({
+    getConfig: deps.getConfig,
+    subscribers: deps.subscribers,
+    states,
+    resolveUtilityModelRef,
+    prepareModel,
+    completeModel,
+    readSession,
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    isDisposed: () => disposed,
+  });
 
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
@@ -125,7 +97,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
   // Terminal paths that cannot run the model must still retire same-run live
   // health, or idle session rows can display a stale in-progress judgment forever.
   async function synthesizeTerminalDigest(source: {
-    event?: AgentEventPayload;
+    event?: SessionObserverEvent;
     state?: SessionObserverState;
   }) {
     const runId = source.event?.runId ?? source.state?.runId;
@@ -240,214 +212,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       allowMissingApiKeyModes: ["aws-sdk"],
     });
     return await state.preparedPromise;
-  };
-
-  const getSnapshot = (sessionKey: string): SessionObserverSnapshot => {
-    const state = states.get(sessionKey);
-    if (state) {
-      flushSessionObserverAssistantNote(state);
-      return {
-        agentId: state.agentId,
-        runId: state.runId,
-        ...(state.previousDigest ? { digest: state.previousDigest } : {}),
-        // These strings were bounded and sanitized when they entered the note
-        // buffer. Copy them verbatim so asks never reopen raw transcript data.
-        notes: state.notes.map((note) => note.text),
-      };
-    }
-    const cfg = deps.getConfig();
-    const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
-    const digest = readSession(sessionKey, agentId)?.observerDigest;
-    return {
-      agentId,
-      ...(digest?.runId ? { runId: digest.runId } : {}),
-      ...(digest ? { digest } : {}),
-      notes: [],
-    };
-  };
-
-  const ask = async (params: {
-    sessionKey: string;
-    question: string;
-    connId: string;
-  }): Promise<SessionsObserverAskResult> => {
-    const sessionKey = params.sessionKey.trim();
-    const question = params.question.trim();
-    if (!sessionKey || !question || disposed) {
-      throw new SessionObserverAskError("model-unavailable", "Session observer is unavailable.");
-    }
-    if (!deps.subscribers.get(sessionKey).has(params.connId)) {
-      throw new SessionObserverAskError(
-        "not-subscribed",
-        "Subscribe to this session before asking its observer.",
-      );
-    }
-    const cfg = deps.getConfig();
-    if (cfg.gateway?.controlUi?.sessionObserver === false) {
-      throw new SessionObserverAskError("disabled", "Session observer is disabled.");
-    }
-    if (askControllers.has(sessionKey)) {
-      throw new SessionObserverAskError(
-        "busy",
-        "The session observer is answering another question.",
-      );
-    }
-    const admittedAt = now();
-    const cutoff = admittedAt - ASK_RATE_WINDOW_MS;
-    while ((askAdmissions[0]?.admittedAt ?? admittedAt) < cutoff) {
-      askAdmissions.shift();
-    }
-    const connectionAdmissions = askAdmissions.filter(
-      (admission) => admission.connId === params.connId,
-    );
-    const globalRetryAfterMs =
-      askAdmissions.length >= MAX_ASKS_PER_RATE_WINDOW
-        ? Math.max(
-            1,
-            (askAdmissions[0]?.admittedAt ?? admittedAt) + ASK_RATE_WINDOW_MS - admittedAt,
-          )
-        : 0;
-    const connectionRetryAfterMs =
-      connectionAdmissions.length >= MAX_ASKS_PER_CONNECTION_RATE_WINDOW
-        ? Math.max(
-            1,
-            (connectionAdmissions[0]?.admittedAt ?? admittedAt) + ASK_RATE_WINDOW_MS - admittedAt,
-          )
-        : 0;
-    if (
-      askControllers.size >= MAX_CONCURRENT_ASKS ||
-      globalRetryAfterMs > 0 ||
-      connectionRetryAfterMs > 0
-    ) {
-      throw new SessionObserverAskError(
-        "rate-limited",
-        "The session observer has reached its question limit. Try again shortly.",
-        Math.max(
-          askControllers.size >= MAX_CONCURRENT_ASKS ? MODEL_TIMEOUT_MS : 0,
-          globalRetryAfterMs,
-          connectionRetryAfterMs,
-        ),
-      );
-    }
-    const snapshot = getSnapshot(sessionKey);
-    const utilityModelRef = resolveUtilityModelRef({ cfg, agentId: snapshot.agentId });
-    if (!utilityModelRef) {
-      throw new SessionObserverAskError(
-        "utility-model-unavailable",
-        "No utility model is configured for this session.",
-      );
-    }
-    // Read-scoped asks can spend utility-model quota. Bound admission across
-    // sessions and connections before any provider-backed preparation starts.
-    askAdmissions.push({ connId: params.connId, admittedAt });
-    const controller = new AbortController();
-    askControllers.set(sessionKey, controller);
-    const timeout = setTimeoutFn(() => controller.abort(), MODEL_TIMEOUT_MS);
-    const aborted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new Error("session observer ask timed out or was cancelled")),
-        { once: true },
-      );
-    });
-    try {
-      const execute = async () => {
-        const prepared = await prepareModel({
-          cfg,
-          agentId: snapshot.agentId,
-          modelRef: utilityModelRef,
-          useUtilityModel: true,
-          useAsyncModelResolution: true,
-          allowMissingApiKeyModes: ["aws-sdk"],
-        });
-        if (controller.signal.aborted || disposed) {
-          throw new Error("session observer ask is no longer active");
-        }
-        const currentCfg = deps.getConfig();
-        if (
-          currentCfg.gateway?.controlUi?.sessionObserver === false ||
-          resolveUtilityModelRef({ cfg: currentCfg, agentId: snapshot.agentId }) !== utilityModelRef
-        ) {
-          throw new Error("session observer utility model changed while answering");
-        }
-        if ("error" in prepared) {
-          throw new Error(prepared.error);
-        }
-        const result = await completeModel({
-          model: prepared.model,
-          auth: prepared.auth,
-          cfg: currentCfg,
-          context: {
-            systemPrompt: SESSION_OBSERVER_ASK_SYSTEM_PROMPT,
-            messages: [
-              {
-                role: "user",
-                content: buildSessionObserverAskPrompt({
-                  digest: snapshot.digest,
-                  notes: snapshot.notes,
-                  question,
-                }),
-                timestamp: now(),
-              },
-            ],
-          },
-          options: {
-            maxTokens: Math.min(
-              SESSION_OBSERVER_ASK_MODEL_MAX_TOKENS,
-              Math.floor(prepared.model.maxTokens),
-            ),
-            temperature: 0.2,
-            signal: controller.signal,
-          },
-        });
-        if (result.stopReason === "error") {
-          throw new Error(result.errorMessage?.trim() || "session observer ask completion failed");
-        }
-        const finalCfg = deps.getConfig();
-        const currentSnapshot = getSnapshot(sessionKey);
-        if (
-          controller.signal.aborted ||
-          disposed ||
-          !deps.subscribers.get(sessionKey).has(params.connId) ||
-          finalCfg.gateway?.controlUi?.sessionObserver === false ||
-          resolveUtilityModelRef({ cfg: finalCfg, agentId: snapshot.agentId }) !==
-            utilityModelRef ||
-          currentSnapshot.runId !== snapshot.runId ||
-          currentSnapshot.digest?.revision !== snapshot.digest?.revision
-        ) {
-          throw new Error("session observer ask is no longer authorized");
-        }
-        const rawAnswer = result.content
-          .filter((block): block is { type: "text"; text: string } => block.type === "text")
-          .map((block) => block.text)
-          .join("");
-        const answer = sanitizeSessionObserverModelText(
-          rawAnswer,
-          SESSION_OBSERVER_ASK_ANSWER_MAX_CHARS,
-        );
-        if (!answer) {
-          throw new Error("session observer returned an empty answer");
-        }
-        return {
-          answer,
-          ...(snapshot.digest ? { digestRevision: snapshot.digest.revision } : {}),
-        };
-      };
-      return await Promise.race([execute(), aborted]);
-    } catch (error) {
-      observerLog.warn("session observer ask failed", { sessionKey, error });
-      throw new SessionObserverAskError(
-        "model-unavailable",
-        "The session observer could not answer right now.",
-      );
-    } finally {
-      clearTimeoutFn(timeout);
-      if (askControllers.get(sessionKey) === controller) {
-        // Clear only the owning call's slot; a stale completion must never
-        // release a newer ask admitted after cancellation.
-        askControllers.delete(sessionKey);
-      }
-    }
   };
 
   const requestModelDigest = async (state: SessionObserverState, notes: readonly string[]) => {
@@ -712,7 +476,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     })();
   };
 
-  const admitState = (event: AgentEventPayload): SessionObserverState | undefined => {
+  const admitState = (event: SessionObserverEvent): SessionObserverState | undefined => {
     const sessionKey = event.sessionKey?.trim();
     const agentId = event.agentId?.trim();
     // Watching is the intentional cost gate: read-scope subscribers are the
@@ -789,7 +553,7 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
     return state;
   };
 
-  const handleEvent = (event: AgentEventPayload) => {
+  const handleEvent = (event: SessionObserverEvent) => {
     if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
     }
@@ -902,15 +666,12 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
 
   return {
     handleEvent,
-    getSnapshot,
-    ask,
+    getSnapshot: askRuntime.getSnapshot,
+    ask: askRuntime.ask,
     dispose() {
       disposed = true;
       unsubscribeChanges();
-      for (const controller of askControllers.values()) {
-        controller.abort();
-      }
-      askControllers.clear();
+      askRuntime.dispose();
       for (const state of states.values()) {
         dropState(state);
       }
@@ -918,7 +679,6 @@ export function createSessionObserver(deps: SessionObserverDeps): SessionObserve
       revisionFloors.clear();
       supersededRuns.clear();
       disabledRuns.clear();
-      askAdmissions.length = 0;
     },
   };
 }

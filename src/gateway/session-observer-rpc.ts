@@ -7,7 +7,7 @@ import {
   type SessionsObserverAskParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
-import { SessionObserverAskError } from "./session-observer.js";
+import { SessionObserverAskError } from "./session-observer-contract.js";
 
 export const sessionObserverHandlers: GatewayRequestHandlers = {
   "sessions.observer.ask": async ({ params, respond, client, context }) => {

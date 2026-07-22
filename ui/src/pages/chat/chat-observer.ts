@@ -1,7 +1,4 @@
-import type {
-  SessionObserverDigest,
-  SessionsObserverAskResult,
-} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type { SessionsObserverAskResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 
 export function requestSessionObserverAnswer(

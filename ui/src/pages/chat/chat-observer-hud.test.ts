@@ -173,10 +173,10 @@ describe("ChatObserverAskState", () => {
     state.switchSession("agent:main:one");
 
     await state.submit("Is it stuck?", async () => {
-      throw {
+      throw Object.assign(new Error("session observer busy"), {
         gatewayCode: "UNAVAILABLE",
         details: { code: "SESSION_OBSERVER_BUSY" },
-      };
+      });
     });
 
     expect(state.exchanges).toEqual([{ question: "Is it stuck?", hint: "busy" }]);
