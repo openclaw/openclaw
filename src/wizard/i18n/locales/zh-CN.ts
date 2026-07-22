@@ -417,6 +417,8 @@ export const zh_CN = {
     },
     security: {
       askForHelp: "启用工具或暴露到互联网之前，请找有经验的人协助。",
+      attribution:
+        "OpenClaw 是由 OpenClaw 基金会（非营利组织）开发的开源助手，会与你一同学习成长。",
       baselineDmSessions:
         "共享收件箱：隔离 DM 会话（session.dmScope: per-channel-peer），并尽量减少工具访问权限。",
       baselinePairing: "配对/允许列表 + @ 提及门控。",
@@ -425,7 +427,6 @@ export const zh_CN = {
       baselineSharedInbox:
         "多用户/共享收件箱：拆分信任边界（分离 gateway/凭据，最好使用独立 OS 用户/主机）。",
       baselineStrongModel: "对启用工具或面对不可信收件箱的 bot，使用可用的最强模型。",
-      beta: "OpenClaw 是一个爱好项目，仍处于 beta 阶段。请预期会有边缘问题。",
       confirm: "我理解 OpenClaw 默认面向个人使用；共享/多用户使用需要加固。继续？",
       hardeningRequired: "如果你不熟悉安全加固和访问控制，请不要运行 OpenClaw。",
       learnMore: "了解更多",

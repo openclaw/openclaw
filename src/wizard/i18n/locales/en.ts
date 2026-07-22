@@ -425,6 +425,8 @@ export const en = {
     security: {
       askForHelp:
         "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      attribution:
+        "OpenClaw is an open-source assistant that learns and grows with you, by the OpenClaw Foundation (a non-profit).",
       baselineDmSessions:
         "Shared inboxes: isolate DM sessions (session.dmScope: per-channel-peer) and keep tool access minimal.",
       baselinePairing: "Pairing/allowlists + mention gating.",
@@ -434,7 +436,6 @@ export const en = {
         "Multi-user/shared inbox: split trust boundaries (separate gateway/credentials, ideally separate OS users/hosts).",
       baselineStrongModel:
         "Use the strongest available model for any bot with tools or untrusted inboxes.",
-      beta: "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
       confirm:
         "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
       hardeningRequired:
