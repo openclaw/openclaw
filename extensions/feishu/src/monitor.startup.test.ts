@@ -1,15 +1,18 @@
 // Feishu tests cover monitor.startup plugin behavior.
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor-startup-timeout.js";
 import { cleanupFeishuMonitorStateForTests } from "./monitor.cleanup.test-helpers.js";
 import { monitorFeishuProvider } from "./monitor.js";
+import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
+const registerFeishuAiAgentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
+  registerFeishuAiAgent: registerFeishuAiAgentMock,
 }));
 
 vi.mock("./client.js", async () => {
@@ -23,6 +26,10 @@ vi.mock("./runtime.js", async () => {
 
 beforeAll(async () => {
   await import("./monitor.account.js");
+});
+
+beforeEach(() => {
+  registerFeishuAiAgentMock.mockResolvedValue({ ok: true });
 });
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
@@ -195,6 +202,49 @@ describe("Feishu monitor startup preflight", () => {
       abortController.abort();
       await monitorPromise;
     }
+  });
+
+  it("returns standard bot identity without waiting for AI-agent registration", async () => {
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      botOpenId: "bot_alpha",
+      botName: "Alpha",
+    });
+    registerFeishuAiAgentMock.mockReturnValue(new Promise(() => {}));
+
+    await expect(
+      fetchBotIdentityForMonitor({
+        accountId: "alpha",
+        appId: "cli_alpha",
+        appSecret: "secret_alpha", // pragma: allowlist secret
+      } as never),
+    ).resolves.toEqual({ botOpenId: "bot_alpha", botName: "Alpha" });
+  });
+
+  it("keeps standard bot identity when AI-agent registration is unavailable", async () => {
+    probeFeishuMock.mockResolvedValue({
+      ok: true,
+      botOpenId: "bot_alpha",
+      botName: "Alpha",
+    });
+    registerFeishuAiAgentMock.mockResolvedValue({ ok: false, reason: "api-error" });
+    const runtime = createNonExitingRuntimeEnv();
+
+    await expect(
+      fetchBotIdentityForMonitor(
+        {
+          accountId: "alpha",
+          appId: "cli_alpha",
+          appSecret: "secret_alpha", // pragma: allowlist secret
+        } as never,
+        { runtime },
+      ),
+    ).resolves.toEqual({ botOpenId: "bot_alpha", botName: "Alpha" });
+    await vi.waitFor(() => {
+      expect(runtime.log).toHaveBeenCalledWith(
+        "feishu[alpha]: AI-agent registration unavailable (api-error); continuing with standard bot identity",
+      );
+    });
   });
 
   it("stops sequential preflight when aborted during probe", async () => {

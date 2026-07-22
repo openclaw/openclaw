@@ -2,7 +2,7 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor-startup-timeout.js";
-import { probeFeishu } from "./probe.js";
+import { probeFeishu, registerFeishuAiAgent } from "./probe.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 const FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS = resolveStartupProbeTimeoutMs();
@@ -41,6 +41,23 @@ export async function fetchBotIdentityForMonitor(
     abortSignal: options.abortSignal,
   });
   if (result.ok) {
+    // AI-agent registration is provider metadata, not channel identity. Keep it
+    // best-effort so its quota or availability cannot suppress message ingress.
+    void registerFeishuAiAgent(account, { abortSignal: options.abortSignal })
+      .then((registration) => {
+        if (!registration.ok && registration.reason !== "aborted") {
+          const log = options.runtime?.log ?? console.log;
+          log(
+            `feishu[${account.accountId}]: AI-agent registration unavailable (${registration.reason}); continuing with standard bot identity`,
+          );
+        }
+      })
+      .catch(() => {
+        const log = options.runtime?.log ?? console.log;
+        log(
+          `feishu[${account.accountId}]: AI-agent registration failed unexpectedly; continuing with standard bot identity`,
+        );
+      });
     return { botOpenId: result.botOpenId, botName: result.botName };
   }
 
