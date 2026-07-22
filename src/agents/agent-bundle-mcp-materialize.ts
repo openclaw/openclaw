@@ -426,9 +426,9 @@ export async function materializeBundleMcpToolsForRun(params: {
   const tools = buildBundleMcpToolsFromCatalog({
     catalog,
     reservedToolNames,
-    createExecute: (tool) => async (toolCallId: string, input: unknown) => {
+    createExecute: (tool) => async (toolCallId: string, input: unknown, signal?: AbortSignal) => {
       params.runtime.markUsed();
-      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input, signal);
       const agentResult = toAgentToolResult({
         serverName: tool.serverName,
         toolName: tool.toolName,
@@ -463,37 +463,39 @@ export async function materializeBundleMcpToolsForRun(params: {
       return agentResult;
     },
     createResourceListExecute: params.runtime.listResources
-      ? (serverName) => async () => {
+      ? (serverName) => async (_toolCallId: string, _input: unknown, signal?: AbortSignal) => {
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "resources_list",
-            value: await params.runtime.listResources?.(serverName),
+            value: await params.runtime.listResources?.(serverName, { signal }),
           });
         }
       : undefined,
     createResourceReadExecute: params.runtime.readResource
-      ? (serverName) => async (_toolCallId: string, input: unknown) => {
+      ? (serverName) => async (_toolCallId: string, input: unknown, signal?: AbortSignal) => {
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "resources_read",
-            value: await params.runtime.readResource?.(serverName, requireStringArg(input, "uri")),
+            value: await params.runtime.readResource?.(serverName, requireStringArg(input, "uri"), {
+              signal,
+            }),
           });
         }
       : undefined,
     createPromptListExecute: params.runtime.listPrompts
-      ? (serverName) => async () => {
+      ? (serverName) => async (_toolCallId: string, _input: unknown, signal?: AbortSignal) => {
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
             operation: "prompts_list",
-            value: await params.runtime.listPrompts?.(serverName),
+            value: await params.runtime.listPrompts?.(serverName, signal),
           });
         }
       : undefined,
     createPromptGetExecute: params.runtime.getPrompt
-      ? (serverName) => async (_toolCallId: string, input: unknown) => {
+      ? (serverName) => async (_toolCallId: string, input: unknown, signal?: AbortSignal) => {
           params.runtime.markUsed();
           return toJsonAgentToolResult({
             serverName,
@@ -502,6 +504,7 @@ export async function materializeBundleMcpToolsForRun(params: {
               serverName,
               requireStringArg(input, "name"),
               optionalStringRecordArg(input, "arguments"),
+              signal,
             ),
           });
         }

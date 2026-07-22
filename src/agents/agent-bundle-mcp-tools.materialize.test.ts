@@ -723,4 +723,80 @@ describe("createBundleMcpToolRuntime", () => {
       }),
     ).toEqual({ parent: { page_id: "page-id" } });
   });
+
+  it("forwards the AbortSignal from projected tool execute to the runtime methods", async () => {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const captured: {
+      callTool?: AbortSignal;
+      listResources?: AbortSignal;
+      readResource?: AbortSignal;
+      listPrompts?: AbortSignal;
+      getPrompt?: AbortSignal;
+    } = {};
+
+    const tools = buildBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          signalServer: {
+            serverName: "signalServer",
+            safeServerName: "signalServer",
+            launchSummary: "signalServer",
+            toolCount: 1,
+            resources: {},
+            prompts: {},
+          },
+        },
+        tools: [
+          {
+            serverName: "signalServer",
+            safeServerName: "signalServer",
+            toolName: "probe",
+            description: "probe",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "probe",
+          },
+        ],
+      },
+      createExecute: (_tool) => async (_toolCallId, _input, toolSignal) => {
+        captured.callTool = toolSignal;
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+      createResourceListExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
+        captured.listResources = toolSignal;
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+      createResourceReadExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
+        captured.readResource = toolSignal;
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+      createPromptListExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
+        captured.listPrompts = toolSignal;
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+      createPromptGetExecute: (_serverName) => async (_toolCallId, _input, toolSignal) => {
+        captured.getPrompt = toolSignal;
+        return { content: [{ type: "text", text: "ok" }], details: {} };
+      },
+    });
+
+    const byName = (name: string) => tools.find((tool) => tool.name === name);
+    await byName("signalServer__probe")?.execute("call-probe", {}, signal);
+    await byName("signalServer__resources_list")?.execute("call-resources-list", {}, signal);
+    await byName("signalServer__resources_read")?.execute(
+      "call-resources-read",
+      { uri: "x" },
+      signal,
+    );
+    await byName("signalServer__prompts_list")?.execute("call-prompts-list", {}, signal);
+    await byName("signalServer__prompts_get")?.execute("call-prompts-get", { name: "x" }, signal);
+
+    expect(captured.callTool).toBe(signal);
+    expect(captured.listResources).toBe(signal);
+    expect(captured.readResource).toBe(signal);
+    expect(captured.listPrompts).toBe(signal);
+    expect(captured.getPrompt).toBe(signal);
+  });
 });

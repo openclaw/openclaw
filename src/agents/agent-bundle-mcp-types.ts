@@ -74,6 +74,7 @@ export type McpToolCatalogDiagnostic = {
 
 export type McpRequestOptions = {
   failureBackoff?: "track" | "ignore";
+  signal?: AbortSignal;
 };
 
 /** Trusted requester identity used to scope per-user MCP connections. */
@@ -112,7 +113,12 @@ export type SessionMcpRuntime = {
   /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
   peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;
-  callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  callTool: (
+    serverName: string,
+    toolName: string,
+    input: unknown,
+    signal?: AbortSignal,
+  ) => Promise<CallToolResult>;
   listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
   listResources?: (serverName: string, options?: McpRequestOptions) => Promise<unknown>;
   readResource?: (serverName: string, uri: string, options?: McpRequestOptions) => Promise<unknown>;
@@ -120,8 +126,13 @@ export type SessionMcpRuntime = {
     serverName: string,
     params?: { cursor?: string },
   ) => Promise<ListResourceTemplatesResult>;
-  listPrompts?: (serverName: string) => Promise<unknown>;
-  getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
+  listPrompts?: (serverName: string, signal?: AbortSignal) => Promise<unknown>;
+  getPrompt?: (
+    serverName: string,
+    name: string,
+    args: Record<string, string> | undefined,
+    signal?: AbortSignal,
+  ) => Promise<unknown>;
   dispose: () => Promise<void>;
 };
 
