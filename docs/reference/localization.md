@@ -36,7 +36,7 @@ provider names, or user-authored data.
 | Control UI                       | `ui/src/i18n/locales/en.ts`                                         | Land reviewed English; the Control UI locale refresh workflow updates generated locale artifacts | `pnpm ui:i18n:verify`                                                                 |
 | CLI updater dry-run              | `src/cli/i18n/locales/en.ts`                                        | Update the typed CLI catalog and its reviewed locale catalogs                                    | `node scripts/run-vitest.mjs src/cli/i18n/runtime.test.ts src/cli/update-cli.test.ts` |
 | CLI onboarding and channel setup | `src/wizard/i18n/locales/en.ts`                                     | Update the wizard-owned catalogs                                                                 | `node scripts/run-vitest.mjs src/wizard/i18n/index.test.ts`                           |
-| Android and Apple apps           | Native source projected through `apps/.i18n/native-source.json`     | Update native source, then use the native locale refresh workflow for generated artifacts        | `pnpm native:i18n:check`, `pnpm android:i18n:check`, and `pnpm apple:i18n:check`      |
+| Android and Apple apps           | Native source projected through `apps/.i18n/native-source.json`     | Update native source, then use the native locale refresh workflow for generated artifacts        | `pnpm native:i18n:baseline` followed by `pnpm native:i18n:verify`                     |
 | Documentation                    | English pages under `docs/` and `docs/.i18n/glossary.<locale>.json` | Land English docs; the publish repository owns translated docs and translation memory            | `pnpm docs:check-i18n-glossary`                                                       |
 
 Other CLI commands, the TUI, Gateway errors, approvals, channels, plugins, and
@@ -103,8 +103,9 @@ unattested production translation.
 
 ## Add a locale
 
-1. Add the canonical BCP 47 identifier, aliases, fallback, and direction to
-   `packages/localization-core/src/locale-registry.ts`.
+1. Add the canonical BCP 47 identifier to `OPENCLAW_LOCALES`, add its aliases,
+   fallback, and direction to `OPENCLAW_LOCALE_REGISTRY`, and update the locale
+   count assertion in `packages/localization-core/src/locale-registry.test.ts`.
 2. Recompute `OPENCLAW_LOCALE_REGISTRY_REVISION` as `sha256:` plus the SHA-256
    digest of `JSON.stringify(OPENCLAW_LOCALE_REGISTRY)`.
 3. Add resolution tests for canonical IDs, aliases, unsupported inputs, and
