@@ -26,12 +26,11 @@ import {
   canManageSessionSharing,
   invalidateSessionSharingSnapshot,
   isSessionVisibilityAllowed,
-  resolveGatewayConnectionIdentity,
-  resolveSessionCreator,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
 } from "../session-sharing.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -52,10 +51,10 @@ function runExclusiveSharingMutation<T>(
 
 function actorIdentity(client: GatewayClient | null): SessionSharingIdentity {
   return (
-    resolveGatewayConnectionIdentity(client) ??
+    gatewayClientSessionCreator(client) ??
     (client?.connect.scopes?.includes("operator.admin")
-      ? { id: "operator.admin", label: "Administrator" }
-      : { id: "local-operator", label: "Local operator" })
+      ? { type: "system", id: "operator.admin", label: "Administrator" }
+      : { type: "system", id: "local-operator", label: "Local operator" })
   );
 }
 
@@ -110,7 +109,7 @@ async function knownSessionIdentities(params: {
   };
   remember(params.actor);
   for (const entry of Object.values(loadCombinedSessionStoreForGateway(params.cfg).store)) {
-    remember(resolveSessionCreator(entry));
+    remember(entry.createdActor ?? null);
   }
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
@@ -122,7 +121,7 @@ async function knownSessionIdentities(params: {
       continue;
     }
     const label = normalizeOptionalString(device.operatorLabel ?? device.displayName);
-    remember({ id, ...(label ? { label } : {}) });
+    remember({ type: "human", id, ...(label ? { label } : {}) });
   }
   return [...identities.values()].toSorted(
     (left, right) =>
@@ -297,13 +296,12 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         (left.label ?? left.id).localeCompare(right.label ?? right.id) ||
         left.id.localeCompare(right.id),
     );
+    const owner = target.entry.createdActor;
     respond(
       true,
       {
         sessionKey: target.canonicalKey,
-        ...(resolveSessionCreator(target.entry)
-          ? { owner: resolveSessionCreator(target.entry) }
-          : {}),
+        ...(owner ? { owner: { ...owner } } : {}),
         members,
         identities,
         role: managed.role,

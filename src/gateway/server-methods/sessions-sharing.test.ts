@@ -39,6 +39,19 @@ function soloClient(): GatewayClient {
   };
 }
 
+function identifiedClient(profileId: string): GatewayClient {
+  return {
+    ...soloClient(),
+    authenticatedUserId: `${profileId}@example.com`,
+    authenticatedUserProfile: {
+      profileId,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+  };
+}
+
 function context(broadcast: ReturnType<typeof vi.fn>): GatewayRequestContext {
   return {
     getRuntimeConfig: () => ({}),
@@ -136,7 +149,7 @@ describe("session sharing handlers", () => {
       expect(
         authorizeSessionMutation({
           cfg: {},
-          client: { ...soloClient(), authenticatedUserId: "viewer" },
+          client: identifiedClient("viewer"),
           method: "sessions.groups.delete",
           requestParams: { name: "Projects" },
           context: requestContext,
@@ -144,8 +157,7 @@ describe("session sharing handlers", () => {
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
       expect(
         await call("session.members.list", { sessionKey: restrictedKey }, requestContext, {
-          ...soloClient(),
-          authenticatedUserId: "viewer",
+          ...identifiedClient("viewer"),
         }),
       ).toEqual([
         [
@@ -159,10 +171,7 @@ describe("session sharing handlers", () => {
 
       await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
       invalidateSessionSharingSnapshot();
-      const viewerClient = {
-        ...soloClient(),
-        authenticatedUserId: "viewer",
-      } as never;
+      const viewerClient = identifiedClient("viewer") as never;
       expect(
         canReceiveSessionEvent({
           cfg: {},

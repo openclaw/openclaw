@@ -4140,7 +4140,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let pullrequest: SessionCatalogPullRequestSummary?
     public let archived: Bool
     public let sessionkey: String?
-    public let createdactor: [String: AnyCodable]?
+    public let createdactor: SessionSharingIdentity?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -4161,7 +4161,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         pullrequest: SessionCatalogPullRequestSummary? = nil,
         archived: Bool,
         sessionkey: String? = nil,
-        createdactor: [String: AnyCodable]? = nil,
+        createdactor: SessionSharingIdentity? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -4935,18 +4935,22 @@ public struct SessionsObserverVisibilityResult: Codable, Sendable {
 }
 
 public struct SessionSharingIdentity: Codable, Sendable {
-    public let id: String
+    public let type: AnyCodable
+    public let id: String?
     public let label: String?
 
     public init(
-        id: String,
+        type: AnyCodable,
+        id: String? = nil,
         label: String? = nil)
     {
+        self.type = type
         self.id = id
         self.label = label
     }
 
     private enum CodingKeys: String, CodingKey {
+        case type
         case id
         case label
     }

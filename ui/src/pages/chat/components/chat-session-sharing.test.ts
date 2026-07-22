@@ -33,8 +33,12 @@ describe("chat session sharing menu", () => {
           loading: false,
           result: {
             sessionKey: "agent:main:main",
+            owner: { type: "human", id: "owner", label: "Owner" },
             members: [],
-            identities: [{ id: "alice", label: "Alice" }],
+            identities: [
+              { type: "human", id: "owner", label: "Owner" },
+              { type: "human", id: "alice", label: "Alice" },
+            ],
             role: "owner",
             allowedVisibilities: ["shared", "read-only"],
           },
@@ -50,6 +54,7 @@ describe("chat session sharing menu", () => {
     expect(root.textContent).toContain("Read-only");
     expect(root.textContent).not.toContain("Suggest");
     expect(root.textContent).toContain("Alice");
+    expect(root.querySelector('wa-dropdown-item[value="member:owner"]')).toBeNull();
 
     dropdown?.dispatchEvent(
       new CustomEvent("wa-select", {

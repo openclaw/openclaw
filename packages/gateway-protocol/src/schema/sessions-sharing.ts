@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SessionCreatedActorSchema, type SessionCreatedActor } from "./sessions.js";
 
 export const SESSION_VISIBILITY_VALUES = ["shared", "read-only", "suggest", "draft"] as const;
 
@@ -12,10 +13,7 @@ export const SessionVisibilitySchema = Type.Union([
   Type.Literal("draft"),
 ]);
 
-export const SessionSharingIdentitySchema = closedObject({
-  id: NonEmptyString,
-  label: Type.Optional(NonEmptyString),
-});
+export const SessionSharingIdentitySchema = SessionCreatedActorSchema;
 
 export const SessionSharingRoleSchema = Type.Union([
   Type.Literal("admin"),
@@ -87,7 +85,7 @@ export const SessionSharingEventSchema = closedObject({
 });
 
 export type SessionVisibility = Static<typeof SessionVisibilitySchema>;
-export type SessionSharingIdentity = Static<typeof SessionSharingIdentitySchema>;
+export type SessionSharingIdentity = SessionCreatedActor;
 export type SessionSharingRole = Static<typeof SessionSharingRoleSchema>;
 export type SessionSharingAction = Static<typeof SessionSharingActionSchema>;
 export type SessionVisibilitySetParams = Static<typeof SessionVisibilitySetParamsSchema>;

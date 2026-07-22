@@ -3,7 +3,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionSharingIdentity,
   type SessionSharingRole,
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
@@ -15,6 +14,7 @@ import {
 import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyBoardViewTicket } from "./board-view-ticket.js";
+import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import {
@@ -24,10 +24,6 @@ import {
 
 const ADMIN_SCOPE = "operator.admin";
 const SNAPSHOT_CACHE_LIMIT = 2_048;
-
-type SessionCreatorCarrier = {
-  createdBy?: unknown;
-};
 
 export type SessionSharingTarget = {
   agentId: string;
@@ -53,40 +49,6 @@ export function resolveSessionVisibility(
   entry: Pick<SessionEntry, "visibility">,
 ): SessionVisibility {
   return entry.visibility ?? "shared";
-}
-
-/** Reads W1's additive creator contract without defining or stamping it in this phase. */
-export function resolveSessionCreator(entry: object): SessionSharingIdentity | null {
-  const value = (entry as SessionCreatorCarrier).createdBy;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as { id?: unknown; label?: unknown };
-  const id = normalizeOptionalString(record.id);
-  if (!id) {
-    return null;
-  }
-  const label = normalizeOptionalString(record.label);
-  return { id, ...(label ? { label } : {}) };
-}
-
-export function resolveGatewayConnectionIdentity(
-  client: Pick<
-    GatewayClient,
-    "authenticatedUserId" | "authenticatedUserProfile" | "connect"
-  > | null,
-): SessionSharingIdentity | null {
-  const authenticatedUserId = normalizeOptionalString(client?.authenticatedUserId);
-  if (authenticatedUserId) {
-    const label = normalizeOptionalString(client?.authenticatedUserProfile?.displayName);
-    return { id: authenticatedUserId, ...(label ? { label } : {}) };
-  }
-  if (!client?.connect.device) {
-    return null;
-  }
-  const deviceLabel = normalizeOptionalString(client.connect.client.displayName);
-  const id = normalizeOptionalString(client.connect.device.id);
-  return id ? { id, ...(deviceLabel ? { label: deviceLabel } : {}) } : null;
 }
 
 export function isGatewayAdmin(client: Pick<GatewayClient, "connect"> | null): boolean {
@@ -139,12 +101,12 @@ export function resolveSessionSharingRole(params: {
   if (isGatewayAdmin(params.client)) {
     return "admin";
   }
-  const identity = resolveGatewayConnectionIdentity(params.client);
+  const identity = gatewayClientSessionCreator(params.client);
   // Shared-secret/no-auth solo deployments have no durable person identity.
   if (!identity) {
     return "owner";
   }
-  if (resolveSessionCreator(params.target.entry)?.id === identity.id) {
+  if (params.target.entry.createdActor?.id === identity.id) {
     return "owner";
   }
   if (params.includeMembership === false) {
@@ -491,7 +453,7 @@ function loadSharingSnapshot(
     // Missing rows occur after deletion. Fail closed here; the delete path also
     // emits an unscoped catalog invalidation so identified readers still refresh.
     visibility: target ? resolveSessionVisibility(target.entry) : "draft",
-    ...(target ? { creatorId: resolveSessionCreator(target.entry)?.id } : {}),
+    ...(target ? { creatorId: target.entry.createdActor?.id } : {}),
   } satisfies SessionSharingSnapshot;
   rememberSharingSnapshot(canonicalKey, snapshot);
   rememberSharingSnapshotAlias(requestedKey, canonicalKey);
@@ -507,7 +469,7 @@ export function canReceiveSessionEvent(params: {
   if (isGatewayAdmin(params.client)) {
     return true;
   }
-  const identity = resolveGatewayConnectionIdentity(params.client);
+  const identity = gatewayClientSessionCreator(params.client);
   if (!identity) {
     return true;
   }
@@ -521,16 +483,13 @@ export function filterDraftSessionsForClient(params: {
   client: GatewayClient | null;
   store: Record<string, SessionEntry>;
 }): Record<string, SessionEntry> {
-  const identity = resolveGatewayConnectionIdentity(params.client);
+  const identity = gatewayClientSessionCreator(params.client);
   if (isGatewayAdmin(params.client) || !identity) {
     return params.store;
   }
   return Object.fromEntries(
     Object.entries(params.store).filter(([, entry]) => {
-      return (
-        resolveSessionVisibility(entry) !== "draft" ||
-        resolveSessionCreator(entry)?.id === identity.id
-      );
+      return resolveSessionVisibility(entry) !== "draft" || entry.createdActor?.id === identity.id;
     }),
   );
 }
