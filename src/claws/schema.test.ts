@@ -577,6 +577,30 @@ describe("buildClawAddPlan", () => {
     expect(workspaceAction).not.toHaveProperty("digest");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "canonicalizes workspace identity through symlinked parents",
+    async () => {
+      const { source } = await createPlanSource();
+      const realParent = join(source.packageRoot, "real-parent");
+      const aliasParent = join(source.packageRoot, "alias-parent");
+      await mkdir(realParent, { recursive: true });
+      await symlink(realParent, aliasParent, "dir");
+
+      const plan = await buildClawAddPlan({
+        manifest: requireManifest({ schemaVersion: 1, agent: { id: "canonical-agent" } }),
+        source,
+        context: { workspace: join(aliasParent, "workspace-canonical-agent") },
+      });
+
+      const canonicalWorkspace = join(realParent, "workspace-canonical-agent");
+      expect(plan.agent.workspace).toBe(canonicalWorkspace);
+      expect(plan.agent.config.workspace).toBe(canonicalWorkspace);
+      expect(plan.actions.find((action) => action.kind === "workspace")?.target).toBe(
+        canonicalWorkspace,
+      );
+    },
+  );
+
   it("blocks aggregate workspace bytes before hashing sources", async () => {
     const { source, workspace } = await createPlanSource();
     const files = [];
