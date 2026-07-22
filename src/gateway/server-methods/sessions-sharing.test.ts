@@ -24,7 +24,37 @@ import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+type ResolveSessionSharingTarget =
+  (typeof import("../session-sharing.js"))["resolveSessionSharingTarget"];
+
+const targetResolutionMock = vi.hoisted(() => ({
+  calls: 0,
+  override: undefined as
+    | undefined
+    | ((
+        target: ReturnType<ResolveSessionSharingTarget>,
+        call: number,
+      ) => ReturnType<ResolveSessionSharingTarget>),
+}));
+
+vi.mock("../session-sharing.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../session-sharing.js")>("../session-sharing.js");
+  return {
+    ...actual,
+    resolveSessionSharingTarget: (params: Parameters<ResolveSessionSharingTarget>[0]) => {
+      const target = actual.resolveSessionSharingTarget(params);
+      const call = ++targetResolutionMock.calls;
+      return targetResolutionMock.override?.(target, call) ?? target;
+    },
+  };
+});
+
+afterEach(() => {
+  targetResolutionMock.calls = 0;
+  targetResolutionMock.override = undefined;
+  closeOpenClawAgentDatabasesForTest();
+});
 
 function soloClient(): GatewayClient {
   return {
@@ -83,6 +113,46 @@ async function call(
 }
 
 describe("session sharing handlers", () => {
+  it("rejects a visibility mutation when the queued session instance changed", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:stale-sharing-mutation";
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-authorized",
+          updatedAt: 1,
+          visibility: "shared",
+        },
+      );
+      targetResolutionMock.override = (target, call) =>
+        call === 2 && target
+          ? {
+              ...target,
+              entry: { ...target.entry, sessionId: "session-replaced" },
+            }
+          : target;
+      const broadcast = vi.fn();
+      const respond = vi.fn();
+
+      await expect(
+        sessionSharingHandlers["session.visibility.set"]?.({
+          params: { sessionKey, visibility: "draft" },
+          client: soloClient(),
+          context: context(broadcast),
+          respond,
+        } as never),
+      ).rejects.toThrow("session changed before sharing mutation");
+
+      expect(loadSessionEntry({ agentId: "main", sessionKey })?.visibility).toBe("shared");
+      expect(respond).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalledWith(
+        "session.sharing",
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+  });
+
   it("projects a shared session member's truthful role in sessions.list", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:shared-member";
