@@ -382,6 +382,33 @@ function copyLegacyMemoryIndexRows(
         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
         WHERE chunk.path = canonical.path AND chunk.source IS canonical.source
       );
+
+    CREATE TEMP TABLE legacy_import_dirty_sources AS
+    SELECT legacy.path, legacy.source
+    FROM ${schema}.files AS legacy
+    WHERE NOT EXISTS (
+      SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
+      WHERE canonical.path = legacy.path AND canonical.source IS legacy.source
+    )
+    UNION
+    SELECT legacy.path, legacy.source
+    FROM ${schema}.chunks AS legacy
+    WHERE EXISTS (
+      SELECT 1 FROM ${schema}.files AS owner
+      WHERE owner.path = legacy.path AND owner.source IS legacy.source
+    )
+      AND NOT EXISTS (
+        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+        WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
+      )
+      AND NOT EXISTS (
+        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
+        WHERE canonical.id = legacy.id
+      )
+    UNION
+    SELECT excluded.path, excluded.source
+    FROM temp.legacy_import_chunk_excluded_sources AS excluded
+    WHERE excluded.force_reindex = 1;
   `);
   try {
     db.exec(`
@@ -395,22 +422,29 @@ function copyLegacyMemoryIndexRows(
       INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
         id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
       )
+      -- Chunks are derived from source rows. Shipped cleanup could leave an
+      -- ownerless legacy chunk, which must not become permanently searchable.
       SELECT id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
       FROM ${schema}.chunks AS legacy
-      WHERE NOT EXISTS (
-        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
-        WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
-      );
+      WHERE EXISTS (
+        SELECT 1 FROM ${schema}.files AS owner
+        WHERE owner.path = legacy.path AND owner.source IS legacy.source
+      )
+        AND NOT EXISTS (
+          SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
+          WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
+        );
 
       -- Content hashes are SHA-256 hex, so an empty hash cannot match a file.
-      -- Retaining the row lets normal sync either rebuild or delete its derived rows.
+      -- Imported sources or chunks may be absent from runtime-owned vector
+      -- indexes, while excluded sources need a canonical rebuild. Retaining the
+      -- dirty source lets sync rebuild every derived row or clean up a deleted file.
       UPDATE main.${MEMORY_INDEX_SOURCES_TABLE}
       SET hash = ''
       WHERE EXISTS (
-        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
-        WHERE excluded.force_reindex = 1
-          AND excluded.path = main.${MEMORY_INDEX_SOURCES_TABLE}.path
-          AND excluded.source IS main.${MEMORY_INDEX_SOURCES_TABLE}.source
+        SELECT 1 FROM temp.legacy_import_dirty_sources AS dirty
+        WHERE dirty.path = main.${MEMORY_INDEX_SOURCES_TABLE}.path
+          AND dirty.source IS main.${MEMORY_INDEX_SOURCES_TABLE}.source
       );
     `);
     assertLegacyRowsCopied(
@@ -444,7 +478,11 @@ function copyLegacyMemoryIndexRows(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.chunks AS legacy
-       WHERE NOT EXISTS (
+       WHERE EXISTS (
+         SELECT 1 FROM ${schema}.files AS owner
+         WHERE owner.path = legacy.path AND owner.source IS legacy.source
+       )
+       AND NOT EXISTS (
          SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
          WHERE canonical.id = legacy.id
            AND canonical.path IS legacy.path
@@ -456,7 +494,18 @@ function copyLegacyMemoryIndexRows(
        )`,
       "chunks",
     );
+    // Repair derived orphans only after authoritative copy assertions pass;
+    // otherwise a synthetic owner could mask an uncopyable legacy source row.
+    db.exec(`
+      INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
+      SELECT DISTINCT orphan.path, orphan.source, '', 0, 0 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS orphan
+      WHERE NOT EXISTS (
+        SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS owner
+        WHERE owner.path = orphan.path AND owner.source IS orphan.source
+      );
+    `);
   } finally {
+    db.exec("DROP TABLE temp.legacy_import_dirty_sources");
     db.exec("DROP TABLE temp.legacy_import_chunk_excluded_sources");
   }
   if (

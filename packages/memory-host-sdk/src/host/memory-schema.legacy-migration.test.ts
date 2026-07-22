@@ -149,7 +149,7 @@ describe("memory index same-file legacy migration", () => {
         // source identity needed to clean up a file deleted before migration.
         sources: [
           { path: "doc.md", hash: "", size: 42 },
-          { path: "old-note.md", hash: "old-note-hash", size: 10 },
+          { path: "old-note.md", hash: "", size: 10 },
         ],
         chunks: [
           { id: "chunk-new-1", text: "current canonical body" },
@@ -196,7 +196,7 @@ describe("memory index same-file legacy migration", () => {
     }
   });
 
-  it("rebuilds a nonempty canonical FTS index after importing legacy-only chunks", () => {
+  it("rebuilds canonical FTS, rejects legacy orphans, and adopts canonical orphans", () => {
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
@@ -207,11 +207,15 @@ describe("memory index same-file legacy migration", () => {
           'chunk-canonical', 'canonical.md', 'memory', 1, 2, 'canonical-chunk-hash',
           'fts-only', 'canonical nebula', '[]', 200
         );
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-canonical-ownerless', 'deleted.md', 'memory', 1, 2, 'orphan-chunk-hash',
+          'fts-only', 'orphaned starlight', '[]', 190
+        );
         INSERT INTO memory_index_chunks_fts
           (text, id, path, source, model, start_line, end_line)
         VALUES
           ('canonical nebula', 'chunk-canonical', 'canonical.md', 'memory', 'fts-only', 1, 2),
-          ('orphaned starlight', 'chunk-orphan', 'deleted.md', 'memory', 'fts-only', 1, 2);
+          ('orphaned starlight', 'chunk-canonical-ownerless', 'deleted.md', 'memory', 'fts-only', 1, 2);
 
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE files (
@@ -238,16 +242,24 @@ describe("memory index same-file legacy migration", () => {
           'chunk-legacy', 'legacy.md', 'memory', 1, 2, 'legacy-chunk-hash',
           'fts-only', 'imported saffronquasar', '[]', 100
         );
+        -- Shipped legacy cleanup could commit its source delete before deleting
+        -- chunks. This derived orphan must not become canonical/searchable.
+        INSERT INTO chunks VALUES (
+          'chunk-ownerless', 'deleted.md', 'memory', 1, 2, 'orphan-chunk-hash',
+          'fts-only', 'orphaned ambercomet', '[]', 90
+        );
       `);
 
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
 
       expect(db.prepare("SELECT id FROM memory_index_chunks ORDER BY id").all()).toEqual([
         { id: "chunk-canonical" },
+        { id: "chunk-canonical-ownerless" },
         { id: "chunk-legacy" },
       ]);
       expect(db.prepare("SELECT id FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
         { id: "chunk-canonical" },
+        { id: "chunk-canonical-ownerless" },
         { id: "chunk-legacy" },
       ]);
       expect(
@@ -263,11 +275,26 @@ describe("memory index same-file legacy migration", () => {
             "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'starlight'",
           )
           .all(),
+      ).toEqual([{ id: "chunk-canonical-ownerless" }]);
+      expect(
+        db
+          .prepare(
+            "SELECT id FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'ambercomet'",
+          )
+          .all(),
       ).toEqual([]);
+      // Schema migration cannot write the runtime-owned sqlite-vec table. The
+      // dirty source guarantees normal sync republishes every derived index.
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'legacy.md'").get(),
+      ).toEqual({ hash: "" });
+      expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'deleted.md'").get(),
+      ).toEqual({ hash: "" });
 
       ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
       expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual({
-        count: 2,
+        count: 3,
       });
     } finally {
       db.close();
@@ -377,6 +404,9 @@ describe("memory index same-file legacy migration", () => {
         db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'diverged.md'").get(),
       ).toEqual({ hash: "" });
       expect(
+        db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'pending.md'").get(),
+      ).toEqual({ hash: "" });
+      expect(
         db
           .prepare(
             "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('meta', 'files', 'chunks')",
@@ -469,6 +499,10 @@ describe("memory index same-file legacy migration", () => {
           updated_at INTEGER NOT NULL
         );
         INSERT INTO files VALUES ('doc.md', 'memory', NULL, 1, 2);
+        INSERT INTO chunks VALUES (
+          'chunk-doc', 'doc.md', 'memory', 1, 2, 'chunk-hash', 'model',
+          'body', '[]', 1
+        );
       `);
 
       expect(() =>
@@ -480,6 +514,9 @@ describe("memory index same-file legacy migration", () => {
       ).toThrow("legacy memory files rows could not be copied");
       expect(db.prepare("SELECT path FROM files").get()).toEqual({ path: "doc.md" });
       expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_sources").get()).toEqual({
+        count: 0,
+      });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
         count: 0,
       });
       expect(

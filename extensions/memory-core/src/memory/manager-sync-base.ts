@@ -505,6 +505,9 @@ export abstract class MemoryManagerSyncBase {
       }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
+      // Cleanup can run while vectors are disabled and strand rows that would
+      // crowd KNN candidates. Reconcile once the extension can safely delete them.
+      this.pruneOrphanedVectorRows();
       if (this.dropLegacyVectorTable()) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
@@ -519,6 +522,25 @@ export abstract class MemoryManagerSyncBase {
       log.warn(`sqlite-vec unavailable: ${message}`);
       return false;
     }
+  }
+
+  private pruneOrphanedVectorRows(): void {
+    if (!memoryTableExists(this.db, VECTOR_TABLE)) {
+      return;
+    }
+    const selectOrphans = this.db.prepare(
+      `SELECT vector.id AS id
+       FROM ${VECTOR_TABLE} AS vector
+       LEFT JOIN memory_index_chunks AS chunk ON chunk.id = vector.id
+       WHERE chunk.id IS NULL`,
+    );
+    const deleteRow = this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`);
+    runSqliteImmediateTransactionSync(this.db, () => {
+      const orphanRows = selectOrphans.all() as Array<{ id: string }>;
+      for (const row of orphanRows) {
+        deleteRow.run(row.id);
+      }
+    });
   }
 
   private ensureVectorTable(dimensions: number): void {

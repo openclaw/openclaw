@@ -56,12 +56,24 @@ describe("memory legacy migration cleanup", () => {
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
           'fts-only', 'obsolete saffronquasar', '[]', 200
         );
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-ownerless', 'memory/ownerless.md', 'memory', 1, 2, 'ownerless-chunk-hash',
+          'fts-only', 'obsolete ambercomet', '[]', 190
+        );
         INSERT INTO memory_index_chunks_fts
           (text, id, path, source, model, start_line, end_line)
-        VALUES (
-          'obsolete saffronquasar', 'chunk-canonical', 'memory/deleted.md',
-          'memory', 'fts-only', 1, 2
-        );
+        VALUES
+          (
+            'obsolete saffronquasar', 'chunk-canonical', 'memory/deleted.md',
+            'memory', 'fts-only', 1, 2
+          ),
+          (
+            'obsolete ambercomet', 'chunk-ownerless', 'memory/ownerless.md',
+            'memory', 'fts-only', 1, 2
+          );
+        CREATE TABLE memory_index_chunks_vec (id TEXT PRIMARY KEY, embedding BLOB);
+        INSERT INTO memory_index_chunks_vec VALUES ('chunk-canonical', X'00000000');
+        INSERT INTO memory_index_chunks_vec VALUES ('chunk-ownerless', X'00000000');
 
         CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         CREATE TABLE files (
@@ -103,7 +115,7 @@ describe("memory legacy migration cleanup", () => {
           memorySearch: {
             provider: "none",
             model: "",
-            store: { vector: { enabled: false } },
+            store: { vector: { enabled: true } },
             cache: { enabled: false },
             sync: { watch: false, onSessionStart: false, onSearch: false },
             query: { hybrid: { enabled: true } },
@@ -127,6 +139,11 @@ describe("memory legacy migration cleanup", () => {
     ).toEqual({ hash: "" });
     expect(
       db
+        .prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'")
+        .get(),
+    ).toEqual({ hash: "" });
+    expect(
+      db
         .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
         .get("memory/deleted.md"),
     ).toEqual({ count: 1 });
@@ -135,6 +152,14 @@ describe("memory legacy migration cleanup", () => {
         .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
         .get("memory/deleted.md"),
     ).toEqual({ count: 1 });
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
+        .get("memory/ownerless.md"),
+    ).toEqual({ count: 1 });
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 2,
+    });
 
     await (
       manager as unknown as {
@@ -157,5 +182,33 @@ describe("memory legacy migration cleanup", () => {
         .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
         .get("memory/deleted.md"),
     ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_sources WHERE path = ?")
+        .get("memory/ownerless.md"),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks WHERE path = ?")
+        .get("memory/ownerless.md"),
+    ).toEqual({ count: 0 });
+    expect(
+      db
+        .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
+        .get("memory/ownerless.md"),
+    ).toEqual({ count: 0 });
+    // Cleanup ran while vectors were disabled, so the old rows remain until the
+    // vector owner loads again and reconciles them against canonical chunks.
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 2,
+    });
+    (
+      manager as unknown as {
+        pruneOrphanedVectorRows(): void;
+      }
+    ).pruneOrphanedVectorRows();
+    expect(db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
+      count: 0,
+    });
   });
 });
