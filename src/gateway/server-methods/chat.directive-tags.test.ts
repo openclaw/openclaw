@@ -169,36 +169,38 @@ const TINY_PNG_BASE64 =
 vi.mock("../session-utils.js", async () => {
   const original =
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+  const loadSessionEntry = (rawKey: string, opts?: { agentId?: string }) => {
+    mockState.loadSessionEntryCalls.push({ rawKey, opts });
+    const canonicalKey =
+      typeof mockState.sessionEntry.canonicalKey === "string"
+        ? mockState.sessionEntry.canonicalKey
+        : rawKey || "main";
+    const entry = mockState.sessionMissing
+      ? undefined
+      : {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          ...mockState.sessionEntry,
+        };
+    return {
+      ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
+      cfg: {
+        ...mockState.config,
+        session: {
+          ...(mockState.config.session as Record<string, unknown> | undefined),
+          mainKey: mockState.mainSessionKey,
+        },
+      },
+      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+      store: entry ? { [canonicalKey]: entry } : {},
+      entry,
+      canonicalKey,
+    };
+  };
   return {
     ...original,
-    loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
-      mockState.loadSessionEntryCalls.push({ rawKey, opts });
-      const canonicalKey =
-        typeof mockState.sessionEntry.canonicalKey === "string"
-          ? mockState.sessionEntry.canonicalKey
-          : rawKey || "main";
-      const entry = mockState.sessionMissing
-        ? undefined
-        : {
-            sessionId: mockState.sessionId,
-            sessionFile: mockState.transcriptPath,
-            ...mockState.sessionEntry,
-          };
-      return {
-        ...(typeof mockState.sessionEntry.canonicalKey === "string" ? { canonicalKey } : {}),
-        cfg: {
-          ...mockState.config,
-          session: {
-            ...(mockState.config.session as Record<string, unknown> | undefined),
-            mainKey: mockState.mainSessionKey,
-          },
-        },
-        storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-        store: entry ? { [canonicalKey]: entry } : {},
-        entry,
-        canonicalKey,
-      };
-    },
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
   };
 });
 
