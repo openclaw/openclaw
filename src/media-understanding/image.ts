@@ -36,7 +36,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
   ) {
     return requestedMaxTokens;
   }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
+  return modelMaxTokens;
 }
 
 function isNativeResponsesReasoningPayload(model: Model): boolean {
@@ -433,7 +433,61 @@ async function describeImagesWithModelInternal(
     });
   }
 
-  const apiKey = runtimeValue;
+  const setupDurationMs = Date.now() - startedAtMs;
+
+  if (isMinimaxVlmModel(model.provider, model.id)) {
+    return await describeImagesWithMinimax({
+      apiKey,
+      provider: model.provider,
+      modelId: model.id,
+      modelBaseUrl: model.baseUrl,
+      prompt,
+      timeoutMs: params.timeoutMs,
+      images: params.images,
+    });
+  }
+
+  const providerStreamFn = registerProviderStreamForModel({
+    model,
+    cfg: params.cfg,
+    agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+
+  const context = buildImageContext(prompt, params.images, {
+    promptInUserContent: shouldPlaceImagePromptInUserContent(model),
+  });
+
+  const maxTokens = resolveImageToolMaxTokens(model.maxTokens);
+  const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
+    const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
+    const timeoutMs = configuredTimeoutMs;
+    const headers = buildImageRequestHeaders(model);
+    const streamOptions = {
+      apiKey,
+      maxTokens,
+      signal: controller.signal,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(headers ? { headers } : {}),
+      ...(payloadHandler ? { onPayload: payloadHandler } : {}),
+    };
+    const task: Promise<AssistantMessage> = providerStreamFn
+      ? (async () => await (await providerStreamFn(model, context, streamOptions)).result())()
+      : complete(model, context, streamOptions);
+    return await withImageDescriptionTimeout({
+      controller,
+      timeoutMs,
+      createTimeoutError: (requestTimeoutMs) =>
+        buildImageDescriptionTimeoutError({
+          phase: "request",
+          timeoutMs: requestTimeoutMs,
+          setupDurationMs,
+        }),
+      task,
+    });
+  };
+
+  const message = await completeImage();
   try {
     const setupDurationMs = Date.now() - startedAtMs;
 
@@ -533,7 +587,6 @@ function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDesc
     model: params.model,
     provider: params.provider,
     prompt: params.prompt,
-    maxTokens: params.maxTokens,
     timeoutMs: params.timeoutMs,
     profile: params.profile,
     preferredProfile: params.preferredProfile,
