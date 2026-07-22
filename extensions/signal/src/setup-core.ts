@@ -30,6 +30,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SignalTransportConfig } from "./account-types.js";
 import { resolveDefaultSignalAccountId, resolveSignalAccount } from "./accounts.js";
 import {
+  detectSignalTransport,
   prepareSignalManagedNativeTransport,
   resolveConfiguredSignalTransport,
   writeSignalAccountTransport,
@@ -136,8 +137,8 @@ function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: 
 export function buildSignalSetupPatch(input: SignalSetupInput) {
   const transport = input.httpUrl
     ? {
-        // Bare --http-url historically meant an already-running native daemon.
-        // Containers stay explicit because they require account-bound REST routes.
+        // Bare --http-url is classified once by prepareAccountConfigInput. If that setup-time
+        // probe is inconclusive, external-native remains the shipped compatibility fallback.
         kind: input.signalTransport ?? ("external-native" as const),
         url: normalizeSignalTransportUrl(input.httpUrl),
       }
@@ -153,6 +154,34 @@ export function buildSignalSetupPatch(input: SignalSetupInput) {
     ...(input.signalNumber ? { account: input.signalNumber } : {}),
     ...(transport ? { transport } : {}),
   };
+}
+
+async function prepareSignalSetupInput(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  input: SignalSetupInput;
+}): Promise<SignalSetupInput> {
+  if (!params.input.httpUrl || params.input.signalTransport) {
+    return params.input;
+  }
+  const account =
+    normalizeSignalAccountInput(params.input.signalNumber) ??
+    normalizeSignalAccountInput(
+      resolveSignalSetupAccount({ cfg: params.cfg, accountId: params.accountId }),
+    ) ??
+    undefined;
+  try {
+    const detected = await detectSignalTransport({
+      url: params.input.httpUrl,
+      ...(account ? { account } : {}),
+    });
+    return {
+      ...params.input,
+      signalTransport: detected.kind === "container" ? "container" : "external-native",
+    };
+  } catch {
+    return { ...params.input, signalTransport: "external-native" };
+  }
 }
 
 function managedTransportOverridesFromSetupInput(
@@ -382,6 +411,8 @@ function restorePromotedSignalDefaultAccount(cfg: OpenClawConfig): OpenClawConfi
 
 export const signalSetupAdapter: ChannelSetupAdapter<SignalSetupInput> = {
   ...signalSetupAdapterBase,
+  prepareAccountConfigInput: ({ cfg, accountId, input }) =>
+    prepareSignalSetupInput({ cfg, accountId, input }),
   singleAccountKeysToMove: [
     "signalNumber",
     "account",

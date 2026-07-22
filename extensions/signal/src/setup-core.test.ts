@@ -1,10 +1,92 @@
 // Signal tests cover setup adapter integration with account-owned transport policy.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSignalCliPathTextInput, signalSetupAdapter } from "./setup-core.js";
 import { signalSetupWizard } from "./setup-surface.js";
 
+const detectSignalTransportMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./setup-transport.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./setup-transport.js")>();
+  return { ...actual, detectSignalTransport: detectSignalTransportMock };
+});
+
+async function prepareInput(input: {
+  signalNumber?: string;
+  signalTransport?: "external-native" | "container";
+  httpUrl?: string;
+}) {
+  const prepared = await signalSetupAdapter.prepareAccountConfigInput?.({
+    cfg: {},
+    accountId: "default",
+    input,
+    runtime: {} as never,
+  });
+  if (!prepared) {
+    throw new Error("expected prepared Signal setup input");
+  }
+  return prepared;
+}
+
 describe("signalSetupAdapter", () => {
+  beforeEach(() => {
+    detectSignalTransportMock.mockReset();
+  });
+
+  it("uses setup-time container detection for a bare HTTP URL", async () => {
+    detectSignalTransportMock.mockResolvedValue({
+      kind: "container",
+      url: "http://signal:8080",
+    });
+
+    const input = await prepareInput({
+      signalNumber: "+15555550123",
+      httpUrl: "http://signal:8080",
+    });
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {},
+      accountId: "default",
+      input,
+    });
+
+    expect(detectSignalTransportMock).toHaveBeenCalledWith({
+      url: "http://signal:8080",
+      account: "+15555550123",
+    });
+    expect(next?.channels?.signal?.transport).toEqual({
+      kind: "container",
+      url: "http://signal:8080",
+    });
+  });
+
+  it("falls back to external native when bare HTTP URL detection is unreachable", async () => {
+    detectSignalTransportMock.mockRejectedValue(new Error("unreachable"));
+
+    const input = await prepareInput({ httpUrl: "http://signal:8080" });
+    const next = signalSetupAdapter.applyAccountConfig?.({
+      cfg: {},
+      accountId: "default",
+      input,
+    });
+
+    expect(input.signalTransport).toBe("external-native");
+    expect(next?.channels?.signal?.transport).toEqual({
+      kind: "external-native",
+      url: "http://signal:8080",
+    });
+  });
+
+  it("skips setup-time detection for an explicit transport kind", async () => {
+    const input = await prepareInput({
+      signalNumber: "+15555550123",
+      signalTransport: "container",
+      httpUrl: "http://signal:8080",
+    });
+
+    expect(input.signalTransport).toBe("container");
+    expect(detectSignalTransportMock).not.toHaveBeenCalled();
+  });
+
   it("restores a generically promoted default account before writing a named account", () => {
     const next = signalSetupAdapter.applyAccountConfig?.({
       cfg: {
