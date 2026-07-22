@@ -39,6 +39,7 @@ type ApplicationStatusBanner = {
 type DeviceAuthMigrationController = ReturnType<
   (typeof import("./device-auth-migration.ts"))["createDeviceAuthMigrationController"]
 >;
+type DeviceAuthMigrationSnapshot = import("./device-auth-migration.ts").DeviceAuthMigrationSnapshot;
 
 type ApplicationOverlaySnapshot = {
   updateAvailable: UpdateAvailable | null;
@@ -56,9 +57,7 @@ type ApplicationOverlaySnapshot = {
   devicePairSetup: DevicePairSetup | null;
   devicePairSetupAccess: DevicePairSetupAccess;
   devicePairPendingCount: number;
-  deviceAuthMigrationRequestId: string | null;
-  deviceAuthMigrationBusy: boolean;
-  deviceAuthMigrationError: string | null;
+  deviceAuthMigration: DeviceAuthMigrationSnapshot;
 };
 
 export type ApplicationOverlays = {
@@ -85,9 +84,9 @@ const PENDING_UPDATE_HANDOFF_REASONS = new Set([
   UPDATE_RESTART_HEALTH_PENDING_REASON,
 ]);
 const EMPTY_DEVICE_AUTH_MIGRATION = {
-  deviceAuthMigrationRequestId: null,
-  deviceAuthMigrationBusy: false,
-  deviceAuthMigrationError: null,
+  requestId: null,
+  busy: false,
+  error: null,
 };
 
 function errorMessage(error: unknown): string {
@@ -251,7 +250,7 @@ export function createApplicationOverlays(
     devicePairSetup: null,
     devicePairSetupAccess: "full",
     devicePairPendingCount: 0,
-    ...EMPTY_DEVICE_AUTH_MIGRATION,
+    deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
   };
   const listeners = new Set<(next: ApplicationOverlaySnapshot) => void>();
   let disposed = false;
@@ -320,7 +319,7 @@ export function createApplicationOverlays(
     void deviceAuthMigration?.then((controller) => controller?.reset());
     snapshot = {
       ...snapshot,
-      ...EMPTY_DEVICE_AUTH_MIGRATION,
+      deviceAuthMigration: EMPTY_DEVICE_AUTH_MIGRATION,
     };
     publish();
   };
@@ -336,7 +335,7 @@ export function createApplicationOverlays(
           gateway,
           isCurrent: isCurrentDeviceAuthMigration,
           onChange: (next) => {
-            snapshot = { ...snapshot, ...next };
+            snapshot = { ...snapshot, deviceAuthMigration: next };
             publish();
           },
         });
@@ -347,9 +346,10 @@ export function createApplicationOverlays(
         if (isCurrentDeviceAuthMigration(client, epoch)) {
           snapshot = {
             ...snapshot,
-            deviceAuthMigrationError: t("login.deviceAuthMigration.loadFailed", {
-              error: errorMessage(error),
-            }),
+            deviceAuthMigration: {
+              ...EMPTY_DEVICE_AUTH_MIGRATION,
+              error: t("login.deviceAuthMigration.loadFailed", { error: errorMessage(error) }),
+            },
           };
           publish();
         }

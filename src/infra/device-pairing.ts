@@ -317,7 +317,7 @@ export function hasEffectivePairedDeviceRole(
   return listEffectivePairedDeviceRoles(device).includes(normalized);
 }
 
-export function hasEffectivePairedDeviceScope(
+function hasEffectivePairedDeviceScope(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
   role: string,
   scope: string,

@@ -141,9 +141,9 @@ describe("device-auth upgrade migration", () => {
     });
 
     await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigrationError).toContain("HTTPS or localhost");
+      expect(overlays.snapshot.deviceAuthMigration.error).toContain("HTTPS or localhost");
     });
-    expect(overlays.snapshot.deviceAuthMigrationRequestId).toBeNull();
+    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
     expect(request).not.toHaveBeenCalledWith("device.pair.list", expect.anything());
     overlays.dispose();
   });
@@ -179,7 +179,7 @@ describe("device-auth upgrade migration", () => {
     });
 
     await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigrationRequestId).toBe("self-request");
+      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
     });
     await overlays.secureThisBrowser();
 
@@ -187,7 +187,7 @@ describe("device-auth upgrade migration", () => {
       requestId: "self-request",
     });
     expect(harness.connect).toHaveBeenCalledOnce();
-    expect(overlays.snapshot.deviceAuthMigrationRequestId).toBeNull();
+    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
     overlays.dispose();
   });
 
@@ -219,7 +219,7 @@ describe("device-auth upgrade migration", () => {
     });
 
     await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigrationRequestId).toBe("self-request");
+      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
     });
     const securing = overlays.secureThisBrowser();
     await vi.waitFor(() => {
@@ -255,7 +255,7 @@ describe("device-auth upgrade migration", () => {
     });
 
     await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigrationRequestId).toBe("self-request");
+      expect(overlays.snapshot.deviceAuthMigration.requestId).toBe("self-request");
     });
     const securing = overlays.secureThisBrowser();
     harness.update({ client: client(replacementRequest) });
@@ -287,11 +287,11 @@ describe("device-auth upgrade migration", () => {
     });
 
     await vi.waitFor(() => {
-      expect(overlays.snapshot.deviceAuthMigrationError).toContain(
+      expect(overlays.snapshot.deviceAuthMigration.error).toContain(
         "pairing request is not available",
       );
     });
-    expect(overlays.snapshot.deviceAuthMigrationRequestId).toBeNull();
+    expect(overlays.snapshot.deviceAuthMigration.requestId).toBeNull();
     await overlays.secureThisBrowser();
     expect(request).not.toHaveBeenCalledWith("device.pair.approve", expect.anything());
     expect(harness.connect).not.toHaveBeenCalled();

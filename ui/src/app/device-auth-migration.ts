@@ -2,17 +2,18 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { peekStoredDeviceIdentityId } from "../lib/nodes/index.ts";
 import type { ApplicationGateway } from "./gateway.ts";
+import "../components/device-auth-migration-banner.ts";
 
-type DeviceAuthMigrationSnapshot = {
-  deviceAuthMigrationRequestId: string | null;
-  deviceAuthMigrationBusy: boolean;
-  deviceAuthMigrationError: string | null;
+export type DeviceAuthMigrationSnapshot = {
+  requestId: string | null;
+  busy: boolean;
+  error: string | null;
 };
 
 const EMPTY_SNAPSHOT: DeviceAuthMigrationSnapshot = {
-  deviceAuthMigrationRequestId: null,
-  deviceAuthMigrationBusy: false,
-  deviceAuthMigrationError: null,
+  requestId: null,
+  busy: false,
+  error: null,
 };
 
 export function createDeviceAuthMigrationController(params: {
@@ -46,7 +47,7 @@ export function createDeviceAuthMigrationController(params: {
         generation += 1;
         update({
           ...EMPTY_SNAPSHOT,
-          deviceAuthMigrationError: t("login.deviceAuthMigration.secureContextRequired"),
+          error: t("login.deviceAuthMigration.secureContextRequired"),
         });
         return;
       }
@@ -62,17 +63,14 @@ export function createDeviceAuthMigrationController(params: {
           (entry) => entry.deviceId === deviceId && typeof entry.requestId === "string",
         );
         update({
-          deviceAuthMigrationRequestId:
-            typeof ownRequest?.requestId === "string" ? ownRequest.requestId : null,
-          deviceAuthMigrationError: ownRequest
-            ? null
-            : t("login.deviceAuthMigration.pendingUnavailable"),
+          requestId: typeof ownRequest?.requestId === "string" ? ownRequest.requestId : null,
+          error: ownRequest ? null : t("login.deviceAuthMigration.pendingUnavailable"),
         });
       } catch (error) {
         if (refreshGeneration === generation && params.isCurrent(client, epoch)) {
           const message = error instanceof Error ? error.message : String(error);
           update({
-            deviceAuthMigrationError: t("login.deviceAuthMigration.loadFailed", {
+            error: t("login.deviceAuthMigration.loadFailed", {
               error: message,
             }),
           });
@@ -80,24 +78,24 @@ export function createDeviceAuthMigrationController(params: {
       }
     },
     async secure(client: GatewayBrowserClient | null, epoch: number) {
-      const requestId = snapshot.deviceAuthMigrationRequestId;
+      const requestId = snapshot.requestId;
       if (
         !client ||
         !requestId ||
         !params.gateway.snapshot.connected ||
         !params.isCurrent(client, epoch) ||
-        snapshot.deviceAuthMigrationBusy ||
+        snapshot.busy ||
         disposed
       ) {
         return;
       }
-      update({ deviceAuthMigrationBusy: true, deviceAuthMigrationError: null });
+      update({ busy: true, error: null });
       try {
         await client.request("device.pair.approve", { requestId });
         if (disposed || !params.isCurrent(client, epoch)) {
           return;
         }
-        update({ deviceAuthMigrationRequestId: null, deviceAuthMigrationBusy: false });
+        update({ requestId: null, busy: false });
         // Reconnect once so the newly approved browser receives and stores its
         // device token; shared auth is no longer its baseline.
         params.gateway.connect();
@@ -105,8 +103,8 @@ export function createDeviceAuthMigrationController(params: {
         if (!disposed && params.isCurrent(client, epoch)) {
           const message = error instanceof Error ? error.message : String(error);
           update({
-            deviceAuthMigrationBusy: false,
-            deviceAuthMigrationError: t("login.deviceAuthMigration.approvalFailed", {
+            busy: false,
+            error: t("login.deviceAuthMigration.approvalFailed", {
               error: message,
             }),
           });
