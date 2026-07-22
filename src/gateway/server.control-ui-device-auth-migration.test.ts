@@ -161,6 +161,44 @@ describe("Control UI device-auth upgrade migration", () => {
     }
   });
 
+  it("completes imported migration state when an effective operator already exists", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        controlUi: {
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    const { approveDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const ownerIdentity = loadOrCreateDeviceIdentity({
+      path: path.join(os.tmpdir(), `openclaw-migration-existing-owner-${randomUUID()}.sqlite`),
+    });
+    const ownerRequest = await requestDevicePairing({
+      deviceId: ownerIdentity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
+      role: "operator",
+      scopes: SCOPES,
+    });
+    await expect(
+      approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
+    ).resolves.toMatchObject({ status: "approved" });
+
+    const harness = await createGatewaySuiteHarness();
+    try {
+      const { readControlUiDeviceAuthMigrationState } =
+        await import("../state/control-ui-device-auth-migration.js");
+      expect(readControlUiDeviceAuthMigrationState({ env: process.env })).toMatchObject({
+        status: "completed",
+        deviceId: ownerIdentity.deviceId,
+      });
+    } finally {
+      await harness.close();
+    }
+  });
+
   it("rejects an in-flight migration handshake completed before registration", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({

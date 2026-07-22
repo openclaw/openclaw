@@ -41,7 +41,11 @@ import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
-import { onEffectiveOperatorDevicePaired } from "../infra/device-pairing.js";
+import {
+  hasEffectivePairedDeviceRole,
+  listDevicePairing,
+  onEffectiveOperatorDevicePaired,
+} from "../infra/device-pairing.js";
 import {
   isDiagnosticsEnabled,
   setDiagnosticsEnabledForProcess,
@@ -754,6 +758,23 @@ export async function startGatewayServer(
     controlUiDeviceAuthMigrationState = recoverControlUiDeviceAuthMigrationClaim({
       env: process.env,
     });
+  }
+  if (controlUiDeviceAuthMigrationState?.status === "pending") {
+    const existingOperator = (await listDevicePairing()).paired.find((device) =>
+      hasEffectivePairedDeviceRole(device, "operator"),
+    );
+    if (existingOperator) {
+      try {
+        controlUiDeviceAuthMigrationState = completeControlUiDeviceAuthMigration(
+          existingOperator.deviceId,
+          { env: process.env },
+        );
+      } catch (error) {
+        log.warn(
+          `failed to reconcile Control UI device-auth migration with existing operator: ${String(error)}`,
+        );
+      }
+    }
   }
   let controlUiDeviceAuthMigrationPending = controlUiDeviceAuthMigrationState?.status === "pending";
   if (controlUiDeviceAuthMigrationPending) {
