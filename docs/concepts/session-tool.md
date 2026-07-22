@@ -112,6 +112,49 @@ See [Session state awareness](/concepts/session-state) for the full model: event
 
 `subagents` is the session-tree view over native sub-agent runs and the shared background-task ledger. `action: "list"` reports active/recent sub-agents plus scoped ACP, CLI/media, and cron tasks. `action: "cancel"` accepts a returned `taskId` and can stop only work inside the caller's controlled session tree; leaf sub-agents cannot cancel another session's task.
 
+## Self-service session management
+
+The `sessions` tool lets agents manage their own sessions and custom session groups. It is owner-gated (`dangerous-tools` list) and unavailable to sandboxed sessions.
+
+### Patch
+
+`sessions` `action: "patch"` updates a session's metadata in-place. Accepted fields:
+
+| Field            | Type    | Description                                                     |
+| ---------------- | ------- | --------------------------------------------------------------- |
+| `sessionKey`     | string  | Target session key (default: current session)                   |
+| `label`          | string  | Human-readable session label                                    |
+| `pinned`         | boolean | Pin or unpin the session                                        |
+| `archived`       | boolean | Archive or restore the session                                  |
+| `model`          | string  | Per-session model override (needs in-process gateway)           |
+| `thinkingLevel`  | string  | Per-session thinking level override                             |
+
+Patch is scoped to the caller's own session tree and the configured session tools visibility level. Targeting another agent's session requires `visibility: "all"`. At least one optional field is required; an empty patch is rejected.
+
+Model overrides applied through `sessions` `patch` carry a marker so the runtime can distinguish agent-selected model changes from operator-configured ones. See [Model auto-revert](#model-auto-revert).
+
+### Groups
+
+Groups let agents organize sessions into named categories. Group management is global per gateway — all agents share the same group catalog. The built-in **Pinned** and **Chats** groups are reserved.
+
+| Action           | What it does                                  |
+| ---------------- | --------------------------------------------- |
+| `group_list`     | List all group names in display order         |
+| `group_set`      | Replace the full ordered group list           |
+| `group_rename`   | Rename a group (`name` → `to`)                |
+| `group_delete`   | Delete a group and return its sessions to Chats |
+
+Group names are capped at 512 characters; `group_set` accepts at most 200 names.
+
+## Model auto-revert
+
+When an agent patches its own session model through `sessions` `action: "patch"` and the next run fails with a permanent error, OpenClaw automatically reverts the model to the pre-patch value:
+
+- **Permanent failures that trigger revert:** `auth`, `auth_permanent`, `billing`, `model_not_found`
+- **Transient failures that do NOT trigger revert:** `rate_limit`, `overloaded`, `timeout`, `server_error`
+
+The agent receives a system notice when a revert occurs so it knows to pick a different model. Subsequent turns keep the restored model unless the agent or operator patches again.
+
 ## Spawning sub-agents
 
 `sessions_spawn` creates an isolated session for a background task by default. It is always non-blocking; it returns immediately with a `runId` and `childSessionKey`. Native sub-agent runs receive the delegated task in the child session's first visible `[Subagent Task]` message, while the system prompt carries only sub-agent runtime rules and routing context.

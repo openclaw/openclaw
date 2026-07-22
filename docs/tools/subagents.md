@@ -244,6 +244,18 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
 <ParamField path="worktreeBaseRef" type="string">
   Optional git base ref for the managed worktree. Requires `visible: true` and `worktree: true`.
 </ParamField>
+<ParamField path="visible" type="boolean" default="false">
+  When `true`, creates a visible dashboard session instead of a background run. Only valid with `runtime: "subagent"`. The session appears in the Control UI sidebar with the given `label`. Other params (`model`, `thinking`, `cwd`, `thread`, `mode`, `context`, `lightContext`, `attachments`, `attachAs`) are unavailable when `visible: true` — they are rejected with a tool input error. The visible session inherits its model and thinking defaults from the target agent config.
+</ParamField>
+<ParamField path="worktree" type="boolean">
+  Visible sessions only. Requests the new session own a managed worktree. Ignored when `visible` is absent or `false`.
+</ParamField>
+<ParamField path="worktreeName" type="string">
+  Visible sessions only. Optional worktree name (the branch becomes `openclaw/<name>`). Ignored when `visible` is absent or `false`.
+</ParamField>
+<ParamField path="worktreeBaseRef" type="string">
+  Visible sessions only. Base ref for the managed worktree. Ignored when `visible` is absent or `false`.
+</ParamField>
 
 <Warning>
 `sessions_spawn` does **not** accept channel-delivery params (`target`,
