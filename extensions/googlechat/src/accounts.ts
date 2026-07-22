@@ -24,6 +24,9 @@ type CredentialUnavailableDiagnostic = Extract<
 
 type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
 
+/** "strict" throws on unresolved SecretRefs; "inspect" reports the account as unconfigured. */
+type GoogleChatAccountResolutionMode = "strict" | "inspect";
+
 export type ResolvedGoogleChatAccount = {
   accountId: string;
   name?: string;
@@ -121,6 +124,7 @@ function parseServiceAccount(value: unknown): Record<string, unknown> | null {
 function resolveCredentialsFromConfig(params: {
   accountId: string;
   account: GoogleChatAccountConfig;
+  mode: GoogleChatAccountResolutionMode;
 }): {
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
@@ -134,15 +138,17 @@ function resolveCredentialsFromConfig(params: {
     return { credentials: inline, source: "inline", status: "available" };
   }
 
-  if (isSecretRef(account.serviceAccount)) {
+  if (isSecretRef(account.serviceAccount) || isSecretRef(account.serviceAccountRef)) {
+    if (params.mode === "inspect") {
+      // Enumeration fans in every account; an unresolved ref means
+      // "not configured" here so one broken account cannot hide healthy ones.
+      return { source: "none", status: "missing" };
+    }
+    const ref = isSecretRef(account.serviceAccount)
+      ? account.serviceAccount
+      : account.serviceAccountRef;
     throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccount.source}:${account.serviceAccount.provider}:${account.serviceAccount.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
-    );
-  }
-
-  if (isSecretRef(account.serviceAccountRef)) {
-    throw new Error(
-      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${account.serviceAccountRef.source}:${account.serviceAccountRef.provider}:${account.serviceAccountRef.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
+      `channels.googlechat.accounts.${accountId}.serviceAccount: unresolved SecretRef "${ref?.source}:${ref?.provider}:${ref?.id}". Resolve this command against an active gateway runtime snapshot before reading it.`,
     );
   }
 
@@ -205,6 +211,7 @@ function resolveCredentialsFromConfig(params: {
 export function resolveGoogleChatAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
+  mode?: GoogleChatAccountResolutionMode;
 }): ResolvedGoogleChatAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? params.cfg.channels?.["googlechat"]?.defaultAccount,
@@ -213,7 +220,11 @@ export function resolveGoogleChatAccount(params: {
   const merged = mergeGoogleChatAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
-  const credentials = resolveCredentialsFromConfig({ accountId, account: merged });
+  const credentials = resolveCredentialsFromConfig({
+    accountId,
+    account: merged,
+    mode: params.mode ?? "strict",
+  });
 
   return {
     accountId,
@@ -229,7 +240,9 @@ export function resolveGoogleChatAccount(params: {
 }
 
 export function listEnabledGoogleChatAccounts(cfg: OpenClawConfig): ResolvedGoogleChatAccount[] {
+  // Discovery fans in every account; inspect mode keeps one account with an
+  // unresolved SecretRef from throwing away healthy accounts' message actions.
   return listGoogleChatAccountIds(cfg)
-    .map((accountId) => resolveGoogleChatAccount({ cfg, accountId }))
+    .map((accountId) => resolveGoogleChatAccount({ cfg, accountId, mode: "inspect" }))
     .filter((account) => account.enabled);
 }

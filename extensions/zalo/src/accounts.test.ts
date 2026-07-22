@@ -94,3 +94,38 @@ describe("resolveZaloAccount", () => {
     expect(listEnabledZaloAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
   });
 });
+
+describe("zalo accounts with an unresolved SecretRef", () => {
+  const cfg = {
+    channels: {
+      zalo: {
+        enabled: true,
+        accounts: {
+          broken: {
+            enabled: true,
+            botToken: { source: "env", provider: "default", id: "OPENCLAW_TEST_MISSING_ZALO" },
+          },
+          healthy: { enabled: true, botToken: "zalo-healthy-token" },
+        },
+      },
+    },
+  };
+
+  it("keeps healthy accounts visible in enumeration instead of throwing", () => {
+    const accounts = listEnabledZaloAccounts(cfg);
+    const broken = accounts.find((account) => account.accountId === "broken");
+    const healthy = accounts.find((account) => account.accountId === "healthy");
+    expect(healthy?.token).toBe("zalo-healthy-token");
+    expect(broken?.tokenSource).toBe("none");
+  });
+
+  it("keeps strict resolution throwing for direct account use", () => {
+    expect(() => resolveZaloAccount({ cfg, accountId: "broken" })).toThrow(/unresolved SecretRef/);
+  });
+
+  it("inspect mode reads the unresolved ref as no token", () => {
+    expect(resolveZaloAccount({ cfg, accountId: "broken", mode: "inspect" }).tokenSource).toBe(
+      "none",
+    );
+  });
+});

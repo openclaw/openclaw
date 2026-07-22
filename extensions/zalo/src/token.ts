@@ -17,7 +17,7 @@ function readTokenFromFile(tokenFile: string | undefined): string {
 export function resolveZaloToken(
   config: ZaloConfig | undefined,
   accountId?: string | null,
-  options?: { allowUnresolvedSecretRef?: boolean },
+  options?: { mode?: "strict" | "inspect" },
 ): ZaloTokenResolution {
   const resolvedAccountId = normalizeAccountId(accountId ?? config?.defaultAccount);
   const isDefaultAccount = resolvedAccountId === DEFAULT_ACCOUNT_ID;
@@ -29,12 +29,13 @@ export function resolveZaloToken(
   const accountHasBotToken = Boolean(accountConfig && Object.hasOwn(accountConfig, "botToken"));
 
   if (accountConfig && accountHasBotToken) {
-    const token = options?.allowUnresolvedSecretRef
-      ? normalizeSecretInputString(accountConfig.botToken)
-      : normalizeResolvedSecretInputString({
-          value: accountConfig.botToken,
-          path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
-        });
+    const token =
+      options?.mode === "inspect"
+        ? normalizeSecretInputString(accountConfig.botToken)
+        : normalizeResolvedSecretInputString({
+            value: accountConfig.botToken,
+            path: `channels.zalo.accounts.${resolvedAccountId}.botToken`,
+          });
     if (token) {
       return { token, source: "config" };
     }
@@ -52,12 +53,13 @@ export function resolveZaloToken(
   }
 
   if (!accountHasBotToken) {
-    const token = options?.allowUnresolvedSecretRef
-      ? normalizeSecretInputString(baseConfig?.botToken)
-      : normalizeResolvedSecretInputString({
-          value: baseConfig?.botToken,
-          path: "channels.zalo.botToken",
-        });
+    const token =
+      options?.mode === "inspect"
+        ? normalizeSecretInputString(baseConfig?.botToken)
+        : normalizeResolvedSecretInputString({
+            value: baseConfig?.botToken,
+            path: "channels.zalo.botToken",
+          });
     if (token) {
       return { token, source: "config" };
     }

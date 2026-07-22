@@ -82,7 +82,7 @@ export function describeSlackMessageTool({
   if (actions.includes("send")) {
     capabilities.add("presentation");
   }
-  if (isSlackInteractiveRepliesEnabled({ cfg, accountId })) {
+  if (isSlackInteractiveRepliesEnabled({ cfg, accountId, mode: "inspect" })) {
     capabilities.add("presentation");
   }
   if (actions.includes("download-file")) {

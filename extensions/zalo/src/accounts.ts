@@ -34,7 +34,8 @@ function mergeZaloAccountConfig(cfg: OpenClawConfig, accountId: string): ZaloAcc
 export function resolveZaloAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  allowUnresolvedSecretRef?: boolean;
+  /** "inspect" treats an unresolved SecretRef as no token instead of throwing. */
+  mode?: "strict" | "inspect";
 }): ResolvedZaloAccount {
   const accountId = normalizeAccountId(
     params.accountId ?? (params.cfg.channels?.zalo as ZaloConfig | undefined)?.defaultAccount,
@@ -46,7 +47,7 @@ export function resolveZaloAccount(params: {
   const tokenResolution = resolveZaloToken(
     params.cfg.channels?.zalo as ZaloConfig | undefined,
     accountId,
-    { allowUnresolvedSecretRef: params.allowUnresolvedSecretRef },
+    { mode: params.mode },
   );
 
   return {
@@ -60,7 +61,9 @@ export function resolveZaloAccount(params: {
 }
 
 export function listEnabledZaloAccounts(cfg: OpenClawConfig): ResolvedZaloAccount[] {
+  // Discovery fans in every account; inspect mode keeps one account with an
+  // unresolved SecretRef from throwing away healthy accounts' message actions.
   return listZaloAccountIds(cfg)
-    .map((accountId) => resolveZaloAccount({ cfg, accountId }))
+    .map((accountId) => resolveZaloAccount({ cfg, accountId, mode: "inspect" }))
     .filter((account) => account.enabled);
 }

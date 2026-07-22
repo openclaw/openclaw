@@ -136,7 +136,7 @@ describe("mattermost setup", () => {
     expect(resolveMattermostAccount).toHaveBeenCalledWith({
       cfg,
       accountId: "default",
-      allowUnresolvedSecretRef: true,
+      mode: "inspect",
     });
   });
 
