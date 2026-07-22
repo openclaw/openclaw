@@ -6,6 +6,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 const CLAUDE_CLI_DISALLOWED_TOOLS =
@@ -20,6 +21,33 @@ describe("resolveClaudeCliAutoCompactEnv", () => {
 
   it.each([undefined, 0, 0.5, Number.NaN])("rejects an invalid context budget: %s", (budget) => {
     expect(resolveClaudeCliAutoCompactEnv(budget)).toBeUndefined();
+  });
+});
+
+describe("resolveClaudeCliRuntimeToolAvailability", () => {
+  it("routes every restricted tool through the OpenClaw MCP policy boundary", () => {
+    expect(
+      resolveClaudeCliRuntimeToolAvailability({
+        toolsAllow: ["read", "write", "edit", "apply_patch", "exec", "process", "browser", "image"],
+      }),
+    ).toEqual({
+      mcp: [
+        "mcp__openclaw__read",
+        "mcp__openclaw__write",
+        "mcp__openclaw__edit",
+        "mcp__openclaw__apply_patch",
+        "mcp__openclaw__exec",
+        "mcp__openclaw__process",
+        "mcp__openclaw__browser",
+        "mcp__openclaw__image",
+      ],
+    });
+  });
+
+  it("keeps process-only authority on the exact OpenClaw MCP tool", () => {
+    expect(resolveClaudeCliRuntimeToolAvailability({ toolsAllow: ["process"] })).toEqual({
+      mcp: ["mcp__openclaw__process"],
+    });
   });
 });
 
@@ -530,6 +558,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(normalized?.resumeArgs).toContain("bypassPermissions");
     expect(normalized?.liveSession).toBe("claude-stdio");
     expect(backend.resolveExecutionArgs).toBe(resolveClaudeCliExecutionArgs);
+    expect(backend.resolveRuntimeToolAvailability).toBe(resolveClaudeCliRuntimeToolAvailability);
   });
 
   it("opts bundled Claude CLI into bounded raw transcript reseed without disabling native resume", () => {

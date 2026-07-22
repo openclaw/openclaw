@@ -589,10 +589,13 @@ AI CLI backend such as `claude-cli` or `my-cli`.
   limit selected for the run, so native-compaction backends can align their
   own threshold without provider-specific core branches.
 - Backends that can disable all native tools for a specific run may declare
-  `nativeToolMode: "selectable"`. Restricted calls pass an empty
-  `ctx.toolAvailability.native` tuple plus an exact host-isolated MCP allowlist;
+  `nativeToolMode: "selectable"`. Restricted calls pass an exact
+  `ctx.toolAvailability.native` list plus an exact host-isolated MCP allowlist;
   `resolveExecutionArgs` must enforce both on the final fresh or resume argv.
-  OpenClaw fails closed if the backend cannot do so.
+  To accept runtime caps such as cron `toolsAllow`, the backend must also
+  implement `resolveRuntimeToolAvailability`; OpenClaw disables all native
+  tools and fails closed if the backend cannot translate or enforce the MCP
+  cap.
 
 For an end-to-end authoring guide, see
 [CLI backend plugins](/plugins/cli-backend-plugins).

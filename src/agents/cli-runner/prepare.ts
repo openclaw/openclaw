@@ -92,6 +92,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { ensureSandboxWorkspaceForSession } from "../sandbox.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
+import { expandToolGroups } from "../tool-policy.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
   DEFAULT_BOOTSTRAP_FILENAME,
@@ -318,9 +319,9 @@ function shouldRefreshAuthProfileForExecution(params: {
 
 /** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
-  params: RunCliAgentParams,
+  inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  const internalParams = params as RunCliAgentPrepareParams;
+  let params = inputParams;
   const started = Date.now();
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
@@ -349,6 +350,35 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  if (params.toolsAllow !== undefined) {
+    if (params.cliToolAvailability !== undefined) {
+      throw new Error(
+        `CLI backend ${backendResolved.id} received conflicting runtime tool policies`,
+      );
+    }
+    const normalizedToolsAllow = expandToolGroups(params.toolsAllow);
+    if (normalizedToolsAllow.includes("*")) {
+      params = { ...params, toolsAllow: undefined };
+    } else {
+      const resolvedAvailability = backendResolved.resolveRuntimeToolAvailability?.({
+        toolsAllow: normalizedToolsAllow,
+      });
+      if (!resolvedAvailability) {
+        throw new Error(
+          `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
+        );
+      }
+      params = {
+        ...params,
+        toolsAllow: undefined,
+        cliToolAvailability: {
+          native: [],
+          mcp: uniqueStrings([...resolvedAvailability.mcp]),
+        },
+      };
+    }
+  }
+  const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = resolveNodeClaudePlacement({
     backendId: backendResolved.id,
     execHost: params.sessionEntry?.execHost,
@@ -360,11 +390,6 @@ export async function prepareCliRunContext(
   ) {
     throw new Error(
       `CLI backend ${backendResolved.id} cannot enforce exact per-run tool availability`,
-    );
-  }
-  if (params.toolsAllow !== undefined) {
-    throw new Error(
-      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
     );
   }
   const sideQuestionDisablesNativeTools =
@@ -934,6 +959,7 @@ export async function prepareCliRunContext(
             groupChannel: normalizeOptionalMcpContextValue(params.groupChannel ?? undefined),
             groupSpace: normalizeOptionalMcpContextValue(params.groupSpace ?? undefined),
             spawnedBy: normalizeOptionalMcpContextValue(params.spawnedBy ?? undefined),
+            toolsAllow: restrictedLoopbackToolsAllow,
           }).tools
         : [];
     const promptToolNamesHash =

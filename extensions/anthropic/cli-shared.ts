@@ -5,6 +5,8 @@ import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
+  CliBackendResolveRuntimeToolAvailabilityContext,
+  CliBackendRuntimeToolAvailability,
 } from "openclaw/plugin-sdk/cli-backend";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
@@ -94,6 +96,7 @@ const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
 const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 const CLAUDE_SYSTEM_AGENT_MCP_TOOL = "mcp__openclaw__openclaw";
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const CLAUDE_SYSTEM_AGENT_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
@@ -493,6 +496,15 @@ export function resolveClaudeCliExecutionArgs(
   return isSystemAgentToolAvailability(context.toolAvailability)
     ? resolveClaudeCliSystemAgentExecutionArgs(executionArgs)
     : resolveClaudeCliToolAvailabilityArgs(executionArgs, context.toolAvailability);
+}
+
+/** Route restricted runs entirely through OpenClaw's grant-scoped MCP policy boundary. */
+export function resolveClaudeCliRuntimeToolAvailability(
+  context: CliBackendResolveRuntimeToolAvailabilityContext,
+): CliBackendRuntimeToolAvailability {
+  return {
+    mcp: context.toolsAllow.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`),
+  };
 }
 
 /** Normalize Claude CLI backend config before registration or execution. */
