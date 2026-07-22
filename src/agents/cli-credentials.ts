@@ -84,6 +84,13 @@ export type CodexCliCredential = {
   idToken?: string;
 };
 
+/** API-key credential parsed from the active Codex CLI auth mode. */
+export type CodexCliApiKeyCredential = {
+  type: "api_key";
+  provider: "openai";
+  key: string;
+};
+
 /** Credential shape parsed from MiniMax portal CLI storage. */
 type MiniMaxCliCredential = {
   type: "oauth";
@@ -184,6 +191,14 @@ function codexAuthJsonUsesChatGptTokens(data: Record<string, unknown>): boolean 
     return authMode === "chatgpt" || authMode === "chatgptauthtokens";
   }
   return typeof data.OPENAI_API_KEY !== "string";
+}
+
+function codexAuthJsonUsesApiKey(data: Record<string, unknown>): boolean {
+  const authMode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (authMode) {
+    return authMode === "apikey" || authMode === "api_key";
+  }
+  return typeof data.OPENAI_API_KEY === "string";
 }
 
 function resolveMiniMaxCliCredentialsPath(homeDir?: string) {
@@ -654,6 +669,23 @@ function readCodexCliCredentials(options?: {
     accountId: typeof tokens.account_id === "string" ? tokens.account_id : undefined,
     idToken: typeof tokens.id_token === "string" ? tokens.id_token : undefined,
   };
+}
+
+/** Reads the API key only when Codex auth.json resolves to API-key mode. */
+export function readCodexCliApiKey(options?: {
+  codexHome?: string;
+}): CodexCliApiKeyCredential | null {
+  const authPath = path.join(resolveCodexHomePath(options?.codexHome), CODEX_CLI_AUTH_FILENAME);
+  const raw = loadJsonFile(authPath);
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const data = raw as Record<string, unknown>;
+  if (!codexAuthJsonUsesApiKey(data)) {
+    return null;
+  }
+  const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";
+  return key ? { type: "api_key", provider: "openai", key } : null;
 }
 
 /** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */
