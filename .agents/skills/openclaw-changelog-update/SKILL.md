@@ -1,13 +1,15 @@
 ---
 name: openclaw-changelog-update
-description: Regenerate OpenClaw release changelog sections from git history before beta or stable releases.
+description: Regenerate OpenClaw release changelog sections from git history before beta, stable, or extended-stable releases.
 ---
 
 # OpenClaw Changelog Update
 
 Use this for release changelog rewrites and GitHub release-note source text.
-Run it once after the final Code SHA has green Full Release Validation. Do not
-rerun it for same-candidate tooling retries, resumed publication, or promotion.
+For regular beta/stable, run it once after the final Code SHA has green Full
+Release Validation. Do not rerun it for same-candidate tooling retries, resumed
+publication, or promotion. For extended-stable, follow the variant below before
+the final exact-head validation and immutable tag.
 Use it with `release-openclaw-maintainer`; this skill owns changelog content,
 ordering, grouping, and attribution discipline.
 
@@ -252,6 +254,29 @@ every human `Thanks @...` attribution.
 - dispatch SHA-pinned Full Release Validation for the Release SHA with evidence
   reuse enabled. It must select `changelog-only-release-v1`; any other changed
   path returns the release to the Code SHA validation loop
+
+## Extended-Stable Variant
+
+Extended-stable has no regular Code-SHA/Release-SHA evidence-reuse split and no
+GitHub Release body. Its changelog still must describe the exact shipped
+maintenance patch.
+
+1. Complete and approve the backport ledger first. Do not write release notes
+   from an incomplete PR list or from validation failures discovered later.
+2. On the coordinated candidate branch, regenerate the matching `## YYYY.M.P`
+   section after version prep and all approved product backports are present.
+   Use the same complete manifest and original-main-PR provenance rules as a
+   regular release.
+3. Land the changelog through the candidate PR or a dedicated follow-up PR to
+   the canonical extended-stable branch. Do not push it directly.
+4. Run the complete branch-owned Full Release Validation only after the
+   changelog is final. Any later branch change invalidates that exact-head run.
+5. A tooling-only compatibility repair does not need a user-facing changelog
+   bullet, but it still requires fresh exact-head validation. A later product
+   backport requires regenerating the section from the updated ledger before
+   validating again.
+6. Create the immutable tag only after the final changelog tree is green. Never
+   rewrite the tag or changelog for a package version already published.
 
 ## Quota / API Outage Rule
 

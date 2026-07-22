@@ -1,10 +1,10 @@
 # Extended-Stable Backport Preparation
 
-Prepare the next Gateway patch for the active `extended-stable` line: the
-`openclaw` npm package, official npm plugins, and matching Docker Gateway
-images. Discover the complete candidate set, obtain approval, and prepare one
-coordinated PR. Commits are canonical; PRs, issues, ClawSweeper reports, and
-advisories provide context.
+Prepare the next npm and Docker maintenance patch for the active
+`extended-stable` line.
+Discover the complete candidate set, obtain maintainer approval, and prepare
+the approved commits as one coordinated PR. Treat commits as canonical; use
+PRs, issues, ClawSweeper reports, and advisories as supporting context.
 
 Read `backport-discovery.md` first. Its evidence-driven inventory, detached
 baseline applicability probes, advisory reconciliation, and durable unreleased
@@ -16,16 +16,18 @@ extended-stable package and publication constraints.
 - Read `docs/reference/RELEASING.md`,
   `scripts/openclaw-npm-extended-stable-release.mjs`, and the relevant release
   workflows from a pinned current `origin/main` before resolving the line.
-- Target npm and Docker `extended-stable` on
-  `extended-stable/YYYY.M.33`; user-facing `stable` remains npm `latest`.
+- Target npm and Docker `extended-stable` and the canonical
+  `extended-stable/YYYY.M.33` branch. The user-facing `extended-stable` update
+  channel resolves that selector; user-facing `stable` continues to resolve
+  npm `latest`.
 - Cover the core `openclaw` package and every npm-publishable official plugin
   included by the canonical `all-publishable` release inventory at the same
   exact version.
-- Carry the complete current-main Docker release-channel change in the tagged
-  tree, including its workflow, promoter, policy, shared release-version
-  classifier, tests, and workflow validation changes.
-- Exclude ClawHub publication, GitHub Releases, the macOS app, Windows Hub,
-  mobile apps, website downloads, and private-repository dist-tags.
+- Treat the current-main Docker release workflow and its release-policy helper
+  as mandatory release infrastructure in the tagged tree, not optional
+  backport candidates. GitHub evaluates tag-push workflows from that tree.
+- Exclude ClawHub publication, GitHub Releases, native apps, mobile artifacts,
+  website downloads, and private-repository dist-tags.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
@@ -161,8 +163,8 @@ path alone.
   at the same intended version and can verify its exact package and selector.
 - Treat ClawHub-only, external, private, or otherwise unlisted plugin changes as
   out of scope.
-- Treat macOS-app-only, Windows-Hub-only, mobile-only, website-only, and GitHub
-  Release-only fixes as `skip` for this Gateway extended-stable line.
+- Treat native-only, mobile-only, website-only, and GitHub Release-only fixes as
+  `skip` for this extended-stable line.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 
@@ -245,7 +247,7 @@ ledger and release set before changing branches.
    per fix, then combined changed-surface and release-relevant checks. Use
    Crabbox/Testbox for broad, package, cross-OS, release, or E2E proof.
 5. Set the intended root version and run `pnpm release:prep` on the same staging
-   branch. Verify every publishable official extension package has that exact
+   branch. Verify every publishable official plugin package has that exact
    version. Do not create the tag or dispatch publication before the PR lands.
 6. Run `$autoreview` until no accepted/actionable findings remain.
 7. Open one coordinated PR targeting the canonical extended-stable branch.
@@ -261,6 +263,41 @@ unresolved blocked candidates so the next run carries them forward. Dispatch
 npm preflight only after the canonical branch or tag has that exact final
 version and SHA.
 
+## Stabilize the Landed Candidate
+
+The approved product backport set and release-infrastructure compatibility are
+separate decisions. After the coordinated PR lands, validate the exact
+canonical branch before creating its immutable tag:
+
+1. Fetch the canonical branch again. Require its tip, root version, and every
+   npm-publishable official plugin version to identify the intended release.
+   Require current-main Docker release workflow and policy-helper versions in
+   the same tree.
+2. Run the focused combined proof, then dispatch Full Release Validation
+   directly from and against `extended-stable/YYYY.M.33` with
+   `release_profile=stable`.
+3. Classify the first blocker before changing the branch:
+   - **Product defect:** return to the candidate ledger, obtain approval for the
+     additional bounded backport, and land it through another PR.
+   - **Frozen-target incompatibility:** prefer current trusted harness behavior
+     that can test the old product unchanged. If the branch itself owns the
+     workflow, installer, package, or QA contract, land only the smallest
+     compatibility repair through a separate PR and record its current-main
+     source and invariant.
+   - **Provider, approval, runner, or transient service failure:** keep the
+     branch unchanged and use the release retry budget.
+4. Do not import current product behavior merely to satisfy current tooling.
+   Do not turn a missing frozen-target scenario into a blanket skipped gate.
+   An omission is acceptable only through the explicit compatibility contract
+   and only when the old target cannot represent that scenario.
+5. Any branch change invalidates prior exact-head validation evidence. Repeat
+   the complete parent run and replace its run id and attempt. Do not create or
+   move the immutable release tag while the candidate is still changing.
+6. Freeze the candidate only when the exact branch tip has green complete
+   validation and every repair is represented in the durable ledger and PR
+   history. Publication then preflights that exact SHA before creating the tag
+   at the unchanged commit.
+
 ## Handoff
 
 Report:
@@ -271,18 +308,25 @@ Report:
 - included, skipped, blocked, not-affected, and already-covered candidates;
 - affected core/plugin packages, adaptations, and commit order;
 - proof commands, run IDs, and autoreview result;
+- candidate-stabilization failures, their classification, every workflow or
+  harness compatibility repair, and superseded validation runs;
 - remaining security, release, or maintainer approvals;
 - the coordinated PR URL or why no PR was opened;
-- explicit confirmation that no non-npm publication is planned.
+- exact intended Docker images and aliases, plus explicit confirmation that no
+  other non-npm publication is planned.
 
-After the PR lands, continue with this skill's canonical extended-stable
-release flow. Require exact branch-tip/tag/package identity; run npm preflight
-and Full Release Validation from the canonical branch; publish every
+After candidate stabilization succeeds, continue with this skill's canonical
+extended-stable release flow. Require exact branch-tip/tag/package identity;
+run npm preflight against the green branch tip's full SHA, create the immutable
+tag only after preflight succeeds, reuse only the matching successful complete
+Full Release Validation run and attempt, publish every
 npm-publishable official plugin from the exact release SHA; publish the
 prepared core tarball with the referenced successful run IDs; verify every
 exact package and `extended-stable` selector; and preserve the generated
 core `openclaw` selector-repair command. Repair missing or stale official-
 plugin selectors on already-published versions with the approved credential-
 isolated release tooling for manual tag repair; the OIDC source workflow cannot
-mutate those tags. Never republish the same version when only a selector
-needs repair.
+mutate those tags. Never republish an immutable version when only a selector
+needs repair. Require the tag-triggered Docker run to publish and attest the
+exact images while moving only the `extended-stable*` aliases; use the
+digest-based current-main channel-promotion workflow for alias-only recovery.

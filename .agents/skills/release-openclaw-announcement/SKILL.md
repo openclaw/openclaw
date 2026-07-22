@@ -1,11 +1,12 @@
 ---
 name: release-openclaw-announcement
-description: "Draft or post OpenClaw beta/stable Discord release announcements from changelog, GitHub release, registry, and validation evidence. Use when announcing a beta, stable release, release candidate, or asking what users should test after an OpenClaw release."
+description: "Draft or post OpenClaw beta, stable, or extended-stable Discord release announcements from changelog, tag, registry, and validation evidence. Use when announcing a release, release candidate, or asking what users should test after an OpenClaw release."
 ---
 
 # OpenClaw Release Announcement
 
-Use with `release-openclaw-maintainer` after a beta or stable release is live.
+Use with `release-openclaw-maintainer` after a beta, stable, or extended-stable
+release is live.
 Use with `$discord-user-post` when actually posting to Discord as the logged-in
 user.
 
@@ -13,7 +14,9 @@ user.
 
 Before drafting focus areas, read real release evidence:
 
-1. Current GitHub release body for the tag.
+1. Current GitHub release body for the tag when that release track creates one;
+   for extended-stable, use the immutable Git tag and exact-head publish
+   workflow evidence instead.
 2. `CHANGELOG.md` section for the released base version.
 3. Commits since the previous shipped version or the operator-specified base.
 4. Registry/package metadata for the exact version and current dist-tag.
@@ -68,6 +71,24 @@ openclaw --version
 ```
 
 Fresh installs still point to `https://openclaw.ai`.
+
+For extended-stable announcements, make the maintenance-track scope explicit
+and use its supported channel:
+
+```sh
+openclaw update --channel extended-stable
+openclaw --version
+```
+
+Include the exact version and trailing completed month, summarize the bounded
+reliability/security backports users can observe, and link the tag or changelog.
+Do not add `--yes`: users on a newer regular stable version must see and
+explicitly accept the downgrade warning because older versions may not
+understand newer configuration.
+Do not require or imply a GitHub Release. Mention only the package, plugin, or
+other artifacts that the current extended-stable release policy actually
+publishes; do not inherit regular stable macOS, Windows, ClawHub, `latest`, or
+website claims.
 
 ## Style
 

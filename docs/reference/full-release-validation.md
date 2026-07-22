@@ -35,11 +35,49 @@ report that same workflow SHA. Pass
 reachable from current `origin/main`. The workflow never creates or updates
 repository refs itself.
 
-When the Code SHA is green, generate and commit only `CHANGELOG.md`. This new
-commit is the **Release SHA**. Run the same helper for the Release SHA. Product
-evidence is reused only when GitHub proves the Release SHA descends from the
-Code SHA and the complete changed path set is exactly `CHANGELOG.md`; npm
-preflight and package/install acceptance still run on the Release SHA.
+### Extended-stable exception
+
+The trailing-month `extended-stable/YYYY.M.33` line uses a different evidence
+identity. Dispatch `Full Release Validation` directly from that canonical
+branch, with the branch itself as `ref` and `release_profile=stable`:
+
+```bash
+gh workflow run full-release-validation.yml \
+  --ref extended-stable/YYYY.M.33 \
+  -f ref=extended-stable/YYYY.M.33 \
+  -f release_profile=stable
+```
+
+Do not use `pnpm ci:full-release` or a `release-ci/*` workflow ref for this
+publication path. The npm publisher requires the validation run's head branch,
+head SHA, target SHA, manifest `workflowRef`, run id, and run attempt to match
+the canonical extended-stable branch and release commit exactly. Direct branch
+runs are fresh; they do not reuse regular-release evidence.
+
+An extended-stable branch is a frozen product target and a release-tooling
+source at the same time. Classify failures before changing it:
+
+- A product failure needs a bounded backport, a new exact release commit, and a
+  complete fresh validation run.
+- A workflow or harness incompatibility needs the smallest current trusted
+  release-tooling fix that makes the frozen target testable. Keep product
+  behavior unchanged, record the repair separately from product backports, and
+  rerun against the new exact branch tip.
+- A provider, approval, runner, or transient service failure keeps the release
+  commit unchanged. Rerun the same parent run, which creates a new attempt, or
+  replace the run once according to the normal retry rules. Then record the
+  successful run id and resulting attempt.
+
+Never hide a missing frozen-target capability by weakening a product gate.
+Compatibility allowances may omit only scenarios the target cannot represent;
+required package, installer, update, channel, and live behavior must still run.
+
+For a regular release, when the Code SHA is green, generate and commit only
+`CHANGELOG.md`. This new commit is the **Release SHA**. Run the same helper for
+the Release SHA. Product evidence is reused only when GitHub proves the Release
+SHA descends from the Code SHA and the complete changed path set is exactly
+`CHANGELOG.md`; npm preflight and package/install acceptance still run on the
+Release SHA.
 
 `release_profile=stable` and `release_profile=full` always run the exhaustive
 live/Docker soak. Pass `run_release_soak=true` to include the same soak lanes
@@ -272,8 +310,11 @@ Keep the `Full Release Validation` summary as the release-level index. It links
 child run ids and includes slowest-job tables. For failures, inspect the child
 workflow first, then rerun the smallest matching handle above.
 
-Record both Code SHA and Release SHA, the reuse policy and changed-path set, the
-green Code SHA parent run, and the lightweight Release SHA parent run.
+For a regular release, record both Code SHA and Release SHA, the reuse policy
+and changed-path set, the green Code SHA parent run, and the lightweight Release
+SHA parent run. For extended-stable, record the canonical branch, exact release
+SHA, fresh parent run id and attempt, workflow ref, every child run, and any
+frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:
 
