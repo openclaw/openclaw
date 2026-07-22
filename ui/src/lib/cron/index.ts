@@ -93,6 +93,9 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "script") {
     return typeof value.script === "string";
   }
+  if (value.kind === "heartbeat") {
+    return true;
+  }
   return false;
 }
 
@@ -749,7 +752,7 @@ function parseStaggerSchedule(
 }
 
 function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
-  return payload?.kind === "command" || payload?.kind === "script";
+  return payload?.kind === "command" || payload?.kind === "script" || payload?.kind === "heartbeat";
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {

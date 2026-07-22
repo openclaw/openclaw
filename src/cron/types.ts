@@ -269,7 +269,10 @@ export type CronPayload =
   | ({ kind: "systemEvent"; text: string } & CronPayloadToolAllow)
   | (CronAgentTurnPayload & CronPayloadToolAllow)
   | (CronCommandPayload & CronPayloadToolAllow)
-  | (CronScriptPayload & CronPayloadToolAllow);
+  | (CronScriptPayload & CronPayloadToolAllow)
+  // System-owned heartbeat monitor: execution requests an interval heartbeat
+  // wake. Gateway-converged only; not accepted from client create/patch APIs.
+  | ({ kind: "heartbeat" } & CronPayloadToolAllow);
 
 /** Partial payload update shape used by cron patch/edit flows. */
 export type CronPayloadPatch =

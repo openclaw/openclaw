@@ -73,6 +73,7 @@ import {
   resolveStreamStopReason,
 } from "./cron-stream-watchers.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
+import { reconcileHeartbeatMonitorJobs } from "./server-cron-heartbeat-jobs.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -94,6 +95,7 @@ export type GatewayCronState = {
   stopExitWatchers?: () => void;
   reconcileStreamWatchers?: () => Promise<void>;
   stopStreamWatchers?: () => Promise<void>;
+  reconcileHeartbeatJobs?: (cfg?: OpenClawConfig) => Promise<void>;
 };
 
 function classifyCronScriptFailure(code: CronTriggerFailureCode): CronRunErrorClassification {
@@ -1289,6 +1291,13 @@ export function buildGatewayCronService(params: {
     await stopStreamWatchers();
     unregisterSessionAutomationSource(automationSource);
   };
+  const reconcileHeartbeatJobs = async (cfgOverride?: OpenClawConfig) => {
+    await reconcileHeartbeatMonitorJobs({
+      cron,
+      cfg: cfgOverride ?? getRuntimeConfig(),
+      logger: cronLogger,
+    });
+  };
   const startCron = cron.start.bind(cron);
   cron.start = async () => {
     const generation = streamWatcherGeneration;
@@ -1304,6 +1313,10 @@ export function buildGatewayCronService(params: {
       return;
     }
     await reconcileStreamWatchers();
+    if (generation !== streamWatcherGeneration) {
+      return;
+    }
+    await reconcileHeartbeatJobs();
     if (generation !== streamWatcherGeneration) {
       return;
     }
@@ -1328,6 +1341,7 @@ export function buildGatewayCronService(params: {
     stopExitWatchers,
     reconcileStreamWatchers,
     stopStreamWatchers,
+    reconcileHeartbeatJobs,
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
