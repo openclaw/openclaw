@@ -558,6 +558,84 @@ describe("registerChannelsCli", () => {
     );
   });
 
+  it("finds a positional channel after shared option-value pairs", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "token",
+              kind: "string",
+              cli: { flags: "--token <token>", description: "Telegram bot token" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "--account",
+      "work",
+      "telegram",
+      "--token",
+      "tok",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", account: "work", token: "tok" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
+  it("lets an explicit channel override the positional channel during option registration", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "token",
+              kind: "string",
+              cli: { flags: "--token <token>", description: "Telegram bot token" },
+            },
+          ],
+        },
+      },
+      {
+        id: "signal",
+        setup: {
+          fields: [
+            {
+              key: "signalNumber",
+              kind: "string",
+              cli: { flags: "--signal-number <e164>", description: "Signal account number" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    await runChannelsAddCli([
+      "channels",
+      "add",
+      "telegram",
+      "--channel",
+      "signal",
+      "--signal-number",
+      "+15555550123",
+    ]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "signal", signalNumber: "+15555550123" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
   it("treats plugin-provided config flags as direct automation inputs", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
       {

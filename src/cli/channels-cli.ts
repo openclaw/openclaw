@@ -19,6 +19,7 @@ type ChannelSetupCliOptionsModule = typeof import("../channels/plugins/cli-add-o
 
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
+const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--channel", "--account", "--name"]);
 
 type RegisterChannelsCliOptions = {
   includeSetupOptions?: boolean;
@@ -124,6 +125,7 @@ function resolveChannelsAddChannelFromArgv(argv: string[]): string | undefined {
     return undefined;
   }
   const args = normalizedArgv.slice(addIndex + 1);
+  let explicitChannel: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg || arg === "--") {
@@ -131,15 +133,36 @@ function resolveChannelsAddChannelFromArgv(argv: string[]): string | undefined {
     }
     if (arg === "--channel") {
       const value = args[index + 1]?.trim();
-      return value || undefined;
+      explicitChannel = value || explicitChannel;
+      index += 1;
+      continue;
     }
     if (arg.startsWith("--channel=")) {
       const value = arg.slice("--channel=".length).trim();
-      return value || undefined;
+      explicitChannel = value || explicitChannel;
     }
-    if (index === 0 && !arg.startsWith("-")) {
-      return arg;
+  }
+  if (explicitChannel) {
+    return explicitChannel;
+  }
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      break;
     }
+    if (CHANNEL_ADD_SHARED_VALUE_OPTIONS.has(arg)) {
+      index += 1;
+      continue;
+    }
+    if (["--channel=", "--account=", "--name="].some((prefix) => arg.startsWith(prefix))) {
+      continue;
+    }
+    // An unknown option may consume the next token, so do not guess that token is positional.
+    if (arg.startsWith("-")) {
+      return undefined;
+    }
+    return arg;
   }
   return undefined;
 }
