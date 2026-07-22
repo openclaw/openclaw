@@ -1,4 +1,5 @@
 // Media parse helpers normalize media references from user and channel input.
+import { statSync } from "node:fs";
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -97,6 +98,14 @@ function isLikelyLocalPath(candidate: string): boolean {
     candidate.startsWith("\\\\") ||
     (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
   );
+}
+
+function isExistingRegularFile(candidate: string): boolean {
+  try {
+    return statSync(candidate).isFile();
+  } catch {
+    return false;
+  }
 }
 
 function normalizeRemoteMediaHostname(value: string): string {
@@ -618,6 +627,17 @@ export function splitMediaFromOutput(
           media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           hasValidMedia = true;
           foundMediaToken = true;
+          validCount = 1;
+          invalidParts.length = 0;
+        }
+      }
+
+      if (!unwrapped && validCount > 1 && /\s/.test(payloadValue) && looksLikeLocalPath) {
+        // Multiple valid fragments can still be one local path whose components contain spaces.
+        // Prefer the full path only when the filesystem resolves that ambiguity.
+        const fallback = normalizeMediaSource(cleanCandidate(payloadValue));
+        if (isValidMedia(fallback, { allowSpaces: true }) && isExistingRegularFile(fallback)) {
+          media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
           validCount = 1;
           invalidParts.length = 0;
         }

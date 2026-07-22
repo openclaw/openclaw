@@ -1,10 +1,24 @@
 // Media parse tests cover media reference parsing from text and payloads.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { splitMediaFromOutput } from "./parse.js";
+
+const mocks = vi.hoisted(() => ({
+  statSync: vi.fn(() => {
+    throw new Error("ENOENT");
+  }),
+}));
+
+vi.mock("node:fs", () => ({ statSync: mocks.statSync }));
 
 type SplitMediaFromOutputOptions = NonNullable<Parameters<typeof splitMediaFromOutput>[1]>;
 
 describe("splitMediaFromOutput", () => {
+  afterEach(() => {
+    mocks.statSync.mockReset().mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+  });
+
   function expectParsedMediaOutputCase(
     input: string,
     expected: {
@@ -72,6 +86,21 @@ describe("splitMediaFromOutput", () => {
     ["/Users/pete/My File.png", "MEDIA:file:///Users/pete/My File.png"],
   ] as const)("accepts supported media path variant: %s", (expectedPath, input) => {
     expectAcceptedMediaPathCase(expectedPath, input);
+  });
+
+  it("keeps an existing unquoted Windows path containing spaces as one attachment", () => {
+    const path = String.raw`C:\Users\Asus X13\workspace\shot.png`;
+    mocks.statSync.mockReturnValue({ isFile: () => true } as never);
+
+    expectAcceptedMediaPathCase(path, `MEDIA:${path}`);
+    expect(mocks.statSync).toHaveBeenCalledWith(path);
+  });
+
+  it("keeps multiple local paths separate when their combined payload is not a file", () => {
+    expectParsedMediaOutputCase("MEDIA:/one.png /two.png", {
+      mediaUrls: ["/one.png", "/two.png"],
+    });
+    expect(mocks.statSync).toHaveBeenCalledWith("/one.png /two.png");
   });
 
   it.each([
