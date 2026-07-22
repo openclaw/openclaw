@@ -20,6 +20,7 @@ type ChannelSetupCliOptionsModule = typeof import("../channels/plugins/cli-add-o
 const optionNamesRemove = ["channel", "account", "delete"] as const;
 const CHANNEL_ADD_SELECTION_OPTION_NAMES = new Set(["channel"]);
 const CHANNEL_ADD_SHARED_VALUE_OPTIONS = new Set(["--channel", "--account", "--name"]);
+const CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES = ["--channel=", "--account=", "--name="];
 
 type RegisterChannelsCliOptions = {
   includeSetupOptions?: boolean;
@@ -31,6 +32,7 @@ type AddChannelSetupOptionsParams = {
 };
 
 type ChannelSetupOptionMode = "none" | "modern" | "legacy";
+type ChannelSetupFlagArity = "boolean" | "value" | "conflict";
 
 type ChannelSetupCliOption = {
   flags: string;
@@ -92,6 +94,34 @@ function getOptionSwitches(flags: string): string[] {
   return [option.short, option.long].filter((flag): flag is string => Boolean(flag));
 }
 
+function resolveChannelSetupFlagArity(
+  flags: string,
+): Exclude<ChannelSetupFlagArity, "conflict"> {
+  return /<[^>]+>|\[[^\]]+\]/u.test(flags) ? "value" : "boolean";
+}
+
+function buildChannelSetupFlagArityMap(
+  options: readonly ChannelSetupCliOption[],
+): Map<string, ChannelSetupFlagArity> {
+  const arityBySwitch = new Map<string, ChannelSetupFlagArity>();
+  const addSwitch = (flag: string, arity: Exclude<ChannelSetupFlagArity, "conflict">) => {
+    const existing = arityBySwitch.get(flag);
+    arityBySwitch.set(flag, existing === undefined || existing === arity ? arity : "conflict");
+  };
+  for (const option of options) {
+    const arity = resolveChannelSetupFlagArity(option.flags);
+    for (const flag of getOptionSwitches(option.flags)) {
+      addSwitch(flag, arity);
+    }
+    if (option.negatedFlags) {
+      for (const flag of getOptionSwitches(option.negatedFlags)) {
+        addSwitch(flag, "boolean");
+      }
+    }
+  }
+  return arityBySwitch;
+}
+
 function addChannelSetupOption(
   command: Command,
   option: ChannelSetupCliOption,
@@ -116,7 +146,9 @@ function addChannelSetupOption(
   }
 }
 
-function resolveChannelsAddChannelFromArgv(argv: string[]): string | undefined {
+export async function resolveChannelsAddChannelFromArgv(
+  argv: string[],
+): Promise<string | undefined> {
   const normalizedArgv = normalizeWindowsArgv(argv);
   const addIndex = normalizedArgv.findIndex(
     (arg, index) => arg === "add" && normalizedArgv[index - 1] === "channels",
@@ -146,6 +178,7 @@ function resolveChannelsAddChannelFromArgv(argv: string[]): string | undefined {
     return explicitChannel;
   }
 
+  let channelFlagArities: Map<string, ChannelSetupFlagArity> | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (!arg || arg === "--") {
@@ -155,12 +188,30 @@ function resolveChannelsAddChannelFromArgv(argv: string[]): string | undefined {
       index += 1;
       continue;
     }
-    if (["--channel=", "--account=", "--name="].some((prefix) => arg.startsWith(prefix))) {
+    if (CHANNEL_ADD_SHARED_VALUE_OPTION_PREFIXES.some((prefix) => arg.startsWith(prefix))) {
       continue;
     }
-    // An unknown option may consume the next token, so do not guess that token is positional.
     if (arg.startsWith("-")) {
-      return undefined;
+      // Shipped `channels add` accepted channel flags before a positional id by registering every
+      // channel option. Lazily inspect serialized all-channel metadata for arity only; actual
+      // option registration remains scoped to the selected channel.
+      if (!channelFlagArities) {
+        const { resolveChannelSetupCliOptionMetadata } = await channelSetupCliOptionsLoader.load();
+        const { optionCandidates } = resolveChannelSetupCliOptionMetadata(undefined, {
+          includeAll: true,
+        });
+        channelFlagArities = buildChannelSetupFlagArityMap(optionCandidates);
+      }
+      const equalsIndex = arg.indexOf("=");
+      const optionSwitch = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+      const arity = channelFlagArities.get(optionSwitch);
+      if (!arity || arity === "conflict") {
+        return undefined;
+      }
+      if (equalsIndex === -1 && arity === "value") {
+        index += 1;
+      }
+      continue;
     }
     return arg;
   }
@@ -387,7 +438,7 @@ export async function registerChannelsCli(
     .option("--name <name>", "Display name for this account");
 
   let channelSetupOptionMode: ChannelSetupOptionMode = "none";
-  const selectedChannelId = resolveChannelsAddChannelFromArgv(argv);
+  const selectedChannelId = await resolveChannelsAddChannelFromArgv(argv);
   if (
     shouldRegisterChannelSetupOptions(argv, options) &&
     (selectedChannelId !== undefined || options.includeSetupOptions)

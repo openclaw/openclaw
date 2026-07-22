@@ -56,8 +56,10 @@ export function resolveChannelSetupCliOptionMetadata(
       ))
     : undefined;
   const channels = params.includeAll ? orderedChannels : selectedChannel ? [selectedChannel] : [];
+  // Keep pre-dedupe candidates available to detect cross-channel flag-arity conflicts.
+  const optionCandidates = channels.flatMap(channelSetupOptions);
   const seenSwitches = new Set<string>();
-  const options = channels.flatMap(channelSetupOptions).filter((option) => {
+  const options = optionCandidates.filter((option) => {
     const key = channelCliOptionSwitchKey(option.flags);
     if (seenSwitches.has(key)) {
       return false;
@@ -79,5 +81,5 @@ export function resolveChannelSetupCliOptionMetadata(
     }
   }
 
-  return { options, selectedChannel, valueMetadataByAttributeName };
+  return { options, optionCandidates, selectedChannel, valueMetadataByAttributeName };
 }

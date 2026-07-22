@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { registerChannelsCli, resolveChannelsAddOptions } from "./channels-cli.js";
+import {
+  registerChannelsCli,
+  resolveChannelsAddChannelFromArgv,
+  resolveChannelsAddOptions,
+} from "./channels-cli.js";
 
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
   vi.fn<() => readonly PluginPackageChannel[]>(() => []),
@@ -556,6 +560,116 @@ describe("registerChannelsCli", () => {
       runtimeMock,
       { hasFlags: true },
     );
+  });
+
+  it("resolves a positional channel after a value-taking channel option", async () => {
+    const metadata: PluginPackageChannel[] = [
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "token",
+              kind: "string",
+              cli: { flags: "--token <token>", description: "Telegram bot token" },
+            },
+          ],
+        },
+      },
+    ];
+    listBundledPackageChannelMetadataMock
+      .mockReturnValueOnce(metadata)
+      .mockReturnValueOnce(metadata);
+
+    await runChannelsAddCli(["channels", "add", "--token", "tok", "telegram"]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", token: "tok" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
+  it("resolves a positional channel after a boolean channel option", async () => {
+    const metadata: PluginPackageChannel[] = [
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "useEnv",
+              kind: "boolean",
+              cli: { flags: "--use-env", description: "Use Telegram environment credentials" },
+            },
+          ],
+        },
+      },
+    ];
+    listBundledPackageChannelMetadataMock
+      .mockReturnValueOnce(metadata)
+      .mockReturnValueOnce(metadata);
+
+    await runChannelsAddCli(["channels", "add", "--use-env", "telegram"]);
+
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", useEnv: true }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
+  it("keeps an all-channel-unknown flag before a positional channel ambiguous", async () => {
+    await expect(
+      resolveChannelsAddChannelFromArgv([
+        "node",
+        "openclaw",
+        "channels",
+        "add",
+        "--unknown-option",
+        "value",
+        "telegram",
+      ]),
+    ).resolves.toBeUndefined();
+  });
+
+  it("keeps conflicting all-channel flag arities before a positional channel ambiguous", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValueOnce([
+      {
+        id: "chat-a",
+        setup: {
+          fields: [
+            {
+              key: "mode",
+              kind: "string",
+              cli: { flags: "--mode <mode>", description: "Chat A mode" },
+            },
+          ],
+        },
+      },
+      {
+        id: "chat-b",
+        setup: {
+          fields: [
+            {
+              key: "mode",
+              kind: "boolean",
+              cli: { flags: "--mode", description: "Enable Chat B mode" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    await expect(
+      resolveChannelsAddChannelFromArgv([
+        "node",
+        "openclaw",
+        "channels",
+        "add",
+        "--mode",
+        "telegram",
+      ]),
+    ).resolves.toBeUndefined();
   });
 
   it("finds a positional channel after shared option-value pairs", async () => {
