@@ -473,6 +473,7 @@ class NewSessionPage extends OpenClawLightDomElement {
     }
     this.error = null;
     this.placePopoverHiding = false;
+    this.closeAgentDropdown();
     this.closeBrowser();
     this.adoptAgentDefaults();
     void this.updateComplete.then(() => {
@@ -1090,6 +1091,15 @@ class NewSessionPage extends OpenClawLightDomElement {
 
   private browseAvailable(): boolean {
     return this.isAdmin();
+  }
+
+  private closeAgentDropdown() {
+    const dropdown = this.querySelector<HTMLElement & { open: boolean }>(
+      ".new-session-page__select--agent wa-dropdown",
+    );
+    if (dropdown) {
+      dropdown.open = false;
+    }
   }
 
   private closeBrowser() {

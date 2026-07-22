@@ -346,6 +346,15 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
     });
     await installMockGateway(page, {
       methodResponses: {
+        "agents.list": {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "agent",
+          agents: [
+            { id: "main", name: "Main" },
+            { id: "writer", name: "Writer" },
+          ],
+        },
         "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
       },
     });
@@ -384,7 +393,26 @@ describeControlUiE2e("Control UI new-session page mocked Gateway E2E", () => {
 
       await pastePng(composer);
       await page.locator('.chat-attachment-thumb img[alt="Attachment preview"]').waitFor();
+      const agentDropdown = page.locator(".new-session-page__select--agent wa-dropdown");
+      await page.locator(".new-session-page__select--agent .agent-select__trigger").click();
+      await expect
+        .poll(() =>
+          agentDropdown.evaluate((dropdown) => (dropdown as HTMLElement & { open: boolean }).open),
+        )
+        .toBe(true);
       await navigate("new-session", "?agent=main&catalog=missing");
+      await expect
+        .poll(() =>
+          page.evaluate(
+            () =>
+              (
+                document.querySelector(".new-session-page__select--agent wa-dropdown") as
+                  | (HTMLElement & { open: boolean })
+                  | null
+              )?.open ?? false,
+          ),
+        )
+        .toBe(false);
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
       await expect.poll(async () => (await proof()).revoked).toBe(2);
 
