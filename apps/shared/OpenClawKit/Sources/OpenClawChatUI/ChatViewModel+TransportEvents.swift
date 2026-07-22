@@ -33,15 +33,15 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .sessionsChanged(change):
-            guard let sessions = ChatSessionSidebarModel.applying(
+            let projectedSessions = ChatSessionSidebarModel.applying(
                 sessionChange: change,
                 to: self.sessions)
-            else {
+            if let projectedSessions {
+                self.sessions = projectedSessions
+            } else if change.reason != "patch", change.reason != "command-metadata" {
                 let context = self.currentSessionSnapshot()
                 Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
-                return
             }
-            self.sessions = sessions
             // Group-catalog mutations from any client arrive as reason "groups"
             // (mirrors web ui/src/lib/sessions); bump the revision so views keyed
             // on it refetch. Rename/delete also rewrite member sessions' category

@@ -5,12 +5,6 @@ public struct OpenClawChatSessionAgentStatus: Codable, Sendable, Hashable {
     public let note: String
     public let expiresAt: Double
     public let attention: String?
-
-    public init(note: String, expiresAt: Double, attention: String? = nil) {
-        self.note = note
-        self.expiresAt = expiresAt
-        self.attention = attention
-    }
 }
 
 public struct OpenClawChatSessionObserverDigest: Codable, Sendable, Hashable {
