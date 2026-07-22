@@ -5,6 +5,7 @@ import { resolveUserPath } from "../utils.js";
 
 const DATA_URL_RE = /^data:/i;
 const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
+const URL_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
 
 /** Resolves a media source to a local path when it is not a remote or data URL. */
 export function resolveLocalMediaPath(source: string): string | undefined {
@@ -25,5 +26,8 @@ export function resolveLocalMediaPath(source: string): string | undefined {
   if (path.isAbsolute(trimmed) || WINDOWS_DRIVE_RE.test(trimmed)) {
     return path.resolve(trimmed);
   }
-  return undefined;
+  if (URL_SCHEME_RE.test(trimmed)) {
+    return undefined;
+  }
+  return path.resolve(trimmed);
 }

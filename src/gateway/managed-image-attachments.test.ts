@@ -999,6 +999,26 @@ describe("createManagedOutgoingImageBlocks", () => {
     }
   });
 
+  it("rejects relative local image paths outside allowed roots", async () => {
+    const outsideDir = tempDirs.make("managed-image-relative-");
+    const outsidePath = path.join(outsideDir, "relative.png");
+    await fs.writeFile(outsidePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const relativeMediaUrl = path.relative(process.cwd(), outsidePath);
+
+    try {
+      await expect(
+        createManagedOutgoingImageBlocks({
+          sessionKey: "agent:main:main",
+          mediaUrls: [relativeMediaUrl],
+          stateDir,
+          localRoots: [path.join(stateDir, "workspace")],
+        }),
+      ).rejects.toThrow(/could not be prepared/i);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts local image paths inside allowed roots", async () => {
     const allowedDir = path.join(stateDir, "workspace", "uploads");
     const allowedPath = path.join(allowedDir, "inside.png");
