@@ -2484,13 +2484,13 @@ async function sendStickerTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
-
+  const threadSpec = resolveTelegramSendThreadSpec({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+  });
   const threadParams = buildTelegramThreadReplyParams({
-    thread: resolveTelegramSendThreadSpec({
-      targetMessageThreadId: target.messageThreadId,
-      messageThreadId: opts.messageThreadId,
-      chatType: target.chatType,
-    }),
+    thread: threadSpec,
     replyToMessageId: opts.replyToMessageId,
   });
   const hasThreadParams = Object.keys(threadParams).length > 0;
@@ -2518,6 +2518,15 @@ async function sendStickerTelegramWithContext(
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   recordSentMessage(chatId, messageId, opts.cfg);
+  await recordOutboundMessageForPromptContext({
+    cfg,
+    account,
+    chatId,
+    message: result,
+    messageId,
+    ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+    ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
+  });
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
@@ -2579,13 +2588,13 @@ async function sendPollTelegramWithContext(
 
   // Normalize the poll input (validates question, options, maxSelections)
   const normalizedPoll = normalizePollInput(poll, { maxOptions: 12 });
-
+  const threadSpec = resolveTelegramSendThreadSpec({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+  });
   const threadParams = buildTelegramThreadReplyParams({
-    thread: resolveTelegramSendThreadSpec({
-      targetMessageThreadId: target.messageThreadId,
-      messageThreadId: opts.messageThreadId,
-      chatType: target.chatType,
-    }),
+    thread: threadSpec,
     replyToMessageId: opts.replyToMessageId,
   });
 
@@ -2633,6 +2642,15 @@ async function sendPollTelegramWithContext(
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
   recordSentMessage(chatId, messageId, opts.cfg);
+  await recordOutboundMessageForPromptContext({
+    cfg,
+    account,
+    chatId,
+    message: result,
+    messageId,
+    ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+    ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
+  });
 
   recordChannelActivity({
     channel: "telegram",
