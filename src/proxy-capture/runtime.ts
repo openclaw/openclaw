@@ -8,6 +8,7 @@ import {
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
 import { resolveDebugProxySettings, type DebugProxySettings } from "./env.js";
+import { isSensitiveHeaderName } from "./header-redaction.js";
 import {
   closeDebugProxyCaptureStore,
   getDebugProxyCaptureStore,
@@ -91,28 +92,6 @@ async function readCapturedResponseBodyBounded(
     ? { status: "too-large" }
     : { status: "captured", buffer: Buffer.concat(chunks, total) };
 }
-const SENSITIVE_CAPTURE_HEADER_NAMES = new Set([
-  "authorization",
-  "proxy-authorization",
-  "cookie",
-  "set-cookie",
-  "x-api-key",
-  "api-key",
-  "apikey",
-  "x-auth-token",
-  "auth-token",
-  "x-access-token",
-  "access-token",
-]);
-const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
-  "api-key",
-  "apikey",
-  "token",
-  "secret",
-  "password",
-  "credential",
-  "session",
-];
 
 function parseDeclaredCaptureContentLength(raw: string | null | undefined): bigint | undefined {
   if (raw === null || raw === undefined) {
@@ -196,14 +175,7 @@ function resolveUrlString(input: RequestInfo | URL): string | null {
 }
 
 function isSensitiveCaptureHeaderName(name: string): boolean {
-  const normalized = name.trim().toLowerCase();
-  if (!normalized) {
-    return false;
-  }
-  if (SENSITIVE_CAPTURE_HEADER_NAMES.has(normalized)) {
-    return true;
-  }
-  return SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS.some((fragment) => normalized.includes(fragment));
+  return isSensitiveHeaderName(name);
 }
 
 function redactedCaptureHeaders(
