@@ -342,6 +342,21 @@ function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
       }),
     },
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
+    resolveUsageAuth: async (ctx) => {
+      const portalOauth = await ctx.resolveOAuthToken({ provider: PORTAL_PROVIDER_ID });
+      if (portalOauth) {
+        return portalOauth;
+      }
+      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
+        providerIds: [PORTAL_PROVIDER_ID],
+        envDirect: MINIMAX_USAGE_ENV_VAR_KEYS.map((name) => ctx.env[name]),
+      });
+      return apiKey ? { token: apiKey } : null;
+    },
+    fetchUsageSnapshot: async (ctx) =>
+      await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
+        baseUrl: resolveMinimaxUsageBaseUrl(ctx.config),
+      }),
     ...MINIMAX_PROVIDER_HOOKS,
     resolveDynamicModel: (ctx) =>
       resolveMinimaxDynamicModel({ providerId: PORTAL_PROVIDER_ID, ctx }),

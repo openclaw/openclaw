@@ -446,6 +446,89 @@ describe("minimax provider hooks", () => {
     expect(result?.windows).toEqual([{ label: "5h", usedPercent: 2, resetAt: undefined }]);
   });
 
+  it("prefers portal OAuth when resolving MiniMax portal usage auth", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+    const resolveOAuthToken = vi.fn(async (params?: { provider?: string }) =>
+      params?.provider === "minimax-portal" ? { token: "portal-oauth-token" } : null,
+    );
+    const resolveApiKeyFromConfigAndStore = vi.fn(() => undefined);
+
+    await expect(
+      portalProvider.resolveUsageAuth?.({
+        provider: "minimax-portal",
+        config: {},
+        env: {},
+        resolveOAuthToken,
+        resolveApiKeyFromConfigAndStore,
+      } as never),
+    ).resolves.toEqual({ token: "portal-oauth-token" });
+
+    expect(resolveOAuthToken).toHaveBeenCalledWith({ provider: "minimax-portal" });
+    expect(resolveApiKeyFromConfigAndStore).not.toHaveBeenCalled();
+  });
+
+  it("routes portal usage snapshots to the global base URL with zero-total coding-plan payload", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+    const fetchFn = vi.fn(async (input: string | URL | Request) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      // Portal provider must resolve to the global usage origin, not the CN default.
+      expect(url).toBe("https://api.minimax.io/v1/token_plan/remains");
+      return new Response(
+        JSON.stringify({
+          base_resp: { status_code: 0, status_msg: "success" },
+          data: {
+            model_remains: [
+              {
+                model_name: "general",
+                current_interval_total_count: 0,
+                current_interval_usage_count: 0,
+                current_interval_remaining_percent: 97,
+              },
+              {
+                model_name: "video",
+                current_interval_remaining_percent: 100,
+              },
+            ],
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const result = await portalProvider.fetchUsageSnapshot?.({
+      provider: "minimax-portal",
+      config: {
+        models: {
+          providers: {
+            "minimax-portal": {
+              baseUrl: "https://api.minimax.io/anthropic",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+      token: "key",
+      timeoutMs: 5000,
+      fetchFn: fetchFn as typeof fetch,
+    } as never);
+
+    expect(result?.error).toBeUndefined();
+    expect(result?.plan).toBe("Coding Plan · general");
+    expect(result?.windows).toEqual([{ label: "5h", usedPercent: 3, resetAt: undefined }]);
+  });
+
   it("writes api and authHeader into the MiniMax portal OAuth config patch", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,
