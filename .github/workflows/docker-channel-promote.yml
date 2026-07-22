@@ -104,6 +104,7 @@ jobs:
     concurrency:
       group: docker-release-publish
       cancel-in-progress: false
+      queue: max
     permissions:
       contents: read
       packages: write
