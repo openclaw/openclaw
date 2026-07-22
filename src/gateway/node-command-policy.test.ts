@@ -641,7 +641,7 @@ describe("gateway/node-command-policy", () => {
     const armed = resolveNodeCommandAllowlist(
       {
         gateway: {
-          nodes: { allowCommands: ["mobile.ui.observe", "mobile.ui.act"] },
+          nodes: { commands: { allow: ["mobile.ui.observe", "mobile.ui.act"] } },
         },
       } as OpenClawConfig,
       node,
@@ -660,8 +660,10 @@ describe("gateway/node-command-policy", () => {
       {
         gateway: {
           nodes: {
-            allowCommands: ["mobile.ui.observe", "mobile.ui.act"],
-            denyCommands: ["mobile.ui.act"],
+            commands: {
+              allow: ["mobile.ui.observe", "mobile.ui.act"],
+              deny: ["mobile.ui.act"],
+            },
           },
         },
       } as OpenClawConfig,

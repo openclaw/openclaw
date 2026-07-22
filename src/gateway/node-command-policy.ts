@@ -139,7 +139,7 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...PHOTOS_COMMANDS,
     ...MOTION_COMMANDS,
     // Dangerous: pairing may approve the advertised surface, while runtime
-    // policy strips it until gateway.nodes.allowCommands explicitly arms it.
+    // policy strips it until gateway.nodes.commands.allow explicitly arms it.
     ...MOBILE_UI_DANGEROUS_COMMANDS,
   ],
   macos: [
