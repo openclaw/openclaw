@@ -73,9 +73,11 @@ if [ "$branch" = "main" ]; then
   git merge --ff-only "${remote}/main"
 else
   # A server may carry a local branch (e.g. an agent's in-progress fix) on top
-  # of main. Rebase preserves that work while still deploying latest main.
+  # of main. Rebase preserves that work while still deploying latest main;
+  # --rebase-merges keeps merge commits (and their conflict resolutions)
+  # instead of silently flattening them away.
   log "rebasing local branch '$branch' onto ${remote}/main"
-  if ! git rebase "${remote}/main"; then
+  if ! git rebase --rebase-merges "${remote}/main"; then
     git rebase --abort
     log "rebase of '$branch' conflicts with ${remote}/main; resolve manually"
     exit 1
