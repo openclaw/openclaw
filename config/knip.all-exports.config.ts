@@ -112,7 +112,14 @@ const config = {
   ],
   // Keep only build artifacts out of the full-tree export audit. In
   // particular, do not inherit production's test-support exclusions.
-  ignore: ["dist/**", "packages/*/dist/**", "**/.boundary-stubs/**"],
+  ignore: [
+    "dist/**",
+    "packages/*/dist/**",
+    "**/.boundary-stubs/**",
+    // decodeUtf8Tail is imported by format-generated-module.mjs; knip does not
+    // trace same-directory .mjs imports in this graph.
+    "scripts/lib/decode-utf8-tail.mjs",
+  ],
   // This fixture deliberately mixes used, aliased, and unused exports so the
   // topology analyzer can prove each classification.
   ignoreIssues: {

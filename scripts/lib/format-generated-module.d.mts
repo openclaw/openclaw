@@ -1,4 +1,5 @@
 /** Format generated source in a temporary file and return the formatter output. */
+export function outputTail(value: string | Buffer): string;
 export function formatGeneratedModule(
   source: string,
   options: { repoRoot: string; outputPath: string; errorLabel: string },
