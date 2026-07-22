@@ -433,6 +433,69 @@ describe("ChatStateController render lifecycle", () => {
     expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
     expect(painted).not.toHaveBeenCalled();
   });
+
+  it("invalidates the composer render lifecycle when a handled history key mutates the draft", () => {
+    const requestUpdate = vi.fn();
+    const host = {
+      addController: () => undefined,
+      removeController: () => undefined,
+      requestUpdate,
+      updateComplete: Promise.resolve(true),
+    } satisfies ReactiveControllerHost;
+    const controller = new ChatStateController<ChatPageHost>(host);
+    controller.hostConnected();
+    const renderLifecycle = controller.createRenderLifecycle();
+    const invalidate = vi.fn();
+    renderLifecycle.invalidate = invalidate;
+
+    const state = {
+      sessionKey: "agent:main:current",
+      chatLoading: false,
+      chatMessage: "",
+      chatMessages: [],
+      chatLocalInputHistoryBySession: {
+        "agent:main:current": [{ text: "remembered prompt", ts: 1 }],
+      },
+      chatInputHistorySessionKey: null,
+      chatInputHistoryItems: null,
+      chatInputHistoryIndex: -1,
+      chatDraftBeforeHistory: null,
+      renderLifecycle,
+      requestUpdate: vi.fn(),
+      handleChatInputHistoryKey: (input: { key: "ArrowUp" | "ArrowDown" }) => {
+        if (input.key !== "ArrowUp" || state.chatMessage !== "") {
+          return { handled: false };
+        }
+        const recalled = state.chatLocalInputHistoryBySession[state.sessionKey]?.[0]?.text;
+        if (!recalled) {
+          return { handled: false };
+        }
+        state.chatMessage = recalled;
+        state.chatInputHistoryItems = [recalled];
+        state.chatInputHistorySessionKey = state.sessionKey;
+        state.chatInputHistoryIndex = 0;
+        return { handled: true };
+      },
+    } as unknown as ChatPageHost;
+
+    controller.attach(state);
+
+    const result = state.handleChatInputHistoryKey({
+      key: "ArrowUp",
+      selectionStart: 0,
+      selectionEnd: 0,
+      valueLength: 0,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      isComposing: false,
+      keyCode: 0,
+    });
+
+    expect(result.handled).toBe(true);
+    expect(invalidate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("session pull request refresh", () => {
