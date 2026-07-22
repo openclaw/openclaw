@@ -2,7 +2,17 @@
 // and assistant-visible text sanitization.
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import * as runtimeConfig from "../../config/config.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
@@ -82,7 +92,7 @@ const loadConfigMock = vi.fn<() => SessionsToolTestConfig>(() => ({
   tools: { agentToAgent: { enabled: false } },
 }));
 
-let getRuntimeConfigSpy: ReturnType<typeof vi.spyOn> | undefined;
+let getRuntimeConfigSpy: MockInstance<typeof runtimeConfig.getRuntimeConfig> | undefined;
 vi.mock("./sessions-send-tool.a2a.js", () => ({
   runSessionsSendA2AFlow: vi.fn(),
 }));

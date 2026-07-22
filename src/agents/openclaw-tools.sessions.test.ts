@@ -3,7 +3,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from "vitest";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions.js";
@@ -58,7 +67,7 @@ const TEST_CONFIG = {
   },
 } as OpenClawConfig;
 
-let getRuntimeConfigSpy: ReturnType<typeof vi.spyOn> | undefined;
+let getRuntimeConfigSpy: MockInstance<typeof runtimeConfig.getRuntimeConfig> | undefined;
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
   let count = 0;
