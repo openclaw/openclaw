@@ -63,6 +63,7 @@ export async function runPackageInstallUpdate(params: {
   nodeRunner?: string;
   installEnv?: NodeJS.ProcessEnv;
   installTarget?: ResolvedGlobalInstallTarget;
+  reapplyLocalOverrides?: boolean;
 }): Promise<UpdateRunResult> {
   const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   const runCommand = createGlobalCommandRunner();
@@ -120,6 +121,7 @@ export async function runPackageInstallUpdate(params: {
     packageRoot: pkgRoot,
     runCommand,
     timeoutMs: params.timeoutMs,
+    reapplyLocalOverrides: params.reapplyLocalOverrides === true,
     ...(installEnv === undefined ? {} : { env: installEnv }),
     runStep: (stepParams) =>
       runUpdateStep({
@@ -202,6 +204,7 @@ export async function runPackageInstallUpdate(params: {
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    localOverrides: packageUpdate.localOverrides,
     steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
   };

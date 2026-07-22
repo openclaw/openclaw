@@ -31,6 +31,7 @@ openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --yes
 openclaw update --acknowledge-clawhub-risk
+openclaw update --reapply-local-overrides
 openclaw update --json
 openclaw --update
 ```
@@ -50,6 +51,7 @@ launcher scripts).
 | `--timeout <seconds>`                            | Per-step timeout. Default `1800`.                                                                                                                                                                                                                                                                                                            |
 | `--yes`                                          | Skip confirmation prompts (for example downgrade confirmation).                                                                                                                                                                                                                                                                              |
 | `--acknowledge-clawhub-risk`                     | Allow post-update plugin sync to continue past community ClawHub trust warnings without an interactive prompt. Without it, risky community releases are skipped and left unchanged when OpenClaw cannot prompt. Official ClawHub packages and bundled plugin sources bypass this prompt.                                                     |
+| `--reapply-local-overrides`                      | Reapply captured local edits to packaged `dist` files after a successful update. Use only for trusted local edits; conflicts preserve the full recovery bundle without changing the verified package.                                                                                                                                        |
 
 There is no `--verbose` flag. Use `--dry-run` to preview planned actions,
 `--json` for machine-readable results, and `openclaw update status --json`
@@ -315,6 +317,17 @@ refresh, and restart work. This keeps packaged sidecars and channel-owned
 plugin records aligned with the installed OpenClaw build, while leaving full
 plugin-command completion rebuilds to explicit
 `openclaw completion --write-state` runs.
+
+Package-manager updates also detect local edits to packaged `dist` files when
+the installed package includes OpenClaw's content inventory. The updater
+captures those edits before the package swap, verifies the new package first,
+and keeps the verified package in place by default while printing the local
+override recovery directory for manual inspection and restore. Use
+`--reapply-local-overrides` only for trusted local edits on that update run; the
+opt-in reapplies the full captured set only when every target remains safe and
+unchanged upstream. If any target conflicts, no captured changes are reapplied;
+the full set remains in the recovery directory instead of overwriting the
+update.
 
 ## Related
 

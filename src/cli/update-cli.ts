@@ -44,6 +44,7 @@ type CommanderUpdateOptions = Record<string, unknown> & {
   channel?: string;
   dryRun?: boolean;
   json?: boolean;
+  reapplyLocalOverrides?: boolean;
   restart?: boolean;
   tag?: string;
   timeout?: string;
@@ -127,6 +128,11 @@ export function registerUpdateCli(program: Command) {
       "Acknowledge ClawHub release trust warnings during post-update plugin sync",
       false,
     )
+    .option(
+      "--reapply-local-overrides",
+      "Reapply preserved local package dist changes after update; use only for trusted local edits",
+      false,
+    )
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -142,6 +148,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["openclaw update --reapply-local-overrides", "Reapply trusted local package dist edits"],
         ["openclaw update repair", "Repair stranded post-update plugin state"],
         ["openclaw update --acknowledge-clawhub-risk", "Acknowledge ClawHub plugin trust warnings"],
         ["openclaw update wizard", "Interactive update wizard"],
@@ -165,6 +172,7 @@ ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
   - Use --acknowledge-clawhub-risk only after reviewing ClawHub plugin trust warnings
   - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
+  - Use --reapply-local-overrides only when you trust local edits under packaged dist
   - Use --dry-run to preview actions without writing config/installing/restarting
 
 ${theme.heading("Examples:")}
@@ -188,6 +196,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           tag: opts.tag,
           timeout: opts.timeout,
           yes: Boolean(opts.yes),
+          reapplyLocalOverrides: Boolean(opts.reapplyLocalOverrides),
           acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
         });
       } catch (err) {

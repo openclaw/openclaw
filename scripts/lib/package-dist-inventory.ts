@@ -3,7 +3,9 @@ import path from "node:path";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { writeJson } from "../../src/infra/json-files.ts";
 import {
+  collectPackageDistContentInventory,
   collectPackageDistInventory,
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "../../src/infra/package-dist-inventory.ts";
 
@@ -129,6 +131,9 @@ async function writePackageDistInventoryFile(
   );
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await writeJson(inventoryPath, inventory, { trailingNewline: true });
+  const contentInventory = await collectPackageDistContentInventory(packageRoot, inventory);
+  const contentInventoryPath = path.join(packageRoot, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
+  await writeJson(contentInventoryPath, contentInventory, { trailingNewline: true });
   return inventory;
 }
 

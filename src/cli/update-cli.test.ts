@@ -2824,13 +2824,14 @@ describe("update-cli", () => {
     expect(seenJson).toBe(true);
   });
 
-  it("parses update --acknowledge-clawhub-risk as the update command option", async () => {
+  it("parses update risk and local override options together", async () => {
     const tempDir = createCaseDir("openclaw-update");
     mockPackageInstallStatus(tempDir);
     const program = new Command();
     program.name("openclaw");
     program.exitOverride();
     registerUpdateCli(program);
+    const update = program.commands.find((command) => command.name() === "update");
 
     await program.parseAsync([
       "node",
@@ -2841,8 +2842,13 @@ describe("update-cli", () => {
       "--yes",
       "--no-restart",
       "--acknowledge-clawhub-risk",
+      "--reapply-local-overrides",
     ]);
 
+    expect(update?.opts()).toMatchObject({
+      acknowledgeClawhubRisk: true,
+      reapplyLocalOverrides: true,
+    });
     expect(syncPluginCall()?.acknowledgeClawHubRisk).toBe(true);
     expect(npmPluginUpdateCall()?.acknowledgeClawHubRisk).toBe(true);
   });
@@ -4868,6 +4874,8 @@ describe("update-cli", () => {
       JSON.stringify({ name: "openclaw", version: "9999.0.0" }),
       "utf-8",
     );
+    await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
+    await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
     for (const relativePath of TEST_BUNDLED_RUNTIME_SIDECAR_PATHS) {
       const absolutePath = path.join(pkgRoot, relativePath);
       await fs.mkdir(path.dirname(absolutePath), { recursive: true });
@@ -4901,6 +4909,30 @@ describe("update-cli", () => {
           termination: "exit",
         };
       }
+      if (
+        Array.isArray(argv) &&
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv[2] === "-g" &&
+        argv.includes("--omit=optional")
+      ) {
+        await fs.mkdir(path.join(pkgRoot, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(pkgRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "9999.0.0" }),
+          "utf-8",
+        );
+        await fs.writeFile(path.join(pkgRoot, "dist", "index.js"), "export {};\n", "utf-8");
+        await writePackageDistInventory(pkgRoot);
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
       return {
         stdout: "",
         stderr: "",
@@ -4911,7 +4943,16 @@ describe("update-cli", () => {
       };
     });
 
-    await updateCommand({ yes: true, restart: false });
+    await withEnvAsync(
+      {
+        [GATEWAY_SERVICE_RUNTIME_PID_ENV]: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
 
     const installArgvs = commandCalls()
       .map(([argv]) => argv)

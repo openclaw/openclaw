@@ -3,11 +3,13 @@
 // This is intentionally tarball-only: the check proves Docker lanes consume the
 // prebuilt package artifact with dist inventory, not a source checkout.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { isLegacyContentInventoryCompatVersion } from "./lib/content-inventory-compat.mjs";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "./lib/local-build-metadata-paths.mjs";
 import {
   collectPackageDistImports,
@@ -319,10 +321,18 @@ const entries = list.stdout
   .split(/\r?\n/u)
   .map((entry) => entry.trim())
   .filter(Boolean);
-const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
-const entrySet = new Set(normalized);
+const listedNormalized = entries.map((entry) => entry.replace(/^package\//u, ""));
+const normalized = listedNormalized.map((entry) => (entry ? path.posix.normalize(entry) : entry));
+const packageNormalized = entries
+  .filter((entry) => entry.startsWith("package/"))
+  .map((entry) => entry.slice("package/".length))
+  .map((entry) => (entry ? path.posix.normalize(entry) : entry))
+  .filter(Boolean);
+const packageEntrySet = new Set(packageNormalized);
+const normalizedEntryCounts = new Map();
 const errors = [];
 const warnings = [];
+const CONTENT_INVENTORY_COMPAT_PATH = "scripts/lib/content-inventory-compat.mjs";
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html", ...WORKSPACE_TEMPLATE_PACK_PATHS];
 const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
@@ -332,6 +342,11 @@ const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
 // 2026.7.1 shipped before the guard existed. Historical inspection may still check it.
 const LEGACY_INSTALL_GUARD_COMPAT_MAX = { year: 2026, month: 7, day: 1 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
+const PACKAGE_DIST_INVENTORY_METADATA_FILES = new Set([
+  "dist/postinstall-inventory.json",
+  "dist/postinstall-content-inventory.json",
+  "dist/plugin-sdk/.tsbuildinfo",
+]);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -359,6 +374,24 @@ function isLegacyOmittedPrivateQaInventoryEntry(relativePath) {
   return (
     LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
     LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  );
+}
+
+function isAllowedMissingContentInventoryEntry(relativePath) {
+  return (
+    isLegacyPackageAcceptanceCompatVersion(packageVersion) &&
+    isLegacyOmittedPrivateQaInventoryEntry(relativePath)
+  );
+}
+
+function isExpectedPackageDistInventoryEntry(relativePath) {
+  return (
+    relativePath.startsWith("dist/") &&
+    !relativePath.endsWith("/") &&
+    relativePath !== PACKAGE_INSTALL_GUARD_RELATIVE_PATH &&
+    !PACKAGE_DIST_INVENTORY_METADATA_FILES.has(relativePath) &&
+    !FORBIDDEN_LOCAL_BUILD_METADATA_FILES.has(relativePath) &&
+    !isAllowedMissingContentInventoryEntry(relativePath)
   );
 }
 
@@ -403,15 +436,110 @@ function isLegacyInstallGuardCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_INSTALL_GUARD_COMPAT_MAX) <= 0 : false;
 }
 
-function readTarEntry(entryPath) {
-  const candidates = [
-    path.join(extractDir, entryPath),
-    path.join(extractDir, "package", entryPath),
-  ];
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate, "utf8");
+function isSafeTarEntryPath(entryPath) {
+  return (
+    entryPath.startsWith("dist/") &&
+    !entryPath.startsWith("/") &&
+    !entryPath.includes("\0") &&
+    !entryPath.split("/").includes("..")
+  );
+}
+
+function resolveExtractedTarEntry(entryPath, packageScoped) {
+  if (
+    !isSafeTarEntryPath(entryPath) &&
+    entryPath !== "package.json" &&
+    entryPath !== "npm-shrinkwrap.json"
+  ) {
+    return null;
+  }
+  const root = packageScoped ? path.join(extractDir, "package") : extractDir;
+  const candidate = path.resolve(root, entryPath);
+  const rootPrefix = `${path.resolve(root)}${path.sep}`;
+  return candidate.startsWith(rootPrefix) ? candidate : null;
+}
+
+function hasUnsafeExtractedAncestor(candidate, root) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  const relativePath = path.relative(resolvedRoot, resolvedCandidate);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return true;
+  }
+  const rootStats = fs.lstatSync(resolvedRoot);
+  if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+    return true;
+  }
+  let current = resolvedRoot;
+  for (const part of relativePath.split(path.sep).slice(0, -1)) {
+    current = path.join(current, part);
+    let stats;
+    try {
+      stats = fs.lstatSync(current);
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        return false;
+      }
+      throw error;
     }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectUnsafeExtractedDistTreeErrors() {
+  const roots = [
+    { label: "dist", root: path.join(extractDir, "dist") },
+    { label: "package/dist", root: path.join(extractDir, "package", "dist") },
+  ];
+  const treeErrors = [];
+  const visit = (dir, label) => {
+    const dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of dirEntries) {
+      const entryPath = path.join(dir, entry.name);
+      const entryLabel = `${label}/${entry.name}`;
+      if (entry.isSymbolicLink()) {
+        treeErrors.push(`unsafe extracted dist entry: ${entryLabel}`);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        visit(entryPath, entryLabel);
+        continue;
+      }
+      if (!entry.isFile()) {
+        treeErrors.push(`unsafe extracted dist entry: ${entryLabel}`);
+      }
+    }
+  };
+  for (const { label, root } of roots) {
+    if (hasUnsafeExtractedAncestor(root, extractDir)) {
+      treeErrors.push(`unsafe extracted dist root: ${label}`);
+      continue;
+    }
+    let stats;
+    try {
+      stats = fs.lstatSync(root);
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      treeErrors.push(`unsafe extracted dist root: ${label}`);
+      continue;
+    }
+    visit(root, label);
+  }
+  return treeErrors;
+}
+
+function readPackageTarEntry(entryPath) {
+  const candidate = resolveExtractedTarEntry(entryPath, true);
+  if (candidate && fs.existsSync(candidate)) {
+    return fs.readFileSync(candidate, "utf8");
   }
   return "";
 }
@@ -422,60 +550,154 @@ const extractedPackageRoot = fs.realpathSync(
     : extractDir,
 );
 
-for (const entry of normalized) {
-  if (entry.startsWith("/") || entry.split("/").includes("..")) {
+function readBundledPackageTarEntry(entryPath) {
+  if (!entryPath.startsWith("node_modules/@openclaw/ai/")) {
+    return "";
+  }
+  const candidate = path.resolve(extractedPackageRoot, entryPath);
+  const rootPrefix = `${extractedPackageRoot}${path.sep}`;
+  if (!candidate.startsWith(rootPrefix) || !fs.existsSync(candidate)) {
+    return "";
+  }
+  return fs.readFileSync(candidate, "utf8");
+}
+
+function readPackageTarEntryBuffer(
+  entryPath,
+  unsafeEntryLabel = "unsafe content inventory tar entry",
+) {
+  const candidate = resolveExtractedTarEntry(entryPath, true);
+  const root = path.join(extractDir, "package");
+  if (candidate && fs.existsSync(candidate)) {
+    if (hasUnsafeExtractedAncestor(candidate, root)) {
+      return { error: `${unsafeEntryLabel} ${entryPath}` };
+    }
+    const stats = fs.lstatSync(candidate);
+    if (!stats.isFile() || stats.isSymbolicLink()) {
+      return { error: `${unsafeEntryLabel} ${entryPath}` };
+    }
+    return { content: fs.readFileSync(candidate), mode: stats.mode };
+  }
+  return { content: null };
+}
+
+function readPackageMetadataTarEntry(entryPath) {
+  const { content, error } = readPackageTarEntryBuffer(
+    entryPath,
+    "unsafe package metadata tar entry",
+  );
+  if (error) {
+    throw new Error(error);
+  }
+  return content?.toString("utf8") ?? "";
+}
+
+function sha256Hex(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function isContentInventoryEntry(entry) {
+  return (
+    entry &&
+    typeof entry === "object" &&
+    typeof entry.path === "string" &&
+    typeof entry.sha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(entry.sha256) &&
+    Number.isInteger(entry.mode) &&
+    entry.mode >= 0 &&
+    Number.isInteger(entry.size) &&
+    entry.size >= 0
+  );
+}
+
+for (const [index, entry] of listedNormalized.entries()) {
+  const canonicalEntry = normalized[index] ?? "";
+  if (canonicalEntry) {
+    normalizedEntryCounts.set(canonicalEntry, (normalizedEntryCounts.get(canonicalEntry) ?? 0) + 1);
+  }
+  if (
+    entry.startsWith("/") ||
+    entry.split("/").includes("..") ||
+    entry.split("/").includes(".") ||
+    canonicalEntry !== entry
+  ) {
     errors.push(`unsafe tar entry: ${entry}`);
   }
 }
+for (const [entry, count] of normalizedEntryCounts) {
+  if (count > 1) {
+    errors.push(`duplicate normalized tar entry: ${entry}`);
+  }
+}
+const unsafeExtractedDistTreeErrors = collectUnsafeExtractedDistTreeErrors();
+if (unsafeExtractedDistTreeErrors.length > 0) {
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  fail(
+    `OpenClaw package tarball integrity failed:\n${[...errors, ...unsafeExtractedDistTreeErrors].join("\n")}`,
+  );
+}
 
-if (!entrySet.has("package.json")) {
+if (!packageEntrySet.has("package.json")) {
   errors.push("missing package.json");
 }
-if (!normalized.some((entry) => entry.startsWith("dist/"))) {
+if (!packageNormalized.some((entry) => entry.startsWith("dist/"))) {
   errors.push("missing dist/ entries");
 }
 for (const requiredEntry of REQUIRED_TARBALL_ENTRIES) {
-  if (!entrySet.has(requiredEntry)) {
+  if (!packageEntrySet.has(requiredEntry)) {
     errors.push(`missing required tar entry ${requiredEntry}`);
   }
 }
 for (const requiredPrefix of REQUIRED_TARBALL_ENTRY_PREFIXES) {
-  if (!normalized.some((entry) => entry.startsWith(requiredPrefix))) {
+  if (!packageNormalized.some((entry) => entry.startsWith(requiredPrefix))) {
     errors.push(`missing required tar entries under ${requiredPrefix}`);
   }
 }
 let packageVersion = "";
-if (entrySet.has("package.json")) {
+if (packageEntrySet.has("package.json")) {
   try {
-    const packageJson = JSON.parse(readTarEntry("package.json"));
+    const packageJson = JSON.parse(readPackageMetadataTarEntry("package.json"));
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
     errors.push(...collectWorkspaceProtocolDependencyErrors(packageJson, "package.json"));
     if (cliArgs.requireBundledWorkspaceDeps) {
       errors.push(
         ...collectRequiredBundledWorkspaceDependencyErrors(
           packageJson,
-          entrySet,
-          normalized,
+          packageEntrySet,
+          packageNormalized,
           extractedPackageRoot,
-          readTarEntry,
+          readBundledPackageTarEntry,
         ),
       );
     }
-  } catch {
+  } catch (error) {
     packageVersion = "";
+    errors.push(
+      `unreadable package.json: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
-if (entrySet.has("package-lock.json")) {
+if (!packageEntrySet.has(CONTENT_INVENTORY_COMPAT_PATH)) {
+  if (isLegacyContentInventoryCompatVersion(packageVersion)) {
+    warnings.push(`legacy package omits ${CONTENT_INVENTORY_COMPAT_PATH}`);
+  } else {
+    errors.push(`missing required tar entry ${CONTENT_INVENTORY_COMPAT_PATH}`);
+  }
+}
+const expectedPackageDistInventoryEntries = [
+  ...new Set(packageNormalized.filter(isExpectedPackageDistInventoryEntry)),
+].toSorted((left, right) => left.localeCompare(right));
+if (packageEntrySet.has("package-lock.json")) {
   errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
 }
-if (!entrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
+if (!packageEntrySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
   if (isLegacyInstallGuardCompatVersion(packageVersion)) {
     warnings.push("legacy package omits the preinstall completion guard");
   } else {
     errors.push(`missing required tar entry ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`);
   }
 }
-if (!entrySet.has("npm-shrinkwrap.json")) {
+if (!packageEntrySet.has("npm-shrinkwrap.json")) {
   if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
     warnings.push("legacy package omits npm-shrinkwrap.json");
   } else {
@@ -483,7 +705,7 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
   }
 } else {
   try {
-    const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json"));
+    const shrinkwrap = JSON.parse(readPackageMetadataTarEntry("npm-shrinkwrap.json"));
     const rootPackage = shrinkwrap.packages?.[""];
     if (shrinkwrap.name !== "openclaw") {
       errors.push("npm-shrinkwrap.json root name must be openclaw");
@@ -522,7 +744,7 @@ if (!entrySet.has("npm-shrinkwrap.json")) {
   }
 }
 for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
-  if (entrySet.has(forbiddenEntry)) {
+  if (packageEntrySet.has(forbiddenEntry)) {
     if (isLegacyLocalBuildMetadataCompatVersion(packageVersion)) {
       warnings.push(`legacy package includes local build metadata tar entry ${forbiddenEntry}`);
       continue;
@@ -530,34 +752,47 @@ for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
     errors.push(`forbidden local build metadata tar entry ${forbiddenEntry}`);
   }
 }
-if (!entrySet.has("dist/postinstall-inventory.json")) {
+if (!packageEntrySet.has("dist/postinstall-inventory.json")) {
   errors.push("missing dist/postinstall-inventory.json");
 }
+if (!packageEntrySet.has("dist/postinstall-content-inventory.json")) {
+  if (isLegacyContentInventoryCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits dist/postinstall-content-inventory.json");
+  } else {
+    errors.push("missing dist/postinstall-content-inventory.json");
+  }
+}
 let packageDistImports = null;
-if (entrySet.has("dist/postinstall-inventory.json")) {
+let normalizedInventory = null;
+if (packageEntrySet.has("dist/postinstall-inventory.json")) {
   try {
     const allowLegacyPrivateQaInventoryOmissions =
       isLegacyPackageAcceptanceCompatVersion(packageVersion);
-    const inventory = JSON.parse(readTarEntry("dist/postinstall-inventory.json"));
+    const inventory = JSON.parse(readPackageMetadataTarEntry("dist/postinstall-inventory.json"));
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push("invalid dist/postinstall-inventory.json");
     } else {
-      const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
+      normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
       if (normalizedInventorySet.has(PACKAGE_INSTALL_GUARD_RELATIVE_PATH)) {
         errors.push(
           `package dist inventory must omit install guard ${PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
         );
       }
+      for (const packagedEntry of expectedPackageDistInventoryEntries) {
+        if (!normalizedInventorySet.has(packagedEntry)) {
+          errors.push(`inventory omits packaged dist file ${packagedEntry}`);
+        }
+      }
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({
-          files: normalized,
-          readText: readTarEntry,
+          files: packageNormalized,
+          readText: readPackageTarEntry,
         }),
       );
       for (const inventoryEntry of inventory) {
         const normalizedEntry = inventoryEntry.replace(/\\/gu, "/");
-        if (!entrySet.has(normalizedEntry)) {
+        if (!packageEntrySet.has(normalizedEntry)) {
           if (
             allowLegacyPrivateQaInventoryOmissions &&
             isLegacyOmittedPrivateQaInventoryEntry(normalizedEntry)
@@ -571,9 +806,9 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
         }
       }
       const expandedInventory = expandPackageDistImportClosure({
-        files: normalized,
+        files: packageNormalized,
         seedFiles: normalizedInventory,
-        readText: readTarEntry,
+        readText: readPackageTarEntry,
         imports: packageDistImports,
       });
       for (const importedEntry of expandedInventory) {
@@ -591,10 +826,102 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
   }
 }
 
+if (packageEntrySet.has("dist/postinstall-content-inventory.json")) {
+  try {
+    const contentInventory = JSON.parse(
+      readPackageMetadataTarEntry("dist/postinstall-content-inventory.json"),
+    );
+    if (
+      !Array.isArray(contentInventory) ||
+      contentInventory.some((entry) => !isContentInventoryEntry(entry))
+    ) {
+      errors.push("invalid dist/postinstall-content-inventory.json");
+    } else {
+      const normalizedContentEntries = contentInventory.map((entry) =>
+        Object.assign({}, entry, { path: entry.path.replace(/\\/gu, "/") }),
+      );
+      const normalizedContentEntryCounts = new Map();
+      for (const contentEntry of normalizedContentEntries) {
+        normalizedContentEntryCounts.set(
+          contentEntry.path,
+          (normalizedContentEntryCounts.get(contentEntry.path) ?? 0) + 1,
+        );
+      }
+      for (const [entry, count] of normalizedContentEntryCounts) {
+        if (count > 1) {
+          errors.push(`duplicate normalized content inventory entry: ${entry}`);
+        }
+      }
+      const contentEntryMap = new Map(normalizedContentEntries.map((entry) => [entry.path, entry]));
+      for (const packagedEntry of expectedPackageDistInventoryEntries) {
+        if (!contentEntryMap.has(packagedEntry)) {
+          errors.push(`content inventory omits packaged dist file ${packagedEntry}`);
+        }
+      }
+      const normalizedInventorySet = normalizedInventory ? new Set(normalizedInventory) : null;
+      if (normalizedInventory) {
+        for (const inventoryEntry of normalizedInventory) {
+          if (
+            !contentEntryMap.has(inventoryEntry) &&
+            !isAllowedMissingContentInventoryEntry(inventoryEntry)
+          ) {
+            errors.push(`content inventory omits packaged dist file ${inventoryEntry}`);
+          }
+        }
+        for (const contentEntry of normalizedContentEntries) {
+          if (!normalizedInventorySet?.has(contentEntry.path)) {
+            errors.push(
+              `content inventory references non-inventoried dist file ${contentEntry.path}`,
+            );
+          }
+        }
+      }
+      for (const contentEntry of normalizedContentEntries) {
+        if (!isSafeTarEntryPath(contentEntry.path)) {
+          errors.push(`unsafe content inventory entry ${contentEntry.path}`);
+          continue;
+        }
+        if (normalizedInventorySet && !normalizedInventorySet.has(contentEntry.path)) {
+          continue;
+        }
+        if (!packageEntrySet.has(contentEntry.path)) {
+          errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
+          continue;
+        }
+        const { content, error, mode } = readPackageTarEntryBuffer(contentEntry.path);
+        if (error) {
+          errors.push(error);
+          continue;
+        }
+        if (!content) {
+          errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
+          continue;
+        }
+        const actualHash = sha256Hex(content);
+        if (actualHash !== contentEntry.sha256) {
+          errors.push(`content inventory hash mismatch for ${contentEntry.path}`);
+        }
+        if (content.length !== contentEntry.size) {
+          errors.push(`content inventory size mismatch for ${contentEntry.path}`);
+        }
+        if (process.platform !== "win32" && (mode & 0o111) !== (contentEntry.mode & 0o111)) {
+          errors.push(`content inventory executable mode mismatch for ${contentEntry.path}`);
+        }
+      }
+    }
+  } catch (error) {
+    errors.push(
+      `unreadable dist/postinstall-content-inventory.json: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
 errors.push(
   ...collectPackageDistImportErrors({
-    files: normalized,
-    readText: readTarEntry,
+    files: packageNormalized,
+    readText: readPackageTarEntry,
     imports: packageDistImports ?? undefined,
   }),
 );

@@ -108,6 +108,7 @@ export async function runGlobalUpdate(params: {
     packageRoot: pkgRoot,
     runCommand,
     timeoutMs,
+    reapplyLocalOverrides: opts.reapplyLocalOverrides === true,
     ...(globalInstallEnv === undefined ? {} : { env: globalInstallEnv }),
     installCwd: pkgRoot,
     runStep: (stepParams) =>
@@ -164,6 +165,7 @@ export async function runGlobalUpdate(params: {
       : undefined,
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion },
+    localOverrides: packageUpdate.localOverrides,
     steps: packageUpdate.steps,
     durationMs: Date.now() - startedAt,
   };

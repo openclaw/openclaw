@@ -776,6 +776,14 @@
     "target": "Ollama Web 搜索"
   },
   {
+    "source": "Llama Cpp plugin",
+    "target": "Llama Cpp 插件"
+  },
+  {
+    "source": "llama-cpp",
+    "target": "llama-cpp"
+  },
+  {
     "source": "Memory LanceDB",
     "target": "Memory LanceDB"
   },

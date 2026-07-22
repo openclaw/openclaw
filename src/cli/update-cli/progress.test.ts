@@ -111,4 +111,28 @@ describe("update failure hints", () => {
     expect(output).not.toContain("Recovery hints:");
     expect(output).not.toContain("npm config set prefix ~/.local");
   });
+
+  it("prints local override conflict paths in human output", () => {
+    const result = {
+      status: "ok",
+      mode: "npm",
+      steps: [],
+      durationMs: 1,
+      localOverrides: {
+        status: "conflict",
+        added: 0,
+        modified: 1,
+        deleted: 0,
+        applied: 0,
+        recoveryDir: "/tmp/openclaw-local-overrides",
+        warnings: [],
+        conflicts: [{ path: "dist/index.js", reason: "target-changed" }],
+      },
+    } satisfies UpdateRunResult;
+
+    const output = renderResult(result);
+    expect(output).toContain("Local conflict:");
+    expect(output).toContain("dist/index.js");
+    expect(output).toContain("target-changed");
+  });
 });

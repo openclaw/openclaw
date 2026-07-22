@@ -193,6 +193,8 @@ export function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig)
 }
 
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+export const PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH =
+  "dist/postinstall-content-inventory.json";
 export const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 export const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",

@@ -187,6 +187,7 @@ export async function executeMutableUpdate(params: {
               nodeRunner: params.packageUpdateNodeRunner,
               installEnv: params.packageInstallEnv,
               installTarget: params.packageInstallTarget,
+              reapplyLocalOverrides: params.opts.reapplyLocalOverrides === true,
             })
           : await runGitUpdate({
               root: params.root,

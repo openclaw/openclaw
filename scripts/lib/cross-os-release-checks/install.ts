@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -12,12 +14,14 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
+import { root as openFsRoot } from "@openclaw/fs-safe/root";
 import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mjs";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,
   INSTALL_STAGE_DEBRIS_DIR_PATTERN,
   OMITTED_QA_EXTENSION_PREFIXES,
+  PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
@@ -28,6 +32,8 @@ import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
 import { logPhase } from "./reporting.ts";
 import { formatError, resolveCommandPath, shellEscapeForSh } from "./shared.ts";
+
+type PackageDistFsRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
 export async function prepareCandidate(params: {
   outputDir: string;
@@ -257,11 +263,94 @@ function assertNoLegacyPluginDependencyStagingDebris(packageRoot: string) {
   );
 }
 
+function collectPackagedDistSymlinkPaths(packageRoot: string, inventory: string[]) {
+  const symlinks: string[] = [];
+  const seen = new Set<string>();
+  for (const relativePath of inventory) {
+    const parts = normalizeRelativePath(relativePath).split("/");
+    let current = packageRoot;
+    for (const part of parts) {
+      current = join(current, part);
+      const symlinkPath = normalizeRelativePath(relative(packageRoot, current));
+      if (seen.has(symlinkPath)) {
+        continue;
+      }
+      seen.add(symlinkPath);
+      try {
+        const stats = lstatSync(current);
+        if (stats.isSymbolicLink()) {
+          symlinks.push(symlinkPath);
+          break;
+        }
+      } catch (error) {
+        if (isNotFoundError(error)) {
+          break;
+        }
+        throw error;
+      }
+    }
+  }
+  return symlinks.toSorted((left, right) => left.localeCompare(right));
+}
+
+function assertNoPackagedDistSymlinks(packageRoot: string, inventory: string[]) {
+  const symlinks = collectPackagedDistSymlinkPaths(packageRoot, inventory);
+  if (symlinks.length === 0) {
+    return;
+  }
+  throw new Error(`unsafe package dist symlink: ${symlinks.join(", ")}`);
+}
+
+function assertSafePackageDistInventoryWriteRoots(packageRoot: string) {
+  // npm can omit a symlinked dist root from its dry-run inventory. Recheck the
+  // write roots so generated inventories cannot follow it outside sourceDir.
+  const packageRootStats = lstatSync(packageRoot);
+  if (packageRootStats.isSymbolicLink() || !packageRootStats.isDirectory()) {
+    throw new Error("unsafe package inventory write root");
+  }
+  try {
+    const distRootStats = lstatSync(join(packageRoot, "dist"));
+    if (distRootStats.isSymbolicLink() || !distRootStats.isDirectory()) {
+      throw new Error("unsafe package dist inventory write root");
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+function assertSafePackageDistInventoryWriteDestination(packageRoot: string, relativePath: string) {
+  try {
+    const stats = lstatSync(join(packageRoot, relativePath));
+    if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink > 1) {
+      throw new Error(`unsafe package dist inventory write destination: ${relativePath}`);
+    }
+  } catch (error) {
+    if (!isNotFoundError(error)) {
+      throw error;
+    }
+  }
+}
+
+async function writePackageDistInventoryMetadata(
+  packageFs: PackageDistFsRoot,
+  packageRoot: string,
+  relativePath: string,
+  content: string,
+) {
+  assertSafePackageDistInventoryWriteDestination(packageRoot, relativePath);
+  await packageFs.write(relativePath, content, { mode: 0o644 });
+}
+
 function isPackagedDistPath(relativePath: string) {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
+    return false;
+  }
+  if (relativePath === PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH) {
     return false;
   }
   if (isLocalBuildMetadataDistPath(relativePath)) {
@@ -279,10 +368,29 @@ function isPackagedDistPath(relativePath: string) {
   return true;
 }
 
+function buildPackageDistContentInventory(packageRoot: string, inventory: string[]) {
+  return inventory
+    .map((relativePath) => {
+      const filePath = join(packageRoot, relativePath);
+      const stats = lstatSync(filePath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error(`unsafe package dist path: ${relativePath}`);
+      }
+      return {
+        path: relativePath,
+        sha256: createHash("sha256").update(readFileSync(filePath)).digest("hex"),
+        mode: stats.mode & 0o777,
+        size: stats.size,
+      };
+    })
+    .toSorted((left, right) => left.path.localeCompare(right.path));
+}
+
 export async function writePackageDistInventoryForCandidate(params: {
   sourceDir: string;
   logPath: string;
 }) {
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     pnpmCommand(),
@@ -309,9 +417,24 @@ export async function writePackageDistInventoryForCandidate(params: {
       return isPackagedDistPath(relativePath) ? [relativePath] : [];
     })
     .toSorted((left, right) => left.localeCompare(right));
+  assertNoPackagedDistSymlinks(params.sourceDir, inventory);
   const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
   mkdirSync(dirname(inventoryPath), { recursive: true });
-  writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
+  assertSafePackageDistInventoryWriteRoots(params.sourceDir);
+  const packageFs = await openFsRoot(params.sourceDir, { mkdir: true });
+  await writePackageDistInventoryMetadata(
+    packageFs,
+    params.sourceDir,
+    PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+    `${JSON.stringify(inventory, null, 2)}\n`,
+  );
+  await writePackageDistInventoryMetadata(
+    packageFs,
+    params.sourceDir,
+    PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH,
+    `${JSON.stringify(buildPackageDistContentInventory(params.sourceDir, inventory), null, 2)}\n`,
+  );
 }
 
 export function readProvidedCandidate(params: {

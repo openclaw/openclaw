@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -2140,6 +2141,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         "utf8",
       );
       writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+      writeFileSync(
+        join(packageRoot, "dist", "postinstall-content-inventory.json"),
+        "stale\n",
+        "utf8",
+      );
       for (const relativePath of LOCAL_BUILD_METADATA_DIST_PATHS) {
         writeFileSync(join(packageRoot, relativePath), "{}\n", "utf8");
       }
@@ -2152,10 +2158,213 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(
         JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
       ).toEqual(["dist/index.js"]);
+      expect(
+        JSON.parse(
+          readFileSync(join(packageRoot, "dist", "postinstall-content-inventory.json"), "utf8"),
+        ),
+      ).toMatchObject([
+        {
+          path: "dist/index.js",
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          size: "export {};\n".length,
+        },
+      ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
   });
+
+  it.runIf(process.platform !== "win32").each([
+    {
+      kind: "symlink",
+      relativePath: "dist/postinstall-inventory.json",
+    },
+    {
+      kind: "symlink",
+      relativePath: "dist/postinstall-content-inventory.json",
+    },
+    {
+      kind: "hardlink",
+      relativePath: "dist/postinstall-inventory.json",
+    },
+    {
+      kind: "hardlink",
+      relativePath: "dist/postinstall-content-inventory.json",
+    },
+  ])("rejects an unsafe $kind candidate inventory destination at $relativePath", async (params) => {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-inventory-destination-"));
+    const outsidePath = `${packageRoot}-outside.json`;
+    try {
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+        "utf8",
+      );
+      writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+      writeFileSync(outsidePath, "outside sentinel\n", "utf8");
+      const destinationPath = join(packageRoot, params.relativePath);
+      if (params.kind === "symlink") {
+        symlinkSync(outsidePath, destinationPath);
+      } else {
+        linkSync(outsidePath, destinationPath);
+      }
+
+      await expect(
+        writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        }),
+      ).rejects.toThrow(`unsafe package dist inventory write destination: ${params.relativePath}`);
+
+      expect(readFileSync(outsidePath, "utf8")).toBe("outside sentinel\n");
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+      rmSync(outsidePath, { force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "omits symlinked dist files omitted from the candidate package",
+    async () => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-symlink-"));
+      try {
+        mkdirSync(join(packageRoot, "dist"), { recursive: true });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+          "utf8",
+        );
+        writeFileSync(join(packageRoot, "dist", "target.js"), "export const target = true;\n");
+        symlinkSync("target.js", join(packageRoot, "dist", "index.js"));
+
+        await writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        });
+
+        expect(
+          JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
+        ).toEqual(["dist/target.js"]);
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "ignores symlinked dist files omitted from the candidate package",
+    async () => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-omitted-symlink-"));
+      try {
+        mkdirSync(join(packageRoot, "dist", "extensions", "demo", "node_modules"), {
+          recursive: true,
+        });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({
+            name: "openclaw-fixture",
+            version: "0.0.0",
+            files: ["dist/index.js"],
+          }),
+          "utf8",
+        );
+        writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n");
+        writeFileSync(
+          join(packageRoot, "dist", "extensions", "demo", "node_modules", "target.js"),
+          "export const target = true;\n",
+        );
+        symlinkSync(
+          "target.js",
+          join(packageRoot, "dist", "extensions", "demo", "node_modules", "linked.js"),
+        );
+
+        await writePackageDistInventoryForCandidate({
+          sourceDir: packageRoot,
+          logPath: join(packageRoot, "npm-pack-dry-run.log"),
+        });
+
+        expect(
+          JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
+        ).toEqual(["dist/index.js"]);
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked dist root before writing candidate inventories",
+    async () => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-dist-symlink-"));
+      try {
+        mkdirSync(join(packageRoot, "real-dist"), { recursive: true });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+          "utf8",
+        );
+        writeFileSync(join(packageRoot, "real-dist", "index.js"), "export {};\n");
+        writeFileSync(
+          join(packageRoot, "real-dist", "postinstall-content-inventory.json"),
+          "outside sentinel\n",
+        );
+        symlinkSync("real-dist", join(packageRoot, "dist"));
+
+        await expect(
+          writePackageDistInventoryForCandidate({
+            sourceDir: packageRoot,
+            logPath: join(packageRoot, "npm-pack-dry-run.log"),
+          }),
+        ).rejects.toThrow("unsafe package dist inventory write root");
+
+        expect(
+          readFileSync(
+            join(packageRoot, "real-dist", "postinstall-content-inventory.json"),
+            "utf8",
+          ),
+        ).toBe("outside sentinel\n");
+        expect(existsSync(join(packageRoot, "real-dist", "postinstall-inventory.json"))).toBe(
+          false,
+        );
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked candidate root before writing candidate inventories",
+    async () => {
+      const realPackageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-root-real-"));
+      const packageRoot = `${realPackageRoot}-link`;
+      try {
+        mkdirSync(join(realPackageRoot, "dist"), { recursive: true });
+        writeFileSync(
+          join(realPackageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+          "utf8",
+        );
+        writeFileSync(join(realPackageRoot, "dist", "index.js"), "export {};\n");
+        symlinkSync(realPackageRoot, packageRoot);
+
+        await expect(
+          writePackageDistInventoryForCandidate({
+            sourceDir: packageRoot,
+            logPath: join(realPackageRoot, "npm-pack-dry-run.log"),
+          }),
+        ).rejects.toThrow("unsafe package inventory write root");
+
+        expect(existsSync(join(realPackageRoot, "dist", "postinstall-inventory.json"))).toBe(false);
+        expect(
+          existsSync(join(realPackageRoot, "dist", "postinstall-content-inventory.json")),
+        ).toBe(false);
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+        rmSync(realPackageRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("accepts a git main dev-channel update status payload", () => {
     expect(

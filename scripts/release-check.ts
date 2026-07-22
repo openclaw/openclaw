@@ -106,6 +106,7 @@ const requiredPathGroups = [
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-plugin-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
+  "scripts/lib/content-inventory-compat.mjs",
   "scripts/lib/recommended-tool-installs.json",
   "scripts/lib/package-dist-imports.mjs",
   "scripts/postinstall-bundled-plugins.mjs",
