@@ -3,6 +3,7 @@ import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -15,8 +16,10 @@ import {
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 import {
+  POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV,
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_RESULT_PATH_ENV,
+  readPostCorePluginInstallRecordsFile,
   resolvePostCoreUpdateStartedAtMs,
   writePostCorePluginUpdateResultFile,
 } from "./update-command-post-core.js";
@@ -71,8 +74,16 @@ async function resumePostCoreUpdateUnlocked(params: ResumePostCoreUpdateParams):
     requestedChannel,
   });
   const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preUpdateSourceConfig);
-  // The updated doctor may have repaired or removed plugin installs before this process resumed.
-  const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const parentPluginInstallRecords = await readPostCorePluginInstallRecordsFile(
+    process.env[POST_CORE_UPDATE_INSTALL_RECORDS_PATH_ENV],
+  );
+  const currentPluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+  const persistedPluginIndex = await readPersistedInstalledPluginIndex();
+  // A present empty index is authoritative: another lifecycle may have removed every plugin.
+  const pluginInstallRecords =
+    Object.keys(currentPluginInstallRecords).length > 0 || persistedPluginIndex
+      ? currentPluginInstallRecords
+      : parentPluginInstallRecords;
 
   const initialPluginUpdate = await updatePluginsAfterCoreUpdate({
     root: params.root,
