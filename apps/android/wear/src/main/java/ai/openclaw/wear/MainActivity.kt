@@ -24,6 +24,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -39,26 +40,67 @@ import androidx.wear.input.RemoteInputIntentHelper
 import kotlinx.coroutines.delay
 import java.util.Locale
 
+internal const val extraWearLaunchTarget = "openclaw.wear.launchTarget"
+
+internal enum class WearLaunchTarget(
+  val rawValue: String,
+  val initialPage: WearHomePage,
+) {
+  Chat("chat", WearHomePage.Chat),
+  Voice("voice", WearHomePage.Voice),
+  ;
+
+  companion object {
+    fun fromRawValue(raw: String?): WearLaunchTarget = entries.firstOrNull { target -> target.rawValue == raw?.trim()?.lowercase() } ?: Chat
+  }
+}
+
+internal fun parseWearLaunchTarget(intent: Intent?): WearLaunchTarget = WearLaunchTarget.fromRawValue(intent?.getStringExtra(extraWearLaunchTarget))
+
+internal data class WearLaunchState(
+  val target: WearLaunchTarget = WearLaunchTarget.Chat,
+  val generation: Int = 0,
+) {
+  fun next(intent: Intent?): WearLaunchState =
+    WearLaunchState(
+      target = parseWearLaunchTarget(intent),
+      generation = generation + 1,
+    )
+}
+
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
   private var screenshotScene: WearScreenshotScene? = null
+  private var launchState by mutableStateOf(WearLaunchState())
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
+    launchState = WearLaunchState(target = parseWearLaunchTarget(intent))
     if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
       screenshotScene = parseWearScreenshotModeIntent(intent)
     }
     setContent {
       val scene = screenshotScene
       if (scene == null) {
-        OpenClawWearApp(
-          viewModel = viewModel,
-          settingsStore = remember { WearSettingsStore(applicationContext) },
-          speaker = remember { WearReplySpeaker(applicationContext) },
-        )
+        key(launchState.generation) {
+          OpenClawWearApp(
+            viewModel = viewModel,
+            settingsStore = remember { WearSettingsStore(applicationContext) },
+            speaker = remember { WearReplySpeaker(applicationContext) },
+            initialPage = launchState.target.initialPage,
+          )
+        }
       } else {
         OpenClawWearScreenshotApp(scene)
       }
+    }
+  }
+
+  override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    if (screenshotScene == null) {
+      launchState = launchState.next(intent)
     }
   }
 
@@ -82,6 +124,7 @@ internal fun OpenClawWearApp(
   viewModel: WearViewModel,
   settingsStore: WearSettingsStore,
   speaker: WearReplySpeaker,
+  initialPage: WearHomePage = WearHomePage.Chat,
 ) {
   val state by viewModel.state.collectAsState()
   val snapshot = state.toConversationSnapshot()
@@ -322,6 +365,7 @@ internal fun OpenClawWearApp(
         themeMode = themeMode,
         autoSpeak = autoSpeak,
         notificationsGranted = notificationsGranted,
+        initialPage = initialPage,
         onTalk = {
           if (!state.connected || snapshot?.activeSessionId == null) return@OpenClawWearScreens
           interaction = WearInteractionState.LISTENING
