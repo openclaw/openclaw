@@ -15,6 +15,12 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Requester session that should receive subagent lifecycle/completion messages. */
+  requesterSessionKey?: string;
+  /** When true, completion should be announced back to the requester session. */
+  expectsCompletionMessage?: boolean;
+  /** Trusted plugin-issued, run-scoped approval capability for native harnesses. */
+  approvalGrant?: unknown;
   /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
   toolsAlsoAllow?: string[];
   provider?: string;

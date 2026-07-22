@@ -278,6 +278,11 @@ export function startAgentRunExecution(params: {
           params.client.internal.runtimePluginToolGrant?.pluginId
           ? params.client.internal.runtimePluginToolGrant
           : undefined;
+      const approvalGrant =
+        params.client?.internal?.agentRunTracking === "plugin_subagent" &&
+        params.client.internal.pluginRuntimeOwnerId
+          ? params.request.approvalGrant
+          : undefined;
       const trustedInternalHandoff =
         params.client?.internal?.delegatedToolPolicyHandoff === true &&
         params.inputProvenance?.kind === "inter_session" &&
@@ -348,6 +353,7 @@ export function startAgentRunExecution(params: {
           bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
           toolsAllow: params.restoredCronContinuation?.toolsAllow,
           runtimePluginToolGrant,
+          approvalGrant,
           trustedInternalHandoff,
           toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
           requireExplicitMessageTarget:

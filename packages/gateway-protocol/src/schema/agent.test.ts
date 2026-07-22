@@ -79,6 +79,24 @@ describe("AgentParamsSchema", () => {
     ).toBe(true);
   });
 
+  it("accepts trusted plugin subagent routing and approval params", () => {
+    expect(
+      Value.Check(AgentParamsSchema, {
+        message: "handoff",
+        sessionKey: "agent:main:subagent:loop-guard",
+        requesterSessionKey: "agent:main:feishu:direct:user",
+        expectsCompletionMessage: true,
+        approvalGrant: {
+          kind: "loop_guard_inherited_approval",
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+          expiresAt: Date.now() + 30_000,
+        },
+        idempotencyKey: "plugin-subagent-approval-1",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects host-owned delivery media constraints from public requests", () => {
     expect(
       Value.Check(AgentParamsSchema, {

@@ -283,6 +283,11 @@ export const AgentParamsSchema = closedObject({
   replyTo: Type.Optional(Type.String()),
   sessionId: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
+  // Trusted plugin-subagent routing/approval parameters. Public callers may send
+  // them, but gateway handlers only consume them for authenticated plugin subagent runs.
+  requesterSessionKey: Type.Optional(Type.String()),
+  expectsCompletionMessage: Type.Optional(Type.Boolean()),
+  approvalGrant: Type.Optional(Type.Unknown()),
   // Backend-owned continuations can bind work to an already-admitted transcript.
   expectedExistingSessionId: Type.Optional(NonEmptyString),
   thinking: Type.Optional(Type.String()),

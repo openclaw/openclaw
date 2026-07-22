@@ -10,6 +10,9 @@ export type AgentRunRequest = {
   replyTo?: string;
   sessionId?: string;
   sessionKey?: string;
+  requesterSessionKey?: string;
+  expectsCompletionMessage?: boolean;
+  approvalGrant?: unknown;
   expectedExistingSessionId?: string;
   thinking?: string;
   deliver?: boolean;

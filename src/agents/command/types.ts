@@ -111,6 +111,8 @@ export type AgentCommandOpts = {
   toolsAllow?: string[];
   /** Trusted owner-scoped plugin tool grant; normal policy and deny rules still apply. */
   runtimePluginToolGrant?: RuntimePluginToolGrant;
+  /** Trusted plugin-subagent, run-scoped approval capability for native harnesses. */
+  approvalGrant?: unknown;
   /** Trusted in-process subagent-completion handoff; never accepted from public RPC params. */
   trustedInternalHandoff?: boolean;
   /** Internal marker for an auto-applied cap that CLI runtimes must omit. */

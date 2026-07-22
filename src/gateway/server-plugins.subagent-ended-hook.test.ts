@@ -116,6 +116,46 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
     expect(request.client?.internal?.pluginRuntimeOwnerId).toBe("memory-core");
   });
 
+  test("forwards trusted plugin subagent completion and approval params", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const gatewayScope = await loadGatewayScope();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    const approvalGrant = {
+      kind: "loop_guard_inherited_approval",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      expiresAt: Date.now() + 30_000,
+    };
+
+    const scope = {
+      context: createTestContext("plugin-scope", createTestCfg()),
+      pluginId: "loop-guard",
+      isWebchatConnect: () => false,
+    } satisfies PluginRuntimeGatewayRequestScope;
+
+    await gatewayScope.withPluginRuntimeGatewayRequestScope(scope, () =>
+      runtime.run({
+        sessionKey: "agent:main:subagent:loop-guard-worker",
+        requesterSessionKey: "agent:main:feishu:direct:user",
+        expectsCompletionMessage: true,
+        approvalGrant,
+        message: "continue after approval",
+        deliver: false,
+      }),
+    );
+
+    const request = lastGatewayRequest();
+    expect(request.req.method).toBe("agent");
+    expect(request.req.params).toMatchObject({
+      sessionKey: "agent:main:subagent:loop-guard-worker",
+      requesterSessionKey: "agent:main:feishu:direct:user",
+      expectsCompletionMessage: true,
+      approvalGrant,
+    });
+    expect(request.client?.internal?.agentRunTracking).toBe("plugin_subagent");
+    expect(request.client?.internal?.pluginRuntimeOwnerId).toBe("loop-guard");
+  });
+
   test("does not dispatch when no runtime config is available", async () => {
     const serverPlugins = await loadServerPlugins();
     const runtime = serverPlugins.createGatewaySubagentRuntime();

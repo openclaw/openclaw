@@ -293,6 +293,7 @@ export async function prepareAgentRunDispatch(params: {
         runId: params.runId,
         childSessionKey: params.resolvedSessionKey,
         task: params.request.message.trim(),
+        requesterSessionKey: normalizeOptionalString(params.request.requesterSessionKey),
         requesterOrigin: normalizeDeliveryContext({
           channel: params.delivery.resolvedChannel,
           to: params.delivery.resolvedTo,
@@ -300,6 +301,7 @@ export async function prepareAgentRunDispatch(params: {
           threadId: resolvedThreadId,
         }),
         pluginId: normalizeOptionalString(params.client?.internal?.pluginRuntimeOwnerId),
+        expectsCompletionMessage: params.request.expectsCompletionMessage === true,
       });
     } catch (err) {
       params.context.logGateway.warn(

@@ -433,6 +433,11 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         {
           sessionKey: params.sessionKey,
           message: params.message,
+          ...(params.requesterSessionKey
+            ? { requesterSessionKey: params.requesterSessionKey }
+            : {}),
+          ...(params.expectsCompletionMessage === true ? { expectsCompletionMessage: true } : {}),
+          ...(params.approvalGrant !== undefined ? { approvalGrant: params.approvalGrant } : {}),
           deliver: params.deliver ?? false,
           ...(allowOverride && params.provider && { provider: params.provider }),
           ...(allowOverride && params.model && { model: params.model }),
