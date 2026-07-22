@@ -41,10 +41,14 @@ function focusTrigger(trigger: HTMLElement) {
   trigger.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
 }
 
-function hoverTrigger(trigger: HTMLElement) {
-  const event = new MouseEvent("pointerenter", { bubbles: true, buttons: 0 });
+function dispatchMousePointer(target: EventTarget, type: "pointerenter" | "pointerleave") {
+  const event = new MouseEvent(type, { bubbles: true, buttons: 0 });
   Object.defineProperty(event, "pointerType", { value: "mouse" });
-  trigger.dispatchEvent(event);
+  target.dispatchEvent(event);
+}
+
+function hoverTrigger(trigger: HTMLElement) {
+  dispatchMousePointer(trigger, "pointerenter");
 }
 
 function webAwesomeTooltip(tooltip: TooltipElement) {
@@ -291,26 +295,53 @@ describe("openclaw-tooltip", () => {
     expectOpenCount(0);
   });
 
-  it("stays open while the pointer moves from the trigger into rich content", async () => {
+  it("stays open when a focused trigger is swept through and out of rich content", async () => {
     const { tooltip, trigger } = createRichTooltip("Scrollable card");
     document.body.append(tooltip);
     await tooltip.updateComplete;
 
-    focusTrigger(trigger);
-    trigger.dispatchEvent(new MouseEvent("pointerleave"));
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+    hoverTrigger(trigger);
+    const richContent = tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
+    dispatchMousePointer(trigger, "pointerleave");
+    if (richContent) {
+      dispatchMousePointer(richContent, "pointerenter");
+      dispatchMousePointer(richContent, "pointerleave");
+    }
+    vi.advanceTimersByTime(100);
+
+    expect(document.activeElement).toBe(trigger);
+    expectOpenCount(1);
+  });
+
+  it("closes after pointer leave when nothing retains the rich tooltip", async () => {
+    const { tooltip, trigger } = createRichTooltip("Hover-only card");
+    document.body.append(tooltip);
+    await tooltip.updateComplete;
+
+    hoverTrigger(trigger);
+    vi.advanceTimersByTime(150);
+    expectOpenCount(1);
+
+    dispatchMousePointer(trigger, "pointerleave");
     vi.advanceTimersByTime(99);
     expectOpenCount(1);
-
-    const richContent = tooltip.shadowRoot?.querySelector(".tooltip-rich-content");
-    const enter = new MouseEvent("pointerenter");
-    Object.defineProperty(enter, "pointerType", { value: "mouse" });
-    richContent?.dispatchEvent(enter);
     vi.advanceTimersByTime(1);
-    expectOpenCount(1);
+    expectOpenCount(0);
+  });
 
-    const leave = new MouseEvent("pointerleave");
-    Object.defineProperty(leave, "pointerType", { value: "mouse" });
-    richContent?.dispatchEvent(leave);
+  it("closes on focusout to an outside element when not hovered", async () => {
+    const { tooltip, trigger } = createRichTooltip("Focus-only card");
+    const outside = document.createElement("button");
+    document.body.append(tooltip, outside);
+    await tooltip.updateComplete;
+
+    trigger.focus();
+    expectOpenCount(1);
+    outside.focus();
+
+    expect(document.activeElement).toBe(outside);
     expectOpenCount(0);
   });
 

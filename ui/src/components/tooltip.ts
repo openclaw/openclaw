@@ -99,6 +99,8 @@ class Tooltip extends OpenClawLitElement {
   private touchTimer: number | null = null;
   private touchCloseTimer: number | null = null;
   private touchStart: { x: number; y: number } | null = null;
+  private triggerHovered = false;
+  private contentHovered = false;
   private suppressPointerFocus = false;
   private describedBy: string | null = null;
   private descriptionCaptured = false;
@@ -161,6 +163,8 @@ class Tooltip extends OpenClawLitElement {
 
   override disconnectedCallback() {
     this.close();
+    this.triggerHovered = false;
+    this.contentHovered = false;
     this.richContentObserver?.disconnect();
     this.richContentObserver = null;
     this.tooltipProvider = null;
@@ -248,33 +252,31 @@ class Tooltip extends OpenClawLitElement {
 
   private readonly handlePointerEnter = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
+      this.triggerHovered = true;
+      this.clearCloseTimer();
       this.scheduleOpen();
     }
   };
 
-  private readonly handlePointerLeave = () => {
-    if (!this.richContentText) {
-      this.close();
-      return;
+  private readonly handlePointerLeave = (event: PointerEvent) => {
+    if (event.pointerType !== "touch") {
+      this.triggerHovered = false;
+      this.maybeClose();
     }
-    if (this.closeTimer !== null) {
-      window.clearTimeout(this.closeTimer);
-    }
-    this.closeTimer = window.setTimeout(() => {
-      this.closeTimer = null;
-      this.close();
-    }, RICH_CONTENT_CLOSE_DELAY);
   };
 
   private readonly handleContentPointerEnter = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
+      this.contentHovered = true;
+      this.clearCloseTimer();
       this.show();
     }
   };
 
   private readonly handleContentPointerLeave = (event: PointerEvent) => {
     if (event.pointerType !== "touch") {
-      this.close();
+      this.contentHovered = false;
+      this.maybeClose();
     }
   };
 
@@ -326,7 +328,11 @@ class Tooltip extends OpenClawLitElement {
     }
   };
   private readonly handleFocusOut = (event: FocusEvent) => {
-    if (event.relatedTarget instanceof Node && this.contains(event.relatedTarget)) {
+    if (
+      (event.relatedTarget instanceof Node && this.contains(event.relatedTarget)) ||
+      this.triggerHovered ||
+      this.contentHovered
+    ) {
       return;
     }
     this.close();
@@ -358,7 +364,7 @@ class Tooltip extends OpenClawLitElement {
     if (!tooltip || !this.triggerElement || !this.tooltipText || this.isRedundant()) {
       return;
     }
-    this.clearTimers();
+    this.clearTimers(false);
     this.provider?.openTooltip(this);
     this.syncDescription();
     tooltip.open = true;
@@ -366,6 +372,8 @@ class Tooltip extends OpenClawLitElement {
 
   private close() {
     this.clearTimers();
+    this.triggerHovered = false;
+    this.contentHovered = false;
     this.touchStart = null;
     if (this.webAwesomeTooltip?.open) {
       this.webAwesomeTooltip.open = false;
@@ -441,14 +449,48 @@ class Tooltip extends OpenClawLitElement {
     }
   }
 
-  private clearTimers() {
+  private clearCloseTimer() {
+    if (this.closeTimer !== null) {
+      window.clearTimeout(this.closeTimer);
+      this.closeTimer = null;
+    }
+  }
+
+  private shouldRemainOpen() {
+    const activeElement = document.activeElement;
+    return (
+      this.triggerHovered ||
+      this.contentHovered ||
+      (activeElement instanceof Node && this.contains(activeElement))
+    );
+  }
+
+  private maybeClose() {
+    this.clearCloseTimer();
+    if (this.shouldRemainOpen()) {
+      return;
+    }
+    if (!this.richContentText) {
+      this.close();
+      return;
+    }
+    this.closeTimer = window.setTimeout(() => {
+      this.closeTimer = null;
+      if (!this.shouldRemainOpen()) {
+        this.close();
+      }
+    }, RICH_CONTENT_CLOSE_DELAY);
+  }
+
+  private clearTimers(resetHover = true) {
     if (this.openTimer !== null) {
       window.clearTimeout(this.openTimer);
       this.openTimer = null;
     }
-    if (this.closeTimer !== null) {
-      window.clearTimeout(this.closeTimer);
-      this.closeTimer = null;
+    this.clearCloseTimer();
+    if (resetHover) {
+      this.triggerHovered = false;
+      this.contentHovered = false;
     }
     this.clearTouchTimer();
     if (this.touchCloseTimer !== null) {
