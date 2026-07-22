@@ -160,7 +160,10 @@ describe("matrix scenario environment", () => {
       { expectFinal: false, timeoutMs: 1_000 },
     );
     const patchCall = gateway.call.mock.calls.find(([method]) => method === "config.patch");
-    expect((patchCall?.[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
+    if (!patchCall) {
+      throw new Error("expected config.patch gateway call");
+    }
+    expect((patchCall[1] as { replacePaths?: string[] }).replacePaths).not.toContain(
       "channels.matrix.accounts.sut.groupAllowFrom",
     );
   });
