@@ -518,11 +518,29 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         this.ensureSessionListener();
         this.ensureIntervalSync();
       }
-      this.dirty = resolveInitialMemoryDirty({
-        hasMemorySource: this.sources.has("memory"),
-        statusOnly: params.purpose === "status",
-        hasIndexedMeta: Boolean(meta),
-      });
+      const invalidatedSources = new Set(
+        (
+          this.db
+            .prepare("SELECT DISTINCT source FROM memory_index_sources WHERE hash = ''")
+            .all() as Array<{ source?: unknown }>
+        ).flatMap((row) =>
+          row.source === "memory" || row.source === "sessions" ? [row.source] : [],
+        ),
+      );
+      this.dirty =
+        resolveInitialMemoryDirty({
+          hasMemorySource: this.sources.has("memory"),
+          statusOnly: params.purpose === "status",
+          hasIndexedMeta: Boolean(meta),
+        }) ||
+        (this.sources.has("memory") && invalidatedSources.has("memory"));
+      if (this.sources.has("sessions") && invalidatedSources.has("sessions")) {
+        // Migration cannot map a durable session source path back to one live
+        // transcript file. Carry a full-session retry so unchanged and deleted
+        // transcripts both converge on the next startup/search sync.
+        this.sessionsDirty = true;
+        this.sessionsFullRetryDirty = true;
+      }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();

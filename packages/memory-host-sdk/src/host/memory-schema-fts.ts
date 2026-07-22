@@ -56,6 +56,18 @@ export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void 
   `);
 }
 
+export function dropDisabledMemoryChunkFts(
+  db: DatabaseSync,
+  ftsTable: string,
+  enabled: boolean,
+): void {
+  if (!enabled && ftsTable === MEMORY_INDEX_FTS_TABLE) {
+    // Body FTS has no maintenance triggers while disabled. Recreate it from
+    // canonical chunks on enable instead of retaining a partial derived index.
+    db.exec(`DROP TABLE IF EXISTS ${ftsTable}`);
+  }
+}
+
 /** Drop the canonical source-to-path-FTS maintenance triggers. */
 export function dropMemoryPathFtsTriggers(db: DatabaseSync): void {
   for (const trigger of MEMORY_PATH_FTS_TRIGGER_DEFINITIONS) {

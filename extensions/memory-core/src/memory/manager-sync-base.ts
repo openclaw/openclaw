@@ -43,6 +43,10 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import {
+  markMemoryVectorRebuildRequired,
+  requiresMemoryVectorRebuild,
+} from "./manager-vector-rebuild-state.js";
 import type { MemoryWatchSettleQueue } from "./watch-settle.js";
 
 export type MemorySyncProgressState = {
@@ -488,6 +492,10 @@ export abstract class MemoryManagerSyncBase {
   }
 
   private async loadVectorExtension(): Promise<boolean> {
+    if (this.vector.available === true && this.hasVectorRebuildMarker()) {
+      this.markConfiguredSourcesForFullReindex();
+      return false;
+    }
     if (this.vector.available !== null) {
       return this.vector.available;
     }
@@ -505,9 +513,13 @@ export abstract class MemoryManagerSyncBase {
       }
       this.vector.extensionPath = loaded.extensionPath;
       this.vector.available = true;
-      // Cleanup can run while vectors are disabled and strand rows that would
-      // crowd KNN candidates. Reconcile once the extension can safely delete them.
-      this.pruneOrphanedVectorRows();
+      if (this.hasVectorRebuildMarker()) {
+        // A skipped vector write/delete can leave both missing and extra rows.
+        // Refuse partial KNN results and let the normal shadow reindex rebuild all
+        // configured sources before this manager treats vectors as ready.
+        this.markConfiguredSourcesForFullReindex();
+        return false;
+      }
       if (this.dropLegacyVectorTable()) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
@@ -524,23 +536,51 @@ export abstract class MemoryManagerSyncBase {
     }
   }
 
-  private pruneOrphanedVectorRows(): void {
+  protected deleteVectorRowsForSource(pathname: string, source: MemorySource): void {
     if (!memoryTableExists(this.db, VECTOR_TABLE)) {
       return;
     }
-    const selectOrphans = this.db.prepare(
-      `SELECT vector.id AS id
-       FROM ${VECTOR_TABLE} AS vector
-       LEFT JOIN memory_index_chunks AS chunk ON chunk.id = vector.id
-       WHERE chunk.id IS NULL`,
-    );
-    const deleteRow = this.db.prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`);
-    runSqliteImmediateTransactionSync(this.db, () => {
-      const orphanRows = selectOrphans.all() as Array<{ id: string }>;
-      for (const row of orphanRows) {
-        deleteRow.run(row.id);
-      }
+    if (!this.vector.enabled || this.vector.available !== true) {
+      this.markVectorRebuildRequired();
+      return;
+    }
+    try {
+      this.db
+        .prepare(
+          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (
+             SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
+           )`,
+        )
+        .run(pathname, source);
+    } catch {
+      this.markVectorRebuildRequired();
+    }
+  }
+
+  protected markVectorRebuildRequired(): void {
+    markMemoryVectorRebuildRequired(this.db);
+  }
+
+  private hasVectorRebuildMarker(): boolean {
+    return requiresMemoryVectorRebuild({
+      db: this.db,
+      vectorTable: VECTOR_TABLE,
+      metaVectorDims: this.readMeta()?.vectorDims,
+      hasSemanticChunks: this.hasSemanticChunks(),
     });
+  }
+
+  private markConfiguredSourcesForFullReindex(): void {
+    // This flag selects the shadow-reindex path even for a sessions-only index;
+    // the rebuild itself still filters work through the configured sources.
+    this.memoryFullRetryDirty = true;
+    if (this.sources.has("memory")) {
+      this.dirty = true;
+    }
+    if (this.sources.has("sessions")) {
+      this.sessionsDirty = true;
+      this.sessionsFullRetryDirty = true;
+    }
   }
 
   private ensureVectorTable(dimensions: number): void {

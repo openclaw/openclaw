@@ -58,7 +58,9 @@ describe("memory legacy migration cleanup", () => {
       ensureMemoryIndexSchema({ db: seedDb, cacheEnabled: false, ftsEnabled: true });
       seedDb.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
-          VALUES ('memory/deleted.md', 'memory', 'canonical-hash', 200, 20);
+          VALUES
+            ('memory/deleted.md', 'memory', 'canonical-hash', 200, 20),
+            ('sessions/excluded.jsonl', 'sessions', '', 200, 20);
         INSERT INTO memory_index_chunks VALUES (
           'chunk-canonical', 'memory/deleted.md', 'memory', 1, 2, 'canonical-chunk-hash',
           'fts-only', 'obsolete saffronquasar', '[]', 200
@@ -154,6 +156,7 @@ describe("memory legacy migration cleanup", () => {
     }
     manager = result.manager as unknown as MemoryIndexManager;
     expect(manager.status().fts?.available).toBe(true);
+    expect(Reflect.get(manager, "sessionsFullRetryDirty")).toBe(false);
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
     expect(
@@ -214,8 +217,14 @@ describe("memory legacy migration cleanup", () => {
         .prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE path = ?")
         .get("memory/ownerless.md"),
     ).toEqual({ count: 0 });
-    // Cleanup ran while vectors were disabled, so the old rows remain until the
-    // vector owner loads again and reconciles them against canonical chunks.
+    // Cleanup ran while vectors were disabled. Keep the old table untouched and
+    // persist a rebuild marker; one-sided orphan pruning would still miss vector
+    // rows that should exist but were never written.
+    expect(
+      db
+        .prepare("SELECT value FROM memory_index_meta WHERE key = 'memory_vector_rebuild_v1'")
+        .get(),
+    ).toEqual({ value: "1" });
     const observerDb = new DatabaseSync(dbPath, { allowExtension: true });
     try {
       const observerLoaded = await loadSqliteVecExtension({
@@ -251,12 +260,13 @@ describe("memory legacy migration cleanup", () => {
           loadVectorExtension(): Promise<boolean>;
         }
       ).loadVectorExtension(),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     expect(reloadedDb.prepare("SELECT vec_version() AS version").get()).toEqual({
       version: expect.any(String),
     });
     expect(
       reloadedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get(),
-    ).toEqual({ count: 0 });
+    ).toEqual({ count: 2 });
+    expect(Reflect.get(manager, "memoryFullRetryDirty")).toBe(true);
   });
 });

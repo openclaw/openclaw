@@ -283,6 +283,47 @@ describe("memory index schema", () => {
     }
   });
 
+  it("rebuilds body FTS after indexing while hybrid search is disabled", () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+      db.exec(`
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-before', 'before.md', 'memory', 1, 1, 'before-hash', 'fts-only',
+          'before body', '[]', 1
+        );
+        INSERT INTO memory_index_chunks_fts
+          (text, id, path, source, model, start_line, end_line)
+        VALUES ('before body', 'chunk-before', 'before.md', 'memory', 'fts-only', 1, 1);
+      `);
+
+      ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+      expect(
+        db
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_index_chunks_fts'",
+          )
+          .get(),
+      ).toBeUndefined();
+      db.exec(`
+        INSERT INTO memory_index_chunks VALUES (
+          'chunk-disabled', 'disabled.md', 'memory', 1, 1, 'disabled-hash', 'fts-only',
+          'disabled body', '[]', 2
+        );
+      `);
+
+      expect(
+        ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true }).ftsAvailable,
+      ).toBe(true);
+      expect(db.prepare("SELECT id, text FROM memory_index_chunks_fts ORDER BY id").all()).toEqual([
+        { id: "chunk-before", text: "before body" },
+        { id: "chunk-disabled", text: "disabled body" },
+      ]);
+    } finally {
+      db.close();
+    }
+  });
+
   it("backfills and maintains one path FTS row per source without changing body FTS", () => {
     const db = new DatabaseSync(":memory:");
     try {

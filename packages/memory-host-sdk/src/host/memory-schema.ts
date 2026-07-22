@@ -2,6 +2,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import {
+  dropDisabledMemoryChunkFts,
   dropMemoryPathFtsTriggers,
   ensureMemoryPathFtsSchema,
   ensureMemoryPathFtsTriggers,
@@ -11,6 +12,10 @@ import {
   MEMORY_INDEX_SOURCES_TABLE,
   rebuildMemoryChunkFts,
 } from "./memory-schema-fts.js";
+import {
+  assertLegacyMemoryRowsCopied,
+  ensureLegacyMemoryMigrationIndexes,
+} from "./memory-schema-migration.js";
 import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
 
 export {
@@ -219,21 +224,6 @@ function tableExists(db: DatabaseSync, tableName: string): boolean {
   return row?.found === 1;
 }
 
-// Same-identity value mismatches keep the canonical row: every copied table is
-// derived search state that normal sync rebuilds, and aborting on them wedges
-// every later index open on the untouched legacy tables (same canonical-wins
-// rule as the sidecar import in memory-core's doctor contract). Only a row the
-// copy could not place at all (e.g. STRICT rejected it) still aborts, so
-// legacy rows are never silently dropped.
-function assertLegacyRowsCopied(db: DatabaseSync, query: string, tableName: string): void {
-  const row = db.prepare(query).get() as { missing?: unknown } | undefined;
-  if (Number(row?.missing ?? 0) > 0) {
-    throw new Error(
-      `legacy memory ${tableName} rows could not be copied into canonical memory index rows`,
-    );
-  }
-}
-
 /** Upgrade canonical memory sources to stable integer identities. */
 export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
   if (!tableExists(db, MEMORY_INDEX_SOURCES_TABLE)) {
@@ -344,13 +334,10 @@ function copyLegacyMemoryIndexRows(
   schema: string,
   preservedEmbeddingCacheTable?: string,
 ): void {
-  // A (path, source) the canonical index already has chunks for keeps its whole
-  // canonical chunk set. If legacy has additional chunk identities, invalidate
-  // the source hash so sync rebuilds instead of accepting an incomplete set.
-  // Chunkless canonical sources import legacy chunks only when their source rows
-  // match; diverged chunkless sources get the same dirty hash. The source row
-  // remains as the cleanup identity if its backing file was already deleted.
-  // Snapshot exclusions before inserts so the predicate sees canonical state.
+  ensureLegacyMemoryMigrationIndexes(db, schema);
+  // Canonical-owned chunk sets stay intact; any extra legacy identity invalidates
+  // the source for rebuild. Chunkless sources import only when metadata matches.
+  // Keep invalidated rows for deleted-file cleanup; snapshot before inserts.
   db.exec(`
     CREATE TEMP TABLE legacy_import_chunk_excluded_sources AS
     SELECT DISTINCT owned.path, owned.source,
@@ -447,7 +434,7 @@ function copyLegacyMemoryIndexRows(
           AND dirty.source IS main.${MEMORY_INDEX_SOURCES_TABLE}.source
       );
     `);
-    assertLegacyRowsCopied(
+    assertLegacyMemoryRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.meta AS legacy
@@ -457,7 +444,7 @@ function copyLegacyMemoryIndexRows(
        )`,
       "meta",
     );
-    assertLegacyRowsCopied(
+    assertLegacyMemoryRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.files AS legacy
@@ -474,7 +461,7 @@ function copyLegacyMemoryIndexRows(
        )`,
       "files",
     );
-    assertLegacyRowsCopied(
+    assertLegacyMemoryRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.chunks AS legacy
@@ -529,7 +516,7 @@ function copyLegacyMemoryIndexRows(
       SELECT provider, model, provider_key, hash, embedding, dims, updated_at
       FROM ${schema}.embedding_cache;
     `);
-    assertLegacyRowsCopied(
+    assertLegacyMemoryRowsCopied(
       db,
       `SELECT COUNT(*) AS missing
        FROM ${schema}.embedding_cache AS legacy
@@ -703,6 +690,7 @@ export function ensureMemoryIndexSchema(params: {
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
   migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable, ftsTable);
+  dropDisabledMemoryChunkFts(params.db, ftsTable, params.ftsEnabled);
   if (params.cacheEnabled) {
     const updatedAtIndex =
       embeddingCacheTable === MEMORY_EMBEDDING_CACHE_TABLE
