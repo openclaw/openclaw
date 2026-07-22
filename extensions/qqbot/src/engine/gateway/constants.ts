@@ -98,9 +98,9 @@ export const GatewayEvent = {
   /** Group message that explicitly @-mentions the bot. */
   GROUP_AT_MESSAGE_CREATE: "GROUP_AT_MESSAGE_CREATE",
   /**
-   * Group message that does NOT mention the bot. Still dispatched to the
-   * pipeline so the group history buffer and the `requireMention=false`
-   * path can observe it.
+   * Passive group message event without an explicit bot mention. The dispatch
+   * path records group context for history-aware routing; visible replies still
+   * depend on the channel activation policy.
    */
   GROUP_MESSAGE_CREATE: "GROUP_MESSAGE_CREATE",
   INTERACTION_CREATE: "INTERACTION_CREATE",
