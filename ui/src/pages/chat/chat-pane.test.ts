@@ -612,7 +612,7 @@ describe("chat pane initialization", () => {
     };
 
     pane.applyGatewaySnapshot({ ...snapshot, connected: false, hello: null });
-    state.pendingAbort = { runId: null, sessionKey, clearQueued: true };
+    state.pendingAbort = { sourceClient: client, runId: null, sessionKey, clearQueued: true };
 
     pane.applyGatewaySnapshot({
       ...snapshot,

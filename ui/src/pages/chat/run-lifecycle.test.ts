@@ -68,10 +68,11 @@ describe("replayPendingChatAbort", () => {
       expect(host.pendingAbort).toBeNull();
       return { abortedRunId: null, status: "aborted" };
     });
+    const client = { request } as unknown as GatewayBrowserClient;
     const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeAbortHost({
-      client: { request } as unknown as GatewayBrowserClient,
-      pendingAbort: { runId: null, sessionKey, clearQueued: true },
+      client,
+      pendingAbort: { sourceClient: client, runId: null, sessionKey, clearQueued: true },
     });
 
     await expect(replayPendingChatAbort(host)).resolves.toBe(true);
@@ -85,9 +86,11 @@ describe("replayPendingChatAbort", () => {
 
   it("dispatches a queued exact browser run stop through chat.abort", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
+    const client = { request } as unknown as GatewayBrowserClient;
     const host = makeAbortHost({
-      client: { request } as unknown as GatewayBrowserClient,
+      client,
       pendingAbort: {
+        sourceClient: client,
         runId: "run-main",
         sessionKey: "global",
         agentId: "work",
@@ -108,9 +111,11 @@ describe("replayPendingChatAbort", () => {
     const request = vi.fn(async () => {
       throw new Error("gateway closed before acknowledgement");
     });
+    const client = { request } as unknown as GatewayBrowserClient;
     const host = makeAbortHost({
-      client: { request } as unknown as GatewayBrowserClient,
+      client,
       pendingAbort: {
+        sourceClient: client,
         runId: null,
         sessionKey: "agent:main:telegram:direct:queued-user",
         clearQueued: true,
@@ -123,6 +128,26 @@ describe("replayPendingChatAbort", () => {
     expect(host.pendingAbort).toBeNull();
     expect(host.chatError).toBe("gateway closed before acknowledgement");
     expect(host.lastError).toBe("gateway closed before acknowledgement");
+  });
+
+  it("discards a queued stop when the reconnect uses a replacement client", async () => {
+    const sourceClient = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const replacementRequest = vi.fn();
+    const host = makeAbortHost({
+      client: { request: replacementRequest } as unknown as GatewayBrowserClient,
+      pendingAbort: {
+        sourceClient,
+        runId: null,
+        sessionKey: "agent:main:telegram:direct:queued-user",
+        clearQueued: true,
+      },
+    });
+
+    await expect(replayPendingChatAbort(host)).resolves.toBe(false);
+
+    expect(replacementRequest).not.toHaveBeenCalled();
+    expect(host.pendingAbort).toBeNull();
+    expect(host.chatError ?? null).toBeNull();
   });
 });
 

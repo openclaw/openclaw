@@ -8384,7 +8384,9 @@ describe("handleAbortChat", () => {
   );
 
   it("queues the active run abort while disconnected", async () => {
+    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: "run-main",
       chatMessage: "draft",
@@ -8393,13 +8395,19 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host);
 
-    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
     expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
   });
 
   it("preserves the draft when queueing a toolbar abort while disconnected", async () => {
+    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: "run-main",
       chatMessage: "draft",
@@ -8408,14 +8416,20 @@ describe("handleAbortChat", () => {
 
     await handleAbortChat(host, { preserveDraft: true });
 
-    expect(host.pendingAbort).toEqual({ runId: "run-main", sessionKey: "agent:main" });
+    expect(host.pendingAbort).toEqual({
+      sourceClient: client,
+      runId: "run-main",
+      sessionKey: "agent:main",
+    });
     expect(host.chatMessage).toBe("draft");
     expect(host.chatRunId).toBe("run-main");
   });
 
   it("queues a session-scoped abort while disconnected after active run state is recovered", async () => {
+    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const sessionKey = "agent:main:telegram:direct:queued-user";
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: null,
       chatMessage: "draft",
@@ -8429,6 +8443,7 @@ describe("handleAbortChat", () => {
     await handleAbortChat(host);
 
     expect(host.pendingAbort).toEqual({
+      sourceClient: client,
       runId: null,
       sessionKey,
       clearQueued: true,
@@ -8437,7 +8452,9 @@ describe("handleAbortChat", () => {
   });
 
   it("queues selected-agent global aborts with agent scope while disconnected", async () => {
+    const client = { request: vi.fn() } as unknown as NonNullable<ChatHost["client"]>;
     const host = makeHost({
+      client,
       connected: false,
       chatRunId: null,
       chatMessage: "draft",
@@ -8452,6 +8469,7 @@ describe("handleAbortChat", () => {
     await handleAbortChat(host);
 
     expect(host.pendingAbort).toEqual({
+      sourceClient: client,
       runId: null,
       sessionKey: "global",
       agentId: "work",

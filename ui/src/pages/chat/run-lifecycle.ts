@@ -100,6 +100,7 @@ type ChatAbortRunState = SessionScopeHost & {
 };
 
 export type PendingChatAbort = {
+  sourceClient: GatewayBrowserClient;
   runId: string | null;
   sessionKey: string;
   agentId?: string;
@@ -180,9 +181,13 @@ async function requestChatAbort(
   }
 }
 
-function currentChatAbortIntent(state: ChatAbortRunState): PendingChatAbort {
+function currentChatAbortIntent(
+  state: ChatAbortRunState,
+  sourceClient: GatewayBrowserClient,
+): PendingChatAbort {
   const runId = state.chatRunId ?? null;
   return {
+    sourceClient,
     runId,
     sessionKey: state.sessionKey,
     ...scopedAgentParamsForSession(state, state.sessionKey),
@@ -191,10 +196,11 @@ function currentChatAbortIntent(state: ChatAbortRunState): PendingChatAbort {
 }
 
 async function abortChatRun(state: ChatAbortRunState): Promise<boolean> {
-  if (!state.client || !state.connected) {
+  const client = state.client;
+  if (!client || !state.connected) {
     return false;
   }
-  const result = await requestChatAbort(state.client, currentChatAbortIntent(state));
+  const result = await requestChatAbort(client, currentChatAbortIntent(state, client));
   if (!result.ok) {
     setChatError(state, formatConnectError(result.error));
   }
@@ -211,6 +217,11 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
   // the request. A rejected request may have reached the Gateway before its
   // ACK was lost; retrying a session-wide abort could stop newer work.
   host.pendingAbort = null;
+  // Automatic reconnects retain the browser client. A replacement client may
+  // target another Gateway, where the same session key can name unrelated work.
+  if (intent.sourceClient !== client) {
+    return false;
+  }
   const result = await requestChatAbort(client, intent);
   if (result.ok) {
     return true;
@@ -220,7 +231,8 @@ export async function replayPendingChatAbort(host: ChatAbortHost): Promise<boole
 }
 
 export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptions) {
-  const queueAbort = !host.connected && hasAbortableSessionRun(host);
+  const disconnectedClient = host.connected ? null : host.client;
+  const queueAbort = Boolean(disconnectedClient && hasAbortableSessionRun(host));
   if (!host.connected && !queueAbort) {
     return;
   }
@@ -228,8 +240,8 @@ export async function handleAbortChat(host: ChatAbortHost, opts?: ChatAbortOptio
     host.chatMessage = "";
     resetChatInputHistoryNavigation(host);
   }
-  if (queueAbort) {
-    host.pendingAbort = currentChatAbortIntent(host);
+  if (queueAbort && disconnectedClient) {
+    host.pendingAbort = currentChatAbortIntent(host, disconnectedClient);
     return;
   }
   await abortChatRun(host);
