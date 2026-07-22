@@ -338,6 +338,9 @@ export type PluginRuntimeCore = {
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
+  talk: {
+    watchActivity: typeof import("../../talk/activity.js").watchTalkActivity;
+  };
   media: {
     loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
     detectMime: typeof import("@openclaw/media-core/mime").detectMime;

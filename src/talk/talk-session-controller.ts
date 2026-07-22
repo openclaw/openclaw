@@ -1,5 +1,6 @@
 // Talk session controller coordinates voice session state and output activity.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { recordTalkActivityEvent } from "./activity.js";
 import {
   createTalkEventSequencer,
   type TalkBrain,
@@ -106,6 +107,7 @@ export function createTalkSessionController(
     if (recentEvents.length > maxRecentEvents) {
       recentEvents.splice(0, recentEvents.length - maxRecentEvents);
     }
+    recordTalkActivityEvent(event as TalkEvent);
     try {
       options.onEvent?.(event as TalkEvent);
     } catch {
