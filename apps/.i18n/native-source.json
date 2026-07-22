@@ -40987,7 +40987,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 40,
+      "line": 46,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Shelling",
       "surface": "apple",
@@ -40995,7 +40995,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 41,
+      "line": 47,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Scuttling",
       "surface": "apple",
@@ -41003,7 +41003,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 42,
+      "line": 48,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Clawing",
       "surface": "apple",
@@ -41011,7 +41011,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 43,
+      "line": 49,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Pinching",
       "surface": "apple",
@@ -41019,7 +41019,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 44,
+      "line": 50,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Molting",
       "surface": "apple",
@@ -41027,7 +41027,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 45,
+      "line": 51,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Bubbling",
       "surface": "apple",
@@ -41035,7 +41035,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 46,
+      "line": 52,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Tiding",
       "surface": "apple",
@@ -41043,7 +41043,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 47,
+      "line": 53,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Reefing",
       "surface": "apple",
@@ -41051,7 +41051,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 48,
+      "line": 54,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Cracking",
       "surface": "apple",
@@ -41059,7 +41059,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 49,
+      "line": 55,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Sifting",
       "surface": "apple",
@@ -41067,7 +41067,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 50,
+      "line": 56,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Brining",
       "surface": "apple",
@@ -41075,7 +41075,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 51,
+      "line": 57,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Nautiling",
       "surface": "apple",
@@ -41083,7 +41083,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 52,
+      "line": 58,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Krilling",
       "surface": "apple",
@@ -41091,7 +41091,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 53,
+      "line": 59,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Barnacling",
       "surface": "apple",
@@ -41099,7 +41099,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 54,
+      "line": 60,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Lobstering",
       "surface": "apple",
@@ -41107,7 +41107,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 55,
+      "line": 61,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Tidepooling",
       "surface": "apple",
@@ -41115,7 +41115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 56,
+      "line": 62,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Pearling",
       "surface": "apple",
@@ -41123,7 +41123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 57,
+      "line": 63,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Snapping",
       "surface": "apple",
@@ -41131,7 +41131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 58,
+      "line": 64,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Surfacing",
       "surface": "apple",
@@ -41139,7 +41139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 129,
+      "line": 135,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "Done in %@",
       "surface": "apple",
@@ -41147,7 +41147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 139,
+      "line": 145,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "1 token",
       "surface": "apple",
@@ -41155,7 +41155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 142,
+      "line": 148,
       "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatWorkingProgress.swift",
       "source": "%@ tokens",
       "surface": "apple",
