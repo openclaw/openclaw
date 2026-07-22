@@ -671,7 +671,11 @@ const config = {
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-core`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/memory-lancedb`]: {
+      ...bundledPluginWorkspace(),
+      // LanceDB declares Arrow as a peer; the plugin provides it for runtime table values.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "apache-arrow"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/microsoft-foundry`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-claude`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/migrate-hermes`]: bundledPluginWorkspace(),
@@ -738,6 +742,11 @@ const config = {
       "vault-secret-ref-resolver.js!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/voyage`]: bundledPluginWorkspace(),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/whatsapp`]: {
+      ...bundledPluginWorkspace(),
+      // Baileys loads its optional audio decoder at runtime for supported media.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "audio-decode"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xiaomi`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
