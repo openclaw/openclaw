@@ -116,9 +116,29 @@ export function isSessionMember(scope: SessionAccessScope, identityId: string): 
   );
 }
 
+// Membership is bound to the session instance. Authorization is rechecked
+// before these transactions, but a reset/recreate can replace the row under the
+// same key in between; verifying the expected sessionId inside the write
+// transaction stops a stale owner from mutating the replacement's members.
+function assertAuthorizedSessionInstance(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+  expectedSessionId: string | undefined,
+): void {
+  if (expectedSessionId === undefined) {
+    return;
+  }
+  const row = database.db
+    .prepare("SELECT session_id FROM session_entries WHERE session_key = ?")
+    .get(sessionKey) as { session_id?: string } | undefined;
+  if (row?.session_id !== expectedSessionId) {
+    throw new Error("session changed before sharing mutation");
+  }
+}
+
 export function addSessionMember(
   scope: SessionAccessScope,
-  params: { identityId: string; addedBy: string; addedAt?: number },
+  params: { identityId: string; addedBy: string; addedAt?: number; expectedSessionId?: string },
 ): { member: SessionMember; inserted: boolean } {
   const identityId = params.identityId.trim();
   const addedBy = params.addedBy.trim();
@@ -129,6 +149,11 @@ export function addSessionMember(
   ensureSessionSharingSchema(options);
   const addedAt = params.addedAt ?? Date.now();
   const inserted = runOpenClawAgentWriteTransaction((database) => {
+    assertAuthorizedSessionInstance(
+      database,
+      resolveSqliteScope(scope).sessionKey,
+      params.expectedSessionId,
+    );
     const db = getSessionMemberKysely(database);
     const result = executeSqliteQuerySync(
       database.db,
@@ -151,6 +176,7 @@ export function removeSessionMember(
   scope: SessionAccessScope,
   identityId: string,
   expected?: Pick<SessionMember, "addedBy" | "addedAt">,
+  expectedSessionId?: string,
 ): SessionMember | null {
   const normalizedIdentityId = identityId.trim();
   if (!normalizedIdentityId) {
@@ -159,6 +185,11 @@ export function removeSessionMember(
   const options = resolveDatabaseOptions(scope);
   ensureSessionSharingSchema(options);
   return runOpenClawAgentWriteTransaction((database) => {
+    assertAuthorizedSessionInstance(
+      database,
+      resolveSqliteScope(scope).sessionKey,
+      expectedSessionId,
+    );
     const db = getSessionMemberKysely(database);
     const row = executeSqliteQueryTakeFirstSync(
       database.db,

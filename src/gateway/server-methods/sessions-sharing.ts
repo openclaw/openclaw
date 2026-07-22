@@ -267,8 +267,14 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           now,
         });
       } catch (error) {
+        // Roll back only if this is still the same instance we patched; a
+        // concurrent reset could otherwise stamp the old restricted value onto
+        // a fresh (shared-default) replacement.
         await patchSessionEntry(scope, (entry) =>
-          resolveSessionVisibility(entry) === visibility ? { visibility: previous } : null,
+          entry.sessionId === current.entry.sessionId &&
+          resolveSessionVisibility(entry) === visibility
+            ? { visibility: previous }
+            : null,
         );
         invalidateSessionSharingSnapshot(current.canonicalKey);
         throw error;
@@ -380,6 +386,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         identityId: params.identityId,
         addedBy: actor.id,
         addedAt: now,
+        expectedSessionId: current.entry.sessionId,
       });
       if (!added.inserted) {
         return;
@@ -392,7 +399,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           now,
         });
       } catch (error) {
-        removeSessionMember(scope, params.identityId, added.member);
+        removeSessionMember(scope, params.identityId, added.member, current.entry.sessionId);
         throw error;
       }
       publishSharingChange({
@@ -444,7 +451,12 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         sessionKey: current.canonicalKey,
         storePath: current.storePath,
       };
-      const removed = removeSessionMember(scope, params.identityId);
+      const removed = removeSessionMember(
+        scope,
+        params.identityId,
+        undefined,
+        current.entry.sessionId,
+      );
       if (!removed) {
         return;
       }
@@ -462,6 +474,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           identityId: removed.identityId,
           addedBy: removed.addedBy,
           addedAt: removed.addedAt,
+          expectedSessionId: current.entry.sessionId,
         });
         throw error;
       }

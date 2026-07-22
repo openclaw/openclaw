@@ -63,6 +63,38 @@ describe("session sharing store", () => {
     });
   });
 
+  it("refuses member writes whose expected session instance no longer matches", async () => {
+    await withTempDir({ prefix: "openclaw-session-sharing-instance-" }, async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const scope = { agentId: "main", env, sessionKey: "agent:main:main" };
+      await upsertSessionEntry(scope, { sessionId: "session-b", updatedAt: 1 });
+
+      // A write authorized against a now-replaced instance must not mutate the
+      // live one under the same key.
+      expect(() =>
+        addSessionMember(scope, {
+          identityId: "stale",
+          addedBy: "owner",
+          expectedSessionId: "session-a",
+        }),
+      ).toThrow(/session changed/);
+      expect(listSessionMembers(scope)).toEqual([]);
+
+      expect(
+        addSessionMember(scope, {
+          identityId: "ok",
+          addedBy: "owner",
+          addedAt: 2,
+          expectedSessionId: "session-b",
+        }).inserted,
+      ).toBe(true);
+      expect(() => removeSessionMember(scope, "ok", undefined, "session-a")).toThrow(
+        /session changed/,
+      );
+      expect(isSessionMember(scope, "ok")).toBe(true);
+    });
+  });
+
   it("drops members when the session instance is replaced under the same key", async () => {
     await withTempDir({ prefix: "openclaw-session-sharing-recreate-" }, async (dir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
