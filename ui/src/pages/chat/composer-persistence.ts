@@ -33,6 +33,7 @@ const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 let lastIssuedDraftRevision = 0;
 const draftRevisionHighWaterByStorage = new WeakMap<Storage, Map<string, Map<string, number>>>();
 const draftAttemptHighWaterByStorage = new WeakMap<Storage, Map<string, Map<string, number>>>();
+const storedChatOutboxChangeListeners = new Set<() => void>();
 export const INTERRUPTED_SETTINGS_WAIT_ERROR =
   "Chat settings update was interrupted. Review and retry when ready.";
 export const CHAT_COMPOSER_DRAFT_STORAGE_ERROR =
@@ -106,6 +107,21 @@ export type StoredChatOutboxScope = {
 export type StoredChatOutbox = StoredChatOutboxScope & {
   queue: ChatQueueItem[];
 };
+
+export function subscribeStoredChatOutboxChanges(listener: () => void): () => void {
+  storedChatOutboxChangeListeners.add(listener);
+  return () => storedChatOutboxChangeListeners.delete(listener);
+}
+
+function notifyStoredChatOutboxChanges(): void {
+  for (const listener of storedChatOutboxChangeListeners) {
+    try {
+      listener();
+    } catch (error) {
+      console.error("[openclaw] stored chat outbox listener failed", error);
+    }
+  }
+}
 
 export type ChatComposerDraftRetry = {
   expectedDraftRevision: number;
@@ -1254,6 +1270,7 @@ export function admitStoredChatComposerQueueItem(
       }
       if (migrated) {
         writeStore(storage, target, store);
+        notifyStoredChatOutboxChanges();
       }
       return true;
     }
@@ -1262,6 +1279,7 @@ export function admitStoredChatComposerQueueItem(
     }
     writeStoredComposerSession(store, storeSessionKey, session, [...queue, serialized]);
     writeStore(storage, target, store);
+    notifyStoredChatOutboxChanges();
     const persisted = resolveStoredComposerSession(
       readStore(storage, target),
       state,
@@ -1314,6 +1332,7 @@ export function updateStoredChatComposerQueueItem(
     nextQueue[index] = serializedNext;
     writeStoredComposerSession(store, storeSessionKey, session, nextQueue);
     writeStore(storage, target, store);
+    notifyStoredChatOutboxChanges();
     const persisted = resolveStoredComposerSession(
       readStore(storage, target),
       state,
@@ -1368,6 +1387,7 @@ export function removeStoredChatComposerQueueItem(
       queue.filter((_, queueIndex) => queueIndex !== index),
     );
     writeStore(storage, target, store);
+    notifyStoredChatOutboxChanges();
     const persisted = resolveStoredComposerSession(
       readStore(storage, target),
       state,

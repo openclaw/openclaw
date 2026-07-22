@@ -12,6 +12,7 @@ import {
   removeStoredChatComposerQueueItem,
   resolveStoredChatOutboxScope,
   restoreChatComposerState,
+  subscribeStoredChatOutboxChanges,
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 
@@ -62,6 +63,44 @@ afterEach(() => {
 });
 
 describe("chat composer persistence", () => {
+  it("notifies durable outbox subscribers on writes until they unsubscribe", () => {
+    const state = createState();
+    const original = reconnectItem("notify", 1);
+    const updated = { ...original, text: "updated message" };
+    const listener = vi.fn();
+    const unsubscribe = subscribeStoredChatOutboxChanges(listener);
+
+    try {
+      expect(persistChatComposerState({ ...state, chatMessage: "draft only" })).toBe(true);
+      expect(listener).not.toHaveBeenCalled();
+      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(
+        updateStoredChatComposerQueueItem(
+          state,
+          state.sessionKey,
+          original,
+          updated,
+          original.agentId,
+        ),
+      ).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(2);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      removeStoredChatComposerQueueItem(
+        state,
+        state.sessionKey,
+        updated.id,
+        updated,
+        updated.agentId,
+      ),
+    ).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
   it("flushes a debounced draft before its owner releases state", () => {
     vi.useFakeTimers();
     const state = createState();

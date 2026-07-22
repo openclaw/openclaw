@@ -42,6 +42,7 @@ export function renderSessionRowBadges(params: {
   hasAutomation: boolean;
   pullRequest?: SessionCatalogPullRequestSummary;
   hasApproval?: boolean;
+  outboxCount?: number;
   placementState?: SessionPlacementState;
   workspaceConflictCount?: number;
 }) {
@@ -59,10 +60,12 @@ export function renderSessionRowBadges(params: {
   const conflictPlacementState = workspaceConflictCount > 0 ? params.placementState : undefined;
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
+  const outboxCount = Math.max(0, Math.floor(params.outboxCount ?? 0));
   if (
     !hasAutomation &&
     !pullRequestLabel &&
     !params.hasApproval &&
+    outboxCount === 0 &&
     !displayedPlacementState &&
     !hasWorkspaceConflict
   ) {
@@ -115,6 +118,21 @@ export function renderSessionRowBadges(params: {
           aria-label=${t("sessionsView.approvalNeeded")}
           title=${t("sessionsView.approvalNeeded")}
           >${icons.alertTriangle}</span
+        >`
+      : nothing}
+    ${outboxCount > 0
+      ? html`<span
+          class="session-row-badge session-row-badge--queued"
+          role="img"
+          aria-label=${t(
+            outboxCount === 1 ? "sessionsView.queuedMessage" : "sessionsView.queuedMessages",
+            { count: String(outboxCount) },
+          )}
+          title=${t(
+            outboxCount === 1 ? "sessionsView.queuedMessage" : "sessionsView.queuedMessages",
+            { count: String(outboxCount) },
+          )}
+          >${icons.clock}<span aria-hidden="true">${outboxCount}</span></span
         >`
       : nothing}
     ${displayedPlacementState || hasWorkspaceConflict

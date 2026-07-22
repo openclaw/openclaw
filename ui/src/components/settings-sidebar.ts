@@ -26,6 +26,7 @@ type SettingsSidebarProps = {
   activeSearch?: string;
   activeHash?: string;
   offline: boolean;
+  queuedOutboxCount?: number;
   lastError: string | null;
   version: string;
   updateAvailable: UpdateAvailable | null;
@@ -212,6 +213,10 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
 
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const reconnecting = t("connection.reconnecting");
+  const queuedCount =
+    (props.queuedOutboxCount ?? 0) > 0
+      ? t("connection.queuedCount", { count: String(props.queuedOutboxCount) })
+      : null;
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
@@ -302,13 +307,18 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
               type="button"
               class="sidebar-footer-bar__status"
               aria-live="polite"
-              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
+              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}${
+                queuedCount ? ` — ${queuedCount}` : ""
+              }`}
               title=${props.lastError ? redactLoginFailureError(props.lastError) : reconnecting}
               @click=${props.onRetryConnect}
             >
               <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
                 "common.offline",
-              )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
+              )}<span class="sidebar-footer-bar__status-detail">· ${reconnecting}</span
+              >${queuedCount
+                ? html`<span class="sidebar-footer-bar__status-detail">· ${queuedCount}</span>`
+                : nothing}
             </button>`
           : nothing}
         ${props.version

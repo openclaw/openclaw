@@ -37,6 +37,10 @@ import {
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../pages/chat/composer-persistence.ts";
+import {
   adoptedCatalogSessionKeys,
   formatSidebarTimestamp,
 } from "./app-sidebar-session-catalogs.ts";
@@ -121,6 +125,20 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
+  protected outboxCountForSessionKey(sessionKey: string): number {
+    const context = this.context;
+    const scope = resolveStoredChatOutboxScope(
+      {
+        settings: { gatewayUrl: context?.gateway.connection?.gatewayUrl },
+        assistantAgentId: context?.gateway.snapshot.assistantAgentId,
+        agentsList: context?.agents.state.agentsList,
+        hello: context?.gateway.snapshot.hello,
+      },
+      sessionKey,
+    );
+    return this.outboxCountsByScope.get(storedChatOutboxScopeKey(scope)) ?? 0;
+  }
+
   protected getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
@@ -183,6 +201,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         pullRequest: context?.sessions.pullRequestSummary(row.key),
+        outboxCount: this.outboxCountForSessionKey(row.key),
         unread: row.archived !== true && row.unread === true,
         lastReadAt: row.lastReadAt,
         attention:

@@ -23,6 +23,8 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) offline = false;
+  @property({ attribute: false }) outboxCountsByScope: ReadonlyMap<string, number> = new Map();
+  @property({ attribute: false }) queuedOutboxCount = 0;
   @property({ attribute: false }) lastError: string | null = null;
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";

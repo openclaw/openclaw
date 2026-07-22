@@ -57,6 +57,11 @@ import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "../lib/toast.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  listStoredChatOutboxes,
+  storedChatOutboxScopeKey,
+  subscribeStoredChatOutboxChanges,
+} from "../pages/chat/composer-persistence.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -123,6 +128,27 @@ type AppSidebarElement = HTMLElement & {
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
+
+function summarizeStoredChatOutboxes(scopeHost: Parameters<typeof listStoredChatOutboxes>[0]) {
+  const itemIdsByScope = new Map<string, Set<string>>();
+  for (const outbox of listStoredChatOutboxes(scopeHost)) {
+    const scopeKey = storedChatOutboxScopeKey(outbox);
+    const itemIds = itemIdsByScope.get(scopeKey) ?? new Set<string>();
+    for (const item of outbox.queue) {
+      if (!item.pendingRunId) {
+        itemIds.add(item.id);
+      }
+    }
+    itemIdsByScope.set(scopeKey, itemIds);
+  }
+  const countsByScope = new Map(
+    [...itemIdsByScope].map(([scopeKey, itemIds]) => [scopeKey, itemIds.size]),
+  );
+  return {
+    countsByScope,
+    total: [...countsByScope.values()].reduce((total, count) => total + count, 0),
+  };
+}
 
 function diffAgentRoster(
   previous: readonly GatewayAgentRow[],
@@ -550,6 +576,10 @@ class OpenClawShell extends OpenClawLightDomElement {
       .effect(
         () => this.context?.gateway,
         (gateway) => gateway.subscribeEvents(this.handleGatewayEvent),
+      )
+      .effect(
+        () => this.context?.gateway.connection.gatewayUrl,
+        () => subscribeStoredChatOutboxChanges(() => this.requestUpdate()),
       )
       .watch(
         () => this.context?.config,
@@ -1470,6 +1500,12 @@ class OpenClawShell extends OpenClawLightDomElement {
       return nothing;
     }
     const gatewaySnapshot = context.gateway.snapshot;
+    const storedOutboxes = summarizeStoredChatOutboxes({
+      settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
+      assistantAgentId: gatewaySnapshot.assistantAgentId,
+      agentsList: context.agents.state.agentsList,
+      hello: gatewaySnapshot.hello,
+    });
     const navigationSnapshot = context.navigation.snapshot;
     const overlaySnapshot = context.overlays.snapshot;
     const terminalAvailable = isTerminalAvailable(
@@ -1597,6 +1633,7 @@ class OpenClawShell extends OpenClawLightDomElement {
                 activeSearch: this.routeState.location?.search ?? "",
                 activeHash: this.routeState.location?.hash ?? "",
                 offline: gatewaySnapshot.offlineStable,
+                queuedOutboxCount: storedOutboxes.total,
                 lastError: gatewaySnapshot.lastError,
                 version:
                   context.config.current.serverVersion ??
@@ -1628,6 +1665,8 @@ class OpenClawShell extends OpenClawLightDomElement {
                 .sessionKey=${this.activeSessionKey}
                 .connected=${gatewaySnapshot.connected}
                 .offline=${gatewaySnapshot.offlineStable}
+                .outboxCountsByScope=${storedOutboxes.countsByScope}
+                .queuedOutboxCount=${storedOutboxes.total}
                 .lastError=${gatewaySnapshot.lastError}
                 .terminalAvailable=${terminalAvailable}
                 .catalogOpenTarget=${normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget)}

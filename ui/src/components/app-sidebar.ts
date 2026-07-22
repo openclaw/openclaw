@@ -46,6 +46,7 @@ import {
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { renderSessionRowBadges } from "./session-row-badges.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -209,6 +210,7 @@ class AppSidebar extends AppSidebarSessionListElement {
     const mainKey = this.selectedAgentMainSessionKey(agentId);
     const mainRow = this.mainSessionRow(agentId);
     const approvalNeeded = sessionHasPendingApproval(this.approvalBadgeSnapshot(), mainKey);
+    const outboxCount = this.outboxCountForSessionKey(mainKey);
     const active =
       this.activeRouteId === "chat" &&
       areUiSessionKeysEquivalent(this.getRouteSessionKey(), mainKey);
@@ -250,7 +252,7 @@ class AppSidebar extends AppSidebarSessionListElement {
               >${icons.layoutDashboard}</span
             >`
           : nothing}
-        ${stateBadge !== nothing || approvalNeeded
+        ${stateBadge !== nothing || approvalNeeded || outboxCount > 0
           ? html`<span class="nav-item__state sidebar-home-session-states">
               ${stateBadge}
               ${approvalNeeded
@@ -262,6 +264,7 @@ class AppSidebar extends AppSidebarSessionListElement {
                     >${icons.alertTriangle}</span
                   >`
                 : nothing}
+              ${renderSessionRowBadges({ hasAutomation: false, outboxCount })}
             </span>`
           : nothing}
       </a>
@@ -291,6 +294,10 @@ class AppSidebar extends AppSidebarSessionListElement {
   /** Zone 5: product chrome recedes to one slim footer bar. */
   private renderFooterBar() {
     const reconnecting = t("connection.reconnecting");
+    const queuedCount =
+      this.queuedOutboxCount > 0
+        ? t("connection.queuedCount", { count: String(this.queuedOutboxCount) })
+        : null;
     const selfUser = this.connected
       ? resolveCurrentSelfUser({
           snapshotUser: this.context?.gateway.snapshot.selfUser,
@@ -347,12 +354,17 @@ class AppSidebar extends AppSidebarSessionListElement {
                 type="button"
                 class="sidebar-footer-bar__status"
                 aria-live="polite"
-                aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
+                aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}${
+                  queuedCount ? ` — ${queuedCount}` : ""
+                }`}
                 @click=${() => this.onRetryConnect?.()}
               >
                 <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
                   "common.offline",
-                )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
+                )}<span class="sidebar-footer-bar__status-detail">· ${reconnecting}</span
+                >${queuedCount
+                  ? html`<span class="sidebar-footer-bar__status-detail">· ${queuedCount}</span>`
+                  : nothing}
               </button>
             </openclaw-tooltip>`
           : nothing}
