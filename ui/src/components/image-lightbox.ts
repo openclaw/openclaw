@@ -280,19 +280,25 @@ export class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   private handleKeydown = (event: KeyboardEvent) => {
-    if (event.key !== "Tab" || !this.closeButton) {
+    const closeButton = this.closeButton;
+    if (event.key !== "Tab" || !closeButton) {
       return;
     }
+    const openOriginal = this.openOriginal;
     const source = event.composedPath()[0];
-    if (!this.openOriginal && source === this.closeButton) {
+    if (!openOriginal) {
+      if (source === closeButton) {
+        event.preventDefault();
+        closeButton.focus();
+      }
+      return;
+    }
+    if (event.shiftKey && source === openOriginal) {
       event.preventDefault();
-      this.closeButton.focus();
-    } else if (event.shiftKey && source === this.openOriginal) {
+      closeButton.focus();
+    } else if (!event.shiftKey && source === closeButton) {
       event.preventDefault();
-      this.closeButton.focus();
-    } else if (!event.shiftKey && source === this.closeButton) {
-      event.preventDefault();
-      this.openOriginal.focus();
+      openOriginal.focus();
     }
   };
 
