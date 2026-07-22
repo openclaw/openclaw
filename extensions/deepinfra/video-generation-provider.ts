@@ -49,11 +49,11 @@ type DeepInfraVideoJob = {
   error?: string | null;
 };
 
-function normalizeDeepInfraVideoUrl(url: string): string {
+function normalizeDeepInfraVideoUrl(url: string, baseUrl: string): string {
   if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:")) {
     return url;
   }
-  return new URL(url, "https://api.deepinfra.com").href;
+  return new URL(url, baseUrl).href;
 }
 
 function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
@@ -130,12 +130,12 @@ function firstDeepInfraVideoUrl(job: DeepInfraVideoJob): string | undefined {
   return undefined;
 }
 
-function extractDeepInfraVideoAsset(job: DeepInfraVideoJob): GeneratedVideoAsset {
+function extractDeepInfraVideoAsset(job: DeepInfraVideoJob, baseUrl: string): GeneratedVideoAsset {
   const videoUrl = firstDeepInfraVideoUrl(job);
   if (!videoUrl) {
     throw new Error("DeepInfra video response missing video URL");
   }
-  const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl);
+  const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl, baseUrl);
   // Some models return the MP4 inline as a data: URL, others a hosted https URL.
   const dataAsset = parseVideoDataUrl(normalizedUrl);
   if (dataAsset) {
@@ -300,7 +300,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
                   : undefined,
             });
 
-      const video = extractDeepInfraVideoAsset(completed);
+      const video = extractDeepInfraVideoAsset(completed, baseUrl);
       return {
         videos: [video],
         model: normalizeOptionalString(completed.model) ?? model,

@@ -175,6 +175,39 @@ describe("deepinfra video generation provider", () => {
     expect(result.metadata).toEqual({ jobId: "videos_fast", status: "succeeded" });
   });
 
+  it("resolves relative video URLs against a configured OpenAI-compatible baseUrl", async () => {
+    mockSubmit({
+      id: "videos_custom",
+      status: "succeeded",
+      data: [{ url: "/generated/custom.mp4" }],
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A video from a custom endpoint",
+      cfg: {
+        models: {
+          providers: {
+            deepinfra: { baseUrl: "https://video.example.com/v1/openai" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(Reflect.get(requireFirstPostJsonRequest() ?? {}, "url")).toBe(
+      "https://video.example.com/v1/openai/videos",
+    );
+    expect(result.videos).toEqual([
+      {
+        url: "https://video.example.com/generated/custom.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
+  });
+
   it("ignores legacy nativeBaseUrl config; doctor owns its migration", async () => {
     mockSubmit({
       id: "videos_native",
