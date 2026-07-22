@@ -34,6 +34,7 @@ import {
   isInvalidCronTaskRunJobIdError,
   readCronTaskRunHistoryPage,
 } from "../../cron/task-run-history.js";
+import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -55,6 +56,7 @@ import {
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
+  type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { listCronPageForCallerScope } from "./cron-list-caller-scope.js";
@@ -174,6 +176,22 @@ async function assertValidCronUpdatePatch(params: {
       delivery,
     });
   }
+  return nextJob;
+}
+
+function requiresExplicitAgentRuntimeToolsAllow(params: {
+  job: Pick<CronJob, "payload" | "trigger">;
+  callerScope: CronCallerScope | undefined;
+}): boolean {
+  return (
+    params.callerScope !== undefined &&
+    cronJobUsesToolRuntime(params.job) &&
+    params.job.payload.toolsAllow === undefined
+  );
+}
+
+function cronPatchTouchesToolRuntime(patch: CronJobPatch): boolean {
+  return patch.payload !== undefined || Object.hasOwn(patch, "trigger");
 }
 
 function assertCronDoesNotTargetAgentHarness(input: {
@@ -511,6 +529,14 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondInvalidCronParams(respond, "cron.add", "job agentId outside caller scope");
       return;
     }
+    if (requiresExplicitAgentRuntimeToolsAllow({ job: jobCreate, callerScope })) {
+      respondInvalidCronParams(
+        respond,
+        "cron.add",
+        "agent-runtime tool jobs require an explicit payload.toolsAllow cap",
+      );
+      return;
+    }
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
     if (!timestampValidation.ok) {
       respond(
@@ -674,12 +700,18 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     try {
-      await assertValidCronUpdatePatch({
+      const nextJob = await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob,
         patch,
       });
+      if (
+        cronPatchTouchesToolRuntime(patch) &&
+        requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
+      ) {
+        throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
+      }
     } catch (err) {
       respond(
         false,
@@ -712,12 +744,18 @@ export const cronHandlers: GatewayRequestHandlers = {
             );
           }
         }
-        await assertValidCronUpdatePatch({
+        const nextJob = await assertValidCronUpdatePatch({
           cfg,
           defaultAgentId: context.cron.getDefaultAgentId(),
           currentJob: lockedJob,
           patch,
         });
+        if (
+          cronPatchTouchesToolRuntime(patch) &&
+          requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope })
+        ) {
+          throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
+        }
       });
     } catch (err) {
       if (err instanceof CronJobConfigRevisionConflictError) {

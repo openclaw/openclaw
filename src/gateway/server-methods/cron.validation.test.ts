@@ -255,7 +255,7 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello" },
+    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
     delivery: { mode: "none" },
     state: {},
     ...overrides,
@@ -373,7 +373,7 @@ function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "hello" },
+    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
     ...overrides,
   };
 }
@@ -828,6 +828,34 @@ describe("cron method validation", () => {
     const payload = requireCronAddPayload(context);
     expect(payload.agentId).toBe("ops");
     expect(payload).not.toHaveProperty("callerScope");
+    expectCronSuccess(respond);
+  });
+
+  it("rejects agent-runtime tool jobs without an explicit toolsAllow cap", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        payload: { kind: "agentTurn", message: "hello" },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.add).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "explicit payload.toolsAllow cap",
+    });
+  });
+
+  it("allows agent-runtime transport-only jobs without a toolsAllow cap", async () => {
+    const { context, respond } = await invokeCronAdd(
+      agentTurnCronParams({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "wake" },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.add).toHaveBeenCalled();
     expectCronSuccess(respond);
   });
 
@@ -1372,6 +1400,43 @@ describe("cron method validation", () => {
         patch: { enabled: false },
       },
       createCronJob({ agentId: "ops" }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", { enabled: false });
+    expectCronSuccess(respond);
+  });
+
+  it("rejects agent-runtime edits that leave a tool-runtime job capless", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { payload: { kind: "agentTurn", message: "updated" } },
+      },
+      createCronJob({
+        agentId: "ops",
+        payload: { kind: "agentTurn", message: "legacy" },
+      }),
+      { client: callerClient("ops") },
+    );
+
+    expect(context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "explicit payload.toolsAllow cap",
+    });
+  });
+
+  it("allows agent-runtime non-policy edits to legacy capless jobs", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: { enabled: false },
+      },
+      createCronJob({
+        agentId: "ops",
+        payload: { kind: "agentTurn", message: "legacy" },
+      }),
       { client: callerClient("ops") },
     );
 
