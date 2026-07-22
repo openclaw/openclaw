@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { applySelectedSessionProjection } from "./chat-pane-state.ts";
+import {
+  applySelectedSessionProjection,
+  resolveSessionParticipationBlocked,
+} from "./chat-pane-state.ts";
 
 function projectionState(): Parameters<typeof applySelectedSessionProjection>[0] {
   return {
@@ -39,5 +42,32 @@ describe("applySelectedSessionProjection", () => {
       chatQueueModeOverride: "followup",
       selectedChatSessionArchived: false,
     });
+  });
+});
+
+describe("resolveSessionParticipationBlocked", () => {
+  it("blocks when a selected row disappears, then reopens once it returns shared", () => {
+    expect(
+      resolveSessionParticipationBlocked({
+        catalog: false,
+        session: { visibility: "draft", sharingRole: "member" },
+      }),
+    ).toBe(true);
+    expect(
+      resolveSessionParticipationBlocked({
+        catalog: false,
+        session: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSessionParticipationBlocked({
+        catalog: false,
+        session: { visibility: "shared", sharingRole: "member" },
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps catalog sessions on their separate capability path", () => {
+    expect(resolveSessionParticipationBlocked({ catalog: true, session: undefined })).toBe(false);
   });
 });

@@ -135,6 +135,10 @@ export function canMutateSession(params: {
   role: SessionSharingRole;
   visibility: SessionVisibility;
 }): boolean {
+  // Drafts stay creator/admin-only; membership becomes active only after promotion.
+  if (params.visibility === "draft") {
+    return params.role === "admin" || params.role === "owner";
+  }
   return params.visibility === "shared" || params.role !== "viewer";
 }
 

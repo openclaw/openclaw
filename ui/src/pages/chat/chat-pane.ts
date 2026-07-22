@@ -163,6 +163,7 @@ import {
   applySelectedSessionProjection,
   dismissChatError,
   resolveAssistantAttachmentAuthToken,
+  resolveSessionParticipationBlocked,
 } from "./chat-pane-state.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
@@ -3480,11 +3481,10 @@ class ChatPane extends OpenClawLightDomElement {
       state.sessionsResult?.sessions.some(
         (row) => row.archived === true && areUiSessionKeysEquivalent(row.key, state.sessionKey),
       ) === true;
-    const sessionParticipationBlocked =
-      selectedSession !== undefined &&
-      selectedSession.visibility !== undefined &&
-      selectedSession.visibility !== "shared" &&
-      selectedSession.sharingRole === "viewer";
+    const sessionParticipationBlocked = resolveSessionParticipationBlocked({
+      catalog: catalogKey !== null,
+      session: selectedSession,
+    });
     const disabledReason = sessionParticipationBlocked
       ? t("chat.sessionSharing.readOnlyNotice")
       : null;

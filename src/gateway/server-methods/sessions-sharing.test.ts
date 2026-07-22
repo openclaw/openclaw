@@ -7,6 +7,7 @@ import {
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import {
+  addSessionMember,
   listSessionMembers,
   removeSessionMember,
 } from "../../config/sessions/session-sharing-store.js";
@@ -15,6 +16,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   authorizeSessionMutation,
   canReceiveSessionEvent,
+  filterDraftSessionsForClient,
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
@@ -79,6 +81,89 @@ async function call(
 }
 
 describe("session sharing handlers", () => {
+  it("revokes all member access while a session is draft and restores it when shared", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:member-transition";
+      const owner = { id: "owner@example.com", label: "Owner" };
+      const memberIdentity = { id: "member@example.com", label: "Member" };
+      const memberClient: GatewayClient = {
+        ...soloClient(),
+        operatorIdentity: memberIdentity,
+      };
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-member-transition",
+          updatedAt: 1,
+          createdBy: owner,
+          visibility: "shared",
+        },
+      );
+      expect(
+        addSessionMember(
+          { agentId: "main", sessionKey },
+          { identityId: memberIdentity.id, addedBy: owner.id, addedAt: 1 },
+        ).inserted,
+      ).toBe(true);
+      const requestContext = {
+        ...context(vi.fn()),
+        execApprovalManager: {
+          lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
+          getSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
+        },
+      } as unknown as GatewayRequestContext;
+      const mutations: Array<[string, Record<string, unknown>]> = [
+        ["chat.send", { sessionKey }],
+        ["sessions.steer", { key: sessionKey }],
+        ["sessions.abort", { key: sessionKey }],
+        ["exec.approval.resolve", { id: "approval-1" }],
+      ];
+      const expectAccess = (allowed: boolean) => {
+        for (const [method, requestParams] of mutations) {
+          const error = authorizeSessionMutation({
+            cfg: {},
+            client: memberClient,
+            method,
+            requestParams,
+            context: requestContext,
+          });
+          if (allowed) {
+            expect(error, method).toBeNull();
+          } else {
+            expect(error, method).toMatchObject({
+              details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+            });
+          }
+        }
+        const entry = loadSessionEntry({ agentId: "main", sessionKey });
+        if (!entry) {
+          throw new Error("expected member transition session entry");
+        }
+        const listed = filterDraftSessionsForClient({
+          client: memberClient,
+          store: { [sessionKey]: entry },
+        });
+        expect(Object.hasOwn(listed, sessionKey)).toBe(allowed);
+        expect(
+          canReceiveSessionEvent({
+            cfg: {},
+            client: memberClient as never,
+            sessionKeys: [sessionKey],
+            agentId: "main",
+          }),
+        ).toBe(allowed);
+      };
+
+      expectAccess(true);
+      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "draft" }));
+      invalidateSessionSharingSnapshot(sessionKey);
+      expectAccess(false);
+      await patchSessionEntry({ agentId: "main", sessionKey }, () => ({ visibility: "shared" }));
+      invalidateSessionSharingSnapshot(sessionKey);
+      expectAccess(true);
+    });
+  });
+
   it("persists visibility and membership changes as transcript system notes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:main";
