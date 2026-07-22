@@ -565,6 +565,38 @@ describe("registerChannelsCli", () => {
     );
   });
 
+  it("prefers modern contract options when a channel also publishes cliAddOptions", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValue([
+      {
+        id: "telegram",
+        setup: {
+          fields: [
+            {
+              key: "token",
+              kind: "string",
+              cli: { flags: "--token <token>", description: "Telegram bot token" },
+            },
+          ],
+        },
+        cliAddOptions: [{ flags: "--legacy-token <token>", description: "Retained legacy switch" }],
+      },
+    ]);
+
+    const program = new Command().name("openclaw");
+    const argv = ["channels", "add", "telegram", "--token", "test-token"];
+    await registerChannelsCli(program, ["node", "openclaw", ...argv]);
+    const flags = getChannelAddOptionFlags(program);
+    expect(flags).toContain("--token <token>");
+    expect(flags).not.toContain("--legacy-token <token>");
+
+    await program.parseAsync(argv, { from: "user" });
+    expect(channelsAddCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "telegram", token: "test-token" }),
+      runtimeMock,
+      { hasFlags: true },
+    );
+  });
+
   it("resolves a positional channel after a value-taking channel option", async () => {
     const metadata: PluginPackageChannel[] = [
       {

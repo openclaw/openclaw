@@ -30,10 +30,13 @@ function compareChannels(left: PluginPackageChannel, right: PluginPackageChannel
 }
 
 function channelSetupOptions(channel: PluginPackageChannel): PluginPackageChannelCliOption[] {
-  return [
-    ...(channel.setup?.fields.map((field) => field.cli) ?? []),
-    ...(channel.cliAddOptions ?? []),
-  ];
+  // A migrating plugin may publish both surfaces so older cores keep working.
+  // The modern contract owns parsing here, so only its options may register;
+  // concatenating both would register flags that parseInput then rejects.
+  if (channel.setup) {
+    return channel.setup.fields.map((field) => field.cli);
+  }
+  return [...(channel.cliAddOptions ?? [])];
 }
 
 export function resolveChannelSetupCliOptionMetadata(
@@ -68,7 +71,9 @@ export function resolveChannelSetupCliOptionMetadata(
     return true;
   });
   const valueMetadataByAttributeName = new Map<string, ChannelSetupCliOptionValueMetadata>();
-  if (selectedChannel) {
+  // Value coercion metadata is a legacy-options mechanism; modern contracts
+  // type their fields, and their cliAddOptions never register above.
+  if (selectedChannel && !selectedChannel.setup) {
     for (const option of selectedChannel.cliAddOptions ?? []) {
       if (!option.valueType) {
         continue;
