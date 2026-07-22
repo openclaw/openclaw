@@ -384,6 +384,99 @@ describe("shouldRunMemoryFlush", () => {
       }),
     ).toBe(false);
   });
+
+  describe("in-turn compaction catch-up (#62420)", () => {
+    const threshold = {
+      contextWindowTokens: 100_000,
+      reserveTokensFloor: 5_000,
+      softThresholdTokens: 2_000,
+    } as const;
+
+    it("flushes when an in-turn compaction left compactionCount > memoryFlushCompactionCount even after tokens dropped below threshold", () => {
+      // Pre-turn flush had not run (tokens were below threshold). The turn
+      // then triggered an in-turn auto-compaction which incremented
+      // compactionCount but the post-compaction transcript is well below
+      // threshold, so the bare token check would otherwise skip the flush
+      // — that is exactly the gap reported in #62420.
+      expect(
+        shouldRunMemoryFlush({
+          entry: {
+            totalTokens: 10_000,
+            totalTokensFresh: true,
+            compactionCount: 1,
+            memoryFlushCompactionCount: 0,
+          },
+          ...threshold,
+        }),
+      ).toBe(true);
+    });
+
+    it("flushes the very first compaction even when memoryFlushCompactionCount has never been set", () => {
+      expect(
+        shouldRunMemoryFlush({
+          entry: {
+            totalTokens: 5_000,
+            totalTokensFresh: true,
+            compactionCount: 1,
+            // memoryFlushCompactionCount intentionally absent
+          },
+          ...threshold,
+        }),
+      ).toBe(true);
+    });
+
+    it("still skips when compactionCount === memoryFlushCompactionCount even with low tokens", () => {
+      expect(
+        shouldRunMemoryFlush({
+          entry: {
+            totalTokens: 10_000,
+            totalTokensFresh: true,
+            compactionCount: 3,
+            memoryFlushCompactionCount: 3,
+          },
+          ...threshold,
+        }),
+      ).toBe(false);
+    });
+
+    it("does not catch up when compactionCount is 0 (never compacted)", () => {
+      expect(
+        shouldRunMemoryFlush({
+          entry: { totalTokens: 10_000, totalTokensFresh: true, compactionCount: 0 },
+          ...threshold,
+        }),
+      ).toBe(false);
+    });
+
+    it("catch-up still requires fresh persisted totals when no override is supplied (avoid flushing on stale snapshots)", () => {
+      expect(
+        shouldRunMemoryFlush({
+          entry: {
+            totalTokens: 10_000,
+            totalTokensFresh: false,
+            compactionCount: 1,
+            memoryFlushCompactionCount: 0,
+          },
+          ...threshold,
+        }),
+      ).toBe(false);
+    });
+
+    it("catch-up honors a fresh tokenCount override even when entry totals are stale", () => {
+      expect(
+        shouldRunMemoryFlush({
+          entry: {
+            totalTokens: 0,
+            totalTokensFresh: false,
+            compactionCount: 1,
+            memoryFlushCompactionCount: 0,
+          },
+          tokenCount: 8_000,
+          ...threshold,
+        }),
+      ).toBe(true);
+    });
+  });
 });
 
 describe("shouldRunPreflightCompaction", () => {

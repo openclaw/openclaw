@@ -149,7 +149,7 @@ export function shouldRunMemoryFlush(params: {
   softThresholdTokens: number;
 }): boolean {
   const state = resolveMemoryFlushGateState(params);
-  if (!state || state.totalTokens < state.threshold) {
+  if (!state) {
     return false;
   }
 
@@ -157,7 +157,19 @@ export function shouldRunMemoryFlush(params: {
     return false;
   }
 
-  return true;
+  // In-turn auto-compaction catch-up (#62420): a runtime-triggered compaction
+  // that fires *during* a turn drops the session's token count back below the
+  // soft threshold, so a pure threshold check would never flush memory for
+  // that compaction cycle. When the entry's recorded compactionCount has
+  // moved past `memoryFlushCompactionCount` (caught by the prior duplicate
+  // guard returning false), honor the explicit memoryFlush.enabled contract
+  // and flush for the pending compaction regardless of current token level.
+  const compactionCount = state.entry.compactionCount ?? 0;
+  if (compactionCount > 0) {
+    return true;
+  }
+
+  return state.totalTokens >= state.threshold;
 }
 
 export function shouldRunPreflightCompaction(params: {
