@@ -153,13 +153,39 @@ async function createTestMcpLoopbackServer(port = 0) {
   };
 }
 
-function createCliBackendConfig(
-  _params: {
-    bundleMcp?: boolean;
-    reseedFromRawTranscriptWhenUncompacted?: boolean;
-    systemPromptWhen?: "first" | "always" | "never";
-  } = {},
-): OpenClawConfig {
+type TestCliBackendParams = {
+  bundleMcp?: boolean;
+  reseedFromRawTranscriptWhenUncompacted?: boolean;
+  systemPromptWhen?: "first" | "always" | "never";
+};
+
+function buildDefaultTestCliBackend(
+  params: TestCliBackendParams = {},
+): CliBackendPlugin & { pluginId: string } {
+  return {
+    id: "test-cli",
+    pluginId: "test-cli-plugin",
+    bundleMcp: params.bundleMcp === true,
+    ...(params.bundleMcp ? { bundleMcpMode: "claude-config-file" as const } : {}),
+    config: {
+      command: "test-cli",
+      args: ["--print"],
+      systemPromptArg: "--system-prompt",
+      systemPromptWhen: params.systemPromptWhen ?? "first",
+      sessionMode: "existing",
+      output: "text",
+      input: "arg",
+      ...(params.reseedFromRawTranscriptWhenUncompacted
+        ? { reseedFromRawTranscriptWhenUncompacted: true }
+        : {}),
+    },
+  };
+}
+
+let defaultTestCliBackend = buildDefaultTestCliBackend();
+
+function createCliBackendConfig(params: TestCliBackendParams = {}): OpenClawConfig {
+  defaultTestCliBackend = buildDefaultTestCliBackend(params);
   return {};
 }
 
@@ -396,9 +422,10 @@ describe("prepareCliRunContext", () => {
   beforeEach(() => {
     // Install narrow test doubles for external runtime seams so preparation
     // remains about data flow, not bundled plugin or loopback startup cost.
+    defaultTestCliBackend = buildDefaultTestCliBackend();
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupCliBackend: () => undefined,
-      resolveRuntimeCliBackends: () => [],
+      resolveRuntimeCliBackends: () => [defaultTestCliBackend],
     });
     setCliRunnerPrepareTestDeps({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
@@ -2605,7 +2632,7 @@ describe("prepareCliRunContext", () => {
           sourceReplyDeliveryMode: "message_tool_only",
           currentMessageId: "msg-1",
           cliSessionBindingFacts,
-          config: createCliBackendConfig({ bundleMcp: true }),
+          config: createCliBackendConfig(),
         });
         const second = await prepareCliRunContext({
           sessionId: "session-test",
@@ -2628,7 +2655,7 @@ describe("prepareCliRunContext", () => {
             promptToolNamesHash: first.promptToolNamesHash,
             cwdHash: hashCliSessionText(dir),
           },
-          config: createCliBackendConfig({ bundleMcp: true }),
+          config: createCliBackendConfig(),
         });
 
         expect(first.extraSystemPromptHash).toBe(hashCliSessionText(staticPrompt));

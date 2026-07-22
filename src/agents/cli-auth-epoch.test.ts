@@ -991,6 +991,12 @@ describe("resolveCliAuthEpoch", () => {
           id: "claude-cli",
           pluginId: "anthropic",
           config: { command },
+          runtimeArtifact: {
+            kind: "bundled-package-tree",
+            packageName: "@fixture/claude-cli",
+            entrypoint: "command",
+            nativeExecutableNames: ["claude", "claude.exe"],
+          },
         },
       ],
     });
