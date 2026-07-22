@@ -1,4 +1,4 @@
-export type TtsAttemptReasonCode =
+type TtsAttemptReasonCode =
   | "success"
   | "no_provider_registered"
   | "not_configured"

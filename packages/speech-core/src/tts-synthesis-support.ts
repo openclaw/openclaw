@@ -64,7 +64,7 @@ export function buildTtsFailureResult(
   };
 }
 
-export type TtsProviderReadyResolution =
+type TtsProviderReadyResolution =
   | {
       kind: "ready";
       provider: NonNullable<ReturnType<typeof getSpeechProvider>>;
