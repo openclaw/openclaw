@@ -51,6 +51,62 @@ class WearLaunchIntentTest {
   }
 
   @Test
+  fun warmDebugLaunchesRecreateForScreenshotEntrySwitchAndExit() {
+    val voiceScreenshotIntent =
+      Intent(Intent.ACTION_MAIN)
+        .putExtra(extraWearScreenshotMode, true)
+        .putExtra(extraWearScreenshotScene, WearScreenshotScene.Voice.rawValue)
+    val controlsScreenshotIntent =
+      Intent(Intent.ACTION_MAIN)
+        .putExtra(extraWearScreenshotMode, true)
+        .putExtra(extraWearScreenshotScene, WearScreenshotScene.Controls.rawValue)
+    val normalIntent = Intent(Intent.ACTION_MAIN)
+
+    assertEquals(
+      true,
+      shouldRecreateForScreenshotMode(null, voiceScreenshotIntent, screenshotModeEnabled = true),
+    )
+    assertEquals(
+      true,
+      shouldRecreateForScreenshotMode(
+        WearScreenshotScene.Voice,
+        controlsScreenshotIntent,
+        screenshotModeEnabled = true,
+      ),
+    )
+    assertEquals(
+      true,
+      shouldRecreateForScreenshotMode(
+        WearScreenshotScene.Controls,
+        normalIntent,
+        screenshotModeEnabled = true,
+      ),
+    )
+    assertEquals(
+      false,
+      shouldRecreateForScreenshotMode(
+        null,
+        Intent(Intent.ACTION_MAIN)
+          .putExtra(extraWearLaunchTarget, WearLaunchTarget.Voice.rawValue),
+        screenshotModeEnabled = true,
+      ),
+    )
+  }
+
+  @Test
+  fun releaseLaunchDoesNotRecreateForScreenshotExtras() {
+    val screenshotIntent =
+      Intent(Intent.ACTION_MAIN)
+        .putExtra(extraWearScreenshotMode, true)
+        .putExtra(extraWearScreenshotScene, WearScreenshotScene.Voice.rawValue)
+
+    assertEquals(
+      false,
+      shouldRecreateForScreenshotMode(null, screenshotIntent, screenshotModeEnabled = false),
+    )
+  }
+
+  @Test
   fun tileActionsTargetMainActivityWithTheirRequestedPage() {
     val context = RuntimeEnvironment.getApplication()
 

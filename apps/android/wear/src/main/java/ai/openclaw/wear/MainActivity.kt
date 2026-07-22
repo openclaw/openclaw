@@ -68,15 +68,26 @@ internal data class WearLaunchState(
     )
 }
 
+internal fun shouldRecreateForScreenshotMode(
+  currentScene: WearScreenshotScene?,
+  intent: Intent?,
+  screenshotModeEnabled: Boolean,
+): Boolean =
+  screenshotModeEnabled &&
+    (currentScene != null || parseWearScreenshotModeIntent(intent) != null)
+
 class MainActivity : ComponentActivity() {
   private val viewModel: WearViewModel by viewModels()
   private var screenshotScene: WearScreenshotScene? = null
   private var launchState by mutableStateOf(WearLaunchState())
 
+  private val screenshotModeEnabled: Boolean
+    get() = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     launchState = WearLaunchState(target = parseWearLaunchTarget(intent))
-    if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+    if (screenshotModeEnabled) {
       screenshotScene = parseWearScreenshotModeIntent(intent)
     }
     setContent {
@@ -99,9 +110,11 @@ class MainActivity : ComponentActivity() {
   override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
-    if (screenshotScene == null) {
-      launchState = launchState.next(intent)
+    if (shouldRecreateForScreenshotMode(screenshotScene, intent, screenshotModeEnabled)) {
+      recreate()
+      return
     }
+    launchState = launchState.next(intent)
   }
 
   override fun onStart() {
