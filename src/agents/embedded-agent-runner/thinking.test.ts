@@ -271,7 +271,7 @@ describe("stripInvalidThinkingSignatures", () => {
     expect(result).toBe(messages);
   });
 
-  it("preserves invalid thinking signatures on the latest assistant message", () => {
+  it("strips invalid thinking signatures from the latest assistant message by default", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "hello" }),
       castAgentMessage({
@@ -289,14 +289,35 @@ describe("stripInvalidThinkingSignatures", () => {
     const result = stripInvalidThinkingSignatures(messages);
     const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
 
-    expect(result).toBe(messages);
+    // The non-replayable thinking blocks (missing / empty / blank signature) on
+    // the latest assistant turn are now dropped so providers do not reject the
+    // outbound request; the validly-signed thinking block and text survive.
+    expect(result).not.toBe(messages);
     expect(assistant.content).toEqual([
-      { type: "thinking", thinking: "missing" },
-      { type: "thinking", thinking: "empty", thinkingSignature: "" },
-      { type: "thinking", thinking: "blank", thinkingSignature: "   " },
       { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
       { type: "text", text: "answer" },
     ]);
+  });
+
+  it("returns the latest assistant message byte-identical when its thinking is validly signed", () => {
+    const signedAssistant = castAgentMessage({
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "internal", thinkingSignature: "sig" },
+        { type: "text", text: "answer" },
+      ],
+    });
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      signedAssistant,
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+
+    // A healthy signed latest turn must never be rewritten: the same array and
+    // the same message object reference are returned unchanged.
+    expect(result).toBe(messages);
+    expect(result[1]).toBe(signedAssistant);
   });
 
   it("can strip invalid thinking signatures from the latest assistant message", () => {
