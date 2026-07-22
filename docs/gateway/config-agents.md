@@ -1274,7 +1274,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
     responsePrefix: "🦞", // or "auto"
     ackReaction: "👀",
     ackReactionScope: "group-mentions", // group-mentions | group-all | direct | all | off | none
-    removeAckAfterReply: false,
     queue: {
       mode: "steer", // steer (default) | followup | collect | interrupt
       debounceMs: 500,
@@ -1320,16 +1319,10 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Per-channel overrides: `channels.<channel>.ackReaction`, `channels.<channel>.accounts.<id>.ackReaction`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`, or `off`/`none` (disables ack reactions entirely).
-- `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Signal, Telegram, WhatsApp, and iMessage.
 - `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Signal, Telegram, and WhatsApp.
   On Discord, unset keeps status reactions enabled when ack reactions are active.
   On Slack, Signal, Telegram, and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
   Slack uses its native assistant thread status and rotating loading messages for progress by default, while keeping the configured ack reaction static.
-- `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
-  `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
-  `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.
-  Telegram only allows a fixed reaction set, so unsupported configured emoji fall back
-  to the nearest supported status variant for that chat.
 
 ### Queue
 

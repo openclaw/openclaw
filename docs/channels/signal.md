@@ -305,7 +305,7 @@ Set `messages.statusReactions.enabled: true` to let Signal show the shared queue
 
 Status reactions also require an ack reaction and a matching `messages.ackReactionScope` (`direct`, `group-all`, `group-mentions`, or `all`). Set `channels.signal.reactionLevel: "off"` to disable Signal status reactions.
 
-`messages.removeAckAfterReply: true` clears the final status reaction after the configured hold time. Otherwise Signal restores the initial ack reaction after the final done/error state.
+Signal restores the initial ack reaction after the final done/error state.
 
 ## Reactions (message tool)
 
