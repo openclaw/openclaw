@@ -49,6 +49,7 @@
       "quickstartAllowFrom": true,
       "setup": { "fields": [
         { "key": "channelAccessToken", "kind": "string", "sensitive": true, "cli": { "flags": "--channel-access-token <token>", "description": "LINE channel access token" } },
+        { "key": "token", "kind": "string", "sensitive": true, "cli": { "flags": "--token <token>", "description": "LINE channel access token (alias)" } },
         { "key": "channelSecret", "kind": "string", "sensitive": true, "cli": { "flags": "--channel-secret <secret>", "description": "LINE channel secret" } },
         { "key": "tokenFile", "kind": "string", "sensitive": true, "cli": { "flags": "--token-file <path>", "description": "LINE access token file" } },
         { "key": "secretFile", "kind": "string", "sensitive": true, "cli": { "flags": "--secret-file <path>", "description": "LINE channel secret file" } },
