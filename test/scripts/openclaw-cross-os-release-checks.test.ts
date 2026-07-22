@@ -31,6 +31,7 @@ import {
   buildInstalledBrowserOverrideImportProbeScript,
   buildNpmGlobalInstallArgs,
   appendLatestNpmDebugLogTail,
+  buildGatewayStopArgsFromHelpText,
   buildGatewayStatusArgsFromHelpText,
   buildInstallerSmokeScript,
   buildWindowsPathBootstrapScript,
@@ -758,7 +759,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(args.at(-2)).toBe("--timeout");
   });
 
-  it("forces shutdown of the isolated managed gateways owned by release checks", () => {
+  it("uses forced shutdown only when the installed gateway supports it", () => {
     const source = [
       "scripts/lib/cross-os-release-checks/lanes.ts",
       "scripts/lib/cross-os-release-checks/runtime.ts",
@@ -766,8 +767,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       .map((filePath) => readFileSync(filePath, "utf8"))
       .join("\n");
 
-    expect(source.match(/args: \["gateway", "stop", "--force"\]/g)).toHaveLength(2);
-    expect(source).not.toContain('args: ["gateway", "stop"]');
+    expect(buildGatewayStopArgsFromHelpText("--force  Skip confirmation")).toEqual([
+      "gateway",
+      "stop",
+      "--force",
+    ]);
+    expect(buildGatewayStopArgsFromHelpText("--disable  Disable the service")).toEqual([
+      "gateway",
+      "stop",
+    ]);
+    expect(source.match(/resolveInstalledGatewayStopArgs\(/g)).toHaveLength(2);
   });
 
   it("keeps cross-OS live smoke agent turns on GPT-5-safe timeouts and minimal context", () => {

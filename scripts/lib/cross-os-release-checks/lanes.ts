@@ -38,6 +38,7 @@ import {
   readInstalledVersion,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
+  resolveInstalledGatewayStopArgs,
   runBundledPluginPostinstall,
   runInstalledBrowserOverrideImportSmoke,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
@@ -484,7 +485,12 @@ export async function runInstallerFreshSuite(
         logLanePhase(lane, "gateway-stop-managed");
         await runInstalledCli({
           cliPath: freshShell.cliPath,
-          args: ["gateway", "stop", "--force"],
+          args: await resolveInstalledGatewayStopArgs({
+            cliPath: freshShell.cliPath,
+            cwd: lane.homeDir,
+            env,
+            logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-help.log"),
+          }),
           env,
           cwd: lane.homeDir,
           logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed.log"),
