@@ -1377,7 +1377,7 @@ CREATE TABLE IF NOT EXISTS followup_queue_entries (
   queue_key TEXT NOT NULL PRIMARY KEY,
   queue_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL
-);
+) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_followup_queue_entries_updated
   ON followup_queue_entries(updated_at DESC, queue_key);

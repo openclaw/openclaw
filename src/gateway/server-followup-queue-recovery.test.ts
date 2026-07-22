@@ -13,8 +13,10 @@ import {
 import { FOLLOWUP_QUEUES } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 
-const enqueueSystemEvent = vi.fn();
-const requestHeartbeat = vi.fn();
+const { enqueueSystemEvent, requestHeartbeat } = vi.hoisted(() => ({
+  enqueueSystemEvent: vi.fn(),
+  requestHeartbeat: vi.fn(),
+}));
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent,
