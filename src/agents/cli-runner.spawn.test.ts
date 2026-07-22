@@ -603,6 +603,7 @@ describe("runCliAgent spawn path", () => {
         resumeArgs: ["-p", "--output-format", "stream-json", "--resume", "{sessionId}"],
         forkArg: "--fork-session",
         liveSession: "claude-stdio",
+        env: { ANTHROPIC_API_KEY: "gateway-backend-key" },
         systemPromptWhen: "always",
       },
     });
@@ -610,6 +611,7 @@ describe("runCliAgent spawn path", () => {
     await expect(executePreparedCliRun(context, undefined)).rejects.toThrow(
       /truncated the Claude CLI stream before the terminal result/,
     );
+    expect(invokeNode.mock.calls[0]?.[0].env).toBeUndefined();
   });
 
   it("cancels a node-placed Claude process when the run aborts", async () => {

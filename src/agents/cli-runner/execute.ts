@@ -924,7 +924,7 @@ export async function executePreparedCliRun(
           Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
         );
         const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
-        const nodeEnvEntries = Object.entries(backendEnv).filter(([key]) =>
+        const nodeEnvEntries = Object.entries(preparedBackendEnv).filter(([key]) =>
           NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
         );
         const nodeEnv = nodeEnvEntries.length > 0 ? Object.fromEntries(nodeEnvEntries) : undefined;
