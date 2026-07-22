@@ -24,7 +24,7 @@ export function formatGatewayAuthFailureMessage(params: {
   const isWebchat = isWebchatClient(client);
   const uiHint = "open the dashboard URL and paste the token in Control UI settings";
   const missingUiTokenHint =
-    "paste token in Control UI or run openclaw doctor --generate-gateway-token; restart";
+    "paste in Control UI settings or openclaw doctor --generate-gateway-token; restart";
   const tokenHint = isCli
     ? "set gateway.remote.token to match gateway.auth.token"
     : isControlUi || isWebchat
