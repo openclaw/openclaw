@@ -17,6 +17,7 @@ import {
   releaseAgentRunContext,
   resetAgentEventsForTest,
   rotateAgentEventLifecycleGeneration,
+  runOncePerAgentRun,
   sweepStaleRunContexts,
   withAgentRunLifecycleGeneration,
 } from "./agent-events.js";
@@ -80,7 +81,7 @@ describe("agent-events sequencing", () => {
       runId: "audit-only-run",
       sessionKey: "agent:main:acp:session",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
     emitAgentAuditEvent({
       runId: "audit-only-run",
@@ -92,7 +93,7 @@ describe("agent-events sequencing", () => {
       runId: "audit-only-run",
       sessionKey: "agent:main:acp:session",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
 
     stopShared();
@@ -298,7 +299,7 @@ describe("agent-events sequencing", () => {
       runId: "shared-run",
       lifecycleGeneration: activeGeneration,
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
     stop();
 
@@ -352,6 +353,35 @@ describe("agent-events sequencing", () => {
     );
 
     expect(captured).toBe(preRestartGeneration);
+  });
+
+  test("shares one run operation across nested fallback scopes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const operation = vi.fn(async () => "claimed");
+
+    const results = await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => [
+      await runOncePerAgentRun("run-1", "before_agent_reply", operation),
+      await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+        runOncePerAgentRun("run-1", "before_agent_reply", operation),
+      ),
+    ]);
+
+    expect(results).toEqual(["claimed", "claimed"]);
+    expect(operation).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not share run operations across admitted execution scopes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const operation = vi.fn(async () => "declined");
+
+    await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runOncePerAgentRun("run-1", "before_agent_reply", operation),
+    );
+    await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
+      runOncePerAgentRun("run-1", "before_agent_reply", operation),
+    );
+
+    expect(operation).toHaveBeenCalledTimes(2);
   });
 
   test("lists only runs owned by the current lifecycle", () => {
@@ -415,6 +445,30 @@ describe("agent-events sequencing", () => {
     expect(seen.find((evt) => evt.stream === "item")?.sessionId).toBeUndefined();
   });
 
+  test("rejects lifecycle starts without a finite producer timestamp", () => {
+    const seen: unknown[] = [];
+    const stop = onAgentEvent((evt) => seen.push(evt));
+
+    emitAgentEvent({ runId: "missing", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "invalid",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: Number.NaN },
+    });
+    emitAgentEvent({
+      runId: "valid",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+    stop();
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({
+      runId: "valid",
+      data: { phase: "start", startedAt: 1_234 },
+    });
+  });
+
   test("rejects old runs after restart and stamps the new generation", () => {
     const oldGeneration = getAgentEventLifecycleGeneration();
     registerAgentRunContext("old-run", { sessionKey: "main" });
@@ -431,7 +485,11 @@ describe("agent-events sequencing", () => {
     });
 
     emitAgentEvent({ runId: "old-run", stream: "lifecycle", data: { phase: "end" } });
-    emitAgentEvent({ runId: "new-run", stream: "lifecycle", data: { phase: "start" } });
+    emitAgentEvent({
+      runId: "new-run",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 1_234 },
+    });
     stop();
 
     expect(newGeneration).not.toBe(oldGeneration);
@@ -614,7 +672,7 @@ describe("agent-events sequencing", () => {
     emitAgentEvent({
       runId: "run-unscoped",
       stream: "lifecycle",
-      data: { phase: "start" },
+      data: { phase: "start", startedAt: 1_000 },
     });
     stop();
 

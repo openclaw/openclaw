@@ -2,50 +2,19 @@
 // Centralizes Vitest mock wiring for agent, channel, plugin, and runtime seams.
 import path from "node:path";
 import { vi } from "vitest";
-import {
-  getTestPluginRegistry,
-  resetTestPluginRegistry,
-  setTestPluginRegistry,
-} from "./test-helpers.plugin-registry.js";
+import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommand,
   cronIsolatedRun,
-  dispatchInboundMessageMock,
   embeddedRunMock,
   type GetReplyFromConfigFn,
-  getReplyFromConfig,
   getGatewayTestHoistedState,
-  mockGetReplyFromConfigOnce,
   agentDiscoveryMock,
-  runBtwSideQuestion,
-  sendWhatsAppMock,
   sessionStoreSaveDelayMs,
-  setTestConfigRoot,
-  testIsNixMode,
-  testState,
   testTailnetIPv4,
   testTailscaleWhois,
   type RunBtwSideQuestionFn,
 } from "./test-helpers.runtime-state.js";
-
-export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
-export {
-  agentCommand,
-  cronIsolatedRun,
-  dispatchInboundMessageMock,
-  embeddedRunMock,
-  getReplyFromConfig,
-  mockGetReplyFromConfigOnce,
-  agentDiscoveryMock,
-  runBtwSideQuestion,
-  sendWhatsAppMock,
-  sessionStoreSaveDelayMs,
-  setTestConfigRoot,
-  testIsNixMode,
-  testState,
-  testTailnetIPv4,
-  testTailscaleWhois,
-};
 
 const gatewayTestHoisted = getGatewayTestHoistedState();
 
@@ -58,9 +27,21 @@ function createEmbeddedRunMockExports() {
       embeddedRunMock.abortCalls.push(sessionId);
       return embeddedRunMock.activeIds.has(sessionId);
     },
-    waitForEmbeddedAgentRunEnd: async (sessionId: string) => {
+    waitForEmbeddedAgentRunEnd: async (sessionId: string, timeoutMs?: number | null) => {
+      if (timeoutMs === null) {
+        embeddedRunMock.endWaitCalls.push(sessionId);
+        return await new Promise<boolean>((resolve) => {
+          embeddedRunMock.endWaiters.set(sessionId, resolve);
+        });
+      }
       embeddedRunMock.waitCalls.push(sessionId);
-      return embeddedRunMock.waitResults.get(sessionId) ?? true;
+      const ended = embeddedRunMock.waitResults.get(sessionId) ?? true;
+      if (ended) {
+        embeddedRunMock.endWaiters.get(sessionId)?.(true);
+      } else if (embeddedRunMock.resolveEndBeforeTimeoutIds.delete(sessionId)) {
+        embeddedRunMock.endWaiters.get(sessionId)?.(true);
+      }
+      return ended;
     },
   };
 }
@@ -270,6 +251,7 @@ vi.mock("../commands/status.js", () => ({
 }));
 vi.mock("../commands/agent.js", () => ({
   agentCommand,
+  agentCommandFromGatewayIngress: agentCommand,
   agentCommandFromIngress: agentCommand,
 }));
 vi.mock("../agents/btw.js", () => ({

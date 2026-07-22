@@ -139,6 +139,7 @@ import {
   extractToolSearchTarget,
   buildQaToolSearchArgs,
   isActiveMemorySubagentPrompt,
+  isSnackRecallPrompt,
   extractSnackPreference,
 } from "./mock-openai-tooling.js";
 
@@ -163,9 +164,15 @@ async function buildResponsesPayload(
   const toolJson = parseToolOutputJson(scenarioToolOutput);
   const promptExactReplyDirective = extractExactReplyDirective(prompt);
   const promptExactMarkerDirective = extractExactMarkerDirective(prompt);
+  const allUserText = extractAllUserTexts(input).join("\n");
+  const userExactReplyDirective =
+    promptExactReplyDirective ?? extractExactReplyDirective(allUserText);
+  const userExactMarkerDirective =
+    promptExactMarkerDirective ?? extractExactMarkerDirective(allUserText);
   const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     promptExactMarkerDirective ?? extractExactMarkerDirective(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const whatsAppLocationMarker = shouldUseWhatsAppLocationMarker(prompt)
     ? extractWhatsAppLocationMarkerDirective(allInputText)
     : "";
@@ -182,7 +189,6 @@ async function buildResponsesPayload(
   const blockStreamingMarkers =
     extractBlockStreamingMarkerDirectives(blockStreamingPrompt) ??
     extractBlockStreamingMarkerDirectives(allInputText);
-  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const isGroupChat = allInputText.includes('"is_group_chat": true');
   const isBaselineUnmentionedChannelChatter = /\bno bot ping here\b/i.test(prompt);
   const hasReasoningOnlyRetryInstruction = allInputText.includes(QA_REASONING_ONLY_RETRY_NEEDLE);
@@ -193,7 +199,7 @@ async function buildResponsesPayload(
     /forked subagent context qa check/i.test(allInputText) ||
     /delegate (?:one |a )bounded qa task/i.test(allInputText) ||
     /subagent handoff/i.test(allInputText) ||
-    buildExplicitSessionsSpawnArgs(allInputText) !== null;
+    buildExplicitSessionsSpawnArgs(prompt) !== null;
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn") || canCallMockSubagentTool;
   const canCallSessionsYield =
     hasDeclaredTool(body, "sessions_yield") ||
@@ -471,7 +477,7 @@ async function buildResponsesPayload(
       },
     ]);
   }
-  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(allInputText);
+  const whatsAppPendingHistoryReply = buildWhatsAppPendingHistoryReply(prompt, input);
   if (whatsAppPendingHistoryReply) {
     return buildAssistantEvents(whatsAppPendingHistoryReply);
   }
@@ -727,11 +733,11 @@ async function buildResponsesPayload(
   if (/\bmarker\b/i.test(allInputText) && promptExactReplyDirective) {
     return buildAssistantEvents(promptExactReplyDirective);
   }
-  if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
-    return buildAssistantEvents(exactMarkerDirective);
+  if (/\bmarker\b/i.test(allInputText) && userExactMarkerDirective) {
+    return buildAssistantEvents(userExactMarkerDirective);
   }
-  if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
-    return buildAssistantEvents(exactReplyDirective);
+  if (/\bmarker\b/i.test(allInputText) && userExactReplyDirective) {
+    return buildAssistantEvents(userExactReplyDirective);
   }
   if (QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE.test(allInputText)) {
     return buildAssistantEvents(
@@ -967,15 +973,12 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (
-    isActiveMemorySubagentPrompt(allInputText) &&
-    /silent snack recall check/i.test(allInputText)
-  ) {
+  if (isActiveMemorySubagentPrompt(allInputText) && isSnackRecallPrompt(allInputText)) {
     if (!toolOutput) {
       if (!hasDeclaredTool(body, "memory_recall")) {
         return buildToolCallEventsWithArgs("memory_search", {
           query: "QA movie night snack lemon pepper wings blue cheese",
-          maxResults: 3,
+          maxResults: /remember across conversations qa check/i.test(allInputText) ? 10 : 3,
         });
       }
       return buildToolCallEventsWithArgs("memory_recall", {
@@ -1007,7 +1010,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (typeof first?.path === "string") {
+    if (typeof first?.path === "string" && hasDeclaredTool(body, "memory_get")) {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)
@@ -1133,7 +1136,7 @@ async function buildResponsesPayload(
     scenarioState.subagentFanoutPhase = 3;
     return buildAssistantEvents("subagent-1: ok\nsubagent-2: ok");
   }
-  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
+  const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(prompt);
   if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }

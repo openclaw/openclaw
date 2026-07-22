@@ -14,8 +14,12 @@
       "./index.ts"
     ],
     "setupEntry": "./setup-entry.ts",
+    "setupFeatures": {
+      "configPromotion": true
+    },
     "channel": {
       "id": "signal",
+      "approvalFlags": ["native"],
       "label": "Signal",
       "selectionLabel": "Signal (signal-cli)",
       "detailLabel": "Signal REST",
@@ -25,6 +29,14 @@
       "systemImage": "antenna.radiowaves.left.and.right",
       "markdownCapable": true,
       "cliAddOptions": [
+        {
+          "flags": "--cli-path <path>",
+          "description": "Channel CLI path"
+        },
+        {
+          "flags": "--http-url <url>",
+          "description": "Channel HTTP service URL"
+        },
         {
           "flags": "--signal-number <e164>",
           "description": "Signal account number (E.164)"

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { listSessionEntries, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -350,6 +351,44 @@ test("sessions.reset emits internal command hook with reason", async () => {
   expect(event.context?.previousSessionEntry?.sessionId).toBe("sess-main");
 });
 
+test("sessions.reset removes automatic recovery state from the replacement session", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-recovery", "hello");
+  await writeMainSessionEntry("sess-recovery", {
+    abortedLastRun: true,
+    restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "generation-1" }],
+    mainRestartRecovery: {
+      cycleId: "cycle-1",
+      revision: 5,
+      chargedAttempts: 3,
+      foregroundClaims: {
+        lifecycleGeneration: "generation-1",
+        tokens: ["foreground-owner"],
+      },
+      tombstone: {
+        reason: "exhausted",
+      },
+    },
+    subagentRecovery: {
+      automaticAttempts: 2,
+      lastAttemptAt: 10,
+      lastRunId: "child-recovery-run",
+      wedgedAt: 20,
+      wedgedReason: "child exhausted",
+    },
+  });
+
+  await resetMainSession();
+
+  const store = await loadGatewaySessionStoreForKey("main");
+  const replacement = store["agent:main:main"];
+  expect(replacement?.sessionId).not.toBe("sess-recovery");
+  expect(replacement?.abortedLastRun).toBe(false);
+  expect(replacement?.restartRecoveryRuns).toBeUndefined();
+  expect((replacement as InternalSessionEntry | undefined)?.mainRestartRecovery).toBeUndefined();
+  expect(replacement?.subagentRecovery).toBeUndefined();
+});
+
 test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -515,13 +554,10 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionId).toBe("sess-main");
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
-  expect(endEvent.transcriptArchived).toBe(true);
-  const archivedSessionFile = expectStringWithPrefix(
-    path.basename(expectStringValue(endEvent.sessionFile, "archived session file")),
-    "sess-main.jsonl.reset.",
-    "archived session file",
-  );
-  expect(archivedSessionFile).toContain(".jsonl.reset.");
+  // Retained history: reset keeps the SQLite transcript searchable under the
+  // same key, so nothing is archived and no reset artifact file exists.
+  expect(endEvent.transcriptArchived).toBeUndefined();
+  expect(endEvent.sessionFile).toBeUndefined();
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");

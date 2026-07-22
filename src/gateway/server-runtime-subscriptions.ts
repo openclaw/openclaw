@@ -14,7 +14,7 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
+import { createLazyPromise, createLazyPromiseLoader } from "../shared/lazy-runtime.js";
 import type { TaskRegistryObserverEvent } from "../tasks/task-registry.store.js";
 import {
   type ChatAbortControllerEntry,
@@ -29,6 +29,7 @@ import type {
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import { mapTaskSummary, type TaskEventPayload } from "./server-methods/task-summary.js";
+import { createSessionObserver } from "./session-observer.js";
 
 function dispatchEventHandler<TEvent>(params: {
   loadHandler: () => Promise<(event: TEvent) => unknown>;
@@ -72,6 +73,11 @@ export function startGatewayEventSubscriptions(params: {
   const auditRecorder = createAuditEventRecorder({
     messageMode: auditEnabled ? auditMessageMode : "off",
   });
+  const sessionObserver = createSessionObserver({
+    getConfig: getRuntimeConfig,
+    subscribers: params.sessionMessageSubscribers,
+    broadcastToConnIds: params.broadcastToConnIds,
+  });
   const unsubscribePrivateAuditEvents = auditEnabled
     ? onAgentAuditEvent(auditRecorder.record)
     : undefined;
@@ -82,7 +88,7 @@ export function startGatewayEventSubscriptions(params: {
     auditEnabled && auditMessageMode !== "off"
       ? onTrustedMessageAuditEvent(auditRecorder.recordMessage)
       : undefined;
-  const getAgentEventHandler = createLazyPromise(
+  const agentEventHandlerLoader = createLazyPromiseLoader(
     () => {
       // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
       return Promise.all([import("./server-chat.js"), import("./server-session-key.js")]).then(
@@ -210,6 +216,7 @@ export function startGatewayEventSubscriptions(params: {
     },
     { cacheRejections: true },
   );
+  const getAgentEventHandler = agentEventHandlerLoader.load;
 
   const getSessionEventsModule = createLazyPromise(() => import("./server-session-events.js"), {
     cacheRejections: true,
@@ -247,6 +254,7 @@ export function startGatewayEventSubscriptions(params: {
   };
 
   const unsubscribeAgentEvents = onAgentRuntimeEvent((evt) => {
+    sessionObserver.handleEvent(evt);
     if (auditEnabled) {
       auditRecorder.record(evt);
     }
@@ -306,9 +314,14 @@ export function startGatewayEventSubscriptions(params: {
   });
   const agentUnsub = async () => {
     unsubscribeAgentEvents();
+    sessionObserver.dispose();
     unsubscribePrivateAuditEvents?.();
     unsubscribeToolAuditEvents?.();
     unsubscribeMessageAuditEvents?.();
+    await agentEventHandlerLoader
+      .peek()
+      ?.then((handler) => handler.dispose())
+      .catch(() => undefined);
     await auditRecorder.stop();
   };
 

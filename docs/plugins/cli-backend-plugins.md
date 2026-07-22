@@ -196,7 +196,6 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `imagePathScope`                                          | Where staged image files live before handoff: `temp` or `workspace`               |
 | `serialize`                                               | Keep same-backend runs ordered                                                    |
 | `reseedFromRawTranscriptWhenUncompacted`                  | Opt in to bounded raw-transcript reseed before compaction for safe session resets |
-| `reliability.outputLimits`                                | Max raw JSONL chars/lines retained for one live CLI turn (live-session backends)  |
 | `reliability.watchdog`                                    | No-output timeout tuning, separate for fresh vs resumed runs                      |
 
 Prefer the smallest static config that matches the CLI. Add plugin callbacks
@@ -219,6 +218,7 @@ only for behavior that really belongs to the backend.
 | `sideQuestionToolMode`             | Declare disabled native tools for `/btw` side questions                     |
 | `bundleMcp` / `bundleMcpMode`      | Opt into OpenClaw's loopback MCP tool bridge                                |
 | `ownsNativeCompaction`             | Backend owns its own compaction - OpenClaw defers                           |
+| `subscriptionAuthDispatch`         | Opted-in embedded runs on subscription credentials execute via this backend |
 | `runtimeArtifact`                  | Bound a script launcher to its complete bundled package tree                |
 
 Keep these hooks provider-owned. Do not add CLI-specific branches to core when
@@ -254,13 +254,23 @@ requires a no-tools CLI run.
 
 Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
 every backend-native tool for an individual run. For those restricted runs,
-`ctx.toolAvailability.native` is an empty tuple and
+`ctx.toolAvailability.native` is the exact backend-native tool list and
 `ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags and return argv that enforces both values;
-OpenClaw calls it once with the final fresh or resume argv and fails closed when
-the backend cannot enforce the restriction. MCP names in this context are safe
-to auto-approve only because the host has already limited the generated MCP
-configuration to those servers and tools.
+must replace conflicting tool flags, disable backend customization surfaces
+that can execute outside those tools, and return argv that enforces both
+values. OpenClaw calls it once with the final fresh or resume argv and fails
+closed when the backend cannot enforce the restriction. MCP names in this
+context are safe to auto-approve only because the host has already limited the
+generated MCP configuration to those servers and tools.
+
+To support OpenClaw runtime caps such as cron `toolsAllow`, also implement
+`resolveRuntimeToolAvailability(ctx)`. OpenClaw passes a normalized,
+group-expanded allowlist and always disables backend-native tools. Return only
+host-isolated MCP names selected from that allowlist. Returning `null` or
+`undefined` keeps the generic runner fail-closed. A backend may omit an allowed
+tool it cannot represent, but must never add authority absent from the
+allowlist. Before minting a grant, the host rejects any returned entry that is
+not the exact `mcp__openclaw__<tool>` name for one of the allowed tools.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

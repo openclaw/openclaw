@@ -85,6 +85,13 @@ export type ChatMessageGetResult = Static<typeof ChatMessageGetResultSchema>;
 /** Attachment envelope shared by chat.send and session creation's initial turn. */
 export const ChatAttachmentsSchema = Type.Array(Type.Unknown());
 
+/** Opaque, out-of-band plugin bindings carried separately from model input. */
+const RunToolBindingsSchema = Type.Record(
+  Type.String({ minLength: 1, maxLength: 128 }),
+  Type.Unknown(),
+  { maxProperties: 16 },
+);
+
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
 export const ChatSendParamsSchema = closedObject({
   sessionKey: ChatSendSessionKeyString,
@@ -95,12 +102,18 @@ export const ChatSendParamsSchema = closedObject({
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
+  // One-turn override for active-run queue admission.
+  queueMode: Type.Optional(Type.String({ enum: ["steer", "followup", "collect", "interrupt"] })),
   deliver: Type.Optional(Type.Boolean()),
   originatingChannel: Type.Optional(Type.String()),
   originatingTo: Type.Optional(Type.String()),
   originatingAccountId: Type.Optional(Type.String()),
   originatingThreadId: Type.Optional(Type.String()),
+  // Transcript id of the message this send replies to; the Gateway hydrates
+  // channel-agnostic reply context metadata from session history.
+  replyToId: Type.Optional(NonEmptyString),
   attachments: Type.Optional(ChatAttachmentsSchema),
+  toolBindings: Type.Optional(RunToolBindingsSchema),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   systemInputProvenance: Type.Optional(InputProvenanceSchema),
   systemProvenanceReceipt: Type.Optional(Type.String()),
@@ -160,6 +173,7 @@ export const ChatFinalEventSchema = closedObject({
   message: Type.Optional(Type.Unknown()),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
+  yielded: Type.Optional(Type.Literal(true)),
 });
 
 /** Terminal event for user-initiated or coordinator-initiated cancellation. */

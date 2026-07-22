@@ -16,10 +16,12 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
+      "configPromotion": true,
       "legacyStateMigrations": true
     },
     "channel": {
       "id": "imessage",
+      "approvalFlags": ["native"],
       "label": "iMessage",
       "selectionLabel": "iMessage (imsg)",
       "detailLabel": "iMessage",
@@ -31,6 +33,10 @@
       ],
       "systemImage": "message.fill",
       "cliAddOptions": [
+        {
+          "flags": "--cli-path <path>",
+          "description": "Channel CLI path"
+        },
         {
           "flags": "--db-path <path>",
           "description": "iMessage database path"

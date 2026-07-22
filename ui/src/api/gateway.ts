@@ -35,11 +35,17 @@ import {
   loadDeviceAuthToken,
   storeDeviceAuthToken,
   loadOrCreateDeviceIdentity,
-  peekStoredDeviceIdentityId,
   signDevicePayload,
 } from "../lib/nodes/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import {
+  gatewayRecoveryScopeMaterial,
+  GatewayRecoveryScopeTracker,
+  storedDeviceTokenScopesAllowRead,
+} from "./gateway-browser-auth.ts";
 import { createBrowserGatewaySocket } from "./gateway-browser-socket.ts";
+
+export { hasStoredGatewayAuth } from "./gateway-browser-auth.ts";
 
 export type GatewayEventFrame = EventFrame;
 
@@ -118,6 +124,7 @@ function isTrustedRetryEndpoint(url: string): boolean {
 }
 
 export type GatewayControlUiPluginTab = NonNullable<HelloOk["controlUiTabs"]>[number];
+export type GatewayControlUiPluginWidgetKind = NonNullable<HelloOk["controlUiWidgetKinds"]>[number];
 export type GatewayHelloOk = Omit<HelloOk, "server" | "features" | "snapshot" | "policy"> & {
   server?: Partial<HelloOk["server"]>;
   features?: Partial<HelloOk["features"]>;
@@ -132,11 +139,13 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
   "operator.pairing",
 ] as const;
 
 const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",
@@ -146,10 +155,12 @@ type GatewayConnectDevice = NonNullable<ConnectParams["device"]>;
 type GatewayConnectClientInfo = ConnectParams["client"];
 
 type ConnectPlan = {
+  generation: number;
   params: ConnectParams;
   explicitGatewayToken?: string;
   selectedAuth: GatewayConnectAuthSelection;
   deviceIdentity: Awaited<ReturnType<typeof loadOrCreateDeviceIdentity>> | null;
+  recoveryScopeMaterial?: string;
 };
 
 export type GatewayBrowserClientOptions = {
@@ -173,6 +184,7 @@ export type GatewayBrowserClientOptions = {
   onGap?: (info: { expected: number; received: number }) => void;
   onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
   onConnectTiming?: (timing: GatewayConnectTiming) => void;
+  onRecoveryScopeChange?: () => void;
 };
 
 export type GatewayEventListener = (evt: GatewayEventFrame) => void;
@@ -284,57 +296,12 @@ async function buildGatewayConnectDevice(params: {
   };
 }
 
-// Operator connects only trust stored device tokens that can at least read;
-// weaker tokens go through the pairing upgrade flow instead of silent auth.
-function storedDeviceTokenScopesAllowRead(role: string, scopes: readonly string[]): boolean {
-  return (
-    role !== CONTROL_UI_OPERATOR_ROLE ||
-    scopes.includes("operator.read") ||
-    scopes.includes("operator.write") ||
-    scopes.includes("operator.admin")
-  );
-}
-
-/**
- * True when the next connect() from this browser would present stored
- * credentials: an explicit token/password, or a readable stored device token
- * in a secure context. Render gating only — lets the app paint a connecting
- * state instead of flashing the login gate while a likely-authenticated first
- * attempt is in flight. connect() remains the source of truth for auth.
- */
-export function hasStoredGatewayAuth(params: {
-  gatewayUrl: string;
-  token?: string;
-  password?: string;
-}): boolean {
-  if (params.token?.trim() || params.password?.trim()) {
-    return true;
-  }
-  // Mirrors buildConnectPlan: insecure contexts skip device identity, so a
-  // stored device token would not be presented and must not suppress the gate.
-  if (typeof crypto === "undefined" || !crypto.subtle) {
-    return false;
-  }
-  const deviceId = peekStoredDeviceIdentityId();
-  if (!deviceId) {
-    return false;
-  }
-  const storedEntry = loadDeviceAuthToken({
-    deviceId,
-    gatewayUrl: params.gatewayUrl,
-    role: CONTROL_UI_OPERATOR_ROLE,
-  });
-  if (!storedEntry) {
-    return false;
-  }
-  return storedDeviceTokenScopesAllowRead(CONTROL_UI_OPERATOR_ROLE, storedEntry.scopes);
-}
-
 export class GatewayBrowserClient {
   private readonly client: GatewayProtocolClient<ConnectPlan>;
   inboundActivitySeq = 0;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private readonly recoveryScopeTracker = new GatewayRecoveryScopeTracker();
 
   constructor(private opts: GatewayBrowserClientOptions) {
     this.client = new GatewayProtocolClient<ConnectPlan>({
@@ -395,6 +362,10 @@ export class GatewayBrowserClient {
     });
   }
 
+  get instanceId(): string | undefined {
+    return this.opts.instanceId;
+  }
+
   start() {
     this.client.start();
   }
@@ -409,6 +380,13 @@ export class GatewayBrowserClient {
     return this.client.connected;
   }
 
+  get recoveryScope() {
+    return this.recoveryScopeTracker.scope;
+  }
+
+  get recoveryScopeReady() {
+    return this.recoveryScopeTracker.ready;
+  }
   private connectPlanTimingPayload(plan: ConnectPlan): Partial<GatewayConnectTiming> {
     return {
       secureContext: Boolean(plan.deviceIdentity),
@@ -427,6 +405,7 @@ export class GatewayBrowserClient {
     connectNonce: string | null,
     generation: number,
   ): Promise<ConnectPlan> {
+    this.recoveryScopeTracker.begin(generation);
     const role = CONTROL_UI_OPERATOR_ROLE;
     const client: GatewayConnectClientInfo = {
       id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -476,6 +455,7 @@ export class GatewayBrowserClient {
       connectNonce,
     });
     const plan: ConnectPlan = {
+      generation,
       params: {
         minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
@@ -484,10 +464,13 @@ export class GatewayBrowserClient {
         scopes,
         device,
         caps: [
+          GATEWAY_CLIENT_CAPS.AGENT_KIND,
+          GATEWAY_CLIENT_CAPS.APPROVALS,
           GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
           GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
           GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
           GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+          GATEWAY_CLIENT_CAPS.UI_COMMANDS,
         ],
         auth: buildGatewayConnectAuth(selectedAuth),
         userAgent: navigator.userAgent,
@@ -496,6 +479,7 @@ export class GatewayBrowserClient {
       explicitGatewayToken,
       selectedAuth,
       deviceIdentity,
+      recoveryScopeMaterial: gatewayRecoveryScopeMaterial(selectedAuth),
     };
     if (this.pendingDeviceTokenRetry && plan.selectedAuth.authDeviceToken) {
       this.pendingDeviceTokenRetry = false;
@@ -515,6 +499,19 @@ export class GatewayBrowserClient {
         token: hello.auth.deviceToken,
         scopes: hello.auth.scopes ?? [],
       });
+    }
+    void this.updateRecoveryScopeForHello(hello, plan);
+  }
+
+  private async updateRecoveryScopeForHello(hello: GatewayHelloOk, plan: ConnectPlan) {
+    if (
+      await this.recoveryScopeTracker.resolve({
+        generation: plan.generation,
+        scopeMaterial: hello.auth?.deviceToken ?? plan.recoveryScopeMaterial,
+        isConnected: () => this.client.connected,
+      })
+    ) {
+      this.opts.onRecoveryScopeChange?.();
     }
   }
 

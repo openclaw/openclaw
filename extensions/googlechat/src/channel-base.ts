@@ -62,7 +62,7 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<
     "botUser",
     "name",
   ],
-  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
@@ -117,6 +117,7 @@ export function createGoogleChatPluginBase(
           configured: account.credentialSource !== "none",
           extra: {
             credentialSource: account.credentialSource,
+            tokenStatus: account.tokenStatus,
           },
         }),
     },

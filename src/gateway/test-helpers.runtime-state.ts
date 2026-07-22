@@ -57,6 +57,9 @@ type GatewayTestHoistedState = {
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
+    endWaitCalls: string[];
+    endWaiters: Map<string, (ended: boolean) => void>;
+    resolveEndBeforeTimeoutIds: Set<string>;
     compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
@@ -107,6 +110,9 @@ const gatewayTestHoisted = vi.hoisted(() => {
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
+      endWaitCalls: [],
+      endWaiters: new Map<string, (ended: boolean) => void>(),
+      resolveEndBeforeTimeoutIds: new Set<string>(),
       compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,
@@ -155,7 +161,6 @@ export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
 export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
-export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;
 export const dispatchInboundMessageMock = gatewayTestHoisted.dispatchInboundMessage;
 export const getReplyFromConfig = gatewayTestHoisted.getReplyFromConfig;
 export const mockGetReplyFromConfigOnce = (impl: GetReplyFromConfigFn) => {

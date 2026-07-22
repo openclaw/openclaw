@@ -376,6 +376,17 @@ describe("Dockerfile", () => {
     );
   });
 
+  it("keeps build-stage workspace packages readable by non-root live tests", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const sourceCopyIndex = dockerfile.indexOf("COPY . .");
+    const readabilityIndex = dockerfile.indexOf("RUN chmod -R a+rX /app");
+    const buildIndex = dockerfile.indexOf("pnpm build:docker");
+
+    expect(sourceCopyIndex).toBeGreaterThan(-1);
+    expect(readabilityIndex).toBeGreaterThan(sourceCopyIndex);
+    expect(readabilityIndex).toBeLessThan(buildIndex);
+  });
+
   it("keeps runtime workspace templates in final images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
@@ -540,8 +551,11 @@ describe("Dockerfile", () => {
 
   it("counts primary pub keys before Docker apt fingerprint compare and dearmor", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    expect(dockerfile).toMatch(
+      /curl -fsSL --connect-timeout 10 --max-time 120\s+https:\/\/download\.docker\.com\/linux\/debian\/gpg -o \/tmp\/docker\.gpg\.asc/u,
+    );
     const anchor = dockerfile.indexOf(
-      "curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc",
+      "https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc",
     );
     expect(anchor).toBeGreaterThan(-1);
     const slice = dockerfile.slice(anchor);

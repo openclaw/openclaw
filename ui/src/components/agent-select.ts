@@ -15,7 +15,10 @@ import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
 
 type WebAwesomeSelectEvent = Event & { detail: { item: Element } };
+type AvatarFetch = { authToken: string; controller: AbortController };
 
+/** Bound local avatar fetches so a stalled Control UI media route cannot pin pending state forever. */
+const AGENT_SELECT_AVATAR_FETCH_TIMEOUT_MS = 30_000;
 export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) agents: GatewayAgentRow[] = [];
   @property({ attribute: false }) selectedId: string | null = null;
@@ -24,12 +27,13 @@ export class AgentSelect extends OpenClawLightDomElement {
   @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) disabled = false;
   @property({ attribute: false }) onSelect: (agentId: string) => void = () => {};
+  @property({ attribute: false }) onCreateAgent: () => void = () => {};
 
   private readonly avatarBlobUrlByRoute = new Map<string, string>();
-  private readonly avatarRoutesPending = new Set<string>();
+  private readonly avatarFetchByRoute = new Map<string, AvatarFetch>();
 
   override disconnectedCallback() {
-    this.releaseAvatarBlobUrls();
+    this.resetAvatarState();
     super.disconnectedCallback();
   }
 
@@ -37,41 +41,77 @@ export class AgentSelect extends OpenClawLightDomElement {
     // Cached blobs and failures belong to the credential that fetched them;
     // a rotated token must refetch with the current authorization.
     if (changed.has("authToken")) {
-      this.releaseAvatarBlobUrls();
+      this.resetAvatarState();
     }
   }
 
-  private releaseAvatarBlobUrls() {
+  private resetAvatarState() {
+    for (const request of this.avatarFetchByRoute.values()) {
+      request.controller.abort();
+    }
     for (const blobUrl of this.avatarBlobUrlByRoute.values()) {
       if (blobUrl) {
         URL.revokeObjectURL(blobUrl);
       }
     }
     this.avatarBlobUrlByRoute.clear();
-    this.avatarRoutesPending.clear();
+    this.avatarFetchByRoute.clear();
   }
 
   private ensureLocalAvatar(url: string, authToken: string) {
-    if (this.avatarRoutesPending.has(url)) {
+    if (this.avatarFetchByRoute.has(url)) {
       return;
     }
-    this.avatarRoutesPending.add(url);
-    void fetch(url, { headers: { Authorization: `Bearer ${authToken}` } })
-      .then(async (res) => (res.ok ? URL.createObjectURL(await res.blob()) : ""))
-      .catch(() => "")
-      .then((blobUrl) => {
-        this.avatarRoutesPending.delete(url);
-        if (!this.isConnected || this.authToken !== authToken) {
-          if (blobUrl) {
-            URL.revokeObjectURL(blobUrl);
-          }
-          return;
-        }
-        this.avatarBlobUrlByRoute.set(url, blobUrl);
+    const request: AvatarFetch = { authToken, controller: new AbortController() };
+    this.avatarFetchByRoute.set(url, request);
+    void this.fetchLocalAvatarBlobUrl(url, request).then((blobUrl) => {
+      // Rotation can start a replacement before the aborted request settles.
+      // Only the request still owning this route may clear or cache its state.
+      if (this.avatarFetchByRoute.get(url) !== request) {
         if (blobUrl) {
-          this.requestUpdate();
+          URL.revokeObjectURL(blobUrl);
         }
+        return;
+      }
+      if (!this.isConnected || this.authToken !== authToken) {
+        this.avatarFetchByRoute.delete(url);
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+        }
+        return;
+      }
+      // Cache the result (including empty miss) before clearing pending so a
+      // concurrent re-render cannot start a second unbounded fetch for the same URL.
+      this.avatarBlobUrlByRoute.set(url, blobUrl);
+      this.avatarFetchByRoute.delete(url);
+      if (blobUrl) {
+        this.requestUpdate();
+      }
+    });
+  }
+
+  private async fetchLocalAvatarBlobUrl(url: string, request: AvatarFetch): Promise<string> {
+    const timeout = setTimeout(
+      () =>
+        request.controller.abort(new DOMException("agent avatar fetch timed out", "TimeoutError")),
+      AGENT_SELECT_AVATAR_FETCH_TIMEOUT_MS,
+    );
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Bearer ${request.authToken}` },
+        signal: request.controller.signal,
       });
+      if (!res.ok) {
+        return "";
+      }
+      return URL.createObjectURL(await res.blob());
+    } catch {
+      // Timeouts and transport failures share the empty-string miss path so the
+      // picker keeps the text fallback instead of leaving avatarRoutesPending set.
+      return "";
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private renderAvatar(agent: GatewayAgentRow) {
@@ -104,6 +144,10 @@ export class AgentSelect extends OpenClawLightDomElement {
 
   private readonly handleSelect = (event: WebAwesomeSelectEvent) => {
     const item = event.detail.item as HTMLElement & { checked?: boolean; value?: string };
+    if (item.hasAttribute("data-create-agent")) {
+      this.onCreateAgent();
+      return;
+    }
     const agentId = item.value ?? item.getAttribute("value");
     if (!agentId) {
       return;
@@ -125,7 +169,7 @@ export class AgentSelect extends OpenClawLightDomElement {
       this.agents.find((agent) => agent.id === this.defaultId) ??
       this.agents[0];
     const selectedBadge = selectedAgent ? agentBadgeText(selectedAgent.id, this.defaultId) : null;
-    const unavailable = this.disabled || this.agents.length === 0;
+    const unavailable = this.disabled;
 
     return html`
       <wa-dropdown class="agent-select" placement="bottom-start" @wa-select=${this.handleSelect}>
@@ -160,6 +204,11 @@ export class AgentSelect extends OpenClawLightDomElement {
             </wa-dropdown-item>
           `;
         })}
+        <div class="agent-select__separator" role="separator"></div>
+        <wa-dropdown-item class="agent-select__option" data-create-agent>
+          <span slot="icon">${icons.users}</span>
+          <span class="agent-select__option-label">${t("custodian.newAgent")}</span>
+        </wa-dropdown-item>
       </wa-dropdown>
     `;
   }

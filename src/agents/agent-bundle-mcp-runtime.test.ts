@@ -3,8 +3,10 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestTimeout } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -21,6 +23,7 @@ import {
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
+import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
@@ -56,6 +59,7 @@ async function writeListToolsMcpServer(params: {
     _meta?: Record<string, unknown>;
   }>;
   capabilities?: Record<string, unknown>;
+  databasePath?: string;
   pidPath?: string;
   notifyListChangedOnInitialized?: boolean;
   notifyListChangedAfterFirstList?: boolean;
@@ -76,6 +80,7 @@ const delayMs = ${params.delayMs ?? 0};
 const initializeDelayMs = ${params.initializeDelayMs ?? 0};
 const hang = ${params.hang === true};
 const capabilities = ${JSON.stringify(params.capabilities ?? { tools: {} })};
+const databasePath = ${JSON.stringify(params.databasePath)};
 const pidPath = ${JSON.stringify(params.pidPath)};
 const notifyListChangedOnInitialized = ${params.notifyListChangedOnInitialized === true};
 const notifyListChangedAfterFirstList = ${params.notifyListChangedAfterFirstList === true};
@@ -99,6 +104,12 @@ let buffer = "";
 let listCount = 0;
 let pendingTimer;
 let keepAlive;
+let database;
+if (databasePath) {
+  const { DatabaseSync } = await import("node:sqlite");
+  database = new DatabaseSync(databasePath);
+  database.exec("PRAGMA busy_timeout = 0; CREATE TABLE IF NOT EXISTS lock_probe (value TEXT); BEGIN IMMEDIATE; INSERT INTO lock_probe VALUES ('held')");
+}
 if (pidPath) {
   await fs.writeFile(pidPath, String(process.pid), "utf8");
 }
@@ -231,6 +242,10 @@ function shutdown() {
   if (keepAlive) {
     clearInterval(keepAlive);
   }
+  try {
+    database?.exec("ROLLBACK");
+  } catch {}
+  database?.close();
   process.exit(0);
 }
 process.stdin.on("data", (chunk) => {
@@ -913,12 +928,11 @@ describe("session MCP runtime", () => {
 
     try {
       await waitForFileText(logPath, "recv tools/list", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
-      const result = await Promise.race([
+      const result = await withTestTimeout(
         catalogResult,
-        new Promise<{ status: "pending" }>((resolve) => {
-          setTimeout(() => resolve({ status: "pending" }), LIST_TOOLS_TEST_DEADLINE_MS);
-        }),
-      ]);
+        LIST_TOOLS_TEST_DEADLINE_MS,
+        "timed out waiting for bundle MCP catalog timeout",
+      );
 
       expect(result.status).toBe("resolved");
       if (result.status === "resolved") {
@@ -927,12 +941,11 @@ describe("session MCP runtime", () => {
       }
     } finally {
       await runtime.dispose();
-      await Promise.race([
+      await withTestTimeout(
         catalogResult,
-        new Promise((resolve) => {
-          setTimeout(resolve, 1000);
-        }),
-      ]);
+        1_000,
+        "timed out waiting for bundle MCP catalog cleanup",
+      );
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
@@ -2019,9 +2032,16 @@ process.on("SIGINT", shutdown);`,
       sessionId: "session-view-lease",
       sessionKey: "agent:test:session-view-lease",
       workspaceDir: "/workspace",
-      cfg: { mcp: { sessionIdleTtlMs: 0 } },
+      cfg: { mcp: {} },
     });
     const release = runtime.acquireLease?.();
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "clear on reset" }],
+      },
+    );
 
     await expect(
       retireSessionMcpRuntime({
@@ -2031,10 +2051,187 @@ process.on("SIGINT", shutdown);`,
       }),
     ).resolves.toBe(true);
     expect(testing.getCachedSessionIds()).toContain("session-view-lease");
+    expect(runtime.pendingMcpAppModelContext).toMatchObject({ text: "clear on reset" });
+    expect(() =>
+      updateMcpAppModelContext(
+        runtime,
+        {},
+        {
+          content: [{ type: "text", text: "still live between turns" }],
+        },
+      ),
+    ).not.toThrow();
 
     release?.();
     await completeDeferredSessionMcpRuntimeRetirement(runtime);
     expect(testing.getCachedSessionIds()).not.toContain("session-view-lease");
+  });
+
+  it("revokes App context across reset while a view lease defers retirement", async () => {
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-view-reset",
+      sessionKey: "agent:test:session-view-reset",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    const release = runtime.acquireLease?.();
+    updateMcpAppModelContext(
+      runtime,
+      {},
+      {
+        content: [{ type: "text", text: "clear on reset" }],
+      },
+    );
+
+    await expect(
+      retireSessionMcpRuntime({
+        sessionId: "session-view-reset",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+        retainAcrossReuse: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain("session-view-reset");
+    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
+    expect(() =>
+      updateMcpAppModelContext(
+        runtime,
+        {},
+        {
+          content: [{ type: "text", text: "stale after reset" }],
+        },
+      ),
+    ).toThrow("unavailable for this session");
+    const reused = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-view-reset",
+      sessionKey: "agent:test:session-view-reset",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    expect(reused).toBe(runtime);
+    expect(reused.mcpAppModelContextRevoked).toBe(true);
+
+    release?.();
+    await completeDeferredSessionMcpRuntimeRetirement(runtime);
+    expect(testing.getCachedSessionIds()).not.toContain("session-view-reset");
+  });
+
+  it("completes deferred retirement when a materialized run releases its lease", async () => {
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-run-lease",
+      sessionKey: "agent:test:session-run-lease",
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+
+    await expect(
+      retireSessionMcpRuntime({
+        sessionId: "session-run-lease",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain("session-run-lease");
+
+    await materialized.dispose();
+    expect(testing.getCachedSessionIds()).not.toContain("session-run-lease");
+  });
+
+  it("keeps an active MCP child and its database lock until deferred retirement completes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-deferred-run-"));
+    const serverPath = path.join(tempDir, "server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    const pidPath = path.join(tempDir, "server.pid");
+    const databasePath = path.join(tempDir, "locked.sqlite");
+    await writeListToolsMcpServer({ filePath: serverPath, logPath, pidPath, databasePath });
+    let materialized: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
+    let lockProbe: DatabaseSync | undefined;
+
+    try {
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: "session-run-child",
+        sessionKey: "agent:test:session-run-child",
+        workspaceDir: "/workspace",
+        cfg: {
+          mcp: {
+            servers: {
+              child: { command: process.execPath, args: [serverPath] },
+            },
+          },
+        },
+      });
+      materialized = await materializeBundleMcpToolsForRun({ runtime });
+      await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      const { DatabaseSync } = await import("node:sqlite");
+      const database = new DatabaseSync(databasePath);
+      lockProbe = database;
+      database.exec("PRAGMA busy_timeout = 0");
+      expect(() => database.exec("BEGIN IMMEDIATE")).toThrow(/database is locked|SQLITE_BUSY/iu);
+
+      await retireSessionMcpRuntime({
+        sessionId: "session-run-child",
+        reason: "gateway-session-cleanup",
+        preserveActiveLeases: true,
+      });
+      expect(() => process.kill(pid, 0)).not.toThrow();
+      expect(testing.getCachedSessionIds()).toContain("session-run-child");
+
+      await materialized.dispose();
+      materialized = undefined;
+      await waitForPredicate(
+        () => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        "deferred MCP child process exit",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+      expect(testing.getCachedSessionIds()).not.toContain("session-run-child");
+      expect(() => database.exec("BEGIN IMMEDIATE")).not.toThrow();
+      database.exec("ROLLBACK");
+    } finally {
+      lockProbe?.close();
+      await materialized?.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a run-mode subagent runtime alive for an approved follow-up turn", async () => {
+    const sessionId = "session-subagent-followup";
+    const sessionKey = "agent:test:session-subagent-followup";
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId,
+      sessionKey,
+      workspaceDir: "/workspace",
+      cfg: { mcp: {} },
+    });
+    const materialized = await materializeBundleMcpToolsForRun({ runtime });
+    expect(runtime.activeLeases).toBe(1);
+
+    await expect(
+      retireSessionMcpRuntimeForSessionKey({
+        sessionKey,
+        reason: "subagent-run-cleanup",
+        preserveActiveLeases: true,
+      }),
+    ).resolves.toBe(true);
+    expect(testing.getCachedSessionIds()).toContain(sessionId);
+
+    const followUp = await materializeBundleMcpToolsForRun({ runtime });
+    expect(runtime.activeLeases).toBe(2);
+
+    await materialized.dispose();
+    expect(testing.getCachedSessionIds()).toContain(sessionId);
+
+    await followUp.dispose();
+    expect(runtime.activeLeases).toBe(0);
+    expect(testing.getCachedSessionIds()).not.toContain(sessionId);
   });
 
   it("cancels deferred retirement when a later run reuses the runtime", async () => {
@@ -2043,7 +2240,7 @@ process.on("SIGINT", shutdown);`,
       sessionId: "session-reused-after-view",
       sessionKey: "agent:test:session-reused-after-view",
       workspaceDir: "/workspace",
-      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 0 } },
+      cfg: { mcp: { servers: {} } },
     };
     const runtime = await manager.getOrCreate(params);
     const release = runtime.acquireLease?.();
@@ -2056,6 +2253,44 @@ process.on("SIGINT", shutdown);`,
       false,
     );
     expect(manager.listSessionIds()).toContain(params.sessionId);
+    await manager.disposeAll();
+  });
+
+  it("keeps required retirement armed across late runtime creation and reuse", async () => {
+    const manager = testing.createSessionMcpRuntimeManager({ enableIdleSweepTimer: false });
+    const params = {
+      sessionId: "session-required-retirement",
+      sessionKey: "agent:test:session-required-retirement",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    };
+
+    expect(manager.deferRetirement(params.sessionId, { retainAcrossReuse: true })).toBe(true);
+    const firstRuntime = await manager.getOrCreate(params);
+    const release = expectDefined(
+      firstRuntime.acquireLease,
+      "firstRuntime.acquireLease test invariant",
+    )();
+    await expect(manager.completeDeferredRetirement(params.sessionId, firstRuntime)).resolves.toBe(
+      false,
+    );
+    release();
+    await expect(manager.completeDeferredRetirement(params.sessionId, firstRuntime)).resolves.toBe(
+      true,
+    );
+    expect(manager.listSessionIds()).not.toContain(params.sessionId);
+
+    const lateRuntime = await manager.getOrCreate(params);
+    await expect(manager.completeDeferredRetirement(params.sessionId, lateRuntime)).resolves.toBe(
+      true,
+    );
+    expect(manager.listSessionIds()).not.toContain(params.sessionId);
+
+    await manager.disposeSession(params.sessionId);
+    const reusableRuntime = await manager.getOrCreate(params);
+    await expect(
+      manager.completeDeferredRetirement(params.sessionId, reusableRuntime),
+    ).resolves.toBe(false);
     await manager.disposeAll();
   });
 
@@ -2078,154 +2313,6 @@ process.on("SIGINT", shutdown);`,
     await expect(
       retireSessionMcpRuntimeForSessionKey({ sessionKey: "agent:test:missing", reason: "test" }),
     ).resolves.toBe(false);
-  });
-
-  it("evicts idle runtimes after the configured TTL but skips active leases", async () => {
-    let now = 1_000;
-    const disposed: string[] = [];
-    const createRuntime: RuntimeFactory = (params) => {
-      let lastUsedAt = now;
-      let activeLeases = 0;
-      return {
-        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: params.configFingerprint ?? "fingerprint",
-        get lastUsedAt() {
-          return lastUsedAt;
-        },
-        get activeLeases() {
-          return activeLeases;
-        },
-        markUsed: () => {
-          lastUsedAt = now;
-        },
-        acquireLease: () => {
-          activeLeases += 1;
-          return () => {
-            activeLeases -= 1;
-          };
-        },
-        dispose: async () => {
-          disposed.push(params.sessionId);
-        },
-      };
-    };
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime,
-      now: () => now,
-      enableIdleSweepTimer: false,
-    });
-
-    const runtime = await manager.getOrCreate({
-      sessionId: "session-idle",
-      sessionKey: "agent:test:session-idle",
-      workspaceDir: "/workspace",
-      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 50 } },
-    });
-    const releaseLease = runtime.acquireLease?.();
-
-    now += 60;
-    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
-    expect(manager.listSessionIds()).toEqual(["session-idle"]);
-
-    releaseLease?.();
-    now += 60;
-    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
-
-    expect(disposed).toEqual(["session-idle"]);
-    expect(manager.listSessionIds()).toStrictEqual([]);
-    expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
-  });
-
-  it("evicts immediately after release when TTL already elapsed during active lease", async () => {
-    let now = 1_000;
-    const disposed: string[] = [];
-    const createRuntime: RuntimeFactory = (params) => {
-      let lastUsedAt = now;
-      let activeLeases = 0;
-      return {
-        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: params.configFingerprint ?? "fingerprint",
-        get lastUsedAt() {
-          return lastUsedAt;
-        },
-        get activeLeases() {
-          return activeLeases;
-        },
-        markUsed: () => {
-          lastUsedAt = now;
-        },
-        acquireLease: () => {
-          activeLeases += 1;
-          return () => {
-            activeLeases -= 1;
-          };
-        },
-        dispose: async () => {
-          disposed.push(params.sessionId);
-        },
-      };
-    };
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime,
-      now: () => now,
-      enableIdleSweepTimer: false,
-    });
-
-    const runtime = await manager.getOrCreate({
-      sessionId: "session-idle-post-release",
-      sessionKey: "agent:test:session-idle-post-release",
-      workspaceDir: "/workspace",
-      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 50 } },
-    });
-    const releaseLease = runtime.acquireLease?.();
-
-    // TTL elapses while the lease is still held, so sweep skips active runtimes.
-    now += 60;
-    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
-
-    // Release must not reset lastUsedAt; the runtime is evictable on the very
-    // next sweep without waiting another full TTL.
-    releaseLease?.();
-    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
-
-    expect(disposed).toEqual(["session-idle-post-release"]);
-    expect(manager.listSessionIds()).toStrictEqual([]);
-  });
-
-  it("keeps idle runtime eviction disabled when the TTL is zero", async () => {
-    let now = 1_000;
-    const disposed: string[] = [];
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime: (params) => ({
-        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: params.configFingerprint ?? "fingerprint",
-        dispose: async () => {
-          disposed.push(params.sessionId);
-        },
-      }),
-      now: () => now,
-      enableIdleSweepTimer: false,
-    });
-
-    await manager.getOrCreate({
-      sessionId: "session-no-ttl",
-      workspaceDir: "/workspace",
-      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 0 } },
-    });
-
-    now += 60_000_000;
-    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
-    expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
-    expect(disposed).toStrictEqual([]);
   });
 
   it("production createSessionMcpRuntime acquireLease release does not refresh lastUsedAt", () => {
@@ -2633,62 +2720,6 @@ describe("requester-scoped MCP connection resolution", () => {
     expect(manager.listRuntimeKeys()).toHaveLength(3);
 
     await manager.disposeAll();
-  });
-
-  it("idle-sweeps requester-scoped runtimes and disposes them with the session", async () => {
-    const { testing: resolverTesting } = await import("./mcp-connection-resolver.js");
-    resolverTesting.setMcpServerConnectionResolversForTest([
-      {
-        serverName: "user-mail",
-        resolve: async () => ({ url: "https://mcp.example.test/user" }),
-      },
-    ]);
-
-    let nowMs = 1_000_000;
-    const disposed: string[] = [];
-    const createRuntime: RuntimeFactory = (params) => {
-      const runtime = makeRuntime([{ toolName: "probe", description: "probe" }]);
-      return {
-        ...runtime,
-        sessionId: params.sessionId,
-        workspaceDir: params.workspaceDir,
-        configFingerprint: params.configFingerprint ?? "fingerprint",
-        requesterScope: params.requesterScope,
-        lastUsedAt: nowMs,
-        dispose: async () => {
-          disposed.push(params.requesterScope?.requesterSenderId ?? "static");
-        },
-      };
-    };
-    const manager = testing.createSessionMcpRuntimeManager({
-      createRuntime,
-      now: () => nowMs,
-      enableIdleSweepTimer: false,
-    });
-    const cfg = {
-      mcp: {
-        sessionIdleTtlMs: 1_000,
-        servers: {
-          shared: { command: "true" },
-          "user-mail": { transport: "streamable-http" },
-        },
-      },
-    };
-
-    await manager.getOrCreate({
-      sessionId: "session-idle",
-      workspaceDir: "/workspace",
-      cfg: cfg as never,
-      requesterSenderId: "sender-a",
-      messageChannel: "telegram",
-    });
-    expect(manager.listRuntimeKeys()).toHaveLength(2);
-
-    nowMs += 2_000;
-    const swept = await manager.sweepIdleRuntimes();
-    expect(swept).toBe(2);
-    expect(disposed.toSorted()).toEqual(["sender-a", "static"]);
-    expect(manager.listSessionIds()).toEqual([]);
   });
 
   it("omits a stalled resolver without hanging static materialization", async () => {
@@ -3596,7 +3627,6 @@ describe("requester-scoped MCP connection resolution", () => {
       workspaceDir: "/workspace",
       cfg: {
         mcp: {
-          sessionIdleTtlMs: 0,
           servers: {
             "user-mail": { transport: "streamable-http" },
           },

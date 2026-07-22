@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   errorShape,
@@ -12,7 +13,7 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import { getActivePluginSessionExtensionRegistry } from "../../plugins/runtime.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
@@ -24,6 +25,15 @@ import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+
+function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
+  const normalized = normalizeOptionalString(search);
+  return normalized
+    ? truncateUtf16Safe(normalized, SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS)
+    : undefined;
+}
 
 function catalogError(error: unknown): { code: string; message: string } {
   const record =
@@ -47,8 +57,8 @@ export function resolveSessionCatalogProvider(
 }
 
 function registrations() {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
+  return (getActivePluginSessionExtensionRegistry()?.sessionCatalogs ?? []).toSorted(
+    (left, right) => left.provider.id.localeCompare(right.provider.id),
   );
 }
 
@@ -146,7 +156,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond, context }) => {
+  "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -158,6 +168,14 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogListParams;
+    if (request.cursors !== undefined && request.catalogId === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      );
+      return;
+    }
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
       const provider = providerOrRespond(request.catalogId, respond);
@@ -178,16 +196,36 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     if (!resolvedAgent) {
       return;
     }
+    const search = normalizeSessionCatalogSearch(request.search);
+    const progressId = request.progressId;
+    const progressConnId = progressId && client?.connId ? client.connId : undefined;
     const catalogList = await Promise.all(
       selected.map(async (provider): Promise<SessionCatalog> => {
         const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
         const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
+        const onHost = progressConnId
+          ? (host: SessionCatalog["hosts"][number]) => {
+              // Progressive frames are an optimization. The final RPC response remains
+              // authoritative when a slow client drops an intermediate host update.
+              context.broadcastToConnIds(
+                "sessions.catalog.host",
+                {
+                  progressId,
+                  agentId: resolvedAgent.agentId,
+                  catalog: catalogResult(provider, [host], undefined, createSession),
+                },
+                new Set([progressConnId]),
+                { dropIfSlow: true },
+              );
+            }
+          : undefined;
         try {
           const hosts = await provider.list({
-            search: request.search,
+            search,
             limitPerHost: request.limitPerHost,
             hostIds: request.hostIds,
-            ...("cursors" in request ? { cursors: request.cursors } : {}),
+            ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+            ...(onHost ? { onHost } : {}),
           });
           return catalogResult(provider, hosts, undefined, createSession);
         } catch (error) {

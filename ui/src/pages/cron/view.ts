@@ -26,13 +26,14 @@ import "../../components/web-awesome.ts";
 import "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { isCronJobActiveFailure, resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
+import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
 import type {
   CronFieldErrors,
   CronFieldKey,
+  CronFormState,
   CronJobsLastStatusFilter,
   CronJobsScheduleKindFilter,
 } from "../../lib/cron/index.ts";
-import type { CronFormState } from "../../lib/cron/index.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
@@ -1050,13 +1051,15 @@ function renderPromptSection(
   props: CronProps,
   ctx: { payloadLocked: boolean; isAgentTurn: boolean },
 ) {
+  const lockedPayloadLabel =
+    props.form.payloadKind === "script" ? t("cron.form.script") : t("cron.form.command");
   const promptLabel = ctx.payloadLocked
-    ? t("cron.form.command")
+    ? lockedPayloadLabel
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.mainTimelineMessage")
       : t("cron.form.assistantTaskPrompt");
   const promptHelp = ctx.payloadLocked
-    ? undefined
+    ? t("cron.form.readOnlyPayloadHelp")
     : props.form.payloadKind === "systemEvent"
       ? t("cron.form.systemEventHelp")
       : t("cron.form.agentTurnHelp");
@@ -1095,7 +1098,7 @@ function renderPromptSection(
           <input
             id="cron-payload-kind"
             class="settings-input"
-            .value=${t("cron.form.command")}
+            .value=${lockedPayloadLabel}
             readonly
           />
         `
@@ -1231,29 +1234,32 @@ function renderGeneralSection(props: CronProps) {
   );
 }
 
-// Human-readable line under the schedule pills; null while inputs are invalid
-// so the summary never lies about what would be saved.
+// Human-readable schedule summary; null while invalid so it never disagrees with the saved value.
 function describeFormSchedule(form: CronFormState): string | null {
   if (form.scheduleKind === "every") {
     const amount = form.everyAmount.trim();
-    if (!amount || !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    if (parseCronEveryMs(amount, form.everyUnit) === undefined) {
       return null;
     }
     if (Number(amount) === 1) {
       const singularKey =
-        form.everyUnit === "minutes"
-          ? "cron.form.summaryEveryMinuteOne"
-          : form.everyUnit === "hours"
-            ? "cron.form.summaryEveryHourOne"
-            : "cron.form.summaryEveryDayOne";
+        form.everyUnit === "seconds"
+          ? "cron.form.summaryEverySecondOne"
+          : form.everyUnit === "minutes"
+            ? "cron.form.summaryEveryMinuteOne"
+            : form.everyUnit === "hours"
+              ? "cron.form.summaryEveryHourOne"
+              : "cron.form.summaryEveryDayOne";
       return t(singularKey);
     }
     const key =
-      form.everyUnit === "minutes"
-        ? "cron.form.summaryEveryMinutes"
-        : form.everyUnit === "hours"
-          ? "cron.form.summaryEveryHours"
-          : "cron.form.summaryEveryDays";
+      form.everyUnit === "seconds"
+        ? "cron.form.summaryEverySeconds"
+        : form.everyUnit === "minutes"
+          ? "cron.form.summaryEveryMinutes"
+          : form.everyUnit === "hours"
+            ? "cron.form.summaryEveryHours"
+            : "cron.form.summaryEveryDays";
     return t(key, { amount });
   }
   if (form.scheduleKind === "at") {
@@ -1268,14 +1274,18 @@ function describeFormSchedule(form: CronFormState): string | null {
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
   }
-  return form.scheduleKind === "on-exit" ? t("cron.form.repeatOnExit") : null;
+  if (form.scheduleKind === "on-exit") {
+    return t("cron.form.repeatOnExit");
+  }
+  return form.scheduleKind === "stream" ? t("cron.form.repeatStream") : null;
 }
 
 function renderScheduleSection(props: CronProps) {
   const form = props.form;
   const isOnExit = form.scheduleKind === "on-exit";
-  // on-exit stays selectable only while it is the current value: jobs can
-  // convert to an editable schedule, but never back to a watched command.
+  const isStream = form.scheduleKind === "stream";
+  // Process-backed schedules stay selectable only while current: jobs can
+  // convert to an editable schedule, but never synthesize a command in the UI.
   const kinds: Array<{ value: CronFormState["scheduleKind"]; label: string; testId: string }> = [
     ...(isOnExit
       ? [
@@ -1283,6 +1293,15 @@ function renderScheduleSection(props: CronProps) {
             value: "on-exit" as const,
             label: t("cron.form.repeatOnExit"),
             testId: "cron-schedule-kind-on-exit",
+          },
+        ]
+      : []),
+    ...(isStream
+      ? [
+          {
+            value: "stream" as const,
+            label: t("cron.form.repeatStream"),
+            testId: "cron-schedule-kind-stream",
           },
         ]
       : []),
@@ -1302,7 +1321,15 @@ function renderScheduleSection(props: CronProps) {
           value: form.scheduleKind,
           options: kinds,
           ariaLabel: t("cron.form.repeat"),
-          onChange: (value) => props.onFormChange({ scheduleKind: value }),
+          onChange: (value) =>
+            props.onFormChange({
+              scheduleKind: value,
+              ...(value === "at" && (form.scheduleKind === "every" || form.scheduleKind === "cron")
+                ? { deleteAfterRun: true }
+                : value === "every" || value === "cron"
+                  ? { deleteAfterRun: false }
+                  : {}),
+            }),
         }),
       })}
       ${form.scheduleKind === "at"
@@ -1361,6 +1388,7 @@ function renderScheduleSection(props: CronProps) {
                         .value as CronFormState["everyUnit"],
                     })}
                 >
+                  <option value="seconds">${t("cron.form.seconds")}</option>
                   <option value="minutes">${t("cron.form.minutes")}</option>
                   <option value="hours">${t("cron.form.hours")}</option>
                   <option value="days">${t("cron.form.days")}</option>
@@ -1608,12 +1636,14 @@ function renderAdvanced(
                 `,
               })
             : nothing}
-          ${renderToggleRow({
-            label: t("cron.form.deleteAfterRun"),
-            checked: props.form.deleteAfterRun,
-            help: t("cron.form.deleteAfterRunHelp"),
-            onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
-          })}
+          ${props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit"
+            ? renderToggleRow({
+                label: t("cron.form.deleteAfterRun"),
+                checked: props.form.deleteAfterRun,
+                help: t("cron.form.deleteAfterRunHelp"),
+                onChange: (checked) => props.onFormChange({ deleteAfterRun: checked }),
+              })
+            : nothing}
           ${renderToggleRow({
             label: t("cron.form.clearAgentOverride"),
             checked: props.form.clearAgent,

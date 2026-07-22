@@ -24,6 +24,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
 import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
+import { parseCronEveryMs } from "./decimal.ts";
 import { loadCronFailingCount } from "./scope.ts";
 
 export { loadCronFailingCount, loadCronScopeStats } from "./scope.ts";
@@ -38,12 +39,12 @@ export type CronFormState = {
   clearAgent: boolean;
   enabled: boolean;
   deleteAfterRun: boolean;
-  // on-exit jobs are read-only because the form cannot edit a watched command.
+  // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
-  scheduleKind: "at" | "every" | "cron" | "on-exit";
+  scheduleKind: "at" | "every" | "cron" | "on-exit" | "stream";
   scheduleAt: string;
   everyAmount: string;
-  everyUnit: "minutes" | "hours" | "days";
+  everyUnit: "seconds" | "minutes" | "hours" | "days";
   cronExpr: string;
   cronTz: string;
   scheduleExact: boolean;
@@ -51,7 +52,7 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn";
+  payloadKind: "systemEvent" | "agentTurn" | "command" | "script";
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
@@ -89,6 +90,9 @@ function isCronPayload(value: unknown): value is CronPayload {
   if (value.kind === "command") {
     return Array.isArray(value.argv) && value.argv.every((arg) => typeof arg === "string");
   }
+  if (value.kind === "script") {
+    return typeof value.script === "string";
+  }
   return false;
 }
 
@@ -108,7 +112,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   sessionKey: "",
   clearAgent: false,
   enabled: true,
-  deleteAfterRun: true,
+  deleteAfterRun: false,
   scheduleKind: "every",
   scheduleAt: "",
   everyAmount: "30",
@@ -157,7 +161,7 @@ export type CronFieldKey =
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
-export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit";
+export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron" | "on-exit" | "stream";
 export type CronJobsLastStatusFilter = "all" | CronRunStatus | "unknown";
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
@@ -293,8 +297,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    if (parseCronEveryMs(form.everyAmount, form.everyUnit) === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     }
   } else if (form.scheduleKind === "cron") {
@@ -654,7 +657,8 @@ function resolveCronJobScheduleKind(job: CronJob): string | null {
     scheduleKind === "at" ||
     scheduleKind === "every" ||
     scheduleKind === "cron" ||
-    scheduleKind === "on-exit"
+    scheduleKind === "on-exit" ||
+    scheduleKind === "stream"
   ) {
     return scheduleKind;
   }
@@ -693,15 +697,32 @@ function formatDateTimeLocal(input: string): string {
   return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
+// Render everyMs back to the largest unit that divides it exactly, falling through
+// to decimal seconds. Sub-second remainders are built from BigInt quotient/remainder,
+// not float division, so every integer millisecond up to Number.MAX_SAFE_INTEGER
+// round-trips losslessly through parseCronEveryMs when the job is resaved.
 function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" | "everyUnit"> {
   if (everyMs % 86_400_000 === 0) {
-    return { everyAmount: String(Math.max(1, everyMs / 86_400_000)), everyUnit: "days" };
+    return { everyAmount: String(everyMs / 86_400_000), everyUnit: "days" };
   }
   if (everyMs % 3_600_000 === 0) {
-    return { everyAmount: String(Math.max(1, everyMs / 3_600_000)), everyUnit: "hours" };
+    return { everyAmount: String(everyMs / 3_600_000), everyUnit: "hours" };
   }
-  const minutes = Math.max(1, Math.ceil(everyMs / 60_000));
-  return { everyAmount: String(minutes), everyUnit: "minutes" };
+  if (everyMs % 60_000 === 0) {
+    return { everyAmount: String(everyMs / 60_000), everyUnit: "minutes" };
+  }
+  return { everyAmount: everyMsToSecondsString(everyMs), everyUnit: "seconds" };
+}
+
+function everyMsToSecondsString(everyMs: number): string {
+  const value = BigInt(everyMs);
+  const whole = value / 1_000n;
+  const remainder = value % 1_000n;
+  if (remainder === 0n) {
+    return String(whole);
+  }
+  const fractional = remainder.toString().padStart(3, "0").replace(/0+$/u, "");
+  return `${whole}.${fractional}`;
 }
 
 function parseStaggerSchedule(
@@ -727,10 +748,14 @@ function parseStaggerSchedule(
   };
 }
 
+function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
+  return payload?.kind === "command" || payload?.kind === "script";
+}
+
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
   const payload = getCronJobPayload(job);
-  const payloadLocked = payload?.kind === "command";
+  const payloadLocked = isReadOnlyCronPayload(payload);
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -739,7 +764,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     sessionKey: job.sessionKey ?? "",
     clearAgent: false,
     enabled: job.enabled,
-    deleteAfterRun: job.deleteAfterRun ?? false,
+    deleteAfterRun: job.deleteAfterRun ?? job.schedule.kind === "at",
     scheduleKind: job.schedule.kind,
     scheduleAt: "",
     everyAmount: prev.everyAmount,
@@ -751,10 +776,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind:
-      payload?.kind === "systemEvent" || payload?.kind === "agentTurn"
-        ? payload.kind
-        : DEFAULT_CRON_FORM.payloadKind,
+    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
     payloadLocked,
     payloadText:
       payload?.kind === "systemEvent"
@@ -763,7 +785,9 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
           ? payload.message
           : payload?.kind === "command"
             ? payload.argv.join(" ")
-            : "",
+            : payload?.kind === "script"
+              ? payload.script
+              : "",
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
@@ -819,7 +843,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     next.staggerAmount = staggerFields.staggerAmount;
     next.staggerUnit = staggerFields.staggerUnit;
   }
-  // Other schedule kinds (e.g. on-exit) are shown read-only in the list and have no
+  // Process-backed schedule kinds are shown read-only in the list and have no
   // editable schedule form fields; leave the cron/at/every fields at their defaults.
 
   return normalizeCronFormState(next);
@@ -834,13 +858,11 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const amount = toNumber(form.everyAmount, 0);
-    if (amount <= 0) {
+    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    if (everyMs === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
-    const unit = form.everyUnit;
-    const mult = unit === "minutes" ? 60_000 : unit === "hours" ? 3_600_000 : 86_400_000;
-    return { kind: "every" as const, everyMs: amount * mult };
+    return { kind: "every" as const, everyMs };
   }
   const expr = form.cronExpr.trim();
   if (!expr) {
@@ -868,6 +890,9 @@ function buildCronPayload(form: CronFormState) {
       throw new Error(t("cron.errors.systemEventTextRequired"));
     }
     return { kind: "systemEvent" as const, text };
+  }
+  if (form.payloadKind !== "agentTurn") {
+    throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
   }
   const message = form.payloadText.trim();
   if (!message) {
@@ -913,13 +938,14 @@ function normalizePersistedDeliveryChannel(
   return channel;
 }
 
-function buildFailureAlert(form: CronFormState, existingChannel?: string) {
+function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert"]) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
   if (form.failureAlertMode !== "custom") {
-    return undefined;
+    return existing !== undefined ? null : undefined;
   }
+  const existingConfig = existing && typeof existing === "object" ? existing : undefined;
   const after = toNumber(form.failureAlertAfter.trim(), 0);
   const cooldownRaw = form.failureAlertCooldownSeconds.trim();
   const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
@@ -929,18 +955,23 @@ function buildFailureAlert(form: CronFormState, existingChannel?: string) {
       : undefined;
   const deliveryMode = form.failureAlertDeliveryMode;
   const accountId = form.failureAlertAccountId.trim();
+  const to = form.failureAlertTo.trim();
   const patch: Record<string, unknown> = {
-    after: after > 0 ? Math.floor(after) : undefined,
+    after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLastOnUpdate: Boolean(existingChannel),
+      preserveLastOnUpdate: Boolean(existingConfig?.channel),
     }),
-    to: form.failureAlertTo.trim() || undefined,
-    ...(cooldownMs !== undefined ? { cooldownMs } : {}),
+    to: to || (existingConfig?.to ? null : undefined),
+    ...(cooldownMs !== undefined
+      ? { cooldownMs }
+      : existingConfig?.cooldownMs !== undefined
+        ? { cooldownMs: null }
+        : {}),
   };
   if (deliveryMode) {
     patch.mode = deliveryMode;
   }
-  patch.accountId = accountId || undefined;
+  patch.accountId = accountId || (existingConfig?.accountId ? null : undefined);
   return patch;
 }
 
@@ -976,16 +1007,17 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       ? state.cronJobs.find((job) => job.id === state.cronEditingJobId)
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
-    // Preserve on-exit only while the edit form still points at on-exit; if the
+    // Preserve a process-backed schedule while the form still points at it; if the
     // user selects an editable schedule kind, the update must apply it.
     const preserveSchedule = Boolean(
       state.cronEditingJobId &&
-      (editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" &&
-      form.scheduleKind === "on-exit",
+      ((editingJob?.schedule as { kind?: string } | undefined)?.kind === "on-exit" ||
+        (editingJob?.schedule as { kind?: string } | undefined)?.kind === "stream") &&
+      form.scheduleKind === editingJob?.schedule.kind,
     );
     const schedule = preserveSchedule ? undefined : buildCronSchedule(form);
     const preserveLockedPayload = Boolean(
-      state.cronEditingJobId && form.payloadLocked && editingPayload?.kind === "command",
+      state.cronEditingJobId && form.payloadLocked && isReadOnlyCronPayload(editingPayload),
     );
     const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
     if (
@@ -1032,12 +1064,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         : selectedDeliveryMode === "none"
           ? ({ mode: "none" } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(
-      form,
-      editingJob?.failureAlert && typeof editingJob.failureAlert === "object"
-        ? editingJob.failureAlert.channel
-        : undefined,
-    );
+    const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
     const agentId = form.clearAgent ? null : form.agentId.trim();
     const sessionKeyRaw = form.sessionKey.trim();
     const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
@@ -1047,7 +1074,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,
-      deleteAfterRun: form.deleteAfterRun,
+      ...(form.scheduleKind === "at" || form.scheduleKind === "on-exit"
+        ? { deleteAfterRun: form.deleteAfterRun }
+        : {}),
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       delivery,

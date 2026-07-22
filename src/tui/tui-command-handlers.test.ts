@@ -628,16 +628,16 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenCalledWith("Version: 1.2.3");
   });
 
-  it("returns to Crestodian with an optional request", async () => {
+  it("returns to OpenClaw with an optional request", async () => {
     const { handleCommand, addSystem, requestExit, sendChat } = createHarness();
 
-    await handleCommand("/crestodian restart gateway");
+    await handleCommand("/openclaw restart gateway");
 
     expect(sendChat).not.toHaveBeenCalled();
-    expect(addSystem).toHaveBeenCalledWith("returning to Crestodian with request: restart gateway");
+    expect(addSystem).toHaveBeenCalledWith("returning to OpenClaw with request: restart gateway");
     expect(requestExit).toHaveBeenCalledWith({
-      exitReason: "return-to-crestodian",
-      crestodianMessage: "restart gateway",
+      exitReason: "return-to-system-agent",
+      systemAgentMessage: "restart gateway",
     });
   });
 
@@ -652,14 +652,14 @@ describe("tui command handlers", () => {
     expect(addSystem).not.toHaveBeenCalled();
   });
 
-  it("leaves a Crestodian breadcrumb after switching agents", async () => {
+  it("leaves a OpenClaw breadcrumb after switching agents", async () => {
     const { handleCommand, addSystem, setSession, state } = createHarness();
 
     await handleCommand("/agent Work");
 
     expect(state.currentAgentId).toBe("work");
     expect(setSession).toHaveBeenCalledWith("");
-    expect(addSystem).toHaveBeenCalledWith("agent set to work; use /crestodian to return");
+    expect(addSystem).toHaveBeenCalledWith("agent set to work; use /openclaw to return");
   });
 
   it("marks the generated runId as local before gateway events arrive", async () => {
@@ -976,13 +976,14 @@ describe("tui command handlers", () => {
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(createSessionMock).toHaveBeenCalledTimes(1);
     const createOptions = firstMockArg(createSessionMock, "createSession") as
-      | { key?: string; agentId?: string; parentSessionKey?: string }
+      | { key?: string; agentId?: string; parentSessionKey?: string; succeedsParent?: boolean }
       | undefined;
     if (!createOptions?.key) {
       throw new Error("expected /new to create a TUI session key");
     }
     expect(createOptions.agentId).toBe("main");
     expect(createOptions.parentSessionKey).toBe("agent:main:main");
+    expect(createOptions.succeedsParent).toBe(true);
     expect(createOptions.key.startsWith("tui-")).toBe(true);
     const uuidParts: string[] = createOptions.key.slice("tui-".length).split("-");
     expect(uuidParts.map((part) => part.length)).toEqual([8, 4, 4, 4, 12]);
@@ -1025,7 +1026,7 @@ describe("tui command handlers", () => {
     expect(createSession).toHaveBeenCalledWith({
       key: expect.stringMatching(/^tui-/),
       agentId: currentAgentId,
-      ...(expectedParent ? { parentSessionKey: expectedParent } : {}),
+      ...(expectedParent ? { parentSessionKey: expectedParent, succeedsParent: true } : {}),
     });
   });
 
@@ -1688,9 +1689,8 @@ describe("tui command handlers", () => {
   it("preserves provider prefix for nested model ids in /model confirmation", async () => {
     // Some providers route to nested model ids that themselves contain a slash
     // (e.g. resolved.model: "moonshotai/kimi-k2.5" with modelProvider: "nvidia").
-    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref
-    // to match the footer/status bar, not strip the provider just because the
-    // model id already contains a slash.
+    // The confirmation must still show the full nvidia/moonshotai/kimi-k2.5 ref,
+    // not strip the provider just because the model id already contains a slash.
     const patchSession = vi.fn().mockResolvedValue({
       ok: true,
       path: "/sessions/patch",
@@ -1826,6 +1826,19 @@ describe("tui command handlers", () => {
     await handleCommand("/queue:followup");
 
     expectSendChatFields(sendChat, { message: "/queue:followup" });
+  });
+
+  it("routes /queue directives through the local backend", async () => {
+    const { handleCommand, sendChat, addSystem } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-active",
+      activityStatus: "streaming",
+    });
+
+    await handleCommand("/queue followup");
+
+    expectSendChatFields(sendChat, { message: "/queue followup" });
+    expect(addSystem).not.toHaveBeenCalledWith("/queue is unavailable in local mode");
   });
 
   it("blocks /queue while optimistic user message is pending", async () => {

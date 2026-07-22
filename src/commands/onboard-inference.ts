@@ -1,5 +1,5 @@
 import { randomInt } from "node:crypto";
-// Inference backend detection shared by onboarding bootstrap and Crestodian setup.
+// Inference backend detection shared by onboarding bootstrap and OpenClaw setup.
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -11,13 +11,13 @@ import {
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { probeLocalCommand, type LocalCommandProbe } from "../crestodian/probes.js";
+import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
 
 /**
  * Onboarding treats inference as the one required step: reuse whatever the
  * machine already has (env API keys, Claude Code login, Codex login) before
  * asking the user anything. The ladder order is a documented contract
- * (docs/cli/crestodian.md "Setup bootstrap") — change docs when changing it.
+ * (docs/cli/setup.md "Setup bootstrap") — change docs when changing it.
  */
 export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6";
 export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
@@ -85,12 +85,12 @@ function detectCliCredentialState(params: {
   return params.platform === "darwin" ? undefined : false;
 }
 
-function describeCliDetail(credentials: boolean | undefined): string {
+function describeCliDetail(credentials: boolean | undefined, loginHint: string): string {
   if (credentials === true) {
     return "logged in";
   }
   if (credentials === false) {
-    return "installed, not logged in";
+    return `installed, not logged in — ${loginHint}, then check again`;
   }
   return "installed";
 }
@@ -155,7 +155,7 @@ async function probeCodexCommand(params: {
   return pathProbe;
 }
 /** Detects a native Codex App Server without coupling it to inference selection. */
-export async function detectNativeCodexAppServer(
+async function detectNativeCodexAppServer(
   options: DetectNativeCodexAppServerOptions = {},
 ): Promise<LocalCommandProbe> {
   return await probeCodexCommand({
@@ -163,6 +163,12 @@ export async function detectNativeCodexAppServer(
     env: options.env ?? process.env,
     platform: options.platform ?? process.platform,
   });
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.onboardInferenceTestApi")] = {
+    detectNativeCodexAppServer,
+  };
 }
 /**
  * Detect usable inference backends in ladder order. Returns candidates only
@@ -231,7 +237,7 @@ export async function detectInferenceBackends(
     probe("gemini"),
   ]);
   const cliCandidates: InferenceBackendCandidate[] = [];
-  if (claudeProbe.found) {
+  if (claudeProbe.found && !claudeProbe.timedOut) {
     const credentials = detectCliCredentialState({
       probe: claudeProbe,
       hasStoredCredentials: readClaude() !== null,
@@ -241,11 +247,11 @@ export async function detectInferenceBackends(
       kind: "claude-cli",
       modelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       label: "Claude Code",
-      detail: describeCliDetail(credentials),
+      detail: describeCliDetail(credentials, "run `claude auth login`"),
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  if (codexProbe.found) {
+  if (codexProbe.found && !codexProbe.timedOut) {
     const credentials = options.deps?.readCodexCliCredentials
       ? detectCliCredentialState({
           probe: codexProbe,
@@ -257,11 +263,11 @@ export async function detectInferenceBackends(
       kind: "codex-cli",
       modelRef: CODEX_APP_SERVER_DEFAULT_MODEL_REF,
       label: "Codex",
-      detail: describeCliDetail(credentials),
+      detail: describeCliDetail(credentials, "run `codex login`"),
       ...(credentials === undefined ? {} : { credentials }),
     });
   }
-  if (geminiProbe.found) {
+  if (geminiProbe.found && !geminiProbe.timedOut) {
     // Gemini CLI stores its OAuth login in a plain file on every platform (no
     // keychain), so a missing credential file is a definitive logout signal.
     const credentials = readGemini() !== null;
@@ -269,7 +275,7 @@ export async function detectInferenceBackends(
       kind: "gemini-cli",
       modelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       label: "Gemini CLI",
-      detail: describeCliDetail(credentials),
+      detail: describeCliDetail(credentials, "sign in to Gemini CLI"),
       credentials,
     });
   }

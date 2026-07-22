@@ -210,8 +210,9 @@ export function createWebOnMessageHandler(params: {
     // undefined = preflight was not attempted (non-audio message).
     let preflightAudioTranscript: string | null | undefined;
     const hasAudioBody =
-      msg.payload.media?.type?.startsWith("audio/") === true &&
-      msg.payload.body === "<media:audio>";
+      (msg.payload.media?.kind === "audio" ||
+        msg.payload.media?.type?.startsWith("audio/") === true) &&
+      !msg.payload.body.trim();
     const canRunEarlyAudioPreflight =
       conversationKind === "group" || canRunDirectEarlyAudioPreflight;
     let ackAlreadySent = false;
@@ -248,8 +249,13 @@ export function createWebOnMessageHandler(params: {
         preflightAudioTranscript =
           (await transcribeFirstAudio({
             ctx: {
-              MediaPaths: [msg.payload.media?.path],
-              MediaTypes: msg.payload.media?.type ? [msg.payload.media?.type] : undefined,
+              media: [
+                {
+                  path: msg.payload.media.path,
+                  contentType: msg.payload.media.type,
+                  kind: msg.payload.media.kind ?? undefined,
+                },
+              ],
               From: conversationId,
               To: msg.platform.recipientJid,
               Provider: "whatsapp",

@@ -36,6 +36,7 @@ type docChunkStructure struct {
 	tagCounts             map[string]int
 	headingLevels         []int
 	listShapes            []markdownListShape
+	listMarkerPrefixes    []string
 	inlineCodeSpans       []string
 	linkDestinations      []string
 	protectedLinkLabels   []string
@@ -72,6 +73,7 @@ func translateDocBodyChunked(ctx context.Context, translator docsTranslator, rel
 		out.WriteString(translated)
 	}
 	translatedBody := out.String()
+	translatedBody = normalizeMaskedListMarkerPlaceholders(translatedBody, mapping)
 	if err := validatePlaceholders(translatedBody, placeholders); err != nil {
 		return "", fmt.Errorf("%s: restore fenced literals: %w", relPath, err)
 	}
@@ -96,6 +98,12 @@ func validateDocBodyFencedLiterals(source, translated string) error {
 	}
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
+	}
+	if !slices.Equal(sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes) {
+		return fmt.Errorf("list marker structure mismatch: source=%q translated=%q", sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes)
+	}
+	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
+		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
 	}
 	if !slices.Equal(sourceStructure.fencedPlaceholders, translatedStructure.fencedPlaceholders) {
 		return fmt.Errorf("fenced placeholder mismatch: source=%d translated=%d", len(sourceStructure.fencedPlaceholders), len(translatedStructure.fencedPlaceholders))
@@ -135,6 +143,7 @@ func translateDocBlockGroup(ctx context.Context, translator docsTranslator, chun
 	}
 	if err == nil {
 		translated = sanitizeDocChunkProtocolWrappers(source, translated)
+		translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 		translated = reapplyCommonIndent(translated, commonIndent)
 		if validationErr := validateDocChunkTranslation(source, translated); validationErr == nil {
 			log.Printf("docs-i18n: chunk done %s out_bytes=%d", chunkID, len(translated))
@@ -183,6 +192,7 @@ func translateDocLeafBlock(ctx context.Context, translator docsTranslator, chunk
 		return "", err
 	}
 	translated = sanitizeDocChunkProtocolWrappers(source, translated)
+	translated = preserveDocChunkBoundaryWhitespace(normalizedSource, translated)
 	translated = reapplyCommonIndent(translated, commonIndent)
 	if validationErr := validateDocChunkTranslation(source, translated); validationErr != nil {
 		return "", validationErr
@@ -286,6 +296,9 @@ func validateDocChunkTranslation(source, translated string) error {
 	if !slices.Equal(sourceStructure.listShapes, translatedStructure.listShapes) {
 		return fmt.Errorf("list structure mismatch: source=%v translated=%v", sourceStructure.listShapes, translatedStructure.listShapes)
 	}
+	if !slices.Equal(sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes) {
+		return fmt.Errorf("list marker structure mismatch: source=%q translated=%q", sourceStructure.listMarkerPrefixes, translatedStructure.listMarkerPrefixes)
+	}
 	if !sameStringMultiset(sourceStructure.inlineCodeSpans, translatedStructure.inlineCodeSpans) {
 		return fmt.Errorf("inline code mismatch: source=%d translated=%d", len(sourceStructure.inlineCodeSpans), len(translatedStructure.inlineCodeSpans))
 	}
@@ -363,6 +376,32 @@ func sanitizeDocChunkProtocolWrappers(source, translated string) string {
 		return translated
 	}
 	return body
+}
+
+func preserveDocChunkBoundaryWhitespace(source, translated string) string {
+	prefixEnd := 0
+	for prefixEnd < len(source) && isDocChunkBoundaryWhitespace(source[prefixEnd]) {
+		prefixEnd++
+	}
+	suffixStart := len(source)
+	for suffixStart > prefixEnd && isDocChunkBoundaryWhitespace(source[suffixStart-1]) {
+		suffixStart--
+	}
+
+	translatedStart := 0
+	for translatedStart < len(translated) && isDocChunkBoundaryWhitespace(translated[translatedStart]) {
+		translatedStart++
+	}
+	translatedEnd := len(translated)
+	for translatedEnd > translatedStart && isDocChunkBoundaryWhitespace(translated[translatedEnd-1]) {
+		translatedEnd--
+	}
+
+	return source[:prefixEnd] + translated[translatedStart:translatedEnd] + source[suffixStart:]
+}
+
+func isDocChunkBoundaryWhitespace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
 func stripBodyOnlyWrapper(source, text string) (string, bool) {
@@ -466,6 +505,7 @@ func summarizeDocChunkStructure(text string) docChunkStructure {
 		tagCounts:             countsWithoutFence(counts),
 		headingLevels:         extractMarkdownHeadingLevels(text),
 		listShapes:            extractMarkdownListShapes(text),
+		listMarkerPrefixes:    extractMarkdownListMarkerPrefixes(text),
 		inlineCodeSpans:       extractMarkdownInlineCodeValues(text),
 		linkDestinations:      extractMarkdownLinkDestinations(text),
 		protectedLinkLabels:   extractProtectedMarkdownLinkLabels(text),

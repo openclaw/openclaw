@@ -1,4 +1,5 @@
 // Core runtime types define system, config, and task helper contracts for plugins.
+import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
 import type { SessionPluginJsonValue } from "../../config/sessions/types.js";
@@ -7,6 +8,7 @@ import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type {
   ListSpeechVoices,
+  PrepareTtsRequest,
   TextToSpeech,
   TextToSpeechStream,
   TextToSpeechTelephony,
@@ -189,7 +191,7 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
-export type LlmCompleteMessage = {
+type LlmCompleteMessage = {
   role: "system" | "user" | "assistant";
   content: string;
 };
@@ -215,6 +217,8 @@ export type LlmCompleteParams = {
   model?: string;
   maxTokens?: number;
   temperature?: number;
+  /** Requested reasoning effort; the host normalizes it for the selected model. */
+  reasoning?: import("../../auto-reply/thinking.js").ThinkLevel;
   systemPrompt?: string;
   signal?: AbortSignal;
   /** Human-readable reason for audit/debug output. */
@@ -260,23 +264,6 @@ export type PluginRuntimeCore = {
     replaceConfigFile: (
       params: RuntimeReplaceConfigFileParams,
     ) => Promise<RuntimeConfigReplaceResult>;
-    /**
-     * @deprecated Use current(), or pass the already loaded config through the
-     * call path. Runtime code must not reload config on demand. Bundled
-     * plugins and repo code are blocked from using this by the
-     * deprecated-internal-config-api architecture guard.
-     */
-    loadConfig: () => import("../../config/types.openclaw.js").OpenClawConfig;
-    /**
-     * @deprecated Use mutateConfigFile() or replaceConfigFile() with an
-     * explicit afterWrite intent so restart behavior stays under host control.
-     * Bundled plugins and repo code are blocked from using this by the
-     * deprecated-internal-config-api architecture guard.
-     */
-    writeConfigFile: (
-      cfg: import("../../config/types.openclaw.js").OpenClawConfig,
-      options?: RuntimeWriteConfigOptions & { afterWrite?: RuntimeConfigAfterWrite },
-    ) => Promise<void>;
   };
   agent: {
     defaults: {
@@ -302,6 +289,12 @@ export type PluginRuntimeCore = {
     /** @deprecated Use runEmbeddedAgent. */
     runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
+    /**
+     * Shares the embedded runner's CLI-backend dispatch eligibility (route,
+     * registered backend, stored credential mode) so opted-in callers can
+     * budget timeouts for the run that will actually execute.
+     */
+    resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
@@ -352,6 +345,7 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
+    prepareTtsRequest: PrepareTtsRequest;
     textToSpeech: TextToSpeech;
     textToSpeechStream: TextToSpeechStream;
     textToSpeechTelephony: TextToSpeechTelephony;
@@ -397,9 +391,6 @@ export type PluginRuntimeCore = {
       params: import("../../web-search/runtime-types.js").RunWebSearchParams,
     ) => Promise<import("../../web-search/runtime-types.js").RunWebSearchResult>;
   };
-  stt: {
-    transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
-  };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
     onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
@@ -413,12 +404,16 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openBlobStore: <TMetadata>(
+      options: import("../../plugin-state/plugin-blob-store.types.js").OpenBlobStoreOptions,
+    ) => import("../../plugin-state/plugin-blob-store.types.js").PluginBlobStore<TMetadata>;
     openKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateSyncKeyedStore<T>;
+    withLease: import("../../plugin-state/plugin-state-lease.types.js").PluginStateLeaseRunner;
     openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
       options?: Omit<CreateChannelIngressQueueOptions, "channelId">,
     ) => import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
@@ -426,16 +421,26 @@ export type PluginRuntimeCore = {
       TMetadata,
       TCompletedMetadata
     >;
+    openChannelIngressDrain: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
+      options: Omit<
+        CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
+        "queue"
+      > & {
+        queue?: import("../../channels/message/ingress-queue.js").ChannelIngressQueue<
+          TPayload,
+          TMetadata,
+          TCompletedMetadata
+        >;
+        accountId?: string;
+        stateDir?: string;
+      },
+    ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
     flows: PluginRuntimeTaskFlows;
     managedFlows: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
-    /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-    flow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   };
-  /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
-  taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
     acquireLocalService: (

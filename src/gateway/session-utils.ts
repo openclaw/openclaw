@@ -64,6 +64,7 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../agents/thinking-runtime.js";
 import { insideGitCheckout } from "../agents/worktrees/git.js";
+import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
 import {
   listThinkingLevelOptions,
   normalizeThinkLevel,
@@ -76,9 +77,13 @@ import {
   buildGroupDisplayName,
   buildGroupDisplayTitle,
   getSessionStoreCacheVersion,
+  isConfiguredSessionStoreAgentId,
+  isLegacyOnlySessionStoreTarget,
   isTerminalSessionStatus,
+  readLegacySessionStoreTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
+  resolveExistingAgentSessionStoreTargetsSync,
   resolveFreshSessionTotalTokens,
   resolveSessionGoalDisplayState,
   resolveStorePath,
@@ -93,17 +98,19 @@ import { withPinnedActivePluginRegistryWorkspaceDir } from "../plugins/runtime-w
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
-  normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { resolveActiveSessionAgentStatus } from "../sessions/session-agent-status.js";
 import { isAcpSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { resolveNonNegativeNumber } from "../shared/number-coercion.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
-import { listGatewayAgentIds } from "./agent-list.js";
+import { listGatewayAgentsBasic } from "./agent-list.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
+import { sortAndLimitSessionEntries, type SessionEntryPair } from "./session-list-order.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -1189,26 +1196,23 @@ function resolveGatewayAgentModel(
 export function listAgentsForGateway(
   cfg: OpenClawConfig,
   modelCatalog?: ModelCatalogEntry[],
-  options?: { modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]> },
+  options?: {
+    modelCatalogByAgentId?: ReadonlyMap<string, ModelCatalogEntry[]>;
+    includeSystem?: boolean;
+  },
 ): {
   defaultId: string;
   mainKey: string;
   scope: SessionScope;
   agents: GatewayAgentRow[];
 } {
-  const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  const mainKey = normalizeMainKey(cfg.session?.mainKey);
-  const scope = cfg.session?.scope ?? "per-sender";
-  const configuredById = new Map<
-    string,
-    { name?: string; identity?: GatewayAgentRow["identity"] }
-  >();
+  const basic = listGatewayAgentsBasic(cfg);
+  const configuredById = new Map<string, { identity?: GatewayAgentRow["identity"] }>();
   for (const entry of cfg.agents?.list ?? []) {
     if (!entry?.id) {
       continue;
     }
     const agentId = normalizeAgentId(entry.id);
-    const configuredName = normalizeOptionalString(entry.name);
     const avatar = normalizeOptionalString(entry.identity?.avatar);
     const avatarUrl = resolveAgentAvatarUrlFromSource(cfg, agentId, avatar);
     const identity = entry.identity
@@ -1220,22 +1224,13 @@ export function listAgentsForGateway(
           avatarUrl,
         }
       : undefined;
-    configuredById.set(agentId, {
-      name: configuredName ?? identity?.name,
-      identity,
-    });
+    configuredById.set(agentId, { identity });
   }
-  const explicitIds = new Set(
-    (cfg.agents?.list ?? [])
-      .map((entry) => (entry?.id ? normalizeAgentId(entry.id) : ""))
-      .filter(Boolean),
-  );
-  const allowedIds = explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
-  let agentIds = listGatewayAgentIds(cfg).filter((id) => (allowedIds ? allowedIds.has(id) : true));
-  if (mainKey && !agentIds.includes(mainKey) && (!allowedIds || allowedIds.has(mainKey))) {
-    agentIds = [...agentIds, mainKey];
-  }
-  const agents = agentIds.map((id) => {
+  const roster = options?.includeSystem
+    ? basic.agents
+    : basic.agents.filter((entry) => entry.kind !== "system");
+  const agents = roster.map((entry) => {
+    const { id } = entry;
     const meta = configuredById.get(id);
     const model = resolveGatewayAgentModel(cfg, id);
     const resolvedModel = resolveDefaultModelForAgent({ cfg, agentId: id });
@@ -1269,7 +1264,8 @@ export function listAgentsForGateway(
     return Object.assign(
       {
         id,
-        name: meta?.name,
+        ...(options?.includeSystem ? { kind: entry.kind } : {}),
+        name: entry.name,
         identity: meta?.identity,
         workspace,
         workspaceGit,
@@ -1288,7 +1284,7 @@ export function listAgentsForGateway(
       model ? { model } : {},
     );
   });
-  return { defaultId, mainKey, scope, agents };
+  return { defaultId: basic.defaultId, mainKey: basic.mainKey, scope: basic.scope, agents };
 }
 
 function buildGatewaySessionStoreScanTargets(params: {
@@ -1317,31 +1313,31 @@ function buildGatewaySessionStoreScanTargets(params: {
 function resolveGatewaySessionStoreCandidates(
   cfg: OpenClawConfig,
   agentId: string,
-): SessionStoreTarget[] {
+): { existing: SessionStoreTarget[]; fallback: SessionStoreTarget } {
   const storeConfig = cfg.session?.store;
-  const defaultTarget = {
+  const fallback = {
     agentId,
     storePath: resolveStorePath(storeConfig, { agentId }),
   };
-  if (!isStorePathTemplate(storeConfig)) {
-    return [defaultTarget];
-  }
-  const targets = new Map<string, SessionStoreTarget>();
-  targets.set(defaultTarget.storePath, defaultTarget);
-  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
-    if (target.agentId === agentId) {
-      targets.set(target.storePath, target);
-    }
-  }
-  return [...targets.values()];
+  return {
+    existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId),
+    fallback,
+  };
 }
 
 function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
   agentId?: string,
+  options: { allowLegacyFallback?: boolean } = {},
 ): Record<string, SessionEntry> {
   try {
+    if (options.allowLegacyFallback) {
+      const legacyStore = readLegacySessionStoreTarget(storePath, agentId);
+      if (legacyStore) {
+        return legacyStore;
+      }
+    }
     return Object.fromEntries(
       listAccessorSessionEntries({
         ...(agentId ? { agentId } : {}),
@@ -1367,15 +1363,30 @@ function resolveGatewaySessionStoreLookup(params: {
   match: { entry: SessionEntry; key: string } | undefined;
 } {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
-  const candidates = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
-  const fallback = candidates[0] ?? {
-    agentId: params.agentId,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
-  };
+  const { existing, fallback } = resolveGatewaySessionStoreCandidates(params.cfg, params.agentId);
+  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
+  const candidates = configured
+    ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
+    : existing;
+  if (candidates.length === 0) {
+    // Discovery is read-only. Only configured agents may cross the fallback edge that creates a
+    // missing SQLite store; retired/manual agents must already have a discovered store.
+    return {
+      storePath: fallback.storePath,
+      store: {},
+      match: undefined,
+    };
+  }
   const loadStore = (target: SessionStoreTarget) =>
-    loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId);
-  let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadStore(fallback);
+    loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId, {
+      allowLegacyFallback: !configured,
+    });
+  const firstCandidate = candidates[0] ?? fallback;
+  let selectedStorePath = firstCandidate.storePath;
+  let selectedStore =
+    params.initialStore && firstCandidate.storePath === fallback.storePath
+      ? params.initialStore
+      : loadStore(firstCandidate);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1903,8 +1914,15 @@ export function buildGatewaySessionRow(params: {
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
-  const skipTranscriptUsage = params.skipTranscriptUsageFallback === true;
   const now = params.now ?? Date.now();
+  const agentStatus = resolveActiveSessionAgentStatus(entry?.agentStatus, now);
+  const observerDigest =
+    entry?.observerDigest &&
+    // Strictly newer: a run end and restart can share a millisecond, and the
+    // prior run's digest must not project onto the replacement run.
+    (entry.startedAt === undefined || entry.observerDigest.updatedAt > entry.startedAt)
+      ? entry.observerDigest
+      : undefined;
   const updatedAt = entry?.updatedAt ?? null;
   const parsed = parseGroupKey(key);
   const channel = entry?.channel ?? parsed?.channel;
@@ -1914,6 +1932,8 @@ export function buildGatewaySessionRow(params: {
   const id = parsed?.id;
   const origin = entry?.origin;
   const originLabel = origin?.label;
+  const parsedAgent = parseAgentSessionKey(key);
+  const isDashboardSession = parsedAgent?.rest.startsWith("dashboard:") === true;
   const isGroupSession = isGroupOrChannelDisplaySession(entry, parsed);
   // A user-assigned label is an explicit rename; it must win over stored
   // channel-derived display names or renames silently vanish on refresh.
@@ -1933,12 +1953,17 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    originLabel;
+    // Dashboard origin labels identify the authenticated sender. Using them as
+    // titles leaks account names into the sidebar while the generated title is pending.
+    (isDashboardSession ? undefined : originLabel);
   const deliveryFields = normalizeSessionDeliveryFields(entry);
-  const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(
     parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
   );
+  const skipTranscriptUsage =
+    params.skipTranscriptUsageFallback === true ||
+    (!isConfiguredSessionStoreAgentId(cfg, sessionAgentId) &&
+      isLegacyOnlySessionStoreTarget(storePath, sessionAgentId));
   const rowContext = params.rowContext;
   const subagentRun = rowContext
     ? rowContext.subagentRuns.getDisplaySubagentRun(key)
@@ -2180,6 +2205,7 @@ export function buildGatewaySessionRow(params: {
   return {
     key,
     spawnedBy: subagentOwner || entry?.spawnedBy,
+    swarmGroupId: entry?.swarmGroupId,
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     worktree: entry?.worktree,
@@ -2206,8 +2232,20 @@ export function buildGatewaySessionRow(params: {
     archivedAt: entry?.archivedAt,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
+    icon: entry?.icon,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
+    agentStatus,
+    observerDigest: observerDigest
+      ? {
+          runId: observerDigest.runId,
+          headline: observerDigest.headline,
+          health: observerDigest.health,
+          updatedAt: observerDigest.updatedAt,
+          revision: observerDigest.revision,
+        }
+      : undefined,
+    lastInteractionAt: entry?.lastInteractionAt,
     lastActivityAt: entry?.lastActivityAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
@@ -2232,6 +2270,7 @@ export function buildGatewaySessionRow(params: {
     goal,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
+    lastRunError: entry?.lastRunError,
     hasAutomation: sessionHasAutomation(key, cfg) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun ? liveSubagentRunActive : undefined,
@@ -2246,6 +2285,12 @@ export function buildGatewaySessionRow(params: {
       cfg.messages?.responseUsage,
       channel,
     ),
+    queueMode: entry?.queueMode,
+    effectiveQueueMode: resolveQueueSettings({
+      cfg,
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      sessionEntry: entry,
+    }).mode,
     modelProvider: rowModelProvider,
     model: rowModel,
     modelSelectionLocked: entry?.modelSelectionLocked,
@@ -2456,10 +2501,8 @@ export function buildGatewaySessionInfo(params: {
  * avoiding excessive yielding overhead for small stores.
  */
 const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
-const SESSIONS_LIST_TOP_N_LIMIT = 200;
 const SESSIONS_LIST_DEFAULT_LIMIT = 100;
 
-type SessionEntryPair = [string, SessionEntry];
 type SessionEntrySelection = {
   entries: SessionEntryPair[];
   totalCount: number;
@@ -2468,21 +2511,6 @@ type SessionEntrySelection = {
   nextOffset: number | null;
   hasMore: boolean;
 };
-
-function compareSessionEntryPairs(a: SessionEntryPair, b: SessionEntryPair): number {
-  const aPinnedAt = a[1]?.pinnedAt ?? 0;
-  const bPinnedAt = b[1]?.pinnedAt ?? 0;
-  if (aPinnedAt !== bPinnedAt) {
-    return bPinnedAt - aPinnedAt;
-  }
-  const byUpdatedAt = (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
-  if (byUpdatedAt !== 0) {
-    return byUpdatedAt;
-  }
-  // Timestamp ties fall back to the key so list order (and offset paging) stays
-  // deterministic across calls; locale-independent code-unit comparison.
-  return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
-}
 
 function resolveSessionsListLimit(
   opts: SessionsListParams,
@@ -2507,38 +2535,6 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   }
   const windowLimit = offset + limit;
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
-}
-
-function selectNewestLimitedEntries(
-  entries: SessionEntryPair[],
-  limit: number,
-): SessionEntryPair[] {
-  const selected: SessionEntryPair[] = [];
-  for (const entry of entries) {
-    const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairs(entry, candidate) < 0,
-    );
-    if (insertAt >= 0) {
-      selected.splice(insertAt, 0, entry);
-      if (selected.length > limit) {
-        selected.pop();
-      }
-    } else if (selected.length < limit) {
-      selected.push(entry);
-    }
-  }
-  return selected;
-}
-
-function sortAndLimitSessionEntries(
-  entries: SessionEntryPair[],
-  limit: number | undefined,
-): SessionEntryPair[] {
-  if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
-    return selectNewestLimitedEntries(entries, limit);
-  }
-  const sorted = entries.toSorted(compareSessionEntryPairs);
-  return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
 function filterSessionEntries(params: {
@@ -2625,6 +2621,15 @@ function filterSessionEntries(params: {
       return opts.archived === true ? archived : !archived;
     })
     .filter(([, entry]) => {
+      if (opts.requireLastInteraction !== true) {
+        return true;
+      }
+      return (
+        isFinitePositiveTimestamp(entry?.lastInteractionAt) &&
+        !normalizeOptionalString(entry?.heartbeatIsolatedBaseSessionKey)
+      );
+    })
+    .filter(([, entry]) => {
       if (!label) {
         return true;
       }
@@ -2690,7 +2695,7 @@ function selectSessionEntries(params: {
   const limit = resolveSessionsListLimit(params.opts, params.defaultLimit);
   const offset = resolveSessionsListOffset(params.opts);
   const windowLimit = resolveSessionsListWindowLimit(limit, offset);
-  const sortedWindow = sortAndLimitSessionEntries(filtered, windowLimit);
+  const sortedWindow = sortAndLimitSessionEntries(filtered, windowLimit, params.opts.sortBy);
   const entries =
     limit === undefined ? sortedWindow.slice(offset) : sortedWindow.slice(offset, offset + limit);
   const nextOffset = offset + entries.length;

@@ -4,7 +4,10 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
+  handleChatAttachmentDrop,
   handleChatAttachmentPaste,
+  isEditableDropTarget,
+  isFileDrag,
   renderAttachmentPreview,
   renderChatAttachmentInputs,
   renderChatAttachmentMenu,
@@ -22,11 +25,21 @@ type NewSessionComposerOptions = {
   readSignal: AbortSignal;
   requiresModifier: boolean;
   submitting: boolean;
+  messageLocked?: boolean;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
   onInput: (message: string) => void;
   onSubmit: () => void;
 };
+
+export function renderDraftError(message: string) {
+  return html`
+    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
+      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
+      <span class="callout__content new-session-page__alert-message">${message}</span>
+    </div>
+  `;
+}
 
 function handleComposerKeydown(event: KeyboardEvent, options: NewSessionComposerOptions) {
   if (
@@ -49,7 +62,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const startLabel = options.submitting ? t("newSession.starting") : t("newSession.start");
   const attachmentProps = {
     attachments: options.attachments,
-    disabled: options.submitting,
+    disabled: options.submitting || options.messageLocked,
     getAttachments: options.getAttachments,
     draft: options.message,
     getDraft: () => options.message,
@@ -58,8 +71,69 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
     onPendingReadsChange: options.onPendingReadsChange,
     readSignal: options.readSignal,
   };
+  const enabled = !options.submitting && !options.messageLocked;
+  // Nested dragenter/dragleave events must stay balanced so crossing composer
+  // children does not flicker the file drop affordance.
+  let attachmentDragDepth = 0;
+  const setAttachmentDropActive = (event: DragEvent, active: boolean) => {
+    const target = event.currentTarget;
+    if (!(target instanceof HTMLElement)) {
+      return;
+    }
+    if (active) {
+      if (!enabled || !isFileDrag(event.dataTransfer)) {
+        return;
+      }
+      attachmentDragDepth += 1;
+    } else {
+      attachmentDragDepth = Math.max(0, attachmentDragDepth - 1);
+    }
+    target.toggleAttribute("data-attachment-drop-active", attachmentDragDepth > 0);
+  };
+  const clearAttachmentDropActive = (event: DragEvent) => {
+    attachmentDragDepth = 0;
+    const target = event.currentTarget;
+    if (target instanceof HTMLElement) {
+      target.removeAttribute("data-attachment-drop-active");
+    }
+  };
   return html`
-    <div class="agent-chat__composer-shell new-session-page__composer">
+    <div
+      class="agent-chat__composer-shell new-session-page__composer"
+      @drop=${(event: DragEvent) => {
+        // Text/URL drops stay native only inside the textarea; elsewhere they
+        // are cancelled so a dropped link cannot navigate the app away. File
+        // drops are cancelled even while disabled for the same reason.
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+          }
+          return;
+        }
+        event.preventDefault();
+        clearAttachmentDropActive(event);
+        if (enabled) {
+          handleChatAttachmentDrop(event, attachmentProps);
+        }
+      }}
+      @dragenter=${(event: DragEvent) => setAttachmentDropActive(event, true)}
+      @dragleave=${(event: DragEvent) => setAttachmentDropActive(event, false)}
+      @dragover=${(event: DragEvent) => {
+        if (!isFileDrag(event.dataTransfer)) {
+          if (!isEditableDropTarget(event)) {
+            event.preventDefault();
+            if (event.dataTransfer) {
+              event.dataTransfer.dropEffect = "none";
+            }
+          }
+          return;
+        }
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = enabled ? "copy" : "none";
+        }
+      }}
+    >
       <div class="agent-chat__input">
         ${renderChatAttachmentInputs(attachmentProps)} ${renderAttachmentPreview(attachmentProps)}
         <div class="agent-chat__composer-input-row">
@@ -67,15 +141,15 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
           <div class="agent-chat__composer-combobox">
             <textarea
               class="new-session-page__message"
-              rows="3"
-              ?disabled=${options.submitting}
+              rows="1"
+              ?disabled=${options.submitting || options.messageLocked}
               placeholder=${t("newSession.messagePlaceholder")}
               .value=${options.message}
               @input=${(event: Event) =>
                 options.onInput((event.target as HTMLTextAreaElement).value)}
               @keydown=${(event: KeyboardEvent) => handleComposerKeydown(event, options)}
               @paste=${(event: ClipboardEvent) => {
-                if (!options.submitting) {
+                if (!options.submitting && !options.messageLocked) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
@@ -97,7 +171,9 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
         </div>
         ${options.modelControl && options.modelControl !== nothing
           ? html`<div class="agent-chat__composer-footer">
-              <div class="agent-chat__composer-controls">${options.modelControl}</div>
+              <div class="agent-chat__composer-controls">
+                <div class="chat-composer-model-control">${options.modelControl}</div>
+              </div>
             </div>`
           : nothing}
         ${options.pendingAttachmentReads > 0
@@ -111,7 +187,7 @@ function renderNewSessionComposer(options: NewSessionComposerOptions) {
 }
 
 export function renderNewSessionDraftComposer(options: {
-  agentDefaultModel?: string;
+  agent?: import("../../api/types.ts").GatewayAgentRow;
   agentId: string;
   attachmentDraft: NewSessionAttachmentDraft;
   canSubmit: boolean;
@@ -121,6 +197,7 @@ export function renderNewSessionDraftComposer(options: {
   modelControl: NewSessionModelControl;
   requiresModifier: boolean;
   submitting: boolean;
+  messageLocked?: boolean;
   onInput: (message: string) => void;
   onSubmit: () => void;
 }) {
@@ -133,7 +210,7 @@ export function renderNewSessionDraftComposer(options: {
     modelControl: options.isCatalogTarget
       ? nothing
       : options.modelControl.render({
-          agentDefaultModel: options.agentDefaultModel,
+          agent: options.agent,
           agentId: options.agentId,
           context: options.context,
           sending: options.submitting,
@@ -142,8 +219,9 @@ export function renderNewSessionDraftComposer(options: {
     readSignal,
     requiresModifier: options.requiresModifier,
     submitting: options.submitting,
+    messageLocked: options.messageLocked,
     onAttachmentsChange: (attachments) => {
-      if (!options.submitting) {
+      if (!options.submitting && !options.messageLocked) {
         options.attachmentDraft.replace(attachments);
       }
     },

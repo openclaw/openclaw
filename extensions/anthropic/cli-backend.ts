@@ -16,6 +16,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 /** Build the Claude CLI backend plugin descriptor. */
@@ -45,6 +46,11 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
     nativeToolMode: "selectable",
     sideQuestionToolMode: "disabled",
     ownsNativeCompaction: true,
+    // Anthropic routes direct anthropic-messages calls on subscription OAuth
+    // tokens to metered extra-usage billing (or rejects them without balance);
+    // opted-in embedded runs on subscription credentials execute through this
+    // backend on plan limits instead.
+    subscriptionAuthDispatch: true,
     config: {
       command: "claude",
       args: [
@@ -106,5 +112,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       return env ? { env } : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
+    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
   };
 }

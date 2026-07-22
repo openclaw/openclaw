@@ -226,6 +226,8 @@ describe("resolveConversationCapabilityProfile", () => {
       spawnDepth: 1,
       subagentRole: "orchestrator",
       subagentControlScope: "children",
+      spawnedBy: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
       inheritedToolAllow: ["image_generate"],
     } as SessionEntry);
 
@@ -240,9 +242,39 @@ describe("resolveConversationCapabilityProfile", () => {
 
       expect(profile.policy.explicitToolAllowlist).toContain("image_generate");
       expect(profile.policy.explicitToolOverrideAllowlist).not.toContain("image_generate");
+      expect(profile.policy.delegated).toBe(true);
+      expect(profile.policy.requesterPolicySource).toBe("persisted-child");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps runtime allowlists local unless the caller opts into inheritance", () => {
+    const localRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+    });
+
+    expect(localRuntimeProfile.policy.explicitToolAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.explicitToolOverrideAllowlist).toEqual([
+      "sessions_spawn",
+      "memory_search",
+    ]);
+    expect(localRuntimeProfile.policy.runtimeToolPolicyForInheritance).toBeUndefined();
+
+    const inheritedRuntimeProfile = resolveConversationCapabilityProfile({
+      runtimeToolAllowlist: ["sessions_spawn", "memory_search"],
+      inheritRuntimeToolAllowlist: true,
+    });
+
+    expect(inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance).toEqual({
+      allow: ["sessions_spawn", "memory_search"],
+    });
+    expect(inheritedRuntimeProfile.policy.inheritancePolicies).toContain(
+      inheritedRuntimeProfile.policy.runtimeToolPolicyForInheritance,
+    );
   });
 
   it("does not classify the conversation as shared from a dropped caller group id", () => {

@@ -11,8 +11,7 @@
  * least once before deciding to skip again.
  *
  * The cache is global, not per-config, so any caller running fallbacks for the
- * same `sessionId` shares the same skip set. Tests can reset state via
- * `resetFallbackSkipCacheForTest()`.
+ * same `sessionId` shares the same skip set.
  */
 
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
@@ -217,23 +216,4 @@ export function getFallbackCandidateSkipReason(params: {
     return undefined;
   }
   return entry.reason;
-}
-
-/**
- * Test-only escape hatch. Production code must not call this; the global
- * cache is meant to outlive individual fallback runs.
- */
-export function resetFallbackSkipCacheForTest(): void {
-  const state = getState();
-  state.buckets.clear();
-  state.lastGlobalPruneAtMs = 0;
-}
-
-/**
- * Test-only inspection hook for the global session-bucket map. Production
- * code must not read this; the buckets are an implementation detail of the
- * cache and may change shape.
- */
-export function peekFallbackSkipBucketsForTest(): SkipBySession {
-  return getBuckets();
 }

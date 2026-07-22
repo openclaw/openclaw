@@ -1,5 +1,7 @@
 // Live-sweeps discovered model profiles with optional provider/model filters and probes.
 import { writeSync } from "node:fs";
+import { defaultApiRegistry } from "@openclaw/ai/internal/runtime";
+import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
@@ -22,7 +24,7 @@ import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-d
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { isRateLimitErrorMessage } from "./embedded-agent-helpers/errors.js";
 import { extractAssistantText } from "./embedded-agent-utils.js";
-import { collectAnthropicApiKeys } from "./live-auth-keys.js";
+import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { appendPrioritizedDynamicLiveModels } from "./live-model-dynamic-candidates.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
@@ -58,11 +60,11 @@ import {
   requiresLiveProfileCredential,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "./live-test-provider-drift.js";
+} from "./live-test-provider-drift.test-support.js";
 import {
   getApiKeyForModel,
   requireApiKey,
@@ -71,7 +73,6 @@ import {
 import { shouldSuppressBuiltInModel } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import type { StreamFn } from "./runtime/index.js";
-import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
@@ -347,6 +348,7 @@ async function ensureLiveProviderApisRegistered(params: {
   const providerConfig = params.config.models?.providers?.ollama;
   const providerBaseUrl = readConfiguredOllamaBaseUrl(providerConfig) || OLLAMA_DEFAULT_BASE_URL;
   ensureCustomApiRegistered(
+    defaultApiRegistry,
     "ollama",
     createLiveOllamaRuntimeStreamFn({
       createConfiguredOllamaStreamFn,
@@ -1436,6 +1438,7 @@ async function completeSimpleWithTimeout<TApi extends Api>(
   });
   try {
     const completionModel = prepareModelForSimpleCompletion({
+      apiRegistry: defaultApiRegistry,
       model,
       cfg: activeLiveCompletionConfig,
     });
@@ -1772,7 +1775,9 @@ describeLive("live models (profile keys)", () => {
         );
         return;
       }
-      const anthropicKeys = collectAnthropicApiKeys();
+      const anthropicKeys = process.env.ANTHROPIC_OAUTH_TOKEN?.trim()
+        ? []
+        : collectProviderApiKeys("anthropic");
       if (anthropicKeys.length > 0) {
         process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);

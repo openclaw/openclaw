@@ -18,6 +18,7 @@ export { splitShellArgs } from "./openclaw-runtime-io.js";
 
 /** Chat shape used by memory send-policy matching. */
 type ChatType = "direct" | "group" | "channel";
+type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
 /** Memory backend selected by user config. */
 export type MemoryBackend = "builtin" | "qmd";
 /** Citation injection behavior for memory search results. */
@@ -115,6 +116,7 @@ type MemoryConfig = {
 /** Per-agent memory search enablement and extra collection paths. */
 type MemorySearchConfig = {
   enabled?: boolean;
+  rememberAcrossConversations?: boolean;
   extraPaths?: string[];
   qmd?: {
     extraCollections?: MemoryQmdIndexPath[];
@@ -155,6 +157,10 @@ export type OpenClawConfig = {
     };
     list?: AgentConfig[];
   };
+  session?: {
+    dmScope?: DmScope;
+  };
+  bindings?: unknown[];
   memory?: MemoryConfig;
   models?: {
     providers?: Record<
@@ -167,6 +173,31 @@ export type OpenClawConfig = {
     >;
   };
 };
+
+export function resolveRememberAcrossConversations(cfg: OpenClawConfig, agentId: string): boolean {
+  const defaults = cfg.agents?.defaults?.memorySearch;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
+  const explicit = overrides?.rememberAcrossConversations ?? defaults?.rememberAcrossConversations;
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  // Recall is per-agent/private-shaped, not per-sender. Any DM isolation signals a
+  // multi-user install, where silently recalling across senders would leak context.
+  return (
+    (cfg.session?.dmScope === undefined || cfg.session.dmScope === "main") &&
+    !cfg.bindings?.some((binding) => {
+      if (!binding || typeof binding !== "object") {
+        return false;
+      }
+      const session = (binding as { session?: unknown }).session;
+      return (
+        Boolean(session) &&
+        typeof session === "object" &&
+        (session as { dmScope?: unknown }).dmScope !== undefined
+      );
+    })
+  );
+}
 
 /** Root memory filename used in agent workspaces. */
 export const MEMORY_HOST_ROOT_FILENAME = "MEMORY.md";
@@ -327,7 +358,7 @@ export function resolveMemoryHostAgentContextLimits(
 export function resolveMemoryHostSearchPathConfig(
   cfg: OpenClawConfig,
   agentId: string,
-): { enabled: boolean; extraPaths: string[] } | null {
+): { enabled: boolean; rememberAcrossConversations: boolean; extraPaths: string[] } | null {
   const defaults = cfg.agents?.defaults?.memorySearch;
   const overrides = resolveAgentConfig(cfg, agentId)?.memorySearch;
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
@@ -340,6 +371,7 @@ export function resolveMemoryHostSearchPathConfig(
   ]);
   return {
     enabled,
+    rememberAcrossConversations: resolveRememberAcrossConversations(cfg, agentId),
     extraPaths: uniqueStrings(rawPaths),
   };
 }

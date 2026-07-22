@@ -302,7 +302,7 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "login",
       nativeName: "login",
-      nativeProviders: ["telegram"],
+      nativeProviders: ["discord", "slack", "telegram"],
       description: "Pair Codex login.",
       textAlias: "/login",
       category: "management",
@@ -317,9 +317,9 @@ export function buildBuiltinChatCommands(
       ],
     }),
     defineChatCommand({
-      key: "crestodian",
-      description: "Run the Crestodian setup and repair helper.",
-      textAlias: "/crestodian",
+      key: "openclaw",
+      description: "Run the OpenClaw setup and repair helper.",
+      textAlias: "/openclaw",
       acceptsArgs: true,
       scope: "text",
       category: "management",

@@ -1,20 +1,21 @@
 import {
   isUnavailableEnvironment,
-  type PlacementFailureActions,
-  type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
-  type WorkerDispatchEnvironmentService,
   type WorkerDispatchPlacement,
-  type WorkerDispatchPlacementStore,
+  type WorkerDrainingDispatchPlacement,
   type WorkerFailedDispatchPlacement,
   type WorkerStartingDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import {
+  recoverPendingWorkspaceResults,
+  type PlacementRecoveryDeps,
+} from "./placement-dispatch-pending-results.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 function sameActiveEnvironment(
-  placement: WorkerActiveDispatchPlacement,
+  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
   environment: ReturnType<WorkerEnvironmentService["get"]>,
-): environment is NonNullable<typeof environment> {
+): boolean {
   return Boolean(
     environment &&
     environment.state === "attached" &&
@@ -41,12 +42,7 @@ function isFailedPlacement(
   return placement.state === "failed";
 }
 
-export function createPlacementRecoveryActions(deps: {
-  placements: WorkerDispatchPlacementStore;
-  environments: WorkerDispatchEnvironmentService;
-  runActivationBarrier: WorkerActivationBarrier;
-  failure: PlacementFailureActions;
-}) {
+export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
   const { environments, failure, placements } = deps;
 
   const adoptActive = async (placement: WorkerActiveDispatchPlacement): Promise<void> => {
@@ -56,7 +52,7 @@ export function createPlacementRecoveryActions(deps: {
       const error = new Error(
         "Active worker turn claim cannot be proven live after gateway restart",
       );
-      await failure.failActive(placement, error);
+      await failure.failActive(placement, error, { forceClaimFence: true });
       return;
     }
     const environment = placement.environmentId
@@ -166,7 +162,14 @@ export function createPlacementRecoveryActions(deps: {
 
   const reconcile = async (): Promise<void> => {
     await environments.reconcileOnce();
+    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, true);
+    const journalOwners = new Set(
+      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
+    );
     for (const placement of placements.listForReconcile()) {
+      if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
+        continue;
+      }
       if (placement.state === "local" || placement.state === "reclaimed") {
         continue;
       }
@@ -184,7 +187,7 @@ export function createPlacementRecoveryActions(deps: {
       }
       const error = new Error(`Worker dispatch interrupted in ${placement.state}`);
       if (placement.state === "draining") {
-        await failure.failDraining(placement, error);
+        await failure.failDraining(placement, error, { forceClaimFence: true });
         continue;
       }
       await failure.teardownEnvironment({
@@ -198,9 +201,19 @@ export function createPlacementRecoveryActions(deps: {
 
   // Runtime sweeps must not classify a live dispatch preparation as a crash. They only repair
   // durable active ownership and retry teardown already fenced by a previous failure.
-  const reconcileActive = async (): Promise<void> => {
+  const reconcileActive = async (environmentId?: string): Promise<void> => {
     await environments.reconcileOnce();
+    const pendingResultOwners = await recoverPendingWorkspaceResults(deps, false);
+    const journalOwners = new Set(
+      placements.listWorkspaceReconciliationOwners().map((owner) => owner.sessionId),
+    );
     for (const placement of placements.listForReconcile()) {
+      if (journalOwners.has(placement.sessionId) || pendingResultOwners.has(placement.sessionId)) {
+        continue;
+      }
+      if (environmentId !== undefined && placement.environmentId !== environmentId) {
+        continue;
+      }
       if (isFailedPlacement(placement)) {
         await failure.retryFailedTeardown(placement);
         continue;

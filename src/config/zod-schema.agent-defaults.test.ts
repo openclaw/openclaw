@@ -38,6 +38,64 @@ describe("agent defaults schema", () => {
     expect(agent.utilityModel).toBe("google/gemini-3.1-flash-lite-preview");
   });
 
+  it("accepts explicit model policy on defaults and agent entries", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      modelPolicy: { allow: ["openai/*", "anthropic/claude-sonnet-4-6"] },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "ops",
+      modelPolicy: { allow: [] },
+    });
+
+    expect(defaults?.modelPolicy?.allow).toEqual(["openai/*", "anthropic/claude-sonnet-4-6"]);
+    expect(agent.modelPolicy?.allow).toEqual([]);
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ modelPolicy: { allow: "openai/*" } }),
+      "modelPolicy.allow",
+    );
+  });
+
+  it("rejects malformed model policy refs during config validation", () => {
+    for (const entry of ["", "///", "provider//model", "nogarbageprovider"]) {
+      const result = validateConfigObject({
+        agents: { defaults: { modelPolicy: { allow: [entry] } } },
+      });
+
+      expect(result.ok, entry || "empty entry").toBe(false);
+      if (result.ok) {
+        continue;
+      }
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({ path: "agents.defaults.modelPolicy.allow.0" }),
+      );
+    }
+  });
+
+  it("accepts exact refs, nested wildcards, configured aliases, and compat selectors", () => {
+    const result = validateConfigObject({
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            "openrouter/openai/gpt-oss-120b:free": {},
+          },
+          modelPolicy: {
+            allow: [
+              "openai/gpt-5.6-sol",
+              "provider/a/b/c/d/e/f",
+              "clawrouter/anthropic/*",
+              "provider/a/b/c/d/*",
+              "sonnet",
+              "openrouter:free",
+            ],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts subagent archiveAfterMinutes=0 to disable archiving", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({
@@ -262,14 +320,8 @@ describe("agent defaults schema", () => {
 
   it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
     expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
-    expect(AgentDefaultsSchema.safeParse({ embeddedHarness: { runtime: "codex" } }).success).toBe(
-      false,
-    );
     expect(
       AgentEntrySchema.safeParse({ id: "legacy", agentRuntime: { id: "codex" } }).success,
-    ).toBe(false);
-    expect(
-      AgentEntrySchema.safeParse({ id: "legacy", embeddedHarness: { runtime: "codex" } }).success,
     ).toBe(false);
   });
 
@@ -284,38 +336,6 @@ describe("agent defaults schema", () => {
     expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
-  it("accepts runRetries configuration on defaults and agent entries", () => {
-    const result = AgentDefaultsSchema.parse({
-      runRetries: {
-        base: 24,
-        max: 160,
-      },
-    });
-    expect(result?.runRetries?.base).toBe(24);
-    expect(result?.runRetries?.max).toBe(160);
-
-    const agentResult = AgentEntrySchema.parse({
-      id: "test",
-      runRetries: {
-        min: 10,
-        max: 50,
-      },
-    });
-    expect(agentResult?.runRetries?.min).toBe(10);
-    expect(agentResult?.runRetries?.max).toBe(50);
-  });
-
-  it("rejects runRetries with max < min", () => {
-    expectSchemaFailurePath(
-      AgentDefaultsSchema.safeParse({ runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
-    expectSchemaFailurePath(
-      AgentEntrySchema.safeParse({ id: "test", runRetries: { min: 100, max: 50 } }),
-      "runRetries.max",
-    );
-  });
-
   it("accepts compaction.truncateAfterCompaction", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
@@ -325,6 +345,28 @@ describe("agent defaults schema", () => {
     })!;
     expect(result.compaction?.truncateAfterCompaction).toBe(true);
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
+  });
+
+  it.each([
+    "off",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "adaptive",
+    "max",
+    "ultra",
+  ] as const)("accepts compaction.thinkingLevel=%s", (thinkingLevel) => {
+    const result = AgentDefaultsSchema.parse({ compaction: { thinkingLevel } })!;
+    expect(result.compaction?.thinkingLevel).toBe(thinkingLevel);
+  });
+
+  it("rejects an unknown compaction thinking level", () => {
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({ compaction: { thinkingLevel: "extreme" } }),
+      "compaction.thinkingLevel",
+    );
   });
 
   it("rejects unsafe byte-size strings in compaction defaults", () => {
@@ -477,6 +519,17 @@ describe("agent defaults schema", () => {
         tools: { codeMode: { unknownKey: 1 } },
       }),
       "tools.codeMode",
+    );
+  });
+
+  it("accepts per-agent tools.swarm config", () => {
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { enabled: true } } }),
+    );
+    expectSchemaSuccess(AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: true } }));
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({ id: "ops", tools: { swarm: { unknownKey: 1 } } }),
+      "tools.swarm",
     );
   });
 

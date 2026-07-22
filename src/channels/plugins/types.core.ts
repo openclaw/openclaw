@@ -26,7 +26,7 @@ import type { ChannelMessageCapability } from "./message-capabilities.js";
 export type { ChannelId } from "./channel-id.types.js";
 export type { ChannelLegacyStateMigrationPlan } from "./legacy-state-migration.types.js";
 
-export type ChannelExposure = {
+type ChannelExposure = {
   configured?: boolean;
   setup?: boolean;
   docs?: boolean;
@@ -105,6 +105,10 @@ export type ChannelSetupInput = {
   secretFile?: string;
   botToken?: string;
   appToken?: string;
+  userToken?: string;
+  signingSecret?: string;
+  identity?: "bot" | "user";
+  mode?: "socket" | "http" | "relay";
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -139,6 +143,10 @@ export type ChannelSetupInput = {
   groupChannels?: string[];
   dmAllowlist?: string[];
   autoDiscoverChannels?: boolean;
+  workspace?: string;
+  defaultTo?: string;
+  allowFrom?: string[];
+  agentActivity?: boolean;
 };
 
 export type ChannelStatusIssue = {
@@ -179,8 +187,6 @@ export type ChannelMeta = {
   systemImage?: string;
   markdownCapable?: boolean;
   exposure?: ChannelExposure;
-  showConfigured?: boolean;
-  showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
   preferSessionLookupForAnnounceTarget?: boolean;
@@ -222,18 +228,21 @@ export type ChannelAccountSnapshot = {
   busy?: boolean;
   activeRuns?: number;
   lastRunActivityAt?: number | null;
+  activeRunStartedAt?: number | null;
   mode?: string;
   dmPolicy?: string;
   allowFrom?: string[];
   tokenSource?: string;
   botTokenSource?: string;
   appTokenSource?: string;
+  userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
   botTokenStatus?: string;
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  identity?: string;
   credentialSource?: string;
   secretSource?: string;
   audienceType?: string;
@@ -285,7 +294,7 @@ export type ChannelGroupContext = {
  * one here. Adding a new entry requires extending the host transcoder
  * recipe table in lockstep so a typed declaration cannot silently no-op.
  */
-export type PreferredAudioFileFormat = "caf";
+type PreferredAudioFileFormat = "caf";
 
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
@@ -366,19 +375,19 @@ export type ChannelStreamingAdapter = {
 // their side and cast at the boundary.
 export type ChannelStructuredComponents = unknown[];
 
-export type ChannelCrossContextPresentationFactory = (params: {
+type ChannelCrossContextPresentationFactory = (params: {
   originLabel: string;
   message: string;
   cfg: OpenClawConfig;
   accountId?: string | null;
 }) => MessagePresentation;
 
-export type ChannelReplyTransport = {
+type ChannelReplyTransport = {
   replyToId?: string | null;
   threadId?: string | number | null;
 };
 
-export type ChannelFocusedBindingContext = {
+type ChannelFocusedBindingContext = {
   conversationId: string;
   parentConversationId?: string;
   placement: "current" | "child";
@@ -503,6 +512,12 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
+  directTargetStyle?: "user-prefixed";
+  /** Equality rule for ids carried by prefixed outbound targets. */
+  targetIdComparison?: "case-sensitive" | "lowercase";
+  /** Bare numeric conversation/topic shorthand is valid for this channel. */
+  numericTopicShorthand?: true;
   normalizeTarget?: (raw: string) => string | undefined;
   defaultMarkdownTableMode?: MarkdownTableMode;
   normalizeExplicitSessionKey?: (params: {
@@ -672,7 +687,7 @@ export type ChannelAgentPromptAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[] | undefined;
-  inboundFormattingHints?: (params: { accountId?: string | null }) =>
+  inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
         text_markup: string;
         rules: string[];
@@ -748,7 +763,7 @@ export type ChannelToolSend = {
   threadSuppressed?: boolean;
 };
 
-export type ChannelMessagePreparedSendPayloadContext = {
+type ChannelMessagePreparedSendPayloadContext = {
   ctx: ChannelMessageActionContext;
   to: string;
   payload: ReplyPayload;

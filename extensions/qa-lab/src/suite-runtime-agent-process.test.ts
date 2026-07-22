@@ -222,6 +222,7 @@ describe("qa suite runtime agent process helpers", () => {
         {
           stdio: "ignore",
           windowsHide: true,
+          timeout: 5_000,
         },
       );
       expect(child.kill).not.toHaveBeenCalled();
@@ -257,7 +258,7 @@ describe("qa suite runtime agent process helpers", () => {
         alternateModel: "openai/gpt-5.6-luna-mini",
         providerMode: "mock-openai",
       } as never,
-      ["crestodian", "-m", "overview"],
+      ["openclaw", "-m", "overview"],
       {
         env: {
           OPENCLAW_STATE_DIR: "/tmp/isolated-state",
@@ -275,7 +276,7 @@ describe("qa suite runtime agent process helpers", () => {
     expect(spawnCall?.[0]).toBe("/usr/bin/node");
     expect(spawnCall?.[1]).toEqual([
       path.join("/repo", "dist", "index.js"),
-      "crestodian",
+      "openclaw",
       "-m",
       "overview",
     ]);
@@ -797,6 +798,158 @@ describe("qa suite runtime agent process helpers", () => {
       { sessionKey: "session-history", limit: 12 },
       { timeoutMs: 10_000 },
     );
+  });
+
+  it("retries structured transient history failures through gateway log wrappers", async () => {
+    vi.useFakeTimers();
+    try {
+      const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+        gatewayCode: "UNAVAILABLE",
+        retryable: true,
+        retryAfterMs: 250,
+        details: { method: "chat.history" },
+      });
+      const wrappedError = new Error("gateway call failed", {
+        cause: new Error("gateway rpc failed", { cause: gatewayError }),
+      });
+      const gatewayCall = vi
+        .fn()
+        .mockRejectedValueOnce(wrappedError)
+        .mockResolvedValueOnce({
+          messages: [{ role: "assistant", content: "HISTORY-RETRY-OK" }],
+        });
+
+      const pending = waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-retry",
+        (text) => text === "HISTORY-RETRY-OK",
+        1_000,
+        1,
+      );
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(pending).resolves.toEqual({ text: "HISTORY-RETRY-OK" });
+      expect(gatewayCall).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves the final retryable history failure when the poll deadline expires", async () => {
+    const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 1,
+      details: { method: "chat.history" },
+    });
+    const wrappedError = new Error("gateway call failed", { cause: gatewayError });
+    const gatewayCall = vi.fn().mockRejectedValue(wrappedError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-retry-timeout",
+        () => false,
+        220,
+        50,
+      ),
+    ).rejects.toMatchObject({
+      message: "timed out after 220ms",
+      cause: wrappedError,
+    });
+    expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not attach a recovered history failure to a later predicate timeout", async () => {
+    const gatewayError = Object.assign(new Error("session history is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 1,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi
+      .fn()
+      .mockRejectedValueOnce(gatewayError)
+      .mockResolvedValue({ messages: [{ role: "assistant", content: "still working" }] });
+
+    const timeoutError = await waitForAgentHistoryReply(
+      { gateway: { call: gatewayCall } } as never,
+      "session-history-recovered-timeout",
+      () => false,
+      220,
+      50,
+    ).catch((error: unknown) => error);
+
+    expect(timeoutError).toBeInstanceOf(Error);
+    expect(timeoutError).not.toHaveProperty("cause");
+    expect(gatewayCall.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("does not retry transient gateway errors for a different method", async () => {
+    const gatewayError = Object.assign(new Error("gateway method is rebuilding"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.startup" },
+    });
+    const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-wrong-method",
+        () => false,
+        1_000,
+        1,
+      ),
+    ).rejects.toBe(gatewayError);
+    expect(gatewayCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry unavailable gateway errors without the retryable contract", async () => {
+    const gatewayError = Object.assign(new Error("history unavailable"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: false,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi.fn().mockRejectedValueOnce(gatewayError);
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-not-retryable",
+        () => false,
+        1_000,
+        1,
+      ),
+    ).rejects.toBe(gatewayError);
+    expect(gatewayCall).toHaveBeenCalledOnce();
+  });
+
+  it("does not retry retry-shaped predicate failures", async () => {
+    const predicateError = Object.assign(new Error("predicate unavailable"), {
+      gatewayCode: "UNAVAILABLE",
+      retryable: true,
+      retryAfterMs: 250,
+      details: { method: "chat.history" },
+    });
+    const gatewayCall = vi.fn().mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: "candidate reply" }],
+    });
+
+    await expect(
+      waitForAgentHistoryReply(
+        { gateway: { call: gatewayCall } } as never,
+        "session-history-predicate-error",
+        async () => {
+          throw predicateError;
+        },
+        1_000,
+        1,
+      ),
+    ).rejects.toBe(predicateError);
+    expect(gatewayCall).toHaveBeenCalledOnce();
   });
 
   it("waits for a specific agent run id", async () => {

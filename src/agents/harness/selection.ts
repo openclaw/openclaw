@@ -30,7 +30,8 @@ import {
 } from "../provider-secret-egress.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { expandToolGroups, mergeAlsoAllowPolicy, normalizeToolName } from "../tool-policy.js";
-import type { CrestodianToolOptions } from "../tools/crestodian-tool.js";
+import type { SystemAgentToolOptions } from "../tools/system-agent-tool.js";
+import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
 import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import { MissingAgentHarnessError } from "./errors.js";
 import { runAgentHarnessLifecycleAttempt } from "./lifecycle.js";
@@ -49,7 +50,6 @@ import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } fr
 
 const log = createSubsystemLogger("agents/harness");
 export { resolveAgentHarnessPolicy } from "./policy.js";
-export type { AgentHarnessPolicy };
 
 type AgentHarnessAvailabilityParams = {
   provider?: string;
@@ -143,6 +143,8 @@ type PluginHarnessToolPolicyContext = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "inputProvenance"
+  | "trustedInternalHandoff"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -389,29 +391,35 @@ function selectAgentHarnessDecision(
     throw new MissingAgentHarnessError(runtime);
   }
 
-  const candidates =
-    pluginHarnesses.length > 0
-      ? (() => {
-          const supportContext = buildAgentHarnessSupportContext({
+  const hintedCandidates = pluginHarnesses.map((harness) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
+  }));
+  const candidates = hintedCandidates.some((entry) => entry.support === undefined)
+    ? (() => {
+        const supportContext = buildAgentHarnessSupportContext({
+          provider: params.provider,
+          modelId: params.modelId,
+          modelProvider: params.modelProvider,
+          requestedRuntime: runtime,
+          config: params.config,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          preparedModelProvider: params.preparedModelProvider,
+          providerOwnership: resolveProviderRefOwnership({
             provider: params.provider,
-            modelId: params.modelId,
-            modelProvider: params.modelProvider,
-            requestedRuntime: runtime,
             config: params.config,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            preparedModelProvider: params.preparedModelProvider,
-            providerOwnership: resolveProviderRefOwnership({
-              provider: params.provider,
-              config: params.config,
-            }),
-          });
-          return pluginHarnesses.map((harness) => ({
-            harness,
-            support: harness.supports(supportContext),
-          }));
-        })()
-      : [];
+          }),
+        });
+        return hintedCandidates.map(({ harness, support }) => ({
+          harness,
+          support: support ?? harness.supports(supportContext),
+        }));
+      })()
+    : hintedCandidates.map(({ harness, support }) => ({
+        harness,
+        support: support as AgentHarnessSupport,
+      }));
   const supported = candidates
     .filter(
       (
@@ -444,7 +452,7 @@ export async function runAgentHarnessAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
   const internalParams = params as EmbeddedRunAttemptParams & {
-    crestodianTool?: CrestodianToolOptions;
+    systemAgentTool?: SystemAgentToolOptions;
   };
   const activeTrace = getActiveDiagnosticTraceContext();
   const harnessTrace = freezeDiagnosticTraceContext(
@@ -467,13 +475,13 @@ export async function runAgentHarnessAttempt(
     preparedModelProvider: params.runtimePlan?.auth !== undefined,
   });
   const harness = selection.harness;
-  if (internalParams.crestodianTool && !isCrestodianOnlyAllowlist(internalParams.toolsAllow)) {
-    throw new Error('Crestodian host authority requires toolsAllow: ["crestodian"]');
+  if (internalParams.systemAgentTool && !isSystemAgentOnlyAllowlist(internalParams.toolsAllow)) {
+    throw new Error('OpenClaw host authority requires toolsAllow: ["openclaw"]');
   }
-  const ringZeroTools = internalParams.crestodianTool
+  const ringZeroTools = internalParams.systemAgentTool
     ? [
-        (await import("../tools/crestodian-tool.js")).createCrestodianTool(
-          internalParams.crestodianTool,
+        (await import("../tools/system-agent-tool.js")).createSystemAgentTool(
+          internalParams.systemAgentTool,
         ),
       ]
     : [];
@@ -509,17 +517,17 @@ export async function runAgentHarnessAttempt(
   }
 }
 
-function isCrestodianOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
-  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "crestodian";
+function isSystemAgentOnlyAllowlist(toolsAllow: readonly string[] | undefined): boolean {
+  return toolsAllow?.length === 1 && normalizeToolName(toolsAllow[0] ?? "") === "openclaw";
 }
 
 function withoutInternalHarnessAuthority(
-  params: EmbeddedRunAttemptParams & { crestodianTool?: CrestodianToolOptions },
+  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
 ): EmbeddedRunAttemptParams {
-  if (!Object.hasOwn(params, "crestodianTool")) {
+  if (!Object.hasOwn(params, "systemAgentTool")) {
     return params;
   }
-  const { crestodianTool: _crestodianTool, ...pluginParams } = params;
+  const { systemAgentTool: _systemAgentTool, ...pluginParams } = params;
   return pluginParams;
 }
 
@@ -543,9 +551,9 @@ function applyPluginHarnessDenyAllToolPolicy(
   params: EmbeddedRunAttemptParams,
 ): EmbeddedRunAttemptParams {
   if (
-    isHostScopedAgentToolActive("crestodian") &&
+    isHostScopedAgentToolActive("openclaw") &&
     params.toolsAllow?.length === 1 &&
-    normalizeToolName(params.toolsAllow[0] ?? "") === "crestodian"
+    normalizeToolName(params.toolsAllow[0] ?? "") === "openclaw"
   ) {
     return params;
   }
@@ -613,6 +621,8 @@ function resolvePluginHarnessToolPolicies(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    inputProvenance: params.inputProvenance,
+    trustedInternalHandoff: params.trustedInternalHandoff,
   });
   const groupPolicyParams = {
     config: params.config,

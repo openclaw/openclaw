@@ -10,9 +10,11 @@ export function isWorktreeNameValid(value: string): boolean {
 
 /** Maps the new-session draft selections onto additive sessions.create params. */
 export function buildDraftSessionCreateParams(draft: {
+  key?: string;
   agentId: string;
   message: string;
   model?: string;
+  thinkingLevel?: string;
   attachments?: unknown[];
   worktree: boolean;
   baseRef?: string;
@@ -27,13 +29,16 @@ export function buildDraftSessionCreateParams(draft: {
   const execNode = normalizeOptionalString(draft.execNode);
   const catalogId = normalizeOptionalString(draft.catalogId);
   const model = normalizeOptionalString(draft.model);
+  const thinkingLevel = normalizeOptionalString(draft.thinkingLevel);
   const customFolder = cwd && cwd !== workspace ? cwd : undefined;
   return {
+    ...(normalizeOptionalString(draft.key) ? { key: normalizeOptionalString(draft.key) } : {}),
     agentId: normalizeAgentId(draft.agentId),
     message: draft.message,
     ...(draft.attachments?.length ? { attachments: draft.attachments } : {}),
     ...(catalogId ? { catalogId } : {}),
     ...(!catalogId && model ? { model } : {}),
+    ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
     ...(draft.worktree
       ? {
           worktree: true,

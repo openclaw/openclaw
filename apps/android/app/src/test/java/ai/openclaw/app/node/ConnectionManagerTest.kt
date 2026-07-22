@@ -433,12 +433,27 @@ class ConnectionManagerTest {
       listOf(
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ),
       options.scopes,
     )
+    assertEquals(
+      listOf(
+        ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY,
+        ConnectionManager.INLINE_WIDGETS_CLIENT_CAPABILITY,
+      ),
+      options.caps,
+    )
+  }
+
+  @Test
+  fun buildOperatorConnectOptions_omitsInlineWidgetsWithoutIsolatedWebViews() {
+    val options = newManager(inlineWidgetsAvailable = false).buildOperatorConnectOptions()
+
+    assertEquals(listOf(ConnectionManager.AGENT_KIND_CLIENT_CAPABILITY), options.caps)
   }
 
   @Test
@@ -619,6 +634,7 @@ class ConnectionManagerTest {
     installedAppsSharingEnabled: Boolean = false,
     voiceWakeEnabled: Boolean = false,
     voiceWakeAvailable: Boolean = true,
+    inlineWidgetsAvailable: Boolean = true,
   ): ConnectionManager {
     val context = RuntimeEnvironment.getApplication()
     context
@@ -646,6 +662,7 @@ class ConnectionManagerTest {
       photosAvailable = { photosAvailable },
       installedAppsSharingEnabled = { installedAppsSharingEnabled },
       voiceWakeAvailable = { voiceWakeAvailable },
+      inlineWidgetsAvailable = { inlineWidgetsAvailable },
       manualTls = { false },
     )
   }

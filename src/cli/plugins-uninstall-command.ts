@@ -19,6 +19,8 @@ type PluginUninstallOptions = {
   force?: boolean;
   dryRun?: boolean;
   invalidateRuntimeCache?: boolean;
+  /** True when a Claw lifecycle caller already owns package coordination. */
+  clawManaged?: boolean;
 };
 
 function isPromptInputClosedError(
@@ -147,6 +149,15 @@ export async function runPluginUninstallCommand(
   );
   runtime.log(`Will remove: ${preview.length > 0 ? preview.join(", ") : "(nothing)"}`);
 
+  const { collectClawPluginUninstallWarnings } =
+    await import("../plugins/uninstall-claw-references.js");
+  for (const warning of collectClawPluginUninstallWarnings({
+    pluginId,
+    installRecord: cfg.plugins?.installs?.[pluginId],
+  })) {
+    runtime.log(theme.warn(warning));
+  }
+
   const nextConfig = withoutPluginInstallRecords(plan.config);
 
   if (opts.dryRun) {
@@ -184,6 +195,8 @@ export async function runPluginUninstallCommand(
         nextConfig,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
         writeOptions: {
+          allowConfigSizeDrop: true,
+          auditOrigin: "plugin-install",
           afterWrite: { mode: "restart", reason: "plugin source changed" },
         },
       }),

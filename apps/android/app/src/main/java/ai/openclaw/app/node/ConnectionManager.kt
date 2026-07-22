@@ -27,6 +27,7 @@ class ConnectionManager(
   private val photosAvailable: () -> Boolean,
   private val installedAppsSharingEnabled: () -> Boolean,
   private val voiceWakeAvailable: () -> Boolean,
+  private val inlineWidgetsAvailable: () -> Boolean,
   private val manualTls: (GatewayEndpoint) -> Boolean,
 ) {
   companion object {
@@ -43,10 +44,14 @@ class ConnectionManager(
         // sessions.patch (model switching); stored tokens keep their granted scopes.
         "operator.admin",
         "operator.approvals",
+        "operator.questions",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       )
+
+    internal const val AGENT_KIND_CLIENT_CAPABILITY = "agent-kind"
+    internal const val INLINE_WIDGETS_CLIENT_CAPABILITY = "inline-widgets"
 
     internal fun operatorScopesForStoredDeviceToken(storedScopes: List<String>): List<String> {
       val normalized =
@@ -218,7 +223,11 @@ class ConnectionManager(
     GatewayConnectOptions(
       role = "operator",
       scopes = scopes,
-      caps = emptyList(),
+      caps =
+        buildList {
+          add(AGENT_KIND_CLIENT_CAPABILITY)
+          if (inlineWidgetsAvailable()) add(INLINE_WIDGETS_CLIENT_CAPABILITY)
+        },
       commands = emptyList(),
       permissions = emptyMap(),
       client = buildClientInfo(clientId = "openclaw-android", clientMode = "ui"),

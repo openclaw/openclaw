@@ -32,6 +32,28 @@ private final class DashboardWindowDragRegionView: NSView {
     }
 }
 
+private final class DashboardLinkSplitView: NSSplitView {
+    var onDividerDragEnded: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        let originalPosition = self.subviews.first?.frame.maxX
+        // AppKit tracks a divider drag inside this call. Persist after it ends;
+        // resize notifications also cover automatic layout and would lose the preference.
+        super.mouseDown(with: event)
+        guard DashboardWindowLayout.dividerMoved(
+            from: originalPosition,
+            to: self.subviews.first?.frame.maxX)
+        else { return }
+        self.onDividerDragEnded?()
+    }
+
+    #if DEBUG
+    func _testCompleteDividerDrag() {
+        self.onDividerDragEnded?()
+    }
+    #endif
+}
+
 @MainActor
 private final class DashboardLinkMessageHandler: NSObject, WKScriptMessageHandler {
     weak var owner: DashboardWindowController?
@@ -65,9 +87,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     private static let windowDragMessageHandlerName = "openclawWindowDrag"
     private static let updateMessageHandlerName = "openclawUpdate"
 
-    private let webView: DashboardWebView
+    let webView: DashboardWebView
     private let linkBrowser: DashboardLinkBrowserView
     private let linkBrowserItem: NSSplitViewItem
+    private let linkBrowserSplitView: DashboardLinkSplitView
     private let splitViewController: NSSplitViewController
     private let updateMessageHandler: DashboardUpdateMessageHandler
     private(set) var currentURL: URL
@@ -114,6 +137,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         config.userContentController.add(linkMessageHandler, name: Self.linkMessageHandlerName)
         let windowDragMessageHandler = DashboardWindowDragMessageHandler()
         config.userContentController.add(windowDragMessageHandler, name: Self.windowDragMessageHandlerName)
+        let notificationsMessageHandler = DashboardNotificationsMessageHandler()
+        config.userContentController.add(notificationsMessageHandler, name: Self.notificationsMessageHandlerName)
         let updateMessageHandler = DashboardUpdateMessageHandler()
         self.updateMessageHandler = updateMessageHandler
         if shouldEnableUpdateBridge {
@@ -134,10 +159,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView.allowsBackForwardNavigationGestures = true
 
         let linkBrowser = DashboardLinkBrowserView(websiteDataStore: dataStore)
+        let linkBrowserSplitView = DashboardLinkSplitView()
         let splitViewController = NSSplitViewController()
+        splitViewController.splitView = linkBrowserSplitView
         splitViewController.splitView.isVertical = true
         splitViewController.splitView.dividerStyle = .thin
-        splitViewController.splitView.autosaveName = DashboardWindowLayout.linkBrowserSplitAutosaveName
 
         let dashboardViewController = NSViewController()
         dashboardViewController.view = BrowserProfileImportBannerView.makeDashboardPane(webView: self.webView)
@@ -148,7 +174,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         linkBrowserViewController.view = linkBrowser
         let linkBrowserItem = NSSplitViewItem(viewController: linkBrowserViewController)
         linkBrowserItem.minimumThickness = DashboardWindowLayout.linkBrowserMinWidth
-        linkBrowserItem.maximumThickness = DashboardWindowLayout.linkBrowserMaxWidth
         linkBrowserItem.preferredThicknessFraction = DashboardWindowLayout.linkBrowserPreferredFraction
         // Keep the sidebar width stable while staying below AppKit's divider-drag
         // priority; the dashboard absorbs window resizing first.
@@ -161,6 +186,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
         self.linkBrowser = linkBrowser
         self.linkBrowserItem = linkBrowserItem
+        self.linkBrowserSplitView = linkBrowserSplitView
         self.splitViewController = splitViewController
 
         let window = Self.makeWindow(contentView: splitViewController.view)
@@ -176,6 +202,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowserItem.isCollapsed = true
         linkMessageHandler.owner = self
         windowDragMessageHandler.owner = self
+        notificationsMessageHandler.owner = self
         updateMessageHandler.owner = self
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self
@@ -183,6 +210,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.linkBrowser.webViewUIDelegate = self
         self.linkBrowser.onClose = { [weak self] in self?.closeLinkBrowser() }
         self.linkBrowser.onOpenExternal = { [weak self] url in self?.openExternal(url) }
+        self.linkBrowserSplitView.onDividerDragEnded = { [weak self] in
+            self?.persistLinkBrowserWidth()
+        }
         self.window?.delegate = self
         self.installHistoryStateBridge()
     }
@@ -196,6 +226,10 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         if nextEnabled {
             controller.add(self.updateMessageHandler, name: Self.updateMessageHandlerName)
         }
+        // The handler is the dashboard's ownership probe. Notify the live page so
+        // its update target stays correct when connection mode or ownership changes.
+        self.webView.evaluateJavaScript(
+            "window.dispatchEvent(new CustomEvent('openclaw:native-update-availability-changed'))")
     }
 
     // MARK: - WKUIDelegate
@@ -410,13 +444,49 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     }
 
     private func openLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = true) {
+        let wasCollapsed = self.linkBrowserItem.isCollapsed
+        let persistedWidth = self.persistedLinkBrowserWidth()
         self.linkBrowserItem.isCollapsed = false
+        if wasCollapsed {
+            self.restoreLinkBrowserWidth(persistedWidth)
+        }
         self.linkBrowser.open(url)
         window?.makeFirstResponder(self.linkBrowser.activeWebView)
         if requestBrowserProfileImportOffer {
             self.browserProfileImportOfferIsArmed = true
             self.requestBrowserProfileImportOfferIfNeeded()
         }
+    }
+
+    private func persistedLinkBrowserWidth() -> CGFloat? {
+        guard let number = UserDefaults.standard.object(
+            forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey) as? NSNumber
+        else { return nil }
+        let width = CGFloat(number.doubleValue)
+        return width.isFinite && width > 0 ? width : nil
+    }
+
+    private func restoreLinkBrowserWidth(_ persistedWidth: CGFloat?) {
+        let splitView = self.splitViewController.splitView
+        splitView.layoutSubtreeIfNeeded()
+        // AppKit requires adjusted, current pane frames before divider positions
+        // are meaningful. Uncollapsing invalidates those frames.
+        splitView.adjustSubviews()
+        let width = DashboardWindowLayout.linkBrowserWidth(
+            splitWidth: splitView.bounds.width,
+            dividerThickness: splitView.dividerThickness,
+            persistedWidth: persistedWidth)
+        splitView.setPosition(
+            splitView.bounds.width - splitView.dividerThickness - width,
+            ofDividerAt: 0)
+        splitView.layoutSubtreeIfNeeded()
+    }
+
+    private func persistLinkBrowserWidth() {
+        guard !self.linkBrowserItem.isCollapsed else { return }
+        let width = self.linkBrowser.frame.width
+        guard width.isFinite, width >= DashboardWindowLayout.linkBrowserMinWidth else { return }
+        UserDefaults.standard.set(Double(width), forKey: DashboardWindowLayout.linkBrowserWidthDefaultsKey)
     }
 
     private func requestBrowserProfileImportOfferIfNeeded() {
@@ -833,15 +903,35 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         return String(raw.dropFirst().dropLast())
     }
 
-    static func shouldAllowNavigation(to url: URL, dashboardURL: URL) -> Bool {
+    static func shouldAllowNavigation(
+        to url: URL,
+        dashboardURL: URL,
+        isMainFrame: Bool,
+        isTrustedDashboardSource: Bool = false) -> Bool
+    {
         guard let scheme = url.scheme?.lowercased() else { return true }
         if scheme == "about" || scheme == "blob" || scheme == "data" {
             return true
         }
         guard scheme == "http" || scheme == "https" else { return false }
-        return url.scheme?.lowercased() == dashboardURL.scheme?.lowercased() &&
-            url.host?.lowercased() == dashboardURL.host?.lowercased() &&
-            url.port == dashboardURL.port
+        let dashboardScheme = dashboardURL.scheme?.lowercased()
+        let dashboardHost = dashboardURL.host?.lowercased()
+        let host = url.host?.lowercased()
+        if scheme == dashboardScheme, host == dashboardHost, url.port == dashboardURL.port {
+            return true
+        }
+        guard !isMainFrame,
+              isTrustedDashboardSource,
+              host?.isEmpty == false,
+              url.user == nil,
+              url.password == nil
+        else {
+            return false
+        }
+        let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
+        return components.count == 4 &&
+            components[0] == "embed" &&
+            (components[1] == "channel" || components[1] == "thread")
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -1048,7 +1138,15 @@ extension DashboardWindowController {
                 decisionHandler: decisionHandler)
             return
         }
-        if Self.shouldAllowNavigation(to: url, dashboardURL: self.currentURL) {
+        if Self.shouldAllowNavigation(
+            to: url,
+            dashboardURL: self.currentURL,
+            isMainFrame: navigationAction.targetFrame?.isMainFrame == true,
+            isTrustedDashboardSource: navigationAction.sourceFrame.isMainFrame &&
+                Self.isTrustedLinkSource(
+                    navigationAction.sourceFrame.request.url,
+                    dashboardURL: self.currentURL))
+        {
             decisionHandler(.allow)
             return
         }
@@ -1210,8 +1308,39 @@ extension DashboardWindowController {
             }
     }
 
-    var _testSplitAutosaveName: String? {
-        self.splitViewController.splitView.autosaveName
+    var _testLinkBrowserWidth: CGFloat {
+        self.linkBrowser.frame.width
+    }
+
+    var _testLinkBrowserSplitWidth: CGFloat {
+        let splitView = self.splitViewController.splitView
+        // Hosted runners can constrain the visible window while content and split
+        // bounds still reflect the requested size. The window frame is authoritative.
+        return self.window?.frame.width ?? splitView.bounds.width
+    }
+
+    var _testLinkBrowserDividerThickness: CGFloat {
+        self.splitViewController.splitView.dividerThickness
+    }
+
+    var _testLinkBrowserMaximumThickness: CGFloat {
+        self.linkBrowserItem.maximumThickness
+    }
+
+    var _testLinkBrowserTabBarIsHidden: Bool {
+        self.linkBrowser._testTabBarIsHidden
+    }
+
+    var _testLinkBrowserToolbarHeight: CGFloat {
+        self.linkBrowser._testToolbarHeight
+    }
+
+    var _testLinkBrowserTabBarHeight: CGFloat {
+        self.linkBrowser._testTabBarHeight
+    }
+
+    func _testCompleteLinkBrowserDividerDrag() {
+        self.linkBrowserSplitView._testCompleteDividerDrag()
     }
 
     func _testOpenLinkBrowser(_ url: URL, requestBrowserProfileImportOffer: Bool = false) {

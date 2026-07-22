@@ -1,10 +1,11 @@
 // Coverage for sanitizing replay messages at the LLM boundary.
 import { describe, expect, it } from "vitest";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
+import { MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
+  installRuntimeContextMessageForPrompt,
   installModelPromptTransform,
-  insertRuntimeContextMessageForPrompt,
   normalizeCurrentPromptTextForLlmBoundary,
   normalizeMessagesForLlmBoundary,
 } from "./attempt.llm-boundary.js";
@@ -233,6 +234,126 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timezone: "UTC",
     });
     expect(output[2]?.content).toBe(`${expectedCurrentPrefix}Current ask`);
+  });
+
+  it("injects media-only text before timestamping with legacy-identical provider bytes", () => {
+    const timestamp = 1717570800000;
+    const persisted = {
+      role: "user",
+      content: "",
+      timestamp,
+      MediaPath: "/tmp/input.png",
+      MediaPaths: ["/tmp/input.png"],
+    };
+    const legacy = { ...persisted, content: MEDIA_ONLY_USER_TEXT };
+    const [normalizedPersisted] = normalizeMessagesForLlmBoundary(
+      [persisted] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [legacy] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const expectedText = `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${MEDIA_ONLY_USER_TEXT}`;
+
+    expect(normalizedPersisted).toEqual(normalizedLegacy);
+    expect(normalizedPersisted?.content).toBe(expectedText);
+
+    const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+    const [normalizedArray] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...persisted,
+          content: [{ type: "text", text: "   " }, image],
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    expect(normalizedArray?.content).toEqual([{ type: "text", text: expectedText }, image]);
+  });
+
+  it("synthesizes marked late-media path lines with legacy-identical string bytes", () => {
+    const timestamp = 1717570800000;
+    const mediaText = "[media attached: /tmp/a.png]\n[media attached: media://inbound/b.jpg]";
+    const marked = {
+      role: "user",
+      content: "",
+      timestamp,
+      MediaPath: "/tmp/a.png",
+      MediaPaths: ["/tmp/a.png", ""],
+      MediaUrls: ["", "media://inbound/b.jpg"],
+      __openclaw: { lateMedia: true },
+    };
+    const legacy = { ...marked, content: mediaText, __openclaw: undefined };
+    const [normalizedMarked] = normalizeMessagesForLlmBoundary(
+      [marked] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [legacy] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+
+    expect(normalizedMarked?.content).toBe(normalizedLegacy?.content);
+    expect(normalizedMarked?.content).toBe(
+      `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${mediaText}`,
+    );
+
+    const [normalizedUrlOnly] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          role: "user",
+          content: "",
+          timestamp,
+          MediaUrl: "https://example.test/late.png",
+          __openclaw: { lateMedia: true },
+        },
+      ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    expect(normalizedUrlOnly?.content).toBe(
+      `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}[media attached: https://example.test/late.png]`,
+    );
+  });
+
+  it("synthesizes marked late-media path lines without dropping replayed image blocks", () => {
+    const timestamp = 1717570800000;
+    const mediaText = "[media attached: /tmp/input.png]";
+    const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
+    const fields = {
+      role: "user",
+      timestamp,
+      MediaPath: "/tmp/input.png",
+      MediaPaths: ["/tmp/input.png"],
+    };
+    const [normalizedMarked] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...fields,
+          content: [image],
+          __openclaw: { lateMedia: true },
+        },
+      ] as unknown as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+    const [normalizedLegacy] = normalizeMessagesForLlmBoundary(
+      [
+        {
+          ...fields,
+          content: [{ type: "text", text: mediaText }, image],
+        },
+      ] as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+      { timezone: "UTC" },
+    ) as unknown as Array<{ content?: unknown }>;
+
+    expect(normalizedMarked?.content).toEqual(normalizedLegacy?.content);
+    expect(normalizedMarked?.content).toEqual([
+      {
+        type: "text",
+        text: `${buildTimestampPrefix(new Date(timestamp), { timezone: "UTC" })}${mediaText}`,
+      },
+      image,
+    ]);
   });
 
   it("can leave user message bytes bare for cache-sensitive local providers", () => {
@@ -743,7 +864,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
     );
   });
 
-  it("keeps overflow retry runtime context immediately before the active user", () => {
+  it("keeps overflow retry runtime context immediately before the active user", async () => {
     const rebuiltAfterOverflow = [
       {
         role: "user",
@@ -769,15 +890,27 @@ describe("normalizeMessagesForLlmBoundary", () => {
       timestamp: 3,
     };
 
-    const retryMessages = insertRuntimeContextMessageForPrompt({
+    const messages = rebuiltAfterOverflow as Parameters<typeof normalizeMessagesForLlmBoundary>[0];
+    const session = {
+      messages,
+      agent: {
+        state: { messages },
+        continue: async () => undefined,
+      },
+    };
+    const cleanup = installRuntimeContextMessageForPrompt({
+      session,
       message: runtimeContext as Parameters<
-        typeof insertRuntimeContextMessageForPrompt
+        typeof installRuntimeContextMessageForPrompt
       >[0]["message"],
-      messages: rebuiltAfterOverflow as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
     });
-    const retryInput = normalizeMessagesForLlmBoundary(retryMessages) as unknown as Array<
-      Record<string, unknown>
-    >;
+    // Pi overflow recovery rebuilds the agent state before invoking continue.
+    session.agent.state.messages = messages;
+    await session.agent.continue();
+    const retryInput = normalizeMessagesForLlmBoundary(
+      session.agent.state.messages,
+    ) as unknown as Array<Record<string, unknown>>;
+    cleanup();
 
     expect(retryInput.map((message) => message.role)).toEqual([
       "user",
