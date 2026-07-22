@@ -487,6 +487,22 @@ async function rollbackComponents(components: PromotionComponent[]): Promise<boo
   }
 }
 
+async function hasPublishedPromotionComponent(components: PromotionComponent[]): Promise<boolean> {
+  for (const component of components) {
+    if (component.status === "promoted") {
+      return true;
+    }
+    const [stagedExists, finalExists] = await Promise.all([
+      pathExists(component.stagedPath),
+      pathExists(component.finalPath),
+    ]);
+    if (!stagedExists && finalExists) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Reconciles interrupted promotion and returns any committed finalization to resume. */
 export async function recoverSetupMigrationPromotion(params: {
   stateDir: string;
@@ -504,9 +520,6 @@ export async function recoverSetupMigrationPromotion(params: {
     }
     return undefined;
   }
-  if (journal.status === "committed" || journal.status === "completed") {
-    return createPromotionResume(found.path, journal);
-  }
   if (journal.status === "indeterminate") {
     throw new Error(
       `An onboarding migration promotion is indeterminate. Review ${found.path} and run openclaw doctor before retrying.`,
@@ -516,21 +529,40 @@ export async function recoverSetupMigrationPromotion(params: {
   const allFinal = (
     await Promise.all(journal.components.map((component) => pathExists(component.finalPath)))
   ).every(Boolean);
+  if (journal.status === "completed") {
+    return createPromotionResume(found.path, journal);
+  }
+  if (journal.status === "committed") {
+    if (currentConfigHash === journal.configHashTarget && allFinal) {
+      return createPromotionResume(found.path, journal);
+    }
+    journal.status = "indeterminate";
+    await writePromotionJournal(found.path, journal);
+    throw new Error(
+      `A committed onboarding migration no longer matches its promoted target. Review ${found.path} and run openclaw doctor before retrying.`,
+    );
+  }
   if (currentConfigHash === journal.configHashTarget && allFinal) {
     journal.status = "committed";
     await writePromotionJournal(found.path, journal);
     return createPromotionResume(found.path, journal);
   }
-  if (
-    currentConfigHash === journal.configHashBefore &&
-    (await rollbackComponents(journal.components))
-  ) {
-    journal.status = "rolled-back";
-    await writePromotionJournal(found.path, journal);
-    if (journal.continuation) {
-      await cleanupPromotionStaging(journal.continuation);
+  if (currentConfigHash === journal.configHashBefore) {
+    if (await hasPublishedPromotionComponent(journal.components)) {
+      journal.status = "indeterminate";
+      await writePromotionJournal(found.path, journal);
+      throw new Error(
+        `An interrupted onboarding migration published local data before config commit. Review ${found.path} and run openclaw doctor before retrying.`,
+      );
     }
-    return undefined;
+    if (await rollbackComponents(journal.components)) {
+      journal.status = "rolled-back";
+      await writePromotionJournal(found.path, journal);
+      if (journal.continuation) {
+        await cleanupPromotionStaging(journal.continuation);
+      }
+      return undefined;
+    }
   }
   journal.status = "indeterminate";
   await writePromotionJournal(found.path, journal);
@@ -660,6 +692,44 @@ function pathsOverlap(left: string, right: string): boolean {
   return (
     relative.length === 0 ||
     (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
+  );
+}
+
+async function assertSupportedStagedStateTree(params: {
+  stagedStateDir: string;
+  agentId: string;
+  providerId: string;
+  reportDirName: string;
+}): Promise<void> {
+  const assertEntries = async (directory: string, allowed: ReadonlySet<string>) => {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(directory);
+    } catch (error) {
+      if (isNotFoundPathError(error)) {
+        return;
+      }
+      throw error;
+    }
+    const unexpected = entries.filter((entry) => !allowed.has(entry));
+    if (unexpected.length > 0) {
+      throw new Error(
+        `Migration provider wrote unsupported staged state: ${unexpected
+          .map((entry) => path.join(directory, entry))
+          .join(", ")}.`,
+      );
+    }
+  };
+  await assertEntries(params.stagedStateDir, new Set(["agents", "migration", "state"]));
+  await assertEntries(path.join(params.stagedStateDir, "agents"), new Set([params.agentId]));
+  await assertEntries(
+    path.join(params.stagedStateDir, "agents", params.agentId),
+    new Set(["agent"]),
+  );
+  await assertEntries(path.join(params.stagedStateDir, "migration"), new Set([params.providerId]));
+  await assertEntries(
+    path.join(params.stagedStateDir, "migration", params.providerId),
+    new Set([params.reportDirName]),
   );
 }
 
@@ -819,6 +889,12 @@ export async function createSetupMigrationStage(params: {
           existingComponents.push(component);
         }
       }
+      await assertSupportedStagedStateTree({
+        stagedStateDir,
+        agentId,
+        providerId: params.providerId,
+        reportDirName: path.basename(params.reportDir),
+      });
       await assertDisjointPromotionTargets([
         ...existingComponents,
         { finalPath: params.reportDir },

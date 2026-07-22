@@ -298,6 +298,36 @@ describe("setup migration stage", () => {
     await stage.cleanup();
   });
 
+  it("rejects staged state that the promotion owner does not publish", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const workspaceDir = path.join(root, "workspace");
+    const reportDir = path.join(stateDir, "migration", "claude", "attempt");
+    const stage = await createSetupMigrationStage({
+      providerId: "claude",
+      stateDir,
+      workspaceDir,
+      reportDir,
+      targetConfig: { agents: { defaults: { workspace: workspaceDir } } },
+    });
+    await fs.mkdir(path.join(stage.staged.stateDir, "credentials"), { recursive: true });
+    await fs.writeFile(
+      path.join(stage.staged.stateDir, "credentials", "provider.json"),
+      "{}\n",
+      "utf8",
+    );
+
+    await expect(
+      stage.promote({
+        expectedConfig: {},
+        continuation: continuation(),
+        readConfigFile: async () => ({}),
+        commitConfigFile: async (config) => config,
+      }),
+    ).rejects.toThrow("unsupported staged state");
+    await stage.cleanup();
+  });
+
   it("rejects overlapping workspace and agent promotion targets", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");
@@ -382,7 +412,7 @@ describe("setup migration stage", () => {
     await stage.cleanup();
   });
 
-  it("rolls back an interrupted promotion before config commit", async () => {
+  it("fails closed when an interrupted promotion already published data", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");
     const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000000Z");
@@ -412,18 +442,20 @@ describe("setup migration stage", () => {
       { mode: 0o600 },
     );
 
-    await recoverSetupMigrationPromotion({
-      stateDir,
-      providerId: "claude",
-      readConfigFile: async () => ({}),
-    });
+    await expect(
+      recoverSetupMigrationPromotion({
+        stateDir,
+        providerId: "claude",
+        readConfigFile: async () => ({}),
+      }),
+    ).rejects.toThrow("published local data before config commit");
 
-    expect(await fs.readFile(path.join(stagedWorkspace, "MEMORY.md"), "utf8")).toBe("promoted\n");
-    await expect(fs.access(finalWorkspace)).rejects.toThrow();
+    expect(await fs.readFile(path.join(finalWorkspace, "MEMORY.md"), "utf8")).toBe("promoted\n");
+    await expect(fs.access(stagedWorkspace)).rejects.toThrow();
     const journal = JSON.parse(
       await fs.readFile(path.join(reportDir, "onboarding-promotion.json"), "utf8"),
     ) as { status: string };
-    expect(journal.status).toBe("rolled-back");
+    expect(journal.status).toBe("indeterminate");
   });
 
   it("restores a pre-existing empty target when recovery starts before its rename", async () => {
@@ -523,6 +555,49 @@ describe("setup migration stage", () => {
     expect(journal.status).toBe("committed");
   });
 
+  it("rejects committed recovery after the promoted target was reset", async () => {
+    const root = await makeTempRoot();
+    const stateDir = path.join(root, "state");
+    const reportDir = path.join(stateDir, "migration", "claude", "2026-07-21T000002Z");
+    const finalWorkspace = path.join(root, "workspace");
+    const targetConfig = { gateway: { mode: "local" as const } };
+    await fs.mkdir(reportDir, { recursive: true });
+    await fs.writeFile(
+      path.join(reportDir, "onboarding-promotion.json"),
+      JSON.stringify({
+        version: 1,
+        status: "committed",
+        providerId: "claude",
+        configHashBefore: configHash({}),
+        configHashTarget: configHash(targetConfig),
+        components: [
+          {
+            name: "workspace",
+            stagedPath: path.join(root, "staged-workspace"),
+            finalPath: finalWorkspace,
+            status: "promoted",
+          },
+        ],
+        continuation: {
+          ...continuation(),
+          workspaceDir: finalWorkspace,
+          stagedReportDir: path.join(root, "staged-report"),
+          stagedRoots: [],
+        },
+        updatedAt: "2026-07-21T00:00:02.000Z",
+      }),
+      { mode: 0o600 },
+    );
+
+    await expect(
+      recoverSetupMigrationPromotion({
+        stateDir,
+        providerId: "claude",
+        readConfigFile: async () => targetConfig,
+      }),
+    ).rejects.toThrow("no longer matches its promoted target");
+  });
+
   it("reconciles a config writer that commits and then throws", async () => {
     const root = await makeTempRoot();
     const stateDir = path.join(root, "state");
@@ -557,10 +632,11 @@ describe("setup migration stage", () => {
     ) as { status: string };
     expect(journal.status).toBe("committed");
     await promoted.resume.complete();
+    await fs.rm(workspaceDir, { recursive: true, force: true });
     const resumed = await recoverSetupMigrationPromotion({
       stateDir,
       providerId: "claude",
-      readConfigFile: async () => structuredClone(currentConfig),
+      readConfigFile: async () => ({ gateway: { mode: "local" } }),
     });
     expect(resumed?.continuation.outcome).toEqual({ kind: "no-imported-inference" });
     await resumed?.acknowledge();
