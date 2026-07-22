@@ -51,7 +51,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- **Profile-isolated gateway logs:** write non-default profiles to `openclaw-<profile>-YYYY-MM-DD.log` and keep CLI, RPC, and Control UI tails on the same profile-specific file while preserving the default profile path.
 - **ClickClack split-origin setup codes:** consume versioned exact claim endpoints without appending a second claim path, validate the returned canonical API base, preserve private API transport overrides, and keep legacy setup URLs working. Fixes #111919. Thanks @shakkernerd.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.
 - **Control UI terminal error messages:** preserve message-only assistant output beginning with `Error:` or a warning marker instead of treating text prefixes as synthetic failures. Thanks @shakkernerd.
