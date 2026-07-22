@@ -120,6 +120,15 @@ describe("realtime voice session harness", () => {
     expect(deliver).toHaveBeenCalledWith("answer:first\nsecond");
   });
 
+  it("detects assistant transcript echo without enabling audio suppression", () => {
+    const harness = createHarness({ transcriptLookbackMs: 12_000 });
+
+    harness.recordTranscript("assistant", "I found the shopping list");
+
+    expect(harness.isLikelyAssistantEchoTranscript("I found the shopping list")).toBe(true);
+    expect(harness.recordInputAudio(Buffer.from([1, 2]))).toBe(true);
+  });
+
   it("flushes transport output when provider barge-in does not clear it", () => {
     const handleBargeIn = vi.fn();
     const provider: RealtimeVoiceProviderPlugin = {
