@@ -369,6 +369,57 @@ describe("MediaStreamHandler security hardening", () => {
     }
   });
 
+  it("drops malformed media frames while keeping the stream usable", async () => {
+    const sentAudio: Buffer[] = [];
+    const session: RealtimeTranscriptionSession = {
+      connect: async () => {},
+      sendAudio: (audio) => sentAudio.push(Buffer.from(audio)),
+      close: () => {},
+      isConnected: () => true,
+    };
+    const handler = new MediaStreamHandler({
+      transcriptionProvider: {
+        createSession: () => session,
+        id: "openai",
+        label: "OpenAI",
+        isConfigured: () => true,
+      },
+      providerConfig: {},
+      shouldAcceptStream: () => true,
+    });
+    const server = await startWsServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      ws.send(
+        JSON.stringify({
+          event: "start",
+          streamSid: "MZ-base64",
+          start: { callSid: "CA-base64" },
+        }),
+      );
+      for (const payload of ["!!!not-valid-base64!!!", "   \t\n  "]) {
+        ws.send(JSON.stringify({ event: "media", media: { payload } }));
+      }
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: { payload: Buffer.from("valid").toString("base64") },
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(sentAudio).toEqual([Buffer.from("valid")]);
+      });
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+
+      ws.close();
+      await waitForClose(ws);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("fails sends and closes stream when buffered bytes already exceed the cap", () => {
     const handler = new MediaStreamHandler({
       transcriptionProvider: createStubSttProvider(),

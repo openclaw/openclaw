@@ -1,6 +1,6 @@
 // Provider-specific media stream frame parsing and serialization.
 
-import { canonicalizeVoiceCallMediaBase64 } from "../media-base64.js";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 
 /** Normalized inbound media stream frame. */
 type StreamFrame =
@@ -65,7 +65,7 @@ function readRecordField(
 function parseMediaFrame(msg: Record<string, unknown>): StreamFrame {
   const mediaData = readRecordField(msg, "media");
   const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
-  const canonicalPayload = payload ? canonicalizeVoiceCallMediaBase64(payload) : undefined;
+  const canonicalPayload = payload ? canonicalizeBase64(payload) : undefined;
   if (!canonicalPayload) {
     return { kind: "ignored" };
   }
