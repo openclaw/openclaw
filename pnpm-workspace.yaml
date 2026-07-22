@@ -121,7 +121,7 @@ overrides:
   tar: 7.5.20
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 7.6.3
+  protobufjs: 7.6.5
   uuid: 14.0.0
 
 allowBuilds:
