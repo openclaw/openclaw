@@ -182,10 +182,10 @@ function resolveProviderMetadataOwners(): ProviderMetadataOwners {
     allowWorkspaceScopedSnapshot: true,
     requireDefaultDiscoveryContext: true,
   });
-  if (current?.owners.providerEndpoints && current.owners.providerRequests) {
+  if (current) {
     return {
-      providerEndpoints: current.owners.providerEndpoints,
-      providerRequests: current.owners.providerRequests,
+      providerEndpoints: current.owners?.providerEndpoints ?? [],
+      providerRequests: current.owners?.providerRequests ?? new Map(),
     };
   }
   const fallback = loadPluginMetadataSnapshot({ config: {} }).owners;
