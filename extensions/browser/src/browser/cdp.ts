@@ -13,6 +13,7 @@ import {
   prepareCdpTargetSession,
   type CdpActionTimeouts,
 } from "./cdp-page-session.js";
+import { truncateCdpPageTextPreview } from "./cdp-page-text-preview.js";
 import {
   appendCdpPath,
   assertCdpEndpointAllowed,
@@ -581,6 +582,18 @@ function renderRoleTree(
   }
 }
 
+// One preview budget for page + Node (CDP transport hardening).
+//
+// The legacy pipeline (page `.slice(0, 101)` → Node `truncateUtf16Safe(_, 100)`)
+// already produces safe final cursor text — the Node re-cut drops any high
+// surrogate left by an unsafe page slice.  However, the intermediate value
+// crossing CDP `returnByValue` carries a material lone surrogate, which
+// violates the UTF-16 invariant on the wire.
+//
+// The injected page-local helper owns the cut *before* evaluate serialises
+// the result.  Node re-applies the same cap as defense-in-depth for odd
+// evaluate payloads that escape the page-side truncate.
+const CDP_CURSOR_INTERACTIVE_TEXT_MAX = 100;
 async function findCursorInteractiveElements(
   send: CdpSendFn,
   sessionId?: string,
@@ -590,6 +603,7 @@ async function findCursorInteractiveElements(
     "Runtime.evaluate",
     {
       expression: `(() => {
+        const truncateCdpPageTextPreview = ${truncateCdpPageTextPreview.toString()};
         const out = [];
         const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
         const tags = new Set(["a","button","input","select","textarea","details","summary"]);
@@ -624,7 +638,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
+            text: truncateCdpPageTextPreview(String(el.textContent || "").replace(/\\s+/g, " ").trim(), ${CDP_CURSOR_INTERACTIVE_TEXT_MAX})
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -642,7 +656,7 @@ async function findCursorInteractiveElements(
   ).catch(() => null)) as { result?: { value?: unknown } } | null;
   const entries = Array.isArray(evaluated?.result?.value)
     ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
-        entry.text = truncateUtf16Safe(entry.text, 100);
+        entry.text = truncateUtf16Safe(entry.text, CDP_CURSOR_INTERACTIVE_TEXT_MAX);
         return entry;
       })
     : [];
