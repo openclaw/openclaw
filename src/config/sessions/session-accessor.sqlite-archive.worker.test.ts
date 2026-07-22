@@ -1,8 +1,9 @@
 // SQLite transcript archive worker tests cover off-main execution and snapshot fencing.
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { recordAcpParentStreamEvents } from "../../agents/acp-parent-stream-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
@@ -49,43 +50,51 @@ describe("SQLite transcript archive worker", () => {
 
   it("keeps the event loop responsive while a transcript archive is built", async () => {
     const sessionId = "off-main-archive-session";
-    await replaceSessionEntry(
-      { sessionKey: "agent:main:off-main-archive", storePath },
-      { sessionId, updatedAt: Date.now() },
-    );
-    await replaceSqliteTranscriptEvents(
-      { sessionKey: "agent:main:off-main-archive", sessionId, storePath },
-      Array.from({ length: 64 }, (_, index) =>
-        createTranscriptEvent(
-          `${sessionId}-${index}`,
-          `${index}:${randomBytes(256 * 1024).toString("base64")}`,
-        ),
+    const sessionKey = "agent:main:off-main-archive";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    const events = Array.from({ length: 64 }, (_, index) =>
+      createTranscriptEvent(
+        `${sessionId}-${index}`,
+        index === 0
+          ? `first: 你好\n${randomBytes(576 * 1024).toString("base64")}`
+          : index === 63
+            ? `last: 🦞\n${randomBytes(576 * 1024).toString("base64")}`
+            : `${index}:${randomBytes(576 * 1024).toString("base64")}`,
       ),
     );
+    await replaceSqliteTranscriptEvents({ sessionKey, sessionId, storePath }, events);
 
-    let heartbeatTicks = 0;
+    const database = openLifecycleTestDatabase(storePath);
+    const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
+    const heartbeatTimes = [performance.now()];
     const heartbeat = setInterval(() => {
-      heartbeatTicks += 1;
-    }, 1);
-    const deletion = deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      storePath,
-      target: {
-        canonicalKey: "agent:main:off-main-archive",
-        storeKeys: ["agent:main:off-main-archive"],
-      },
-    });
-
-    const result = await deletion.finally(async () => {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      heartbeatTimes.push(performance.now());
+    }, 5);
+    let materialized: Awaited<ReturnType<typeof materializeSqliteSessionStateDeletePlans>>;
+    try {
+      materialized = await materializeSqliteSessionStateDeletePlans([plan]);
+    } finally {
+      heartbeatTimes.push(performance.now());
       clearInterval(heartbeat);
-    });
-    expect(heartbeatTicks).toBeGreaterThan(5);
-    expect(result.deleted).toBe(true);
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(readArchiveLines(result.archivedTranscripts[0]?.archivedPath)).toHaveLength(64);
+    }
+
+    const heartbeatGaps = heartbeatTimes
+      .slice(1)
+      .map((time, index) => time - heartbeatTimes[index]);
+    expect(heartbeatTimes.length - 2).toBeGreaterThan(5);
+    expect(Math.max(...heartbeatGaps)).toBeLessThan(150);
+    expect(materialized).toHaveLength(1);
+    const archivedPath = materialized[0]?.archivedTranscript?.archivedPath;
+    expect(archivedPath).toBeTruthy();
+    const expectedContent = `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    const archivedContent = readSessionArchiveContentSync(archivedPath ?? "");
+    expect(Buffer.byteLength(archivedContent)).toBe(Buffer.byteLength(expectedContent));
+    expect(sha256(archivedContent)).toBe(sha256(expectedContent));
+    const archiveLines = readArchiveLines(archivedPath);
+    expect(archiveLines).toHaveLength(events.length);
+    expect(archiveLines.map((line) => (JSON.parse(line) as { id: string }).id)).toEqual(
+      events.map((event) => event.id),
+    );
   });
 
   it("rejects transcript changes between deletion planning and the worker snapshot", async () => {
@@ -177,6 +186,90 @@ describe("SQLite transcript archive worker", () => {
     await expect(materializeSqliteSessionStateDeletePlans([plan])).rejects.toThrow();
     await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
     expect(fs.readFileSync(blockedArchiveDirectory, "utf8")).toBe("not a directory");
+  });
+
+  it("preserves all lifecycle state when the archive worker rejects publication", async () => {
+    const sessionId = "nested/archive-worker-lifecycle-failure";
+    const sessionKey = "agent:main:archive-worker-lifecycle-failure";
+    const scope = { sessionKey, sessionId, storePath };
+    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        type: "message",
+        id: "archive-worker-lifecycle-failure-message",
+        parentId: null,
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "preserve every lifecycle row" }],
+        },
+        timestamp: Date.now(),
+      } as unknown as TestTranscriptEvent,
+    ]);
+    appendSqliteTrajectoryRuntimeEvents({ sessionId, storePath }, [
+      createTestTrajectoryEvent(sessionId),
+    ]);
+    const database = openLifecycleTestDatabase(storePath);
+    recordAcpParentStreamEvents({
+      agentId: database.agentId,
+      path: database.path,
+      sessionId,
+      runId: "archive-worker-lifecycle-failure-run",
+      events: [{ event: { type: "output", text: "preserve ACP state" }, createdAt: Date.now() }],
+    });
+    const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+    const readLifecycleCounts = () => ({
+      acp: executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("acp_parent_stream_events").select("seq").where("session_id", "=", sessionId),
+      ).rows.length,
+      fts: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_transcript_fts")
+          .select("session_id")
+          .where("session_id", "=", sessionId),
+      ).rows.length,
+      routes: executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("session_routes").select("session_id").where("session_id", "=", sessionId),
+      ).rows.length,
+      sessions: executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("sessions").select("session_id").where("session_id", "=", sessionId),
+      ).rows.length,
+      trajectory: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("trajectory_runtime_events")
+          .select("seq")
+          .where("session_id", "=", sessionId),
+      ).rows.length,
+      transcript: executeSqliteQuerySync(
+        database.db,
+        db.selectFrom("transcript_events").select("seq").where("session_id", "=", sessionId),
+      ).rows.length,
+    });
+    const before = readLifecycleCounts();
+
+    await expect(
+      deleteSessionEntryLifecycle({
+        archiveTranscript: true,
+        storePath,
+        target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+      }),
+    ).rejects.toThrow("Cannot archive SQLite transcript outside");
+
+    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(sessionId);
+    await expect(loadTranscriptEvents(scope)).resolves.toHaveLength(1);
+    expect(readLifecycleCounts()).toEqual(before);
+    expect(before).toEqual({
+      acp: 1,
+      fts: 1,
+      routes: 1,
+      sessions: 1,
+      trajectory: 1,
+      transcript: 1,
+    });
   });
 
   it("keeps rows when a transcript changes after its archive snapshot", async () => {
@@ -306,82 +399,6 @@ describe("SQLite transcript archive worker", () => {
     },
   );
 
-  it("falls back to an exclusive durable copy when hard links are unavailable", async () => {
-    const sessionId = "copy-fallback-archive-session";
-    await replaceSqliteTranscriptEvents(
-      { sessionKey: "agent:main:copy-fallback-archive", sessionId, storePath },
-      [createTranscriptEvent(sessionId, "copy fallback archive")],
-    );
-
-    const originalCopyFileSync = fs.copyFileSync;
-    const openSpy = vi.spyOn(fs, "openSync");
-    const fsyncSpy = vi.spyOn(fs, "fsyncSync");
-    const copySpy = vi
-      .spyOn(fs, "copyFileSync")
-      .mockImplementation((...args) => originalCopyFileSync(...args));
-    const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation(() => {
-      throw Object.assign(new Error("hard links are unavailable"), { code: "ENOTSUP" });
-    });
-
-    try {
-      const database = openLifecycleTestDatabase(storePath);
-      const workerResult = materializeSqliteTranscriptArchiveInWorker(
-        planArchiveWorker(database, path.dirname(storePath), sessionId),
-      );
-      const archivedPath = workerResult.archivedPath;
-      expect(archivedPath).not.toBeNull();
-      expect(copySpy).toHaveBeenCalledWith(
-        expect.stringContaining(`${sessionId}.jsonl.deleted.`),
-        archivedPath,
-        fs.constants.COPYFILE_EXCL,
-      );
-      const finalOpenIndex = openSpy.mock.calls.findIndex(
-        (args) => args[0] === archivedPath && args[1] === "r+",
-      );
-      expect(finalOpenIndex).toBeGreaterThanOrEqual(0);
-      expect(fsyncSpy).toHaveBeenCalledWith(openSpy.mock.results[finalOpenIndex]?.value);
-      expect(readArchiveLines(archivedPath ?? undefined)).toEqual([
-        createTranscriptEventLine(sessionId, "copy fallback archive"),
-      ]);
-    } finally {
-      linkSpy.mockRestore();
-      copySpy.mockRestore();
-      fsyncSpy.mockRestore();
-      openSpy.mockRestore();
-    }
-  });
-
-  it("does not remove a concurrent archive when exclusive copy loses the race", async () => {
-    const sessionId = "copy-race-owner-session";
-    await replaceSqliteTranscriptEvents(
-      { sessionKey: "agent:main:copy-race-owner", sessionId, storePath },
-      [createTranscriptEvent(sessionId, "copy race owner")],
-    );
-    const database = openLifecycleTestDatabase(storePath);
-    let winnerPath: string | undefined;
-    const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation(() => {
-      throw Object.assign(new Error("hard links are unavailable"), { code: "ENOTSUP" });
-    });
-    const copySpy = vi.spyOn(fs, "copyFileSync").mockImplementation((_source, destination) => {
-      winnerPath = String(destination);
-      fs.writeFileSync(winnerPath, "concurrent winner", "utf8");
-      throw Object.assign(new Error("exclusive copy lost the race"), { code: "EEXIST" });
-    });
-
-    try {
-      expect(() =>
-        materializeSqliteTranscriptArchiveInWorker(
-          planArchiveWorker(database, path.dirname(storePath), sessionId),
-        ),
-      ).toThrow("Could not create SQLite transcript archive");
-      expect(winnerPath).toBeDefined();
-      expect(fs.readFileSync(winnerPath ?? "", "utf8")).toBe("concurrent winner");
-    } finally {
-      copySpy.mockRestore();
-      linkSpy.mockRestore();
-    }
-  });
-
   it("does not reuse a matching in-flight temp file as an archive", async () => {
     const sessionId = "in-flight-temp-archive-session";
     const line = createTranscriptEventLine(sessionId, "in-flight temp archive");
@@ -488,6 +505,10 @@ function readArchiveLines(archivePath: string | undefined): string[] {
   return readSessionArchiveContentSync(archivePath ?? "")
     .trim()
     .split("\n");
+}
+
+function sha256(content: string): string {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 function openLifecycleTestDatabase(storePath: string) {

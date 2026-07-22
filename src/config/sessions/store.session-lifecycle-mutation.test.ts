@@ -436,30 +436,30 @@ describe("session store lifecycle mutations", () => {
       [createTranscriptEvent("durable-delete-session", "durable archive first")],
     );
 
-    const originalLinkSync = fs.linkSync;
-    const entryObservedDuringArchivePublish: boolean[] = [];
+    const originalRenameSync = fs.renameSync;
+    const entryObservedDuringArchiveRename: boolean[] = [];
     const openSpy = vi.spyOn(fs, "openSync");
     const fsyncSpy = vi.spyOn(fs, "fsyncSync");
-    const linkSpy = vi.spyOn(fs, "linkSync").mockImplementation((...args) => {
+    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((...args) => {
       const archivePath = String(args[1]);
       if (archivePath.includes("durable-delete-session.jsonl.deleted.")) {
-        entryObservedDuringArchivePublish.push(
+        entryObservedDuringArchiveRename.push(
           loadSessionEntry({ sessionKey: "agent:main:durable-delete", storePath })?.sessionId ===
             "durable-delete-session",
         );
       }
-      return originalLinkSync(...args);
+      return originalRenameSync(...args);
     });
 
     let archivedPath: string | null = null;
     try {
       const database = openLifecycleTestDatabase(storePath);
-      const workerResult = await materializeSqliteTranscriptArchiveInWorker(
+      const workerResult = materializeSqliteTranscriptArchiveInWorker(
         planArchiveWorker(database, path.dirname(storePath), "durable-delete-session"),
       );
       archivedPath = workerResult.archivedPath;
       expect(archivedPath).not.toBeNull();
-      expect(entryObservedDuringArchivePublish).toEqual([true]);
+      expect(entryObservedDuringArchiveRename).toEqual([true]);
       const archiveTempOpenIndexes = openSpy.mock.calls.flatMap((args, index) =>
         String(args[0]).includes("durable-delete-session.jsonl.deleted.") && args[1] === "wx"
           ? [index]
@@ -470,7 +470,7 @@ describe("session store lifecycle mutations", () => {
       expect(openSpy.mock.calls[archiveTempOpenIndex]?.[1]).toBe("wx");
       expect(fsyncSpy).toHaveBeenCalledWith(openSpy.mock.results[archiveTempOpenIndex]?.value);
     } finally {
-      linkSpy.mockRestore();
+      renameSpy.mockRestore();
       fsyncSpy.mockRestore();
       openSpy.mockRestore();
     }

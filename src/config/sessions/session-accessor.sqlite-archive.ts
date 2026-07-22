@@ -129,6 +129,8 @@ export function writeSqliteTranscriptArchive(params: {
   if (existing) {
     return existing;
   }
+  // Archives are the long-lived cold tier; compress when the runtime can so
+  // keep-forever retention stays cheap. Plain JSONL is the Bun/older fallback.
   const encoded = encodeSessionArchiveContent(params.content);
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const archivePath = `${resolveSqliteTranscriptArchivePath({
@@ -143,19 +145,16 @@ export function writeSqliteTranscriptArchive(params: {
     const tempPath = `${archivePath}.${randomUUID()}.tmp`;
     try {
       writeDurableFileExclusive(tempPath, encoded.bytes);
-      publishTranscriptArchiveExclusive(tempPath, archivePath);
-      fs.rmSync(tempPath);
+      fs.renameSync(tempPath, archivePath);
       fsyncDirectory(params.archiveDirectory);
-      try {
-        if (readSessionArchiveContentSync(archivePath) === params.content) {
-          return archivePath;
-        }
-      } catch (error) {
+      // Full readback is bounded by the same single-generation content the
+      // delete plan already buffers (Node string limits cap both); a partial
+      // or corrupt archive must fail here, before any rows are reclaimed.
+      if (readSessionArchiveContentSync(archivePath) !== params.content) {
         fs.rmSync(archivePath, { force: true });
-        throw error;
+        throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
       }
-      fs.rmSync(archivePath, { force: true });
-      throw new Error(`SQLite transcript archive verification failed for ${params.sessionId}`);
+      return archivePath;
     } catch (error) {
       fs.rmSync(tempPath, { force: true });
       if ((error as { code?: unknown })?.code === "EEXIST") {
@@ -176,42 +175,6 @@ function writeDurableFileExclusive(filePath: string, content: Buffer): void {
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
-  }
-}
-
-function fsyncWritableFile(filePath: string): void {
-  const fd = fs.openSync(filePath, "r+");
-  try {
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-function publishTranscriptArchiveExclusive(tempPath: string, archivePath: string): void {
-  try {
-    fs.linkSync(tempPath, archivePath);
-    return;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
-      throw error;
-    }
-    if (code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EPERM") {
-      throw error;
-    }
-  }
-
-  let copied = false;
-  try {
-    fs.copyFileSync(tempPath, archivePath, fs.constants.COPYFILE_EXCL);
-    copied = true;
-    fsyncWritableFile(archivePath);
-  } catch (error) {
-    if (copied) {
-      fs.rmSync(archivePath, { force: true });
-    }
-    throw error;
   }
 }
 
@@ -298,7 +261,7 @@ function runSqliteTranscriptArchiveWorker(
   });
 }
 
-// Runs duplicate probing, archive write, exclusive publication, fsync, and readback outside
+// Runs duplicate probing, archive write, rename, fsync, and readback outside
 // SQLite write transactions and off the gateway event loop. One worker handles
 // deduped plans serially so large generations cannot multiply memory pressure.
 export async function materializeSqliteSessionStateDeletePlans(
