@@ -430,7 +430,7 @@ describe("AppSidebar session accessibility", () => {
     const list = sidebar.querySelector('[data-session-section="ungrouped"] [role="list"]');
     const row = sidebar.querySelector(`[data-session-key="${key}"]`);
     const link = row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link");
-    expect(list?.getAttribute("aria-label")).toBe("Threads");
+    expect(list?.getAttribute("aria-label")).toBe("Recent");
     expect(row?.getAttribute("role")).toBe("listitem");
     expect(row?.hasAttribute("aria-label")).toBe(false);
     expect(link?.hasAttribute("aria-label")).toBe(false);

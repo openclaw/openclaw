@@ -36,6 +36,7 @@ struct ChatGatewayRequestTests {
     @Test func `list sessions request normalizes optional filters`() {
         let request = OpenClawChatGatewayRequests.sessionsList(
             limit: 12,
+            offset: 24,
             search: "  incident  ",
             archived: true)
 
@@ -44,6 +45,7 @@ struct ChatGatewayRequestTests {
         #expect(request.params["includeGlobal"]?.value as? Bool == true)
         #expect(request.params["includeUnknown"]?.value as? Bool == false)
         #expect(request.params["limit"]?.value as? Int == 12)
+        #expect(request.params["offset"]?.value as? Int == 24)
         #expect(request.params["search"]?.value as? String == "incident")
         #expect(request.params["archived"]?.value as? Bool == true)
     }

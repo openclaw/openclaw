@@ -8913,6 +8913,11 @@ struct ChatViewModelTests {
     @Test func `decodes gateway thinking metadata from session list`() throws {
         let json = """
         {
+          "totalCount": 3,
+          "limitApplied": 1,
+          "offset": 2,
+          "nextOffset": null,
+          "hasMore": false,
           "defaults": {
             "modelProvider": "anthropic",
             "model": "claude-opus-4-7",
@@ -8950,6 +8955,11 @@ struct ChatViewModelTests {
             from: Data(json.utf8))
 
         #expect(decoded.defaults?.modelProvider == "anthropic")
+        #expect(decoded.totalCount == 3)
+        #expect(decoded.limitApplied == 1)
+        #expect(decoded.offset == 2)
+        #expect(decoded.nextOffset == nil)
+        #expect(decoded.hasMore == false)
         #expect(decoded.defaults?.thinkingLevels?.map(\.id) == ["off", "adaptive", "max"])
         #expect(decoded.defaults?.thinkingLevels?.last?.label == "maximum")
         #expect(decoded.defaults?.thinkingDefault == "adaptive")

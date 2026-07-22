@@ -10,7 +10,7 @@ import {
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar session section visibility", () => {
-  it("renders an active draft first inside an expanded empty Threads section", async () => {
+  it("renders an active draft first inside an expanded empty Recent section", async () => {
     localStorage.setItem(
       "openclaw:sidebar:sessions:collapsed-sections",
       JSON.stringify(["ungrouped"]),
@@ -48,7 +48,7 @@ describe("AppSidebar session section visibility", () => {
     expect(draftSidebar.querySelector(".sidebar-recent-session--draft")).toBeNull();
   });
 
-  it("keeps normal pagination when a draft overrides collapsed Threads", async () => {
+  it("keeps normal pagination when a draft overrides collapsed Recent", async () => {
     localStorage.setItem(
       "openclaw:sidebar:sessions:collapsed-sections",
       JSON.stringify(["ungrouped"]),
@@ -73,7 +73,7 @@ describe("AppSidebar session section visibility", () => {
     expect(draftSidebar.querySelector('[aria-label="Load more threads"]')).not.toBeNull();
   });
 
-  it("hides empty Threads at rest but keeps empty categories and the drag drop target", async () => {
+  it("hides empty Recent at rest but keeps empty categories and the drag drop target", async () => {
     const harness = createSessionsHarness("main", ["agent:main:main", "agent:main:alpha"]);
     const result = harness.sessions.state.result;
     const alpha = result?.sessions.find((row) => row.key === "agent:main:alpha");
@@ -87,7 +87,7 @@ describe("AppSidebar session section visibility", () => {
     const { sidebar } = await mountSidebar(gateway, harness.sessions);
 
     // Empty user-created groups stay visible (creation and drag targets);
-    // only the bare Threads header disappears while nothing lives in it.
+    // only the bare Recent header disappears while nothing lives in it.
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).not.toBeNull();
     expect(sidebar.querySelector('[data-session-section="ungrouped"]')).toBeNull();
 

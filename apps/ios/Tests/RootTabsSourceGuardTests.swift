@@ -896,6 +896,10 @@ extension RootTabsSourceGuardTests {
         #expect(suppressionCapture.lowerBound < externalNavigation.lowerBound)
         #expect(suppressionCapture.lowerBound < ownedNavigation.lowerBound)
         #expect(settingsTabSource.contains("navigateToRoute(.notifications)"))
+        #expect(settingsTabSource.contains(
+            "self.directRoute == nil || (!self.ownsNavigationStack && self.navigateToRoute != nil)"))
+        #expect(settingsSource.contains(
+            "self.directRoute == nil || (!self.ownsNavigationStack && self.navigateToRoute != nil)"))
         // Cross-route settings shortcuts push so Back returns to the origin
         // screen; replacing the path resets Back to the Settings root.
         #expect(settingsTabSource.contains("self.navigationPath.append(.notifications)"))

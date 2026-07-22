@@ -19019,7 +19019,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 332,
+      "line": 349,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Gateway settings",
       "surface": "apple",
@@ -19027,7 +19027,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 333,
+      "line": 350,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Opens gateway settings",
       "surface": "apple",
@@ -19035,7 +19035,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 357,
+      "line": 374,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Gateway",
       "surface": "apple",
@@ -19043,7 +19043,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 362,
+      "line": 379,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Connection",
       "surface": "apple",
@@ -19051,7 +19051,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 368,
+      "line": 385,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Address",
       "surface": "apple",
@@ -19059,7 +19059,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 374,
+      "line": 391,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Agents",
       "surface": "apple",
@@ -19067,7 +19067,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 408,
+      "line": 425,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Agent session",
       "surface": "apple",
@@ -19075,7 +19075,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 423,
+      "line": 440,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Recent sessions",
       "surface": "apple",
@@ -19083,7 +19083,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 428,
+      "line": 445,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Gateway offline",
       "surface": "apple",
@@ -19091,7 +19091,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 428,
+      "line": 445,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "No recent sessions",
       "surface": "apple",
@@ -19099,7 +19099,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 430,
+      "line": 447,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Connect to the gateway.",
       "surface": "apple",
@@ -19107,7 +19107,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 430,
+      "line": 447,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Start a chat and it will appear here.",
       "surface": "apple",
@@ -19115,7 +19115,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 500,
+      "line": 517,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Online",
       "surface": "apple",
@@ -19123,7 +19123,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 502,
+      "line": 519,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Connecting",
       "surface": "apple",
@@ -19131,7 +19131,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 504,
+      "line": 521,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Attention",
       "surface": "apple",
@@ -19139,7 +19139,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 506,
+      "line": 523,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Offline",
       "surface": "apple",
@@ -19147,7 +19147,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 526,
+      "line": 543,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Unknown",
       "surface": "apple",
@@ -19155,7 +19155,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 554,
+      "line": 571,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "No recent activity",
       "surface": "apple",
@@ -19163,7 +19163,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 773,
+      "line": 790,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "iOS chat",
       "surface": "apple",
@@ -19171,7 +19171,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 776,
+      "line": 793,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Telegram chat",
       "surface": "apple",
@@ -19179,7 +19179,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 779,
+      "line": 796,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Direct chat",
       "surface": "apple",
@@ -19187,7 +19187,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 821,
+      "line": 838,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "just now",
       "surface": "apple",
@@ -19195,7 +19195,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 879,
+      "line": 896,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "%@ on %@",
       "surface": "apple",
@@ -19203,7 +19203,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 885,
+      "line": 902,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "%@ via %@",
       "surface": "apple",
@@ -19211,7 +19211,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 958,
+      "line": 975,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Group name",
       "surface": "apple",
@@ -19219,7 +19219,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 964,
+      "line": 981,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Create",
       "surface": "apple",
@@ -19227,7 +19227,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 965,
+      "line": 982,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Save",
       "surface": "apple",
@@ -19235,7 +19235,7 @@
     },
     {
       "kind": "ui-modifier",
-      "line": 976,
+      "line": 993,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Delete Group?",
       "surface": "apple",
@@ -19243,7 +19243,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 983,
+      "line": 1000,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Delete Group",
       "surface": "apple",
@@ -19251,7 +19251,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 987,
+      "line": 1004,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Cancel",
       "surface": "apple",
@@ -19259,7 +19259,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1001,
+      "line": 1018,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Sessions",
       "surface": "apple",
@@ -19267,7 +19267,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1020,
+      "line": 1037,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Archived sessions",
       "surface": "apple",
@@ -19275,7 +19275,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1030,
+      "line": 1047,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Show Archived",
       "surface": "apple",
@@ -19283,7 +19283,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 1044,
+      "line": 1061,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Sessions unavailable",
       "surface": "apple",
@@ -19291,7 +19291,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1083,
+      "line": 1100,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Loading archived sessions",
       "surface": "apple",
@@ -19299,7 +19299,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1084,
+      "line": 1101,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Loading recent sessions",
       "surface": "apple",
@@ -19307,7 +19307,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1091,
+      "line": 1108,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "^[\\(count) session](inflect: true)",
       "surface": "apple",
@@ -19315,7 +19315,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1121,
+      "line": 1138,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "No archived sessions",
       "surface": "apple",
@@ -19323,7 +19323,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1127,
+      "line": 1144,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Archived sessions will appear here.",
       "surface": "apple",
@@ -19331,7 +19331,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1158,
+      "line": 1175,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Rename Group…",
       "surface": "apple",
@@ -19339,7 +19339,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1165,
+      "line": 1182,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "New Group…",
       "surface": "apple",
@@ -19347,7 +19347,7 @@
     },
     {
       "kind": "ui-call",
-      "line": 1171,
+      "line": 1188,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Delete Group…",
       "surface": "apple",
@@ -19355,7 +19355,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1178,
+      "line": 1195,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "New Group",
       "surface": "apple",
@@ -19363,7 +19363,7 @@
     },
     {
       "kind": "ui-localized-call",
-      "line": 1179,
+      "line": 1196,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Rename Group",
       "surface": "apple",
@@ -19371,7 +19371,7 @@
     },
     {
       "kind": "conditional-branch",
-      "line": 1382,
+      "line": 1399,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
       "source": "Try again after the gateway reconnects.",
       "surface": "apple",

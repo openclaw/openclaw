@@ -43,7 +43,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
     // A fresh draft must be visible where it will live: genuinely expand a
-    // collapsed Threads section (persisted) instead of overriding at render
+    // collapsed Recent section (persisted) instead of overriding at render
     // time, so the header toggle keeps matching the visible state.
     if (
       changed.has("draftSessionAgentId") &&
@@ -552,7 +552,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
-        // Threads hides its bare header when empty, except while a draft needs
+        // Recent hides its bare header when empty, except while a draft needs
         // a home or a session drag needs the unpin drop target. Empty custom
         // categories keep rendering: they are user-created containers and the
         // "New group…" / drag-into-group flows depend on seeing them.

@@ -418,6 +418,11 @@ public protocol OpenClawChatTransport: Sendable {
         limit: Int?,
         search: String?,
         archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    func listSessions(
+        limit: Int?,
+        offset: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
     func listAgents() async throws -> OpenClawChatAgentsListResponse?
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
     func listSessionGroups() async throws -> OpenClawChatSessionGroupsResponse?
@@ -686,6 +691,21 @@ extension OpenClawChatTransport {
     /// sugars and never called through the protocol.
     public func listSessions(limit: Int?) async throws -> OpenClawChatSessionsListResponse {
         try await self.listSessions(limit: limit, search: nil, archived: false)
+    }
+
+    public func listSessions(
+        limit: Int?,
+        offset: Int?,
+        search: String?,
+        archived: Bool) async throws -> OpenClawChatSessionsListResponse
+    {
+        guard offset == nil || offset == 0 else {
+            throw NSError(
+                domain: "OpenClawChatTransport",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "sessions.list pagination not supported by this transport"])
+        }
+        return try await self.listSessions(limit: limit, search: search, archived: archived)
     }
 
     public func listSessions(limit: Int?, archived: Bool) async throws -> OpenClawChatSessionsListResponse {

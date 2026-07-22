@@ -123,13 +123,13 @@ struct CommandCenterTab: View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
             self.threadTile(
                 title: String(localized: "Sessions"),
-                value: self.overviewSessions.count.formatted())
+                value: self.overviewSessionCountText)
             self.threadTile(
                 title: String(localized: "Live"),
-                value: self.overviewLiveCount.formatted())
+                value: self.overviewLiveCountText)
             self.threadTile(
                 title: String(localized: "Unread"),
-                value: self.overviewUnreadCount.formatted())
+                value: self.overviewUnreadCountText)
             self.threadTile(
                 title: String(localized: "Tokens"),
                 value: self.overviewTokenText)
@@ -278,14 +278,31 @@ struct CommandCenterTab: View {
         }
     }
 
+    private var overviewLiveCountText: String {
+        let prefix = self.dashboardModel?.isSessionRosterComplete == false ? "~" : ""
+        return "\(prefix)\(self.overviewLiveCount.formatted())"
+    }
+
     private var overviewUnreadCount: Int {
         self.overviewSessions.count { $0.unread == true }
     }
 
+    private var overviewUnreadCountText: String {
+        let prefix = self.dashboardModel?.isSessionRosterComplete == false ? "~" : ""
+        return "\(prefix)\(self.overviewUnreadCount.formatted())"
+    }
+
     private var overviewTokenText: String {
-        let summary = RootSidebarModel.tokenUsageSummary(for: self.overviewSessions)
+        let summary = RootSidebarModel.tokenUsageSummary(
+            for: self.overviewSessions,
+            rosterIsComplete: self.dashboardModel?.isSessionRosterComplete ?? true)
         guard let total = summary.total else { return "n/a" }
         return "\(summary.isPartial ? "~" : "")\(total.formatted(.number.notation(.compactName)))"
+    }
+
+    private var overviewSessionCountText: String {
+        let prefix = self.dashboardModel?.isSessionRosterComplete == false ? "~" : ""
+        return "\(prefix)\(self.overviewSessions.count.formatted())"
     }
 
     static func usesSplitSectionsLayout(
