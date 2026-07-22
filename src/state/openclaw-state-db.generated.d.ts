@@ -1020,6 +1020,24 @@ export interface SessionWatchCursors {
   watcher_session_key: string;
 }
 
+export interface SessionsSendDeferredCompletions {
+  claimed_at: number | null;
+  completed_at: number | null;
+  completion_text: string | null;
+  continuation_run_id: string;
+  created_at: number;
+  expires_at: number;
+  last_error: string | null;
+  request_message: string;
+  requester_origin_json: string;
+  requester_session_id: string;
+  requester_session_key: string;
+  state: string;
+  target_run_id: string;
+  target_session_key: string;
+  terminal_outcome_json: string | null;
+}
+
 export interface SkillCuratorState {
   id: Generated<number>;
   last_attempt_at_ms: number;
@@ -1500,6 +1518,7 @@ export interface DB {
   session_state_heads: SessionStateHeads;
   session_upstream_links: SessionUpstreamLinks;
   session_watch_cursors: SessionWatchCursors;
+  sessions_send_deferred_completions: SessionsSendDeferredCompletions;
   skill_curator_state: SkillCuratorState;
   skill_lifecycle: SkillLifecycle;
   skill_upload_chunks: SkillUploadChunks;
