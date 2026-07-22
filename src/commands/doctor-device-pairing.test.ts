@@ -197,6 +197,52 @@ describe("noteDevicePairingHealth", () => {
     });
   });
 
+  it("warns when the legacy device auth store has not been migrated", async () => {
+    await withTempDir("openclaw-doctor-device-pairing-", async (stateDir) => {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_TEST_FAST: "1",
+        },
+        async () => {
+          const legacyPath = path.join(stateDir, "identity", "device-auth.json");
+          await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+          const legacyStore = JSON.stringify({
+            version: 1,
+            deviceId: "device-legacy",
+            tokens: { operator: { token: "legacy-token" } },
+          });
+          await fs.writeFile(legacyPath, legacyStore, "utf8");
+
+          await noteDevicePairingHealth({
+            cfg: { gateway: { mode: "local" } },
+            healthOk: false,
+          });
+
+          expect(noteMock).toHaveBeenCalledTimes(1);
+          const message = requireNoteMessage();
+          expect(requireNoteTitle()).toBe("Device pairing");
+          expect(message).toContain("device-auth.json");
+          expect(message).toContain("doctor --fix");
+
+          const findings = await collectDevicePairingHealthFindings({
+            cfg: { gateway: { mode: "local" } },
+          });
+          expect(findings).toEqual([
+            expect.objectContaining({
+              checkId: "core/doctor/device-pairing",
+              severity: "warning",
+              path: "identity.device-auth",
+              requirement: "device-auth-store-legacy-file",
+              message: expect.stringContaining("has not been imported"),
+            }),
+          ]);
+          expect(await fs.readFile(legacyPath, "utf8")).toBe(legacyStore);
+        },
+      );
+    });
+  });
+
   it("warns when the local cached device token predates the gateway rotation", async () => {
     await withApprovedOperatorPairing(async ({ identity }) => {
       const now = vi.spyOn(Date, "now").mockReturnValue(1);
