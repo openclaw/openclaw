@@ -41,6 +41,7 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
+import { resolveMediaFacts } from "../../media/media-facts.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -49,7 +50,6 @@ import {
 } from "../../routing/session-key.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
-  buildPersistedUserTurnMediaInputsFromFields,
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
@@ -1461,7 +1461,7 @@ export async function runPreparedReply(
       : undefined);
   setChannelSourceTurnId(sessionCtx, sourceTurnId);
   const persistGroupSender = replyRoute.chatType === "group" || replyRoute.chatType === "channel";
-  const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
+  const userTurnMediaForPersistence = resolveMediaFacts(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
   // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for

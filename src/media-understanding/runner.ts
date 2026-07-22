@@ -893,7 +893,7 @@ async function runAttachmentEntries(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  attachmentIndex: number;
+  attachment: MediaAttachment;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -906,6 +906,7 @@ async function runAttachmentEntries(params: {
   attempts: MediaUnderstandingModelDecision[];
 }> {
   const { entries, capability } = params;
+  const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
   for (const candidate of entries) {
     const { entry } = candidate;
@@ -918,7 +919,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachment: params.attachment,
               cache: params.cache,
               config: params.config,
             })
@@ -927,7 +928,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachmentIndex,
               cache: params.cache,
               agentId: params.agentId,
               agentDir: params.agentDir,
@@ -1130,7 +1131,7 @@ export async function runCapability(params: {
       capability,
       cfg,
       ctx,
-      attachmentIndex: attachment.index,
+      attachment,
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
