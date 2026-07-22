@@ -38,15 +38,9 @@ import {
   promptResolvedAllowFrom,
   resolveAccountIdForConfigure,
   resolveEntriesWithOptionalToken,
-  resolveGroupAllowlistWithLookupNotes,
-  resolveParsedAllowFromEntries,
   resolveSetupAccountId,
-  setAccountDmAllowFromForChannel,
   setAccountAllowFromForChannel,
-  setAccountGroupPolicyForChannel,
-  setTopLevelChannelAllowFrom,
   setTopLevelChannelDmPolicyWithAllowFrom,
-  setTopLevelChannelGroupPolicy,
   setSetupChannelEnabled,
   splitSetupEntries,
 } from "./setup-wizard-helpers.js";
@@ -792,30 +786,6 @@ describe("setSetupChannelEnabled", () => {
   });
 });
 
-describe("setAccountGroupPolicyForChannel", () => {
-  it("writes group policy on default account config", () => {
-    const next = setAccountGroupPolicyForChannel({
-      cfg: {},
-      channel: "discord",
-      accountId: DEFAULT_ACCOUNT_ID,
-      groupPolicy: "open",
-    });
-    expect(next.channels?.discord?.groupPolicy).toBe("open");
-    expect(next.channels?.discord?.enabled).toBe(true);
-  });
-
-  it("writes group policy on nested non-default account", () => {
-    const next = setAccountGroupPolicyForChannel({
-      cfg: {},
-      channel: "slack",
-      accountId: "work",
-      groupPolicy: "disabled",
-    });
-    expect(next.channels?.slack?.accounts?.work?.groupPolicy).toBe("disabled");
-    expect(next.channels?.slack?.accounts?.work?.enabled).toBe(true);
-  });
-});
-
 describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
   it("adds wildcard allowFrom for open policy", () => {
     const cfg: OpenClawConfig = {
@@ -854,32 +824,6 @@ describe("setTopLevelChannelDmPolicyWithAllowFrom", () => {
         normalizeAllowFromEntries([...(inputCfg.channels?.["nextcloud-talk"]?.allowFrom ?? [])]),
     });
     expect(next.channels?.["nextcloud-talk"]?.allowFrom).toEqual(["alice", "*"]);
-  });
-});
-
-describe("setTopLevelChannelAllowFrom", () => {
-  it("writes allowFrom and can force enabled state", () => {
-    const next = setTopLevelChannelAllowFrom({
-      cfg: {},
-      channel: "msteams",
-      allowFrom: ["user-1"],
-      enabled: true,
-    });
-    expect(next.channels?.msteams?.allowFrom).toEqual(["user-1"]);
-    expect(next.channels?.msteams?.enabled).toBe(true);
-  });
-});
-
-describe("setTopLevelChannelGroupPolicy", () => {
-  it("writes groupPolicy and can force enabled state", () => {
-    const next = setTopLevelChannelGroupPolicy({
-      cfg: {},
-      channel: "feishu",
-      groupPolicy: "allowlist",
-      enabled: true,
-    });
-    expect(next.channels?.feishu?.groupPolicy).toBe("allowlist");
-    expect(next.channels?.feishu?.enabled).toBe(true);
   });
 });
 
@@ -984,52 +928,6 @@ describe("createTopLevelChannelGroupPolicySetter", () => {
 
     expect(next.channels?.feishu?.groupPolicy).toBe("allowlist");
     expect(next.channels?.feishu?.enabled).toBe(true);
-  });
-});
-
-describe("setAccountDmAllowFromForChannel", () => {
-  it("writes account-scoped allowlist dm config", () => {
-    const next = setAccountDmAllowFromForChannel({
-      cfg: {},
-      channel: "discord",
-      accountId: DEFAULT_ACCOUNT_ID,
-      allowFrom: ["123"],
-    });
-
-    expect(next.channels?.discord?.dmPolicy).toBe("allowlist");
-    expect(next.channels?.discord?.allowFrom).toEqual(["123"]);
-  });
-});
-
-describe("resolveGroupAllowlistWithLookupNotes", () => {
-  it("returns resolved values when lookup succeeds", async () => {
-    const prompter = createPrompter([]);
-    await expect(
-      resolveGroupAllowlistWithLookupNotes({
-        label: "Discord channels",
-        prompter,
-        entries: ["general"],
-        fallback: [],
-        resolve: async () => ["guild/channel"],
-      }),
-    ).resolves.toEqual(["guild/channel"]);
-    expect(prompter.note).not.toHaveBeenCalled();
-  });
-
-  it("notes lookup failure and returns the fallback", async () => {
-    const prompter = createPrompter([]);
-    await expect(
-      resolveGroupAllowlistWithLookupNotes({
-        label: "Slack channels",
-        prompter,
-        entries: ["general"],
-        fallback: ["general"],
-        resolve: async () => {
-          throw new Error("boom");
-        },
-      }),
-    ).resolves.toEqual(["general"]);
-    expect(prompter.note).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1241,20 +1139,6 @@ describe("resolveEntriesWithOptionalToken", () => {
           entries.map((input) => ({ input, resolved: true, id: `${token}:${input}` })),
       }),
     ).resolves.toEqual([{ input: "alice", resolved: true, id: "xoxb-test:alice" }]);
-  });
-});
-
-describe("resolveParsedAllowFromEntries", () => {
-  it("maps parsed ids into resolved/unresolved entries", () => {
-    expect(
-      resolveParsedAllowFromEntries({
-        entries: ["alice", " "],
-        parseId: (raw) => raw.trim() || null,
-      }),
-    ).toEqual([
-      { input: "alice", resolved: true, id: "alice" },
-      { input: " ", resolved: false, id: null },
-    ]);
   });
 });
 

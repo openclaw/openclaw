@@ -146,7 +146,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +4: session discussion state, info, provider, and registration contracts.
       // +2: structured media placeholder formatter and its text-fact contract.
       // +2: narrow settled-turn finalization result and safe full-attempt projector.
-      4723,
+      4679,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -154,7 +154,7 @@ export function readPluginSdkSurfaceBudgets(env = process.env) {
       // +1: session discussion provider registration.
       // +1: structured media placeholder formatter for text-only channel carriers.
       // +1: settled-turn full-attempt projector.
-      2881,
+      2842,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

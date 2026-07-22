@@ -549,7 +549,7 @@ const setupWizard: ChannelSetupWizard = {
 
     - `createDetectedBinaryStatus(...)` for status blocks that vary only by labels, hints, scores, and binary detection
     - `createCliPathTextInput(...)` for path-backed text inputs
-    - `createDelegatedSetupWizardStatusResolvers(...)`, `createDelegatedPrepare(...)`, `createDelegatedFinalize(...)`, and `createDelegatedResolveConfigured(...)` when `setupEntry` needs to forward to a heavier full wizard lazily
+    - `createDelegatedSetupWizardProxy(...)` when `setupEntry` needs to forward status, prepare, or finalize behavior to a heavier full wizard lazily
     - `createDelegatedTextInputShouldPrompt(...)` when `setupEntry` only needs to delegate a `textInputs[*].shouldPrompt` decision
 
   </Accordion>

@@ -9,97 +9,9 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   createAllowlistSetupWizardProxy,
-  createDelegatedFinalize,
-  createDelegatedPrepare,
-  createDelegatedResolveConfigured,
   createDelegatedSetupWizardProxy,
 } from "./setup-wizard-proxy.js";
 import type { ChannelSetupWizard } from "./setup-wizard.js";
-
-describe("createDelegatedResolveConfigured", () => {
-  it("forwards configured resolution to the loaded wizard", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: async ({ cfg, accountId }) =>
-            Boolean(cfg.channels?.[accountId ?? "demo"]),
-        },
-        credentials: [],
-      }),
-    );
-
-    const resolveConfigured = createDelegatedResolveConfigured(loadWizard);
-
-    expect(await resolveConfigured({ cfg: {} })).toBe(false);
-    expect(await resolveConfigured({ cfg: { channels: { work: {} } }, accountId: "work" })).toBe(
-      true,
-    );
-  });
-});
-
-describe("createDelegatedPrepare", () => {
-  it("forwards prepare when the loaded wizard implements it", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
-        },
-        credentials: [],
-        prepare: async ({ cfg }) => ({ cfg: { ...cfg, channels: { demo: { enabled: true } } } }),
-      }),
-    );
-
-    const prepare = createDelegatedPrepare(loadWizard);
-
-    expect(await runSetupWizardPrepare({ prepare })).toEqual({
-      cfg: {
-        channels: {
-          demo: { enabled: true },
-        },
-      },
-    });
-  });
-});
-
-describe("createDelegatedFinalize", () => {
-  it("forwards finalize when the loaded wizard implements it", async () => {
-    const loadWizard = vi.fn(
-      async (): Promise<ChannelSetupWizard> => ({
-        channel: "demo",
-        status: {
-          configuredLabel: "configured",
-          unconfiguredLabel: "needs setup",
-          resolveConfigured: () => true,
-        },
-        credentials: [],
-        finalize: async ({ cfg, forceAllowFrom }) => ({
-          cfg: {
-            ...cfg,
-            channels: {
-              demo: { forceAllowFrom },
-            },
-          },
-        }),
-      }),
-    );
-
-    const finalize = createDelegatedFinalize(loadWizard);
-
-    expect(await runSetupWizardFinalize({ finalize, forceAllowFrom: true })).toEqual({
-      cfg: {
-        channels: {
-          demo: { forceAllowFrom: true },
-        },
-      },
-    });
-  });
-});
 
 describe("createAllowlistSetupWizardProxy", () => {
   it("falls back when delegated surfaces are absent", async () => {

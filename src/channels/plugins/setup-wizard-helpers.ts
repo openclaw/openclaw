@@ -280,7 +280,7 @@ export function patchTopLevelChannelConfigSection(params: {
   };
 }
 
-export function setTopLevelChannelAllowFrom(params: {
+function setTopLevelChannelAllowFrom(params: {
   cfg: OpenClawConfig;
   channel: string;
   allowFrom: string[];
@@ -318,7 +318,7 @@ export function setTopLevelChannelDmPolicyWithAllowFrom(params: {
   });
 }
 
-export function setTopLevelChannelGroupPolicy(params: {
+function setTopLevelChannelGroupPolicy(params: {
   cfg: OpenClawConfig;
   channel: string;
   groupPolicy: GroupPolicy;
@@ -395,7 +395,7 @@ export function createTopLevelChannelGroupPolicySetter(params: {
     });
 }
 
-export function setAccountGroupPolicyForChannel(params: {
+function setAccountGroupPolicyForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId: string;
@@ -409,7 +409,7 @@ export function setAccountGroupPolicyForChannel(params: {
   });
 }
 
-export function setAccountDmAllowFromForChannel(params: {
+function setAccountDmAllowFromForChannel(params: {
   cfg: OpenClawConfig;
   channel: string;
   accountId: string;
@@ -423,7 +423,7 @@ export function setAccountDmAllowFromForChannel(params: {
   });
 }
 
-export async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
+async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
   label: string;
   prompter: Pick<WizardPrompter, "note">;
   entries: string[];
@@ -964,7 +964,7 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
   });
 }
 
-export function resolveParsedAllowFromEntries(params: {
+function resolveParsedAllowFromEntries(params: {
   entries: string[];
   parseId: (raw: string) => string | null;
 }): ChannelSetupWizardAllowFromEntry[] {
