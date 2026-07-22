@@ -5,10 +5,6 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-} from "../lib/chat/outbox-store.ts";
-import {
   isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -126,17 +122,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected outboxCountForSessionKey(sessionKey: string): number {
-    const context = this.context;
-    const scope = resolveStoredChatOutboxScope(
-      {
-        settings: { gatewayUrl: context?.gateway.connection?.gatewayUrl },
-        assistantAgentId: context?.gateway.snapshot.assistantAgentId,
-        agentsList: context?.agents.state.agentsList,
-        hello: context?.gateway.snapshot.hello,
-      },
-      sessionKey,
-    );
-    return this.outboxCountsByScope.get(storedChatOutboxScopeKey(scope)) ?? 0;
+    return this.outboxCountForSession(sessionKey);
   }
 
   protected getSessionNavigationState() {

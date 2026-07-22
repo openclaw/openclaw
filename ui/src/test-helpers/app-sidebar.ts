@@ -37,7 +37,7 @@ export type SidebarLifecycleState = HTMLElement & {
   enabledRouteIds?: readonly NavigationRouteId[];
   connected: boolean;
   offline: boolean;
-  outboxCountsByScope: ReadonlyMap<string, number>;
+  outboxCountForSession: (sessionKey: string) => number;
   queuedOutboxCount: number;
   lastError: string | null;
   terminalAvailable: boolean;
