@@ -210,6 +210,62 @@ test("sessions.diagnose picks a session-id-only active session beyond the bounde
   });
 });
 
+test("sessions.diagnose does not preselect a stale row from a conflicting keyed run id", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  await writeSessionStore({
+    entries: {
+      "agent:main:stale": sessionStoreEntry("sess-shared", {
+        status: "running",
+        updatedAt: 1,
+      }),
+      "agent:main:newest": sessionStoreEntry("sess-newest", {
+        updatedAt: 2,
+      }),
+    },
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>(
+    "sessions.diagnose",
+    {},
+    {
+      context: {
+        chatAbortControllers: new Map([
+          [
+            "run-other",
+            {
+              controller: new AbortController(),
+              sessionId: "sess-shared",
+              sessionKey: "agent:main:other",
+              agentId: "main",
+              startedAtMs: now - 1_000,
+              expiresAtMs: now + 60_000,
+              kind: "agent",
+            },
+          ],
+        ]),
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    chosenBecause: "newest stored session",
+    session: {
+      key: "agent:main:newest",
+      sessionId: "sess-newest",
+      hasActiveRun: false,
+    },
+    live: {
+      gatewayRun: {
+        hasActiveRun: false,
+        runs: [],
+      },
+    },
+  });
+});
+
 test("sessions.diagnose picks an embedded active session beyond the bounded newest scan", async () => {
   await createSessionStoreDir();
   const now = Date.now();

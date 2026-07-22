@@ -83,6 +83,36 @@ describe("session active runs", () => {
     ).toEqual({ active: true, runIds: ["run-a", "run-z"] });
   });
 
+  it("does not match a conflicting keyed run by session id alone", () => {
+    const context = contextWithRuns([
+      [
+        "run-other",
+        {
+          sessionId: "session-1",
+          sessionKey: "agent:main:other",
+          agentId: "main",
+        },
+      ],
+    ]);
+
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ active: false, runIds: [] });
+    expect(
+      collectTrackedActiveSessionRunSnapshot({
+        context,
+        requestedKey: "agent:main:main",
+        canonicalKey: "agent:main:main",
+        sessionId: "session-1",
+      }),
+    ).toEqual({ hasActiveRun: false, runs: [] });
+  });
+
   it("projects a lifecycle-owned worker run without widening event visibility", () => {
     registerAgentRunContext("worker-run", {
       isControlUiVisible: false,

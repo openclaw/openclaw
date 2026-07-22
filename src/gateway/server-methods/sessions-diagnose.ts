@@ -19,11 +19,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionStateSnapshot } from "../../logging/diagnostic-session-state.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
-import {
-  isUnscopedSessionKeySentinel,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
@@ -33,6 +29,7 @@ import {
 import {
   collectTrackedActiveSessionRuns,
   collectTrackedActiveSessionRunSnapshot,
+  isTrackedActiveSessionRunForTarget,
   resolveVisibleActiveSessionRunState,
   type TrackedActiveSessionRun,
 } from "./session-active-runs.js";
@@ -119,20 +116,16 @@ function hasDiagnoseTrackedActiveRun(params: {
   agentId?: string;
   defaultAgentId: string;
 }): boolean {
-  return params.activeRuns.some((active) => {
-    if (params.sessionId && active.sessionId === params.sessionId) {
-      return true;
-    }
-    if (active.sessionKey !== params.key) {
-      return false;
-    }
-    if (!isUnscopedSessionKeySentinel(params.key)) {
-      return true;
-    }
-    const requestedAgentId = normalizeAgentId(params.agentId ?? params.defaultAgentId);
-    const activeAgentId = normalizeAgentId(active.agentId ?? params.defaultAgentId);
-    return activeAgentId === requestedAgentId;
-  });
+  return params.activeRuns.some((active) =>
+    isTrackedActiveSessionRunForTarget(active, {
+      requestedKey: params.key,
+      canonicalKey: params.key,
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      defaultAgentId: params.defaultAgentId,
+      scopeUnknownByAgent: true,
+    }),
+  );
 }
 
 function scoreDiagnoseCandidatePreselect(params: {

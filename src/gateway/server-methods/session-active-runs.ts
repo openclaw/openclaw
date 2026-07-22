@@ -86,22 +86,16 @@ export function collectTrackedActiveSessionRunSnapshot(params: {
       ...(sessionId ? { sessionId } : {}),
       agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
     };
-    const matches =
-      (targetSessionId !== undefined && sessionId === targetSessionId) ||
-      isTrackedActiveSessionRunForKey(
-        projected,
-        params.canonicalKey,
-        params.agentId,
-        params.defaultAgentId,
-        { scopeUnknownByAgent: params.scopeUnknownByAgent },
-      ) ||
-      isTrackedActiveSessionRunForKey(
-        projected,
-        params.requestedKey,
-        params.agentId,
-        params.defaultAgentId,
-        { scopeUnknownByAgent: params.scopeUnknownByAgent },
-      );
+    const matches = isTrackedActiveSessionRunForTarget(projected, {
+      requestedKey: params.requestedKey,
+      canonicalKey: params.canonicalKey,
+      ...(targetSessionId ? { sessionId: targetSessionId } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
+      ...(params.scopeUnknownByAgent !== undefined
+        ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+        : {}),
+    });
     if (!matches) {
       continue;
     }
@@ -167,6 +161,44 @@ function isTrackedActiveSessionRunForKey(
     : false;
 }
 
+export function isTrackedActiveSessionRunForTarget(
+  active: TrackedActiveSessionRun,
+  params: {
+    requestedKey: string;
+    canonicalKey: string;
+    sessionId?: string;
+    agentId?: string;
+    defaultAgentId?: string;
+    scopeUnknownByAgent?: boolean;
+  },
+): boolean {
+  const matchesCanonicalKey = isTrackedActiveSessionRunForKey(
+    active,
+    params.canonicalKey,
+    params.agentId,
+    params.defaultAgentId,
+    { scopeUnknownByAgent: params.scopeUnknownByAgent },
+  );
+  const matchesRequestedKey =
+    params.requestedKey === params.canonicalKey
+      ? matchesCanonicalKey
+      : isTrackedActiveSessionRunForKey(
+          active,
+          params.requestedKey,
+          params.agentId,
+          params.defaultAgentId,
+          { scopeUnknownByAgent: params.scopeUnknownByAgent },
+        );
+  const targetSessionId = params.sessionId?.trim() || undefined;
+  // Session-id-only controllers predate keyed run state; keyed controllers must
+  // still match the diagnosed key so a reused id cannot borrow another session's run.
+  const matchesSessionId =
+    targetSessionId !== undefined &&
+    active.sessionId === targetSessionId &&
+    (!active.sessionKey || matchesCanonicalKey || matchesRequestedKey);
+  return matchesCanonicalKey || matchesRequestedKey || matchesSessionId;
+}
+
 /** Returns true when either requested or canonical session key has a visible active run. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
@@ -207,23 +239,17 @@ export function resolveVisibleActiveSessionRunState(params: {
 }): { active: boolean; runIds: string[] } {
   const sessionId = params.sessionId?.trim();
   const runIds = collectTrackedActiveSessionRuns(params.context)
-    .filter(
-      (active) =>
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.canonicalKey,
-          params.agentId,
-          params.defaultAgentId,
-          { scopeUnknownByAgent: params.scopeUnknownByAgent },
-        ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          params.agentId,
-          params.defaultAgentId,
-          { scopeUnknownByAgent: params.scopeUnknownByAgent },
-        ) ||
-        (sessionId !== undefined && active.sessionId === sessionId),
+    .filter((active) =>
+      isTrackedActiveSessionRunForTarget(active, {
+        requestedKey: params.requestedKey,
+        canonicalKey: params.canonicalKey,
+        ...(sessionId ? { sessionId } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
+        ...(params.scopeUnknownByAgent !== undefined
+          ? { scopeUnknownByAgent: params.scopeUnknownByAgent }
+          : {}),
+      }),
     )
     .map((active) => active.runId)
     .toSorted();
