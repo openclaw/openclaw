@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentCommandOpts } from "../../agents/command/types.js";
+import { formatProviderModelRef } from "../../auto-reply/model-runtime.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -11,8 +12,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveAgentDeliveryPlanWithSessionRoute } from "../../infra/outbound/agent-delivery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { formatSessionResetAck } from "../../sessions/session-reset-reply.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  loadSessionEntry,
+  resolveGatewaySessionThinkingProjection,
+  resolveSessionModelRef,
+} from "../session-utils.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 export async function runSessionResetFromAgent(params: {
@@ -37,11 +43,45 @@ export async function runSessionResetFromAgent(params: {
     ok: true as const,
     key: result.key,
     sessionId: result.entry.sessionId,
+    entry: result.entry,
+    agentId: result.agentId,
   };
 }
 
 export function sessionResetAckText(reason: "new" | "reset"): string {
-  return reason === "new" ? "✅ New session started." : "✅ Session reset.";
+  return formatSessionResetAck({ reason });
+}
+
+function resolveSessionResetAckText(params: {
+  cfg: OpenClawConfig;
+  reason: "new" | "reset";
+  sessionKey: string;
+  sessionEntry?: SessionEntry;
+  agentId?: string;
+}): string {
+  if (params.cfg.commands?.showRuntimeStatusOnReset !== true) {
+    return sessionResetAckText(params.reason);
+  }
+  const agentId =
+    params.agentId ??
+    resolveAgentIdFromSessionKey(params.sessionKey) ??
+    resolveDefaultAgentId(params.cfg);
+  const modelRef = resolveSessionModelRef(params.cfg, params.sessionEntry, agentId);
+  const thinking = resolveGatewaySessionThinkingProjection({
+    cfg: params.cfg,
+    provider: modelRef.provider,
+    model: modelRef.model,
+    agentId,
+    sessionKey: params.sessionKey,
+    entry: params.sessionEntry,
+  }).effectiveThinkingLevel;
+  return formatSessionResetAck({
+    reason: params.reason,
+    runtimeStatus: {
+      model: formatProviderModelRef(modelRef.provider, modelRef.model),
+      thinking,
+    },
+  });
 }
 
 export function buildBareSessionResetResult(params: {
@@ -162,11 +202,20 @@ export async function resolveBareSessionResetResult(params: {
   ackText?: string;
 }) {
   params.assertCurrent?.();
+  const ackText =
+    params.ackText ??
+    resolveSessionResetAckText({
+      cfg: params.cfg,
+      reason: params.reason,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      agentId: params.agentId,
+    });
   if (params.request.deliver !== true) {
     return buildBareSessionResetResult({
       reason: params.reason,
       sessionId: params.sessionId,
-      ackText: params.ackText,
+      ackText,
     });
   }
   const sendPolicy = resolveSendPolicy({
@@ -231,7 +280,7 @@ export async function resolveBareSessionResetResult(params: {
     originMessageChannel: params.originMessageChannel ?? deliveryPlan.resolvedChannel,
     runId: params.runId,
     assertCurrent: params.assertCurrent,
-    ackText: params.ackText,
+    ackText,
   });
 }
 

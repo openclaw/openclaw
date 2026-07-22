@@ -502,6 +502,88 @@ describe("handleCommands reset hooks", () => {
     expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
   });
 
+  it("can include the resolved model and thinking level in bare /new replies", async () => {
+    const params = buildResetParams("/new", {
+      commands: { text: true, showRuntimeStatusOnReset: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.provider = "openai";
+    params.model = "gpt-4.1";
+    params.resolvedThinkLevel = "medium";
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started.\nModel: openai/gpt-4.1\nThink: medium" },
+    });
+    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
+  });
+
+  it("uses the target session runtime state in bare /new replies", async () => {
+    const params = buildResetParams(
+      "/new",
+      {
+        commands: { text: true, showRuntimeStatusOnReset: true },
+        channels: { telegram: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        Provider: "telegram",
+        Surface: "telegram",
+        CommandSource: "native",
+        CommandTargetSessionKey: "agent:main:telegram:direct:123",
+        SessionKey: "telegram:slash:123",
+        SenderId: "123",
+      },
+    );
+    params.sessionKey = "agent:main:telegram:direct:123";
+    params.provider = "openai";
+    params.model = "gpt-4.1";
+    params.resolvedThinkLevel = "medium";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+      modelProvider: "openai",
+      model: "gpt-4.1",
+      thinkingLevel: "medium",
+    } as HandleCommandsParams["sessionEntry"];
+    params.sessionStore = {
+      "agent:main:telegram:direct:123": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        thinkingLevel: "xhigh",
+      },
+    };
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started.\nModel: openai-codex/gpt-5.5\nThink: xhigh" },
+    });
+    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
+  });
+
+  it("can include the default thinking level in bare /reset replies", async () => {
+    const params = buildResetParams("/reset", {
+      commands: { text: true, showRuntimeStatusOnReset: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig);
+    params.provider = "anthropic";
+    params.model = "claude-sonnet-4-6";
+    params.resolveDefaultThinkingLevel = async () => "high";
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ Session reset.\nModel: anthropic/claude-sonnet-4-6\nThink: high" },
+    });
+    expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
+  });
+
   it("keeps reset tails falling through so the model receives the user input", async () => {
     const params = buildResetParams("/Reset take notes", {
       commands: { text: true },
