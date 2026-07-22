@@ -1,5 +1,12 @@
+/* oxlint-disable max-lines -- TODO: split Agentic OS runtime contract state machine after PR #112589 blocker rework. */
 import { randomUUID } from "node:crypto";
 import { spawnSubagentDirect } from "../agents/subagent-spawn.js";
+import {
+  loadAgenticOsRuntimeSnapshot,
+  resetAgenticOsRuntimeStoreForTest,
+  runtimeSnapshotPath,
+  saveAgenticOsRuntimeSnapshot,
+} from "./agentic-os-runtime-contract-store.js";
 
 const CONTRACT_VERSION = "v1";
 const AGENTIC_OS_ALLOW_LEASE_MAX_TTL_MS = 24 * 60 * 60 * 1000;
@@ -100,6 +107,7 @@ type SessionRecord = {
 };
 
 type ReleaseReplay = {
+  releaseIdempotencyKey: string;
   fingerprint: string;
   response: Record<string, unknown>;
   createdAtMs: number;
@@ -109,6 +117,7 @@ type ReleaseReplay = {
 type SpawnPending = {
   fingerprint: string;
   promise: Promise<SessionRecord>;
+  authenticatedPrincipalId: string;
 };
 
 const leasesByGatewayId = new Map<string, LeaseRecord>();
@@ -120,6 +129,14 @@ const spawnByIdempotencyKey = new Map<string, SessionRecord>();
 const spawnByClientRequestId = new Map<string, SessionRecord>();
 const spawnPendingByIdempotencyKey = new Map<string, SpawnPending>();
 const spawnPendingByClientRequestId = new Map<string, SpawnPending>();
+
+type RuntimeSnapshot = {
+  leases: LeaseRecord[];
+  releaseReplays: ReleaseReplay[];
+  sessions: SessionRecord[];
+};
+
+let loadedSnapshotPath: string | undefined;
 
 class ContractInputError extends Error {}
 
@@ -138,6 +155,69 @@ function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
+}
+
+function snapshotRuntimeState(): RuntimeSnapshot {
+  return {
+    leases: [...acquireByIdempotencyKey.values()],
+    releaseReplays: [...releaseByReleaseIdempotencyKey.values()],
+    sessions: [...sessionsByKey.values()],
+  };
+}
+
+function hydrateRuntimeSnapshot(snapshot: RuntimeSnapshot): void {
+  leasesByGatewayId.clear();
+  acquireByIdempotencyKey.clear();
+  acquireByClientLeaseId.clear();
+  releaseByReleaseIdempotencyKey.clear();
+  sessionsByKey.clear();
+  spawnByIdempotencyKey.clear();
+  spawnByClientRequestId.clear();
+  spawnPendingByIdempotencyKey.clear();
+  spawnPendingByClientRequestId.clear();
+
+  for (const lease of snapshot.leases) {
+    acquireByIdempotencyKey.set(lease.acquireIdempotencyKey, lease);
+    acquireByClientLeaseId.set(lease.clientLeaseId, lease);
+    if (!lease.released_at_ms) {
+      leasesByGatewayId.set(lease.gatewayLeaseId, lease);
+    }
+  }
+  for (const replay of snapshot.releaseReplays) {
+    if (replay.releaseIdempotencyKey) {
+      releaseByReleaseIdempotencyKey.set(replay.releaseIdempotencyKey, replay);
+    }
+  }
+  for (const session of snapshot.sessions) {
+    sessionsByKey.set(session.sessionKey, session);
+    spawnByIdempotencyKey.set(session.idempotencyKey, session);
+    spawnByClientRequestId.set(session.clientRequestId, session);
+  }
+}
+
+function ensureRuntimeStateLoaded(): void {
+  const storePath = runtimeSnapshotPath();
+  if (loadedSnapshotPath === storePath) {
+    return;
+  }
+  hydrateRuntimeSnapshot((loadAgenticOsRuntimeSnapshot() as RuntimeSnapshot | undefined) ?? {
+    leases: [],
+    releaseReplays: [],
+    sessions: [],
+  });
+  loadedSnapshotPath = storePath;
+}
+
+function persistRuntimeState(): void {
+  ensureRuntimeStateLoaded();
+  saveAgenticOsRuntimeSnapshot(snapshotRuntimeState());
+  loadedSnapshotPath = runtimeSnapshotPath();
+}
+
+export function resetAgenticOsRuntimeContractForTest(): void {
+  resetAgenticOsRuntimeStoreForTest();
+  loadedSnapshotPath = runtimeSnapshotPath();
+  hydrateRuntimeSnapshot({ leases: [], releaseReplays: [], sessions: [] });
 }
 
 function assertNoForbiddenAliases(
@@ -230,10 +310,12 @@ function rejectConflict(message: string): never {
 }
 
 function pruneExpiredLeases(now = Date.now()) {
+  let changed = false;
   for (const [gatewayLeaseId, record] of leasesByGatewayId.entries()) {
     if (!record.released_at_ms && record.expires_at_ms <= now) {
       record.released_at_ms = record.expires_at_ms;
       leasesByGatewayId.delete(gatewayLeaseId);
+      changed = true;
     }
   }
   for (const [key, record] of acquireByIdempotencyKey) {
@@ -245,11 +327,13 @@ function pruneExpiredLeases(now = Date.now()) {
       if (acquireByClientLeaseId.get(record.clientLeaseId) === record) {
         acquireByClientLeaseId.delete(record.clientLeaseId);
       }
+      changed = true;
     }
   }
   for (const [key, replay] of releaseByReleaseIdempotencyKey) {
     if (now - replay.createdAtMs > AGENTIC_OS_RUNTIME_REPLAY_RETENTION_MS) {
       releaseByReleaseIdempotencyKey.delete(key);
+      changed = true;
     }
   }
   for (const [sessionKey, record] of sessionsByKey) {
@@ -263,6 +347,10 @@ function pruneExpiredLeases(now = Date.now()) {
     if (spawnByClientRequestId.get(record.clientRequestId) === record) {
       spawnByClientRequestId.delete(record.clientRequestId);
     }
+    changed = true;
+  }
+  if (changed) {
+    persistRuntimeState();
   }
 }
 
@@ -277,6 +365,7 @@ export function acquireAgenticOsAllowLease(
   authenticatedRequesterAgentId?: string,
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_LEASE_CAMEL_ALIASES);
   const owner = pickStrings(params, ALLOW_LEASE_IDENTITY_FIELDS);
@@ -326,12 +415,14 @@ export function acquireAgenticOsAllowLease(
   leasesByGatewayId.set(gatewayLeaseId, record);
   acquireByIdempotencyKey.set(owner.idempotency_key, record);
   acquireByClientLeaseId.set(owner.client_lease_id, record);
+  persistRuntimeState();
   return leaseResponse(record);
 }
 
 export function listAgenticOsAllowLeases(
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   const leases = [...leasesByGatewayId.values()]
     .filter(
@@ -347,6 +438,7 @@ export function releaseAgenticOsAllowLease(
   authenticatedRequesterAgentId?: string,
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_RELEASE_ALIASES);
   const owner = pickStrings(params, ALLOW_LEASE_OWNER_FIELDS);
@@ -388,11 +480,13 @@ export function releaseAgenticOsAllowLease(
   const response = releaseResponse(record, metadataEnvelope(normalized));
   assertRecordCapacity(releaseByReleaseIdempotencyKey, "allow lease release replay");
   releaseByReleaseIdempotencyKey.set(releaseIdempotencyKey, {
+    releaseIdempotencyKey,
     fingerprint,
     response,
     createdAtMs: Date.now(),
     authenticatedPrincipalId,
   });
+  persistRuntimeState();
   return response;
 }
 
@@ -483,6 +577,7 @@ export async function spawnAgenticOsSession(
   authenticatedRequesterAgentId?: string,
   authenticatedPrincipalId = "internal",
 ): Promise<Record<string, unknown>> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_SPAWN_CAMEL_ALIASES);
   const clientRequestId = readString(params, "client_request_id");
@@ -495,7 +590,68 @@ export async function spawnAgenticOsSession(
   if (metadataClientRequestId !== clientRequestId || metadataIdempotencyKey !== idempotencyKey) {
     return rejectConflict("session metadata identity does not match spawn identity");
   }
-  pruneExpiredLeases();
+  const agentId =
+    typeof params.agentId === "string" && params.agentId
+      ? params.agentId
+      : String(metadata.agent_id);
+  if (agentId !== metadata.agent_id) {
+    return rejectConflict("spawn agentId does not match session metadata agent_id");
+  }
+  const taskName =
+    typeof params.taskName === "string" && params.taskName ? params.taskName : undefined;
+  const mode = params.mode === "session" ? "session" : "run";
+  const cleanup =
+    params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined;
+  const context =
+    params.context === "fork" || params.context === "isolated" ? params.context : undefined;
+  const lightContext = params.lightContext === true;
+  const fingerprint = stableJson({
+    client_request_id: clientRequestId,
+    idempotency_key: idempotencyKey,
+    gateway_lease_id: gatewayLeaseId,
+    task,
+    taskName,
+    mode,
+    cleanup,
+    context,
+    lightContext,
+    agentId,
+    metadata,
+  });
+  const existingByIdempotency = spawnByIdempotencyKey.get(idempotencyKey);
+  if (existingByIdempotency) {
+    if (existingByIdempotency.authenticatedPrincipalId !== authenticatedPrincipalId) {
+      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
+    }
+    if (existingByIdempotency.fingerprint !== fingerprint) {
+      return rejectConflict("conflicting sessions_spawn idempotency_key");
+    }
+    return spawnProjectionPayload(existingByIdempotency);
+  }
+  const existingByClientRequest = spawnByClientRequestId.get(clientRequestId);
+  if (existingByClientRequest) {
+    if (existingByClientRequest.authenticatedPrincipalId !== authenticatedPrincipalId) {
+      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
+    }
+    return rejectConflict("conflicting sessions_spawn client_request_id");
+  }
+  const pendingByIdempotency = spawnPendingByIdempotencyKey.get(idempotencyKey);
+  if (pendingByIdempotency) {
+    if (pendingByIdempotency.authenticatedPrincipalId !== authenticatedPrincipalId) {
+      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
+    }
+    if (pendingByIdempotency.fingerprint !== fingerprint) {
+      return rejectConflict("conflicting sessions_spawn idempotency_key");
+    }
+    return spawnProjectionPayload(await pendingByIdempotency.promise);
+  }
+  const pendingByClientRequest = spawnPendingByClientRequestId.get(clientRequestId);
+  if (pendingByClientRequest) {
+    if (pendingByClientRequest.authenticatedPrincipalId !== authenticatedPrincipalId) {
+      return rejectConflict("sessions_spawn belongs to a different authenticated principal");
+    }
+    return rejectConflict("conflicting sessions_spawn client_request_id");
+  }
   const lease = leasesByGatewayId.get(gatewayLeaseId);
   if (!lease || lease.gatewayLeaseId !== gatewayLeaseId || lease.released_at_ms) {
     return rejectConflict("gateway_lease_id is not active");
@@ -509,62 +665,22 @@ export async function spawnAgenticOsSession(
   if (lease.authenticatedPrincipalId !== authenticatedPrincipalId) {
     return rejectConflict("allow lease belongs to a different authenticated principal");
   }
-  const agentId =
-    typeof params.agentId === "string" && params.agentId
-      ? params.agentId
-      : String(metadata.agent_id);
-  if (agentId !== metadata.agent_id) {
-    return rejectConflict("spawn agentId does not match session metadata agent_id");
-  }
   requireLeaseAuthorizesSpawn({ lease, metadata, agentId });
-  const taskName =
-    typeof params.taskName === "string" && params.taskName ? params.taskName : undefined;
-  const fingerprint = stableJson({
-    client_request_id: clientRequestId,
-    idempotency_key: idempotencyKey,
-    gateway_lease_id: gatewayLeaseId,
-    task,
-    taskName,
-    agentId,
-    metadata,
-  });
-  const existingByIdempotency = spawnByIdempotencyKey.get(idempotencyKey);
-  if (existingByIdempotency) {
-    if (existingByIdempotency.fingerprint !== fingerprint) {
-      return rejectConflict("conflicting sessions_spawn idempotency_key");
-    }
-    return spawnProjectionPayload(existingByIdempotency);
-  }
-  const existingByClientRequest = spawnByClientRequestId.get(clientRequestId);
-  if (existingByClientRequest) {
-    return rejectConflict("conflicting sessions_spawn client_request_id");
-  }
-  const pendingByIdempotency = spawnPendingByIdempotencyKey.get(idempotencyKey);
-  if (pendingByIdempotency) {
-    if (pendingByIdempotency.fingerprint !== fingerprint) {
-      return rejectConflict("conflicting sessions_spawn idempotency_key");
-    }
-    return spawnProjectionPayload(await pendingByIdempotency.promise);
-  }
-  if (spawnPendingByClientRequestId.has(clientRequestId)) {
-    return rejectConflict("conflicting sessions_spawn client_request_id");
-  }
   assertRecordCapacity(spawnByIdempotencyKey, "session spawn replay");
   assertRecordCapacity(spawnPendingByIdempotencyKey, "pending session spawn");
   const pending: SpawnPending = {
     fingerprint,
+    authenticatedPrincipalId,
     promise: (async () => {
       const spawnResult = (await spawnSubagentDirect(
         {
           task,
           taskName,
           agentId,
-          mode: params.mode === "session" ? "session" : "run",
-          cleanup:
-            params.cleanup === "delete" || params.cleanup === "keep" ? params.cleanup : undefined,
-          context:
-            params.context === "fork" || params.context === "isolated" ? params.context : undefined,
-          lightContext: params.lightContext === true,
+          mode,
+          cleanup,
+          context,
+          lightContext,
           expectsCompletionMessage: false,
         },
         {
@@ -598,6 +714,7 @@ export async function spawnAgenticOsSession(
       sessionsByKey.set(sessionKey, record);
       spawnByIdempotencyKey.set(idempotencyKey, record);
       spawnByClientRequestId.set(clientRequestId, record);
+      persistRuntimeState();
       return record;
     })(),
   };
@@ -614,6 +731,7 @@ export async function spawnAgenticOsSession(
 export function listAgenticOsSessions(
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   const sessions = [...sessionsByKey.values()]
     .filter((record) => record.authenticatedPrincipalId === authenticatedPrincipalId)
@@ -625,6 +743,7 @@ export function statusAgenticOsSession(
   params: Record<string, unknown>,
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_SESSION_STATUS_CAMEL_ALIASES);
   const sessionKey = readString(params, "session_key");
@@ -643,6 +762,7 @@ export function historyAgenticOsSession(
   params: Record<string, unknown>,
   authenticatedPrincipalId = "internal",
 ): Record<string, unknown> {
+  ensureRuntimeStateLoaded();
   pruneExpiredLeases();
   assertNoForbiddenAliases(params, FORBIDDEN_HISTORY_CAMEL_ALIASES);
   const sessionKey = readString(params, "sessionKey");

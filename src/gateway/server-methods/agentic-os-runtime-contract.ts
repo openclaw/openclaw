@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { stripToolMessages } from "../../agents/tools/chat-history-text.js";
 import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ContractInputError,
@@ -198,7 +199,9 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       } catch {
         throw new ContractInputError("canonical chat.history read failed");
       }
-      return { ...tracked, messages: Array.isArray(canonical.messages) ? canonical.messages : [] };
+      const rawMessages = Array.isArray(canonical.messages) ? canonical.messages : [];
+      const messages = input.includeTools === true ? rawMessages : stripToolMessages(rawMessages);
+      return { ...tracked, messages };
     });
   },
 };

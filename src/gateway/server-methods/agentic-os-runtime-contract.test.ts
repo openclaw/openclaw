@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { spawnSubagentDirect } from "../../agents/subagent-spawn.js";
 import type { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -30,6 +33,7 @@ vi.mock("../../tasks/task-status-access.js", () => ({
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
 
 let agenticOsRuntimeContractHandlers: GatewayRequestHandlers;
+let runtimeStateDir: string | undefined;
 
 const acquireParams = {
   client_lease_id: "lease-a",
@@ -107,8 +111,13 @@ async function acquireLease(params: Record<string, unknown> = acquireParams) {
 
 describe("Agentic OS runtime contract v1", () => {
   beforeEach(async () => {
+    runtimeStateDir = mkdtempSync(path.join(tmpdir(), "openclaw-agentic-os-runtime-contract-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", runtimeStateDir);
     vi.resetModules();
-    ({ agenticOsRuntimeContractHandlers } = await import("./agentic-os-runtime-contract.js"));
+    const contract = await import("./agentic-os-runtime-contract.js");
+    ({ agenticOsRuntimeContractHandlers } = contract);
+    const runtimeContract = await import("../agentic-os-runtime-contract.js");
+    runtimeContract.resetAgenticOsRuntimeContractForTest();
     spawnSubagentDirectMock.mockClear();
     spawnSubagentDirectMock.mockResolvedValue({
       status: "accepted",
@@ -120,6 +129,14 @@ describe("Agentic OS runtime contract v1", () => {
     waitForAgentJobMock.mockResolvedValue(null);
     findTaskByRunIdForStatusMock.mockReset();
     findTaskByRunIdForStatusMock.mockReturnValue({ status: "running", startedAt: 5 });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (runtimeStateDir) {
+      rmSync(runtimeStateDir, { recursive: true, force: true });
+      runtimeStateDir = undefined;
+    }
   });
 
   it("replays duplicate allow lease acquire and rejects conflicting reuse", async () => {
@@ -245,6 +262,79 @@ describe("Agentic OS runtime contract v1", () => {
     );
   });
 
+  it("persists lease, session, and idempotency authority across Gateway module restart", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const spawnParams = {
+      task: "persist across restart",
+      taskName: "restart-safe",
+      runtime: "subagent",
+      mode: "run",
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: "spawn-a",
+      idempotency_key: "spawn-idem-a",
+      metadata: sessionMetadata,
+    };
+    const accepted = payload(await invoke("sessions_spawn", spawnParams));
+    expect(accepted.session_key).toBe("agent:ai-engineer:subagent:real-child");
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+
+    vi.resetModules();
+    ({ agenticOsRuntimeContractHandlers } = await import("./agentic-os-runtime-contract.js"));
+
+    const listedLeases = payload(await invoke("subagents.allowLease.status"));
+    expect(listedLeases.leases).toEqual(
+      expect.arrayContaining([expect.objectContaining({ gateway_lease_id: gatewayLeaseId })]),
+    );
+    const replayedSpawn = payload(await invoke("sessions_spawn", spawnParams));
+    expect(replayedSpawn.session_key).toBe(accepted.session_key);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+    const status = payload(
+      await invoke("sessions_status", { session_key: accepted.session_key as string }),
+    );
+    expect(status.session_key).toBe(accepted.session_key);
+
+    const releaseParams = {
+      ...releaseOwnerParams,
+      release_idempotency_key: "lease-release-idem-a",
+      gateway_lease_id: gatewayLeaseId,
+    };
+    const released = payload(await invoke("subagents.allowLease.release", releaseParams));
+    vi.resetModules();
+    ({ agenticOsRuntimeContractHandlers } = await import("./agentic-os-runtime-contract.js"));
+    expect(payload(await invoke("subagents.allowLease.release", releaseParams))).toEqual(released);
+  });
+
+  it("includes mode, cleanup, context, and lightContext in sessions_spawn replay fingerprints", async () => {
+    const gatewayLeaseId = await acquireLease();
+    const spawnParams = {
+      task: "fingerprint all launch controls",
+      taskName: "fingerprint-controls",
+      runtime: "subagent",
+      mode: "run",
+      cleanup: "keep",
+      context: "fork",
+      lightContext: true,
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: "spawn-a",
+      idempotency_key: "spawn-idem-a",
+      metadata: sessionMetadata,
+    };
+    payload(await invoke("sessions_spawn", spawnParams));
+    for (const changed of [
+      { mode: "session" },
+      { cleanup: "delete" },
+      { context: "isolated" },
+      { lightContext: false },
+    ]) {
+      expectInvalid(
+        await invoke("sessions_spawn", { ...spawnParams, ...changed }),
+        "conflicting sessions_spawn idempotency_key",
+      );
+    }
+  });
+
   it("rejects unleased legacy sessions_spawn callers before the runner", async () => {
     expectInvalid(
       await invoke("sessions_spawn", {
@@ -278,6 +368,42 @@ describe("Agentic OS runtime contract v1", () => {
     const first = invoke("sessions_spawn", spawnParams);
     const second = invoke("sessions_spawn", spawnParams);
     await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1));
+    resolveSpawn({
+      status: "accepted",
+      childSessionKey: "agent:ai-engineer:subagent:real-child",
+      runId: "run-real-child",
+    });
+    expect(payload(await first).session_key).toBe(payload(await second).session_key);
+    expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("replays a same-principal pending sessions_spawn before lease liveness rejection", async () => {
+    const gatewayLeaseId = await acquireLease();
+    let resolveSpawn!: (value: Awaited<ReturnType<typeof spawnSubagentDirect>>) => void;
+    spawnSubagentDirectMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveSpawn = resolve;
+      }),
+    );
+    const spawnParams = {
+      task: "pending duplicate survives released lease",
+      runtime: "subagent",
+      agentId: "ai-engineer",
+      gateway_lease_id: gatewayLeaseId,
+      client_request_id: "spawn-a",
+      idempotency_key: "spawn-idem-a",
+      metadata: sessionMetadata,
+    };
+    const first = invoke("sessions_spawn", spawnParams);
+    await vi.waitFor(() => expect(spawnSubagentDirectMock).toHaveBeenCalledTimes(1));
+    payload(
+      await invoke("subagents.allowLease.release", {
+        ...releaseOwnerParams,
+        release_idempotency_key: "lease-release-idem-a",
+        gateway_lease_id: gatewayLeaseId,
+      }),
+    );
+    const second = invoke("sessions_spawn", spawnParams);
     resolveSpawn({
       status: "accepted",
       childSessionKey: "agent:ai-engineer:subagent:real-child",
@@ -430,6 +556,59 @@ describe("Agentic OS runtime contract v1", () => {
     }
     expect(history.messages).toEqual([]);
     expect(history).not.toHaveProperty("task");
+  });
+
+  it("honors includeTools=false on sessions_history while preserving explicit tool history", async () => {
+    const { chatHistoryHandlers } = await import("./chat-history-handler.js");
+    const original = chatHistoryHandlers["chat.history"];
+    if (!original) {
+      throw new Error("missing chat.history handler");
+    }
+    chatHistoryHandlers["chat.history"] = async ({ respond }) => {
+      respond(true, {
+        messages: [
+          { role: "user", content: "hello" },
+          { role: "tool", content: "private tool input" },
+          { role: "toolResult", content: "private tool result" },
+          { role: "assistant", content: "done" },
+        ],
+      });
+    };
+    try {
+      const gatewayLeaseId = await acquireLease();
+      const accepted = payload(
+        await invoke("sessions_spawn", {
+          task: "verify history filtering",
+          runtime: "subagent",
+          agentId: "ai-engineer",
+          gateway_lease_id: gatewayLeaseId,
+          client_request_id: "spawn-a",
+          idempotency_key: "spawn-idem-a",
+          metadata: sessionMetadata,
+        }),
+      );
+      const sessionKey = accepted.session_key as string;
+      const defaultHistory = payload(await invoke("sessions_history", { sessionKey, limit: 5 }));
+      expect(defaultHistory.messages).toEqual([
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "done" },
+      ]);
+      const explicitFiltered = payload(
+        await invoke("sessions_history", { sessionKey, limit: 5, includeTools: false }),
+      );
+      expect(explicitFiltered.messages).toEqual(defaultHistory.messages);
+      const withTools = payload(
+        await invoke("sessions_history", { sessionKey, limit: 5, includeTools: true }),
+      );
+      expect(withTools.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ role: "tool" }),
+          expect.objectContaining({ role: "toolResult" }),
+        ]),
+      );
+    } finally {
+      chatHistoryHandlers["chat.history"] = original;
+    }
   });
 
   it("projects canonical failed child lifecycle without exposing raw failure text", async () => {

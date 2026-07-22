@@ -361,6 +361,7 @@ describe("Agentic OS authenticated real Gateway runtime contract", () => {
         await Promise.allSettled([
           disconnectGatewayClient(secondPrincipalClient),
           disconnectGatewayClient(readOnlyClient),
+          disconnectGatewayClient(writeOnlyClient),
           disconnectGatewayClient(client),
         ]);
       }
