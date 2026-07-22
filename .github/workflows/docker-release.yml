@@ -27,7 +27,7 @@ on:
           - promote-channel
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || format('docker-release-push-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'backfill' && format('docker-release-manual-{0}', inputs.tag) || 'docker-release-publish' }}
   cancel-in-progress: false
 
 env:
@@ -90,10 +90,15 @@ jobs:
         env:
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           RELEASE_OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'release' }}
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
             echo "::error::Docker releases require a v-prefixed release tag; got ${SOURCE_REF}."
+            exit 1
+          fi
+          if [[ "${RELEASE_OPERATION}" == "promote-channel" && "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Docker channel promotion must be dispatched from main; got ${WORKFLOW_REF}."
             exit 1
           fi
           version="${SOURCE_REF#refs/tags/v}"
@@ -126,7 +131,14 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_OPERATION: ${{ inputs.operation }}
-        run: echo "Approved Docker ${RELEASE_OPERATION} for ${RELEASE_TAG}"
+          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
+          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
+          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
+        run: |
+          echo "Approved Docker ${RELEASE_OPERATION} for ${RELEASE_TAG}"
+          echo "Default aliases: ${DEFAULT_ALIASES:-none}"
+          echo "Slim aliases: ${SLIM_ALIASES:-none}"
+          echo "Browser aliases: ${BROWSER_ALIASES:-none}"
 
   validate_publish_config:
     runs-on: ubuntu-24.04
@@ -779,15 +791,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       packages: write
-      contents: read
     steps:
-      - name: Checkout selected tag
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          ref: refs/tags/${{ inputs.tag }}
-          fetch-depth: 1
-          persist-credentials: false
-
       - *buildkit_prepull_step
       - name: Set up Docker Builder
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
@@ -864,27 +868,18 @@ jobs:
             done
           }
 
-          browser_supported=0
-          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
-            browser_supported=1
-          fi
-
           # Resolve every immutable source before moving any alias so missing
           # release images fail without leaving a partially promoted channel.
           for image in "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"; do
             require_group_source "${image}" "" "${DEFAULT_ALIASES}"
             require_group_source "${image}" "-slim" "${SLIM_ALIASES}"
-            if [[ "${browser_supported}" == "1" ]]; then
-              require_group_source "${image}" "-browser" "${BROWSER_ALIASES}"
-            fi
+            require_group_source "${image}" "-browser" "${BROWSER_ALIASES}"
           done
 
           for image in "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"; do
             promote_group "${image}" "" "${DEFAULT_ALIASES}"
             promote_group "${image}" "-slim" "${SLIM_ALIASES}"
-            if [[ "${browser_supported}" == "1" ]]; then
-              promote_group "${image}" "-browser" "${BROWSER_ALIASES}"
-            fi
+            promote_group "${image}" "-browser" "${BROWSER_ALIASES}"
           done
 
           {

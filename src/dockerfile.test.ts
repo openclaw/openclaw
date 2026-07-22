@@ -377,9 +377,9 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
     expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
-    expect(workflow.split("needs.resolve_release_policy.outputs.default_aliases")).toHaveLength(4);
-    expect(workflow.split("needs.resolve_release_policy.outputs.slim_aliases")).toHaveLength(4);
-    expect(workflow.split("needs.resolve_release_policy.outputs.browser_aliases")).toHaveLength(4);
+    expect(workflow.split("needs.resolve_release_policy.outputs.default_aliases")).toHaveLength(5);
+    expect(workflow.split("needs.resolve_release_policy.outputs.slim_aliases")).toHaveLength(5);
+    expect(workflow.split("needs.resolve_release_policy.outputs.browser_aliases")).toHaveLength(5);
   });
 
   it("promotes existing immutable Docker images without rebuilding them", async () => {
@@ -387,10 +387,13 @@ describe("Dockerfile", () => {
 
     expect(workflow).toContain("promote-channel-aliases:");
     expect(workflow).toContain("inputs.operation == 'promote-channel'");
+    expect(workflow).toContain("Docker channel promotion must be dispatched from main");
+    expect(workflow).toContain("'docker-release-publish'");
     expect(workflow).toContain("docker buildx imagetools create --prefer-index=false");
     expect(workflow).toContain('"${image}@${source_digest}"');
     expect(workflow).toContain('if [[ "${target_digest}" != "${source_digest}" ]]; then');
     expect(workflow).toContain('require_group_source "${image}" "-slim" "${SLIM_ALIASES}"');
+    expect(workflow).toContain('require_group_source "${image}" "-browser" "${BROWSER_ALIASES}"');
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {
