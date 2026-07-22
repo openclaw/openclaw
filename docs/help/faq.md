@@ -147,7 +147,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     ```json5
     {
       agents: {
-        list: [
+        entries: [
           {
             id: "coder",
             model: "xiaomi/mimo-v2.5-pro",

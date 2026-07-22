@@ -399,7 +399,7 @@ Example:
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       {
         id: "codex",
         runtime: {

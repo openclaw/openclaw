@@ -456,7 +456,7 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       { id: "main" },
       { id: "agent-a", workspace: "/home/user/agent-a" },
       { id: "agent-b", workspace: "/home/user/agent-b" },

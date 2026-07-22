@@ -173,7 +173,7 @@ Per-agent override: `agents.entries.*.subagents.delegationMode`.
         maxConcurrent: 4,
       },
     },
-    list: [
+    entries: [
       {
         id: "coordinator",
         subagents: { delegationMode: "prefer" },

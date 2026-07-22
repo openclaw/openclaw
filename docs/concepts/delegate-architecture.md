@@ -209,7 +209,7 @@ Route inbound messages to the delegate agent using [Multi-Agent Routing](/concep
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       { id: "main", workspace: "~/.openclaw/workspace" },
       {
         id: "delegate",

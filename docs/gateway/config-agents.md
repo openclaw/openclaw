@@ -46,7 +46,7 @@ Optional default skill allowlist for agents that do not set
 {
   agents: {
     defaults: { skills: ["github", "weather"] },
-    list: [
+    entries: [
       { id: "writer" }, // inherits github, weather
       { id: "docs", skills: ["docs-search"] }, // replaces defaults
       { id: "locked-down", skills: [] }, // no skills
@@ -141,7 +141,7 @@ injection behavior from the shared defaults. Omitted fields inherit from
       bootstrapMaxChars: 20000,
       bootstrapTotalMaxChars: 60000,
     },
-    list: [
+    entries: [
       {
         id: "strict-worker",
         contextInjection: "always",
@@ -260,7 +260,7 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: { memoryGetMaxChars: 12000 },
     },
-    list: [
+    entries: [
       {
         id: "tiny-local",
         contextLimits: {
@@ -291,7 +291,7 @@ Per-agent override for the skills prompt budget.
 ```json5
 {
   agents: {
-    list: [{ id: "tiny-local", skillsLimits: { maxSkillsPromptChars: 6000 } }],
+    entries: [{ id: "tiny-local", skillsLimits: { maxSkillsPromptChars: 6000 } }],
   },
 }
 ```
@@ -1050,7 +1050,7 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
       { id: "work", workspace: "~/.openclaw/workspace-work" },
     ],
@@ -1109,7 +1109,7 @@ For `type: "acp"` entries, OpenClaw resolves by exact conversation identity (`ma
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       {
         id: "family",
         workspace: "~/.openclaw/workspace-family",

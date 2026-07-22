@@ -727,7 +727,7 @@ Replace model IDs with exact names from `ollama list` or
     ```json5
     {
       agents: {
-        list: [
+        entries: [
           {
             id: "local",
             experimental: {

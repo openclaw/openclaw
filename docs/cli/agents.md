@@ -175,7 +175,7 @@ Config sample:
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       {
         id: "main",
         identity: {

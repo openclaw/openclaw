@@ -402,7 +402,7 @@ Common patterns: personal agent (full access, no sandbox), family/work agent (sa
 ```json5
 {
   agents: {
-    list: [
+    entries: [
       {
         id: "family",
         workspace: "~/.openclaw/workspace-family",
