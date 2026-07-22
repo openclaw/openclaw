@@ -69,6 +69,7 @@ export type EmbeddingProviderCreateOptions = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;

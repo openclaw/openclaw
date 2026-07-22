@@ -470,12 +470,12 @@ export type MemorySearchConfig = {
   queryInputType?: string;
   /** Optional provider-specific embedding input_type for document/index embeddings. */
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   /**
    * Gemini embedding-2 models only: output vector dimensions.
    * Supported values today are 768, 1536, and 3072.
    */
   outputDimensionality?: number;
-  /** Local embedding settings (node-llama-cpp). */
   local?: {
     /** GGUF model path or hf: URI. */
     modelPath?: string;

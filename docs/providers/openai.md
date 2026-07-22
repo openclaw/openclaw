@@ -204,6 +204,11 @@ embeddings use `queryInputType`; indexed memory chunks and batch indexing use
 [Memory configuration reference](/reference/memory-config#provider-specific-config)
 for the full example.
 
+For instruction-aware OpenAI or OpenAI-compatible embedding models, set
+`queryInstructionTemplate: true` under `memorySearch` to apply a known retrieval
+query template for matching Qwen3 embedding and Mixedbread `mxbai-embed-large`
+model ids. Indexed memory document batches stay raw.
+
 ## Getting started
 
 <Tabs>

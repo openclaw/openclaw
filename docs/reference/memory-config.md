@@ -231,13 +231,14 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
 
   </Accordion>
   <Accordion title="OpenAI-compatible input types">
-    OpenAI-compatible embedding endpoints can opt into provider-specific `input_type` request fields. This is useful for asymmetric embedding models that require different labels for query and document embeddings.
+    OpenAI-compatible embedding endpoints can opt into provider-specific `input_type` request fields and known query instruction templates. This is useful for asymmetric embedding models that require different labels or retrieval prompts for query and document embeddings.
 
-    | Key                 | Type     | Default | Description                                             |
-    | ------------------- | -------- | ------- | -------------------------------------------------------- |
-    | `inputType`         | `string` | unset   | Shared `input_type` for query and document embeddings   |
-    | `queryInputType`    | `string` | unset   | Query-time `input_type`; overrides `inputType`          |
-    | `documentInputType` | `string` | unset   | Index/document `input_type`; overrides `inputType`      |
+    | Key                        | Type      | Default | Description                                                                 |
+    | -------------------------- | --------- | ------- | --------------------------------------------------------------------------- |
+    | `inputType`                | `string`  | unset   | Shared `input_type` for query and document embeddings                       |
+    | `queryInputType`           | `string`  | unset   | Query-time `input_type`; overrides `inputType`                              |
+    | `documentInputType`        | `string`  | unset   | Index/document `input_type`; overrides `inputType`                          |
+    | `queryInstructionTemplate` | `boolean` | `false` | Apply a known retrieval query template for Qwen3 or Mixedbread IDs         |
 
     ```json5
     {
@@ -252,13 +253,14 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
             model: "asymmetric-embedder",
             queryInputType: "query",
             documentInputType: "passage",
+            queryInstructionTemplate: true,
           },
         },
       },
     }
     ```
 
-    Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
+    Changing `inputType`, `queryInputType`, or `documentInputType` affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently. `queryInstructionTemplate` changes query-time embeddings only; indexed document batches stay raw.
 
   </Accordion>
   <Accordion title="Bedrock">
