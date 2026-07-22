@@ -1695,24 +1695,6 @@ class OpenClawShell extends OpenClawLightDomElement {
               ></openclaw-connection-banner>`}
           <openclaw-update-banner
             .props=${{
-              statusBanner: overlaySnapshot.controlUiRefreshRequired
-                ? {
-                    tone: "info",
-                    text: "Server updated — refresh for full capabilities",
-                  }
-                : null,
-              action: overlaySnapshot.controlUiRefreshRequired
-                ? { label: t("common.refresh"), onClick: this.refreshControlUi }
-                : undefined,
-            }}
-          ></openclaw-update-banner>
-          <openclaw-update-banner
-            .props=${{
-              statusBanner: overlaySnapshot.updateStatusBanner,
-            }}
-          ></openclaw-update-banner>
-          <openclaw-update-banner
-            .props=${{
               statusBanner:
                 gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
                   ? {
@@ -1721,15 +1703,29 @@ class OpenClawShell extends OpenClawLightDomElement {
                         overlaySnapshot.deviceAuthMigrationError ??
                         t("login.deviceAuthMigration.banner"),
                     }
-                  : null,
+                  : overlaySnapshot.controlUiRefreshRequired
+                    ? {
+                        tone: "info",
+                        text: "Server updated — refresh for full capabilities",
+                      }
+                    : null,
               action:
-                overlaySnapshot.deviceAuthMigrationRequestId &&
-                !overlaySnapshot.deviceAuthMigrationBusy
-                  ? {
-                      label: t("login.deviceAuthMigration.action"),
-                      onClick: () => void context.overlays.secureThisBrowser(),
-                    }
-                  : undefined,
+                gatewaySnapshot.hello?.deviceAuthMigration?.pending === true
+                  ? overlaySnapshot.deviceAuthMigrationRequestId &&
+                    !overlaySnapshot.deviceAuthMigrationBusy
+                    ? {
+                        label: t("login.deviceAuthMigration.action"),
+                        onClick: () => void context.overlays.secureThisBrowser(),
+                      }
+                    : undefined
+                  : overlaySnapshot.controlUiRefreshRequired
+                    ? { label: t("common.refresh"), onClick: this.refreshControlUi }
+                    : undefined,
+            }}
+          ></openclaw-update-banner>
+          <openclaw-update-banner
+            .props=${{
+              statusBanner: overlaySnapshot.updateStatusBanner,
             }}
           ></openclaw-update-banner>
           ${renderFloatingUpdateCard({

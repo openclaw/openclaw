@@ -461,9 +461,6 @@ export function createApplicationOverlays(
         ...snapshot,
         updateAvailable: null,
         updateRunning: false,
-        deviceAuthMigrationRequestId: null,
-        deviceAuthMigrationBusy: false,
-        deviceAuthMigrationError: null,
       };
       if (!next.client) {
         connectedEpoch = 0;

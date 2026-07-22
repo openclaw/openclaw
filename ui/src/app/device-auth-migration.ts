@@ -30,9 +30,6 @@ export function createDeviceAuthMigrationController(params: {
   };
 
   return {
-    get snapshot(): DeviceAuthMigrationSnapshot {
-      return snapshot;
-    },
     reset() {
       generation += 1;
       update(EMPTY_SNAPSHOT);
