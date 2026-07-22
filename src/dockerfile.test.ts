@@ -334,10 +334,11 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
     expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
     expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
-    expect(workflow).toContain('${GHCR_IMAGE}:latest-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:latest-browser"');
-    expect(workflow).toContain('${GHCR_IMAGE}:main-browser"');
-    expect(workflow).toContain('${DOCKERHUB_IMAGE}:main-browser"');
+    expect(workflow).toContain(
+      "BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}",
+    );
+    expect(workflow).toContain('browser_tags+=("${GHCR_IMAGE}:${alias}")');
+    expect(workflow).toContain('dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${alias}")');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -366,17 +367,30 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
-  it("publishes beta Docker tags without advancing latest aliases", async () => {
+  it("keeps moving Docker aliases behind the release-version policy", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
-    expect(workflow).toContain("Existing stable or beta release tag to backfill");
+    expect(workflow).toContain("Existing stable, extended-stable, or beta release tag");
     expect(workflow).toContain('! "${RELEASE_TAG}" =~ ^v[0-9]{4}');
-    expect(workflow).toContain("(-beta\\.[1-9][0-9]*)?");
+    expect(workflow).toContain("(-(beta\\.)?[1-9][0-9]*)?");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
-    expect(workflow.split("do not advance latest/main aliases from those flows")).toHaveLength(3);
-    expect(workflow.split('"$version" =~ ^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9]+)?$')).toHaveLength(3);
+    expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
+    expect(workflow.split("needs.resolve_release_policy.outputs.default_aliases")).toHaveLength(4);
+    expect(workflow.split("needs.resolve_release_policy.outputs.slim_aliases")).toHaveLength(4);
+    expect(workflow.split("needs.resolve_release_policy.outputs.browser_aliases")).toHaveLength(4);
+  });
+
+  it("promotes existing immutable Docker images without rebuilding them", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("promote-channel-aliases:");
+    expect(workflow).toContain("inputs.operation == 'promote-channel'");
+    expect(workflow).toContain("docker buildx imagetools create --prefer-index=false");
+    expect(workflow).toContain('"${image}@${source_digest}"');
+    expect(workflow).toContain('if [[ "${target_digest}" != "${source_digest}" ]]; then');
+    expect(workflow).toContain('require_group_source "${image}" "-slim" "${SLIM_ALIASES}"');
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {

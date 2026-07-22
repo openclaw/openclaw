@@ -14,9 +14,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing stable or beta release tag to backfill (for example v2026.3.22 or v2026.3.22-beta.1)
+        description: Existing stable, extended-stable, or beta release tag
         required: true
         type: string
+      operation:
+        description: Build immutable images, or promote an existing immutable version to its moving channel aliases
+        required: true
+        type: choice
+        default: backfill
+        options:
+          - backfill
+          - promote-channel
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || format('docker-release-push-{0}', github.run_id) }}
@@ -45,7 +53,7 @@ jobs:
             echo "Docker alpha image publishing is disabled."
             exit 1
           fi
-          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-beta\.[1-9][0-9]*)?$ ]]; then
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-(beta\.)?[1-9][0-9]*)?$ ]]; then
             echo "Invalid release tag: ${RELEASE_TAG}"
             exit 1
           fi
@@ -56,18 +64,69 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 
+  resolve_release_policy:
+    needs: validate_manual_backfill
+    if: ${{ always() && (github.event_name != 'workflow_dispatch' || needs.validate_manual_backfill.result == 'success') }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.policy.outputs.version }}
+      channel: ${{ steps.policy.outputs.channel }}
+      default_aliases: ${{ steps.policy.outputs.default_aliases }}
+      slim_aliases: ${{ steps.policy.outputs.slim_aliases }}
+      browser_aliases: ${{ steps.policy.outputs.browser_aliases }}
+    steps:
+      - name: Checkout trusted workflow helpers
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-source
+          persist-credentials: false
+
+      - name: Resolve release channel policy
+        id: policy
+        shell: bash
+        env:
+          SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          RELEASE_OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'release' }}
+        run: |
+          set -euo pipefail
+          if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
+            echo "::error::Docker releases require a v-prefixed release tag; got ${SOURCE_REF}."
+            exit 1
+          fi
+          version="${SOURCE_REF#refs/tags/v}"
+          policy="$(node workflow-source/scripts/lib/docker-release-policy.mjs "${version}")"
+          channel="$(jq -r '.channel' <<< "${policy}")"
+          if [[ "${RELEASE_OPERATION}" == "promote-channel" && "${channel}" == "beta" ]]; then
+            echo "::error::Beta releases have no moving Docker channel aliases to promote."
+            exit 1
+          fi
+          default_aliases="$(jq -r '.movingAliases.default | join(" ")' <<< "${policy}")"
+          slim_aliases="$(jq -r '.movingAliases.slim | join(" ")' <<< "${policy}")"
+          browser_aliases="$(jq -r '.movingAliases.browser | join(" ")' <<< "${policy}")"
+          {
+            echo "version=${version}"
+            echo "channel=${channel}"
+            echo "default_aliases=${default_aliases}"
+            echo "slim_aliases=${slim_aliases}"
+            echo "browser_aliases=${browser_aliases}"
+          } >> "$GITHUB_OUTPUT"
+
   approve_manual_backfill:
     if: github.event_name == 'workflow_dispatch'
-    needs: validate_manual_backfill
+    needs: [validate_manual_backfill, resolve_release_policy]
     # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
     runs-on: ubuntu-24.04
     environment: docker-release
     permissions: {}
     steps:
-      - name: Approve Docker backfill
+      - name: Approve Docker operation
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-        run: echo "Approved Docker backfill for $RELEASE_TAG"
+          RELEASE_OPERATION: ${{ inputs.operation }}
+        run: echo "Approved Docker ${RELEASE_OPERATION} for ${RELEASE_TAG}"
 
   validate_publish_config:
     runs-on: ubuntu-24.04
@@ -86,6 +145,30 @@ jobs:
             exit 1
           fi
           echo "Docker Hub publishing configured for ${DOCKERHUB_IMAGE}."
+
+  resolve_build_provenance:
+    needs: [approve_manual_backfill, resolve_release_policy, validate_publish_config]
+    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || (needs.approve_manual_backfill.result == 'success' && inputs.operation == 'backfill')) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      built_at: ${{ steps.build_provenance.outputs.built_at }}
+      source_sha: ${{ steps.build_provenance.outputs.source_sha }}
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve shared build provenance
+        id: build_provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
   # KEEP THIS WORKFLOW ON GITHUB-HOSTED RUNNERS.
   # DO NOT MOVE IT BACK TO BLACKSMITH WITHOUT RE-VALIDATING TAG BUILDS AND BACKFILLS.
@@ -533,7 +616,15 @@ jobs:
 
   # Create multi-platform manifests
   create-manifest:
-    needs: [approve_manual_backfill, validate_publish_config, build-amd64, build-arm64]
+    needs:
+      [
+        approve_manual_backfill,
+        resolve_release_policy,
+        validate_publish_config,
+        resolve_build_provenance,
+        build-amd64,
+        build-arm64,
+      ]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
     runs-on: ubuntu-24.04
@@ -569,6 +660,9 @@ jobs:
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
+          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
+          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
         run: |
           set -euo pipefail
           tags=()
@@ -591,16 +685,25 @@ jobs:
               browser_tags+=("${GHCR_IMAGE}:${version}-browser")
               dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${version}-browser")
             fi
-            # Beta releases and manual backfills publish only immutable version tags;
-            # do not advance latest/main aliases from those flows.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              tags+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
-              slim_tags+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
-              dockerhub_tags+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-              dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:slim" "${DOCKERHUB_IMAGE}:main-slim")
+            # Manual backfills publish immutable tags only. Tag pushes advance
+            # only the moving aliases assigned by the release-version policy.
+            if [[ "${IS_MANUAL_BACKFILL}" != "1" ]]; then
+              read -r -a default_aliases <<< "${DEFAULT_ALIASES}"
+              read -r -a slim_aliases <<< "${SLIM_ALIASES}"
+              read -r -a browser_aliases <<< "${BROWSER_ALIASES}"
+              for alias in "${default_aliases[@]}"; do
+                tags+=("${GHCR_IMAGE}:${alias}")
+                dockerhub_tags+=("${DOCKERHUB_IMAGE}:${alias}")
+              done
+              for alias in "${slim_aliases[@]}"; do
+                slim_tags+=("${GHCR_IMAGE}:${alias}")
+                dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:${alias}")
+              done
               if [[ "${browser_supported}" == "1" ]]; then
-                browser_tags+=("${GHCR_IMAGE}:latest-browser" "${GHCR_IMAGE}:main-browser")
-                dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:latest-browser" "${DOCKERHUB_IMAGE}:main-browser")
+                for alias in "${browser_aliases[@]}"; do
+                  browser_tags+=("${GHCR_IMAGE}:${alias}")
+                  dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${alias}")
+                done
               fi
             fi
           fi
@@ -670,8 +773,129 @@ jobs:
               "${dockerhub_browser_tags[@]}"
           fi
 
+  promote-channel-aliases:
+    needs: [approve_manual_backfill, resolve_release_policy, validate_publish_config]
+    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'promote-channel' && needs.approve_manual_backfill.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Checkout selected tag
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - *buildkit_prepull_step
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote and verify channel aliases
+        shell: bash
+        env:
+          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
+          RELEASE_CHANNEL: ${{ needs.resolve_release_policy.outputs.channel }}
+          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
+          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
+          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+
+          manifest_digest() {
+            local ref="$1"
+            docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' |
+              jq -er '.digest | select(startswith("sha256:"))'
+          }
+
+          require_group_source() {
+            local image="$1"
+            local suffix="$2"
+            local aliases_text="$3"
+            if [[ -n "${aliases_text}" ]]; then
+              manifest_digest "${image}:${VERSION}${suffix}" >/dev/null
+            fi
+          }
+
+          promote_group() {
+            local image="$1"
+            local suffix="$2"
+            local aliases_text="$3"
+            if [[ -z "${aliases_text}" ]]; then
+              return
+            fi
+            local source_ref="${image}:${VERSION}${suffix}"
+            local source_digest
+            source_digest="$(manifest_digest "${source_ref}")"
+            local aliases=()
+            local create_args=()
+            read -r -a aliases <<< "${aliases_text}"
+            for alias in "${aliases[@]}"; do
+              create_args+=(--tag "${image}:${alias}")
+            done
+            docker buildx imagetools create --prefer-index=false \
+              "${create_args[@]}" "${image}@${source_digest}"
+            for alias in "${aliases[@]}"; do
+              local target_ref="${image}:${alias}"
+              local target_digest
+              target_digest="$(manifest_digest "${target_ref}")"
+              if [[ "${target_digest}" != "${source_digest}" ]]; then
+                echo "::error::${target_ref} resolved to ${target_digest}, expected ${source_digest}."
+                exit 1
+              fi
+              echo "Verified ${target_ref} -> ${source_digest}."
+            done
+          }
+
+          browser_supported=0
+          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
+            browser_supported=1
+          fi
+
+          # Resolve every immutable source before moving any alias so missing
+          # release images fail without leaving a partially promoted channel.
+          for image in "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"; do
+            require_group_source "${image}" "" "${DEFAULT_ALIASES}"
+            require_group_source "${image}" "-slim" "${SLIM_ALIASES}"
+            if [[ "${browser_supported}" == "1" ]]; then
+              require_group_source "${image}" "-browser" "${BROWSER_ALIASES}"
+            fi
+          done
+
+          for image in "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"; do
+            promote_group "${image}" "" "${DEFAULT_ALIASES}"
+            promote_group "${image}" "-slim" "${SLIM_ALIASES}"
+            if [[ "${browser_supported}" == "1" ]]; then
+              promote_group "${image}" "-browser" "${BROWSER_ALIASES}"
+            fi
+          done
+
+          {
+            echo "## Docker channel promotion"
+            echo "- Version: ${VERSION}"
+            echo "- Channel: ${RELEASE_CHANNEL}"
+            echo "- Registries: ${GHCR_IMAGE}, ${DOCKERHUB_IMAGE}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
   verify-attestations:
-    needs: [create-manifest]
+    needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
@@ -727,6 +951,9 @@ jobs:
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
           IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
+          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
+          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
+          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
         run: |
           set -euo pipefail
           multi_refs=()
@@ -777,16 +1004,25 @@ jobs:
               arm64_refs+=("${GHCR_IMAGE}:${version}-browser-arm64")
               dockerhub_arm64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-arm64")
             fi
-            # Beta releases and manual backfills publish only immutable version tags;
-            # do not advance latest/main aliases from those flows.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              multi_refs+=("${GHCR_IMAGE}:latest" "${GHCR_IMAGE}:main")
-              slim_multi_refs+=("${GHCR_IMAGE}:slim" "${GHCR_IMAGE}:main-slim")
-              dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:latest" "${DOCKERHUB_IMAGE}:main")
-              dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:slim" "${DOCKERHUB_IMAGE}:main-slim")
+            # Manual backfills verify immutable tags only. Tag pushes also
+            # verify the moving aliases selected by the release policy.
+            if [[ "${IS_MANUAL_BACKFILL}" != "1" ]]; then
+              read -r -a default_aliases <<< "${DEFAULT_ALIASES}"
+              read -r -a slim_aliases <<< "${SLIM_ALIASES}"
+              read -r -a browser_aliases <<< "${BROWSER_ALIASES}"
+              for alias in "${default_aliases[@]}"; do
+                multi_refs+=("${GHCR_IMAGE}:${alias}")
+                dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${alias}")
+              done
+              for alias in "${slim_aliases[@]}"; do
+                slim_multi_refs+=("${GHCR_IMAGE}:${alias}")
+                dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:${alias}")
+              done
               if [[ "${browser_supported}" == "1" ]]; then
-                multi_refs+=("${GHCR_IMAGE}:latest-browser" "${GHCR_IMAGE}:main-browser")
-                dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:latest-browser" "${DOCKERHUB_IMAGE}:main-browser")
+                for alias in "${browser_aliases[@]}"; do
+                  multi_refs+=("${GHCR_IMAGE}:${alias}")
+                  dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${alias}")
+                done
               fi
             fi
           fi
