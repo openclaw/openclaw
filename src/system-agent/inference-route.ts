@@ -130,21 +130,16 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       config: runConfig,
       agentId: modelOwnerAgentId,
     });
+  // Route projection preserves an explicit profile identity. The verified
+  // binding and CLI runner validate its credential owner before execution.
   const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
+    ? (selection.profileId ??
+      resolveCliExecutionAuthProfileId({
         cliExecutionProvider: executionProvider,
         authProfileProvider: selection.provider,
         config: runConfig,
         agentDir: selection.agentDir,
-        ...(selection.profileId
-          ? {
-              selected: {
-                authProfileId: selection.profileId,
-                authProfileIdSource: "user",
-              },
-            }
-          : {}),
-      })
+      }))
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(runConfig, modelOwnerAgentId);
