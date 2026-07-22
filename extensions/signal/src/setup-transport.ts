@@ -95,7 +95,7 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
     });
     // Empty configs expose an implicit default placeholder with managed defaults. Until that
     // account is configured, its synthetic endpoint does not reserve a port.
-    if (siblingAccount.configured === false) {
+    if (!siblingAccount.configured) {
       continue;
     }
     const siblingTransport = siblingAccount.transport;
