@@ -23,6 +23,7 @@ describe("session sharing store", () => {
       await upsertSessionEntry(scope, {
         sessionId: "session-main",
         updatedAt: 1,
+        visibility: "shared",
       });
       expect(loadSessionEntry(scope)?.visibility).toBe("shared");
       const database = openOpenClawAgentDatabase({ agentId: "main", env });

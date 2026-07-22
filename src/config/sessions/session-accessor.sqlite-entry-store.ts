@@ -419,10 +419,7 @@ export function writeSessionEntry(
   entry: SessionEntry,
 ): void {
   const db = getSessionKysely(database.db);
-  const normalizedEntry = {
-    ...normalizeSqliteSessionEntryTimestamp(entry),
-    visibility: entry.visibility ?? "shared",
-  };
+  const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
   const updatedAt = normalizedEntry.updatedAt;
   const previousEntry = readExactSessionEntryRow(database, sessionKey)?.entry;
   // Registry writes snapshot the current transcript watermark so recovery can
