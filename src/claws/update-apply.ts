@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { listAgentEntries } from "../agents/agent-scope.js";
 import { stableStringify } from "../agents/stable-stringify.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
@@ -323,16 +325,14 @@ export async function applyClawUpdatePlan(
         transform: (config) => ({ nextConfig: transform(config) }),
       });
     });
-  let previousAgent: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number] | undefined;
+  let previousAgent: AgentConfig | undefined;
   let agentChanged = false;
   const rollbackAgent = async (): Promise<void> => {
     if (!agentChanged) {
       return;
     }
     await commit((config) => {
-      const agents = config.agents?.list ?? [];
-      const index = agents.findIndex((agent) => agent.id === fresh.agentId);
-      const current = index >= 0 ? agents[index] : undefined;
+      const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
       const targetDigest = `sha256:${createHash("sha256").update(stableStringify(targetAddPlan.agent.config)).digest("hex")}`;
       const liveDigest = current
         ? `sha256:${createHash("sha256").update(stableStringify(current)).digest("hex")}`
@@ -340,20 +340,21 @@ export async function applyClawUpdatePlan(
       if (liveDigest !== targetDigest) {
         throw new Error("The agent changed before rollback.");
       }
-      const nextAgents = agents.filter((agent) => agent.id !== fresh.agentId);
+      const nextEntries = { ...config.agents?.entries };
       if (previousAgent) {
-        nextAgents.splice(index, 0, previousAgent);
+        const { id: _id, ...previousEntry } = previousAgent;
+        nextEntries[fresh.agentId] = previousEntry;
+      } else {
+        delete nextEntries[fresh.agentId];
       }
-      return { ...config, agents: { ...config.agents, list: nextAgents } };
+      return { ...config, agents: { ...config.agents, entries: nextEntries } };
     });
     agentChanged = false;
   };
   if (agentAction?.action === "change") {
     try {
       await commit((config) => {
-        const agents = config.agents?.list ?? [];
-        const index = agents.findIndex((agent) => agent.id === fresh.agentId);
-        const current = index >= 0 ? agents[index] : undefined;
+        const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
         previousAgent = current;
         if (agentAction.currentDigest !== undefined) {
           if (!current) {
@@ -370,14 +371,11 @@ export async function applyClawUpdatePlan(
             );
           }
         }
-        const nextAgents = [...agents];
-        if (index >= 0) {
-          nextAgents[index] = targetAddPlan.agent.config;
-        } else {
-          nextAgents.push(targetAddPlan.agent.config);
-        }
+        const nextEntries = { ...config.agents?.entries };
+        const { id: _id, ...targetEntry } = targetAddPlan.agent.config;
+        nextEntries[fresh.agentId] = targetEntry;
         agentChanged = true;
-        return { ...config, agents: { ...config.agents, list: nextAgents } };
+        return { ...config, agents: { ...config.agents, entries: nextEntries } };
       });
     } catch (error) {
       const rollbackFailures: string[] = [];

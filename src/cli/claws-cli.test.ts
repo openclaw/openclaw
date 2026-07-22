@@ -220,7 +220,7 @@ describe("claws cli", () => {
           kind: "agent",
           id: "demo-agent",
           action: "remove",
-          target: "agents.list[demo-agent]",
+          target: 'agents.entries["demo-agent"]',
           blocked: false,
         },
       ],

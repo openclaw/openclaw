@@ -241,7 +241,7 @@ export async function buildClawUpdatePlan(params: {
       kind: "agent",
       id: agentId,
       action: agentAction,
-      target: `agents.list.${agentId}`,
+      target: `agents.entries[${JSON.stringify(agentId)}]`,
       blocked: agentAction === "manual",
       reason:
         agentAction === "manual"

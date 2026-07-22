@@ -40,7 +40,7 @@ const install: PersistedClawInstall = {
   agentId: "worker",
   workspace: "/tmp/workspace-worker",
   agentConfigDigest: "sha256:current-agent",
-  agentOwnedPaths: ["agents.list.worker"],
+  agentOwnedPaths: ['agents.entries["worker"]'],
   status: "complete",
   addedAtMs: 1,
   updatedAtMs: 1,
@@ -176,14 +176,14 @@ describe("applyClawUpdatePlan", () => {
         kind: "agent",
         id: "worker",
         action: "change",
-        target: "agents.list.worker",
+        target: 'agents.entries["worker"]',
         blocked: false,
         reason: "target changed",
         currentDigest,
         desiredDigest: "sha256:target-agent",
       },
     ]);
-    let config: OpenClawConfig = { agents: { list: [currentAgent] } };
+    let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
     const persisted = { ...install, claw: source, updatedAtMs: 2 };
     const persistInstall = vi.fn(() => persisted);
 
@@ -203,7 +203,10 @@ describe("applyClawUpdatePlan", () => {
       },
     );
 
-    expect(config.agents?.list).toEqual([addPlan.agent.config]);
+    expect(config.agents?.entries?.worker).toEqual({
+      name: "Worker v2",
+      workspace: "/tmp/workspace-worker",
+    });
     expect(persistInstall).toHaveBeenCalledWith(addPlan, expect.any(Object));
     expect(result).toMatchObject({
       schemaVersion: "openclaw.clawUpdateResult.v1",
@@ -219,13 +222,13 @@ describe("applyClawUpdatePlan", () => {
         kind: "agent",
         id: "worker",
         action: "change",
-        target: "agents.list.worker",
+        target: 'agents.entries["worker"]',
         blocked: false,
         reason: "restore agent",
       },
     ]);
     const order: string[] = [];
-    let config: OpenClawConfig = { agents: { list: [] } };
+    let config: OpenClawConfig = { agents: { entries: {} } };
 
     await applyClawUpdatePlan(
       updatePlan,
@@ -284,7 +287,7 @@ describe("applyClawUpdatePlan", () => {
         kind: "agent",
         id: "worker",
         action: "change",
-        target: "agents.list.worker",
+        target: 'agents.entries["worker"]',
         blocked: false,
         reason: "restore agent",
       },
@@ -297,7 +300,7 @@ describe("applyClawUpdatePlan", () => {
         reason: "target adds cron job",
       },
     ]);
-    let config: OpenClawConfig = { agents: { list: [] } };
+    let config: OpenClawConfig = { agents: { entries: {} } };
     const workspaceRollback = vi.fn(async () => undefined);
     const mcpRollback = vi.fn(async () => undefined);
     const packageRollback = vi.fn(async () => undefined);
@@ -332,7 +335,10 @@ describe("applyClawUpdatePlan", () => {
     ).rejects.toMatchObject({ code: "update_partial" });
 
     const partialRecord = readClawInstallRecord("worker", { env });
-    expect(config.agents?.list).toEqual([addPlan.agent.config]);
+    expect(config.agents?.entries?.worker).toEqual({
+      name: "Worker v2",
+      workspace: "/tmp/workspace-worker",
+    });
     expect(partialRecord).toMatchObject({
       claw: { version: "2.0.0", integrity: "sha256:target" },
       planIntegrity: addPlan.planIntegrity,
@@ -542,13 +548,13 @@ describe("applyClawUpdatePlan", () => {
         kind: "agent",
         id: "worker",
         action: "change",
-        target: "agents.list.worker",
+        target: 'agents.entries["worker"]',
         blocked: false,
         reason: "target changed",
         currentDigest,
       },
     ]);
-    let config: OpenClawConfig = { agents: { list: [currentAgent] } };
+    let config: OpenClawConfig = { agents: { entries: { worker: { name: "Worker" } } } };
     let commits = 0;
 
     await expect(
@@ -571,7 +577,7 @@ describe("applyClawUpdatePlan", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "agent_update_failed" });
-    expect(config.agents?.list).toEqual([currentAgent]);
+    expect(config.agents?.entries?.worker).toEqual({ name: "Worker" });
     expect(commits).toBe(2);
   });
 
@@ -583,13 +589,13 @@ describe("applyClawUpdatePlan", () => {
         kind: "agent",
         id: "worker",
         action: "change",
-        target: "agents.list.worker",
+        target: 'agents.entries["worker"]',
         blocked: false,
         reason: "target changed",
         currentDigest,
       },
     ]);
-    let config: OpenClawConfig = { agents: { list: [] } };
+    let config: OpenClawConfig = { agents: { entries: {} } };
 
     await expect(
       applyClawUpdatePlan(
@@ -607,7 +613,7 @@ describe("applyClawUpdatePlan", () => {
         },
       ),
     ).rejects.toMatchObject({ code: "agent_changed" });
-    expect(config.agents?.list).toEqual([]);
+    expect(config.agents?.entries?.worker).toBeUndefined();
   });
 
   it("rejects a stale or manually blocked plan", async () => {
