@@ -541,6 +541,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Remote startup can spawn an SSH child. Admit tunnel work only after the
         // singleton check so a short-lived handoff process cannot orphan that child.
         GatewayEndpointStore.admitPrimaryAppLaunch()
+        // AppKit can terminate the process ~0.5s after launch in remote mode
+        // when no persistent window is open. Disable automatic termination so
+        // the menu bar app stays resident as long as the status item is active.
+        ProcessInfo.processInfo.disableAutomaticTermination()
         GatewayConnectivityCoordinator.shared.start()
         self.state = AppStateStore.shared
         if let state {
