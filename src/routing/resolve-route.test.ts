@@ -612,6 +612,9 @@ describe("resolveAgentRoute", () => {
       },
     );
 
+    // When route uses a non-default accountId, the binding should NOT match
+    // because missing accountId in the match is scoped to the default account.
+    // The route falls through to the default agent.
     expectResolvedRoute(
       resolveRoute({
         cfg,

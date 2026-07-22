@@ -254,3 +254,114 @@ describe("resolveMatrixInboundRoute thread-isolated sessions", () => {
     expect(route.sessionKey).not.toContain(":thread:");
   });
 });
+
+describe("resolveMatrixInboundRoute room message bindings", () => {
+  beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
+    );
+  });
+
+  function resolveRoomRoute(
+    cfg: OpenClawConfig,
+    opts: {
+      roomId?: string;
+      accountId?: string;
+      threadId?: string;
+    } = {},
+  ) {
+    return resolveMatrixInboundRoute({
+      cfg,
+      accountId: opts.accountId ?? "ops",
+      roomId: opts.roomId ?? "!room:example.org",
+      senderId: "@alice:example.org",
+      isDirectMessage: false,
+      threadId: opts.threadId,
+      resolveAgentRoute,
+    });
+  }
+
+  it("routes room messages to the agent bound by channel peer id", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("room-agent", { kind: "channel", id: "!room:example.org" })],
+    } satisfies OpenClawConfig;
+
+    const { route, configuredBinding } = resolveRoomRoute(cfg);
+
+    expect(configuredBinding).toBeNull();
+    expect(route.agentId).toBe("room-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+    expect(route.sessionKey).toContain("agent:room-agent:");
+  });
+
+  it("routes to default agent when no binding matches the room", () => {
+    const cfg = {
+      ...baseCfg,
+      bindings: [matrixBinding("room-agent", { kind: "channel", id: "!other-room:example.org" })],
+    } satisfies OpenClawConfig;
+
+    const { route } = resolveRoomRoute(cfg);
+
+    expect(route.agentId).toBe("main");
+    expect(route.matchedBy).toBe("default");
+  });
+
+  it("matches room peer when binding uses group kind (backward compatible)", () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [...(baseCfg.agents?.list ?? []), { id: "group-agent" }],
+      },
+      bindings: [matrixBinding("group-agent", { kind: "group", id: "!room:example.org" })],
+    } satisfies OpenClawConfig;
+
+    const { route } = resolveRoomRoute(cfg);
+
+    expect(route.agentId).toBe("group-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  it("matches room peer without accountId in binding match (uses default account)", () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [...(baseCfg.agents?.list ?? []), { id: "no-account-agent" }],
+      },
+      bindings: [
+        {
+          agentId: "no-account-agent",
+          match: {
+            channel: "matrix",
+            peer: { kind: "channel", id: "!room:example.org" },
+          },
+        } as RouteBinding,
+      ],
+    } satisfies OpenClawConfig;
+
+    const { route } = resolveRoomRoute(cfg);
+
+    expect(route.agentId).toBe("no-account-agent");
+    expect(route.matchedBy).toBe("binding.peer");
+  });
+
+  it("routes different rooms to different bound agents", () => {
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [...(baseCfg.agents?.list ?? []), { id: "dev-agent" }, { id: "ops-agent" }],
+      },
+      bindings: [
+        matrixBinding("dev-agent", { kind: "channel", id: "!dev:example.org" }),
+        matrixBinding("ops-agent", { kind: "channel", id: "!ops:example.org" }),
+      ],
+    } satisfies OpenClawConfig;
+
+    const devRoute = resolveRoomRoute(cfg, { roomId: "!dev:example.org" });
+    expect(devRoute.route.agentId).toBe("dev-agent");
+
+    const opsRoute = resolveRoomRoute(cfg, { roomId: "!ops:example.org" });
+    expect(opsRoute.route.agentId).toBe("ops-agent");
+  });
+});
