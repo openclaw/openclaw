@@ -362,6 +362,10 @@ describe("scripts/test-projects changed-target routing", () => {
       mode: "targets",
       targets: ["test/scripts/check-file-utils.test.ts"],
     });
+    expect(resolveChangedTestTargetPlan(["scripts/install-trufflehog.sh"])).toEqual({
+      mode: "targets",
+      targets: ["test/scripts/install-trufflehog.test.ts"],
+    });
   });
 
   it("routes nested scripts through conventional owner tests", () => {
@@ -1369,6 +1373,7 @@ describe("scripts/test-projects changed-target routing", () => {
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/changed-lanes.test.ts",
+          "test/scripts/install-trufflehog.test.ts",
         ],
       ],
       [
@@ -1376,6 +1381,15 @@ describe("scripts/test-projects changed-target routing", () => {
         [
           "test/scripts/ci-workflow-guards.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/install-trufflehog.test.ts",
+        ],
+      ],
+      [
+        ".github/workflows/ci-build-artifacts-testbox.yml",
+        [
+          "test/scripts/install-trufflehog.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
         ],
       ],
       [
@@ -1978,6 +1992,7 @@ describe("scripts/test-projects changed-target routing", () => {
       [
         ".github/actions/setup-node-env/action.yml",
         [
+          "test/scripts/install-trufflehog.test.ts",
           "test/scripts/package-acceptance-workflow.test.ts",
           "test/scripts/ci-workflow-guards.test.ts",
         ],

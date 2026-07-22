@@ -4,6 +4,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
+} from "../../agents/agent-lifecycle-registry.js";
 import { enqueueCommandInLane, type CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -19,8 +23,15 @@ import {
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
+import { createCronStreamSourceIdentity, cronStreamScheduleKey } from "../stream-schedule.js";
 import { normalizeCronTaskRunJobId } from "../task-run-history.js";
-import type { CronJob, CronJobCreate, CronJobPatch, CronPayload } from "../types.js";
+import type {
+  CronJob,
+  CronJobCreate,
+  CronJobPatch,
+  CronPayload,
+  CronRunErrorClassification,
+} from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
@@ -350,6 +361,128 @@ export async function readJob(state: CronServiceState, id: string) {
   });
 }
 
+/** Record a terminal failure from a scheduler-owned event source. */
+export async function recordExternalFailure(
+  state: CronServiceState,
+  id: string,
+  error: string,
+  statePatch: Partial<CronJob["state"]>,
+  source?: { scheduleKey: string; identity: string },
+) {
+  await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = findJobOrThrow(state, id);
+    if (source && !ownsStreamSource(job, source.scheduleKey, source.identity)) {
+      return;
+    }
+    const snapshot = snapshotStoreForRollback(state);
+    const now = state.deps.nowMs();
+    const sourceIdentity = job.state.streamSourceIdentity;
+    Object.assign(job.state, statePatch);
+    job.state.streamSourceIdentity = sourceIdentity;
+    // Source restarts are counted separately, but terminal exhaustion should
+    // enter the same alert/history path as a fifth consecutive payload error.
+    job.state.consecutiveErrors = Math.max(job.state.consecutiveErrors ?? 0, 4);
+    applyJobResult(state, job, {
+      status: "error",
+      error,
+      executionStarted: false,
+      startedAt: now,
+      endedAt: now,
+    });
+    // Stream schedules are event-driven; applyJobResult's generic recurring
+    // backoff must never turn source failure into a time-due payload run.
+    job.state.nextRunAtMs = undefined;
+    emit(state, {
+      jobId: job.id,
+      action: "finished",
+      job,
+      status: "error",
+      error,
+      runAtMs: now,
+      durationMs: 0,
+      failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
+    });
+    await persistOrRestore(state, snapshot);
+    armTimer(state);
+  });
+}
+
+/** Atomically persist owner state only while its logical stream source still matches. */
+export async function updateExternalState(
+  state: CronServiceState,
+  id: string,
+  streamScheduleKey: string,
+  streamSourceIdentity: string,
+  statePatch: Partial<CronJob["state"]>,
+): Promise<boolean> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
+      return false;
+    }
+    await updateLoadedJob({ state, id, patch: { state: statePatch } });
+    return true;
+  });
+}
+
+/** Retire a logical stream source before teardown that has no job-definition mutation. */
+export async function retireExternalStreamSource(
+  state: CronServiceState,
+  id: string,
+  streamScheduleKey: string,
+  streamSourceIdentity: string,
+): Promise<string | undefined> {
+  return await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    if (!job || !ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)) {
+      return undefined;
+    }
+    const snapshot = snapshotStoreForRollback(state);
+    const nextIdentity = createCronStreamSourceIdentity();
+    job.state.streamSourceIdentity = nextIdentity;
+    await persistOrRestore(state, snapshot);
+    return nextIdentity;
+  });
+}
+
+/** Persist the owner's monotonic loss counters across stream schedule replacement. */
+export async function updateExternalCounters(
+  state: CronServiceState,
+  id: string,
+  counters: Pick<CronJob["state"], "streamDroppedBatches" | "streamCoalescedBatches">,
+): Promise<void> {
+  await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === id);
+    // A retired owner's counter write can land after the job is converted to a
+    // non-stream schedule; only persist while the schedule is still stream so
+    // stream counters never bleed onto a time/cron job (applyJobPatch cleared
+    // them on conversion). Stream-to-stream replacements keep carrying counters.
+    if (!job || job.schedule.kind !== "stream") {
+      return;
+    }
+    await updateLoadedJob({
+      state,
+      id,
+      patch: {
+        state: {
+          streamDroppedBatches: Math.max(
+            job.state.streamDroppedBatches ?? 0,
+            counters.streamDroppedBatches ?? 0,
+          ),
+          streamCoalescedBatches: Math.max(
+            job.state.streamCoalescedBatches ?? 0,
+            counters.streamCoalescedBatches ?? 0,
+          ),
+        },
+      },
+    });
+  });
+}
+
 function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
   if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
     return opts.enabled;
@@ -363,7 +496,8 @@ function resolveScheduleKindFilter(opts?: CronListPageOptions): CronJobsSchedule
     opts?.scheduleKind === "at" ||
     opts?.scheduleKind === "every" ||
     opts?.scheduleKind === "cron" ||
-    opts?.scheduleKind === "on-exit"
+    opts?.scheduleKind === "on-exit" ||
+    opts?.scheduleKind === "stream"
   ) {
     return opts.scheduleKind;
   }
@@ -387,12 +521,19 @@ function resolveJobLastRunStatus(job: CronJob): CronJobsLastRunStatusFilter {
   return job.state.lastRunStatus ?? job.state.lastStatus ?? "unknown";
 }
 
-function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+function resolveEffectiveJobAgentId(
+  job: { agentId?: string | null },
+  defaultAgentId: string | undefined,
+) {
   return (
     normalizeOptionalAgentId(job.agentId) ??
     normalizeOptionalAgentId(defaultAgentId) ??
     DEFAULT_AGENT_ID
   );
+}
+
+function resolveCurrentDefaultAgentId(state: CronServiceState): string | undefined {
+  return state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId;
 }
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
@@ -456,6 +597,21 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
   });
 }
 
+function reconcileStreamSourceIdentity(job: CronJob, nextJob: CronJob): void {
+  if (nextJob.schedule.kind !== "stream") {
+    nextJob.state.streamSourceIdentity = undefined;
+    return;
+  }
+  const sourceChanged =
+    job.schedule.kind !== "stream" ||
+    cronStreamScheduleKey(job.schedule) !== cronStreamScheduleKey(nextJob.schedule) ||
+    isJobEnabled(job) !== isJobEnabled(nextJob);
+  const currentIdentity =
+    job.schedule.kind === "stream" ? job.state.streamSourceIdentity : undefined;
+  nextJob.state.streamSourceIdentity =
+    sourceChanged || !currentIdentity ? createCronStreamSourceIdentity() : currentIdentity;
+}
+
 function finalizeUpdatedJob(params: {
   job: CronJob;
   nextJob: CronJob;
@@ -493,6 +649,11 @@ function finalizeUpdatedJob(params: {
       };
     }
   }
+  // Source identity belongs to the durable job mutation, not the process
+  // watcher. Equivalent resaves preserve it; disable/enable and source changes
+  // rotate it in the same write that changes the public job definition.
+  reconcileStreamSourceIdentity(job, nextJob);
+
   // Only advance a recurring job's next run when the schedule/enabled inputs
   // actually changed. An idempotent re-save (same schedule, or re-enabling an
   // already-enabled job) must preserve a still-due slot, matching the
@@ -568,6 +729,10 @@ export async function add(state: CronServiceState, input: CronJobCreate, opts?: 
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
+    const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
+    if (state.deps.isAgentAvailable?.(agentId) === false) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
       throw new Error("cron job id must not be blank");
@@ -678,6 +843,12 @@ async function updateLoadedJob(params: {
     scheduleValidationNowMs: now,
     cronConfig: state.deps.cronConfig,
   });
+  if (patch.agentId !== undefined) {
+    const agentId = resolveEffectiveJobAgentId(nextJob, resolveCurrentDefaultAgentId(state));
+    if (state.deps.isAgentAvailable?.(agentId) === false) {
+      throw new Error(`cron job agent is unavailable: ${agentId}`);
+    }
+  }
   finalizeUpdatedJob({
     job,
     nextJob,
@@ -739,6 +910,67 @@ export async function remove(state: CronServiceState, id: string) {
   });
 }
 
+/** Remove one agent's jobs while holding the cron lock across an external roster commit. */
+export async function removeAgentJobsTransactional<T>(
+  state: CronServiceState,
+  agentId: string,
+  commit: () => Promise<T>,
+): Promise<T> {
+  return await locked(state, async () => {
+    warnIfDisabled(state, "remove agent jobs");
+    await ensureLoaded(state, { skipRecompute: true });
+    const id = normalizeOptionalAgentId(agentId);
+    if (!id || !state.store) {
+      return await commit();
+    }
+    const defaultAgentId = resolveCurrentDefaultAgentId(state);
+    const removedJobs = state.store.jobs.filter(
+      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) === id,
+    );
+    if (removedJobs.length === 0) {
+      return await commit();
+    }
+    const snapshot = snapshotStoreForRollback(state);
+    state.store.jobs = state.store.jobs.filter(
+      (job) => resolveEffectiveJobAgentId(job, defaultAgentId) !== id,
+    );
+    recomputeNextRunsForMaintenance(state);
+    await persistOrRestore(state, snapshot);
+    let result: T;
+    try {
+      result = await commit();
+    } catch (error) {
+      if (error instanceof AgentDeletionCommitUncertainError) {
+        armTimer(state);
+        for (const job of removedJobs) {
+          emit(state, { jobId: job.id, action: "removed", job });
+        }
+        throw error;
+      }
+      state.store = snapshot.store;
+      state.durableNextRunAtMsByJobId = snapshot.durableNextRunAtMsByJobId;
+      try {
+        if (!(await persist(state))) {
+          throw new Error("cron: rollback store write did not complete", { cause: error });
+        }
+        armTimer(state);
+      } catch (rollbackError) {
+        throw new AgentDeletionAuthorityRollbackError(
+          [error, rollbackError],
+          `cron: failed to roll back agent job deletion for ${id}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    armTimer(state);
+    for (const job of removedJobs) {
+      emit(state, { jobId: job.id, action: "removed", job });
+    }
+    return result;
+  });
+}
+
 type PreparedManualRun =
   | {
       ok: true;
@@ -761,6 +993,11 @@ type PreparedManualRun =
       reservationIdentity: object;
       wasEnabled: boolean;
       payload?: CronPayload;
+      evaluateTrigger?: boolean;
+      streamBatch?: string;
+      streamScheduleKey?: string;
+      streamSourceIdentity?: string;
+      onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
     }
   | { ok: false };
 
@@ -776,6 +1013,11 @@ type ManualRunOptions = {
   payload?: CronPayload;
   terminalTracker?: ManualRunTerminalTracker;
   owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+  evaluateTrigger?: boolean;
+  streamBatch?: string;
+  streamScheduleKey?: string;
+  streamSourceIdentity?: string;
+  onTriggerDisposition?: (disposition: "fired" | "dropped" | "busy" | "error") => void;
 };
 
 type ManualRunTerminalTracker = { emitted: boolean };
@@ -785,15 +1027,19 @@ function emitCronRunFinished(
   evt: CronEvent & { action: "finished" },
   tracker?: ManualRunTerminalTracker,
   taskRunId?: string,
-  triggerEval?: CronTriggerEvalOutcome,
-  scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown },
+  details?: {
+    triggerEval?: CronTriggerEvalOutcome;
+    scriptResult?: { scriptStateChanged?: boolean; scriptState?: unknown };
+    errorClassification?: CronRunErrorClassification;
+  },
 ): void {
   tryFinishCronTaskRun(state, {
     taskRunId,
     job: evt.job,
     event: evt,
-    ...(scriptResult ? { scriptResult } : {}),
-    ...(triggerEval ? { triggerEval } : {}),
+    errorClassification: details?.errorClassification,
+    ...(details?.scriptResult ? { scriptResult: details.scriptResult } : {}),
+    ...(details?.triggerEval ? { triggerEval: details.triggerEval } : {}),
   });
   emit(state, evt);
   if (tracker) {
@@ -816,6 +1062,34 @@ type ManualRunPreflightResult =
     };
 
 let nextManualRunId = 1;
+
+function ownsStreamSource(
+  job: CronJob,
+  streamScheduleKey: string,
+  streamSourceIdentity: string,
+): boolean {
+  return (
+    job.schedule.kind === "stream" &&
+    cronStreamScheduleKey(job.schedule) === streamScheduleKey &&
+    job.state.streamSourceIdentity === streamSourceIdentity
+  );
+}
+
+function admitsStreamSourceRun(
+  job: CronJob,
+  streamScheduleKey?: string,
+  streamSourceIdentity?: string,
+): boolean {
+  if (streamScheduleKey === undefined && streamSourceIdentity === undefined) {
+    return true;
+  }
+  return (
+    streamScheduleKey !== undefined &&
+    streamSourceIdentity !== undefined &&
+    isJobEnabled(job) &&
+    ownsStreamSource(job, streamScheduleKey, streamSourceIdentity)
+  );
+}
 
 async function skipInvalidPersistedManualRun(params: {
   state: CronServiceState;
@@ -883,6 +1157,8 @@ async function inspectManualRunPreflight(
   mode?: "due" | "force",
   runId?: string,
   terminalTracker?: ManualRunTerminalTracker,
+  streamScheduleKey?: string,
+  streamSourceIdentity?: string,
 ): Promise<ManualRunPreflightResult> {
   return await locked(state, async () => {
     warnIfDisabled(state, "run");
@@ -901,6 +1177,9 @@ async function inspectManualRunPreflight(
       mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
     );
     const job = findJobOrThrow(state, id);
+    if (!admitsStreamSourceRun(job, streamScheduleKey, streamSourceIdentity)) {
+      return { ok: true, ran: false, reason: "not-due" } as const;
+    }
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
@@ -948,6 +1227,8 @@ async function prepareManualRun(
     mode,
     opts?.runId,
     opts?.terminalTracker,
+    opts?.streamScheduleKey,
+    opts?.streamSourceIdentity,
   );
   if (!preflight.ok) {
     return preflight;
@@ -976,6 +1257,9 @@ async function prepareManualRun(
       mode === "force" ? { preserveExpiredPacedNextRunJobId: id } : undefined,
     );
     const job = findJobOrThrow(state, id);
+    if (!admitsStreamSourceRun(job, opts?.streamScheduleKey, opts?.streamSourceIdentity)) {
+      return { ok: true, ran: false, reason: "not-due" as const };
+    }
     try {
       assertSupportedJobSpec(job);
     } catch (error) {
@@ -1050,6 +1334,15 @@ async function prepareManualRun(
       reservationIdentity,
       wasEnabled: isJobEnabled(job),
       ...(opts?.payload ? { payload: structuredClone(opts.payload) } : {}),
+      ...(opts?.evaluateTrigger ? { evaluateTrigger: true } : {}),
+      ...(opts?.streamBatch !== undefined ? { streamBatch: opts.streamBatch } : {}),
+      ...(opts?.streamScheduleKey !== undefined
+        ? { streamScheduleKey: opts.streamScheduleKey }
+        : {}),
+      ...(opts?.streamSourceIdentity !== undefined
+        ? { streamSourceIdentity: opts.streamSourceIdentity }
+        : {}),
+      ...(opts?.onTriggerDisposition ? { onTriggerDisposition: opts.onTriggerDisposition } : {}),
     } as const;
   });
 }
@@ -1072,11 +1365,22 @@ async function activatePreparedManualRun(
       return { ok: true, ran: false, reason: "restart-recovery-pending" } as const;
     }
     const job = state.store?.jobs.find((entry) => entry.id === prepared.jobId);
+    if (!job) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "not-due" } as const;
+    }
     if (
-      !job ||
       !isQueuedCronRunReservationCurrent(state, prepared.jobId, prepared.reservationIdentity) ||
       job.state.queuedAtMs !== prepared.reservationAt
     ) {
+      await releasePreparedManualReservationWithRetry(state, prepared);
+      return { ok: true, ran: false, reason: "not-due" } as const;
+    }
+    if (!admitsStreamSourceRun(job, prepared.streamScheduleKey, prepared.streamSourceIdentity)) {
+      // This is reservation identity, not watcher ownership: a force run can
+      // wait behind cron admission after its owner has stopped for replacement.
+      // The logical source identity rejects retired batches even when the
+      // schedule key is unchanged (disable→re-enable, A→B→A).
       await releasePreparedManualReservationWithRetry(state, prepared);
       return { ok: true, ran: false, reason: "not-due" } as const;
     }
@@ -1148,7 +1452,7 @@ async function activatePreparedManualRun(
     // Execute against a snapshot so later reload/merge can preserve delivery
     // target writeback from disk without mutating the running object.
     const executionJob = structuredClone(job);
-    if (mode === "force" && executionJob.trigger) {
+    if (mode === "force" && executionJob.trigger && !prepared.evaluateTrigger) {
       // Force means run the payload now; strip the gate only from this snapshot
       // so persisted trigger state and future due evaluations stay intact.
       delete executionJob.trigger;
@@ -1250,9 +1554,26 @@ async function finishPreparedManualRun(
         runId: taskRunId,
         activeJobMarker: prepared.activeJobMarker,
         owningCronLaneTaskMarker: prepared.owningCronLaneTaskMarker,
+        streamBatch: prepared.streamBatch,
+        streamScheduleKey: prepared.streamScheduleKey,
+        streamSourceIdentity: prepared.streamSourceIdentity,
       });
     } catch (err) {
       coreResult = { status: "error", error: normalizeCronRunErrorText(err) };
+    }
+    if (prepared.onTriggerDisposition) {
+      const disposition = coreResult.triggerEval?.busy
+        ? "busy"
+        : coreResult.status === "error"
+          ? "error"
+          : coreResult.status !== "ok"
+            ? "dropped"
+            : !executionJob.trigger
+              ? "fired"
+              : coreResult.triggerEval?.fired
+                ? "fired"
+                : "dropped";
+      prepared.onTriggerDisposition(disposition);
     }
     const endedAt = state.deps.nowMs();
     const triggerSkipped = coreResult.status === "ok" && coreResult.triggerEval?.fired === false;
@@ -1291,6 +1612,9 @@ async function finishPreparedManualRun(
         },
         tracker,
         taskRunId,
+        {
+          errorClassification: triggerSkipped ? undefined : coreResult.errorClassification,
+        },
       );
     };
     if (!triggerSkipped) {
@@ -1356,6 +1680,12 @@ async function finishPreparedManualRun(
         });
         applyScriptRunResult(job, coreResult);
 
+        // Stream payloads are event-owned by their batch. Generic recurring
+        // error backoff must not synthesize a later run without that batch.
+        if (job.schedule.kind === "stream") {
+          job.state.nextRunAtMs = undefined;
+        }
+
         emitCronRunFinished(
           state,
           {
@@ -1384,8 +1714,11 @@ async function finishPreparedManualRun(
           },
           prepared.terminalTracker,
           taskRunId,
-          coreResult.triggerEval,
-          coreResult,
+          {
+            triggerEval: coreResult.triggerEval,
+            scriptResult: coreResult,
+            errorClassification: coreResult.errorClassification,
+          },
         );
       }
 

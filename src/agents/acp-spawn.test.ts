@@ -36,13 +36,9 @@ function createDefaultSpawnConfig(): OpenClawConfig {
     session: {
       mainKey: "main",
       scope: "per-sender",
-    },
-    channels: {
-      discord: {
-        threadBindings: {
-          enabled: true,
-          spawnSessions: true,
-        },
+      threadBindings: {
+        enabled: true,
+        spawnSessions: true,
       },
     },
   };
@@ -629,12 +625,11 @@ function enableLineCurrentConversationBindings(): void {
 function enableTelegramCurrentConversationBindings(): void {
   replaceSpawnConfig({
     ...hoisted.state.cfg,
-    channels: {
-      ...hoisted.state.cfg.channels,
-      telegram: {
-        threadBindings: {
-          enabled: true,
-        },
+    session: {
+      ...hoisted.state.cfg.session,
+      threadBindings: {
+        ...hoisted.state.cfg.session?.threadBindings,
+        enabled: true,
       },
     },
   });
@@ -866,6 +861,8 @@ describe("spawnAcpDirect", () => {
     expectSessionPatchFields({
       key: accepted.childSessionKey,
       spawnedBy: "agent:main:main",
+      completionOwnerSessionKey: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
     });
     expectBindingCallFields({
       targetKind: "session",
@@ -2530,12 +2527,11 @@ describe("spawnAcpDirect", () => {
   it("fails fast when Discord ACP thread spawn is disabled", async () => {
     replaceSpawnConfig({
       ...hoisted.state.cfg,
-      channels: {
-        discord: {
-          threadBindings: {
-            enabled: true,
-            spawnSessions: false,
-          },
+      session: {
+        ...hoisted.state.cfg.session,
+        threadBindings: {
+          enabled: true,
+          spawnSessions: false,
         },
       },
     });

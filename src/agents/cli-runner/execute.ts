@@ -196,7 +196,6 @@ function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): vo
 function buildCliLogArgs(params: {
   args: string[];
   systemPromptArg?: string;
-  sessionArg?: string;
   modelArg?: string;
   imageArg?: string;
   argsPrompt?: string;
@@ -207,11 +206,6 @@ function buildCliLogArgs(params: {
     if (arg === params.systemPromptArg) {
       const systemPromptValue = params.args[i + 1] ?? "";
       logArgs.push(arg, `<systemPrompt:${systemPromptValue.length} chars>`);
-      i += 1;
-      continue;
-    }
-    if (arg === params.sessionArg) {
-      logArgs.push(arg, params.args[i + 1] ?? "");
       i += 1;
       continue;
     }
@@ -988,7 +982,6 @@ export async function executePreparedCliRun(
           const logArgs = buildCliLogArgs({
             args: executionArgs,
             systemPromptArg: backend.systemPromptArg,
-            sessionArg: backend.sessionArg,
             modelArg: backend.modelArg,
             imageArg: backend.imageArg,
             argsPrompt,

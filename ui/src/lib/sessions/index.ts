@@ -1,3 +1,4 @@
+import type { SessionCatalogPullRequestSummary } from "../../../../packages/gateway-protocol/src/schema/sessions-catalog.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -175,6 +176,8 @@ type SessionConnectionScope = {
   epoch: number;
 };
 
+type SessionCreateReconciliation = "blocking" | "background";
+
 type SessionMessageSubscription = {
   key: string;
   agentId?: string | null;
@@ -194,10 +197,20 @@ export type SessionCapability = {
   reconcileRunTerminal: (terminal: SessionRunTerminal) => boolean;
   refresh: (options?: SessionRefreshOptions) => Promise<void>;
   refreshReplacement: (agentId?: string | null) => Promise<void>;
-  createResult: (params?: SessionCreateParams) => Promise<SessionCreateOutcome | null>;
+  createResult: (
+    params?: SessionCreateParams,
+    options?: { reconciliation?: SessionCreateReconciliation },
+  ) => Promise<SessionCreateOutcome | null>;
   create: (params?: SessionCreateParams) => Promise<string | null>;
   patch: SessionPatchRoute;
   setModelOverride: (key: string, value: string | null | undefined) => void;
+  pullRequestSummary: (key: string) => SessionCatalogPullRequestSummary | undefined;
+  capturePullRequestEpoch: (key: string) => symbol;
+  setPullRequestSummary: (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => void;
   delete: (key: string, options?: SessionDeleteOptions) => Promise<SessionDeleteOutcome>;
   deleteMany: (targets: readonly SessionDeleteTarget[]) => Promise<SessionDeleteBatchResult>;
   reset: (key: string, options?: SessionResetOptions) => Promise<SessionResetResult>;
@@ -725,6 +738,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     { token: symbol; previous: string | null | undefined }
   >();
   const swarmActivity = new SwarmActivityTracker();
+  const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
+  const pullRequestEpochs = new Map<string, symbol>();
   let subscribedClient: GatewayBrowserClient | null = null;
   let lastListOptions: SessionListOptions = {};
   let hasForegroundListOptions = false;
@@ -765,6 +780,47 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     for (const listener of listeners) {
       listener(state);
     }
+  };
+
+  const pullRequestSummary = (key: string): SessionCatalogPullRequestSummary | undefined =>
+    pullRequestSummaries.get(key.trim());
+
+  const capturePullRequestEpoch = (key: string): symbol => {
+    const normalizedKey = key.trim();
+    const epoch = Symbol(normalizedKey);
+    pullRequestEpochs.set(normalizedKey, epoch);
+    return epoch;
+  };
+
+  const retirePullRequestSummary = (key: string) => {
+    const normalizedKey = key.trim();
+    pullRequestEpochs.delete(normalizedKey);
+    pullRequestSummaries.delete(normalizedKey);
+  };
+
+  const setPullRequestSummary = (
+    key: string,
+    summary: SessionCatalogPullRequestSummary | undefined,
+    epoch?: symbol,
+  ) => {
+    const normalizedKey = key.trim();
+    if (!normalizedKey || (epoch !== undefined && pullRequestEpochs.get(normalizedKey) !== epoch)) {
+      return;
+    }
+    const previous = pullRequestSummaries.get(normalizedKey);
+    const unchanged =
+      previous?.state === summary?.state &&
+      previous?.numbers.length === summary?.numbers.length &&
+      previous?.numbers.every((number, index) => number === summary?.numbers[index]);
+    if (unchanged || (!previous && !summary)) {
+      return;
+    }
+    if (summary) {
+      pullRequestSummaries.set(normalizedKey, summary);
+    } else {
+      pullRequestSummaries.delete(normalizedKey);
+    }
+    publish({ ...state });
   };
 
   const setModelOverride = (key: string, value: string | null | undefined) => {
@@ -923,7 +979,10 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     return refresh({ ...options, force: true });
   };
 
-  const createResult = async (params: SessionCreateParams = {}) => {
+  const createResult = async (
+    params: SessionCreateParams = {},
+    options: { reconciliation?: SessionCreateReconciliation } = {},
+  ) => {
     const scope = captureConnection();
     if (!scope) {
       return null;
@@ -937,14 +996,28 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!isCurrentConnection(scope)) {
         return null;
       }
-      await refreshReplacement(params.agentId);
-      if (!isCurrentConnection(scope)) {
-        return null;
-      }
-      // Creation may overlap read-only list loading. Notify presentation owners
-      // after its queued refresh so they never guess from stale list churn.
-      for (const listener of createdListeners) {
-        listener(result.key);
+      const reconcileCreatedSession = async () => {
+        await refreshReplacement(params.agentId);
+        if (!isCurrentConnection(scope)) {
+          return;
+        }
+        // Creation may overlap read-only list loading. Notify presentation owners
+        // after its queued refresh so they never guess from stale list churn.
+        for (const listener of createdListeners) {
+          listener(result.key);
+        }
+      };
+      if (options.reconciliation === "background") {
+        void reconcileCreatedSession().catch((error: unknown) => {
+          if (isCurrentConnection(scope)) {
+            publish({ ...state, error: String(error) });
+          }
+        });
+      } else {
+        await reconcileCreatedSession();
+        if (!isCurrentConnection(scope)) {
+          return null;
+        }
       }
       return result;
     } catch (error) {
@@ -1254,6 +1327,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
             result,
             row: base.row ? result?.sessions.find((row) => row.key === base.row?.key) : undefined,
           };
+    if (reconciled.deletedKey) {
+      retirePullRequestSummary(reconciled.deletedKey);
+    }
     if (reconciled.applied && (reconciled.result !== state.result || reconciled.deletedKey)) {
       publish({
         ...state,
@@ -1295,6 +1371,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       if (!confirmsSessionDeletion(response)) {
         return { deleted: false };
       }
+      retirePullRequestSummary(key);
       publish({ ...state, deletedSessions: [{ key, agentId: options.agentId }] });
       setModelOverride(key, undefined);
       await refreshReplacement(options.agentId);
@@ -1342,6 +1419,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
     }
     if (deleted.length > 0 && isCurrentConnection(scope)) {
+      for (const key of deleted) {
+        retirePullRequestSummary(key);
+      }
       publish({
         ...state,
         deletedSessions: targets.filter((target) => deleted.includes(target.key)),
@@ -1590,12 +1670,20 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     connectionClient = next.client;
     connectionConnected = next.connected;
     if (connectionChanged) {
+      const hadPullRequestSummaries = pullRequestSummaries.size > 0;
       connectionEpoch += 1;
       invalidateGroupsLoad();
       swarmActivity.clear();
       inFlight = null;
       queuedRefresh = null;
       rollbackPendingModelPatches();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
+      // A connected client replacement needs its own invalidation publish;
+      // disconnects publish the cleared state in the branch immediately below.
+      if (hadPullRequestSummaries && next.connected && next.client) {
+        publish({ ...state });
+      }
     }
     if (!next.connected || !next.client) {
       subscribedClient = null;
@@ -1669,6 +1757,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
         return;
       }
       if (reconciled.deletedKey) {
+        retirePullRequestSummary(reconciled.deletedKey);
         // Preserve remote-deletion navigation before the canonical refresh
         // clears transient event state.
         publish({
@@ -1701,6 +1790,9 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     create,
     patch,
     setModelOverride,
+    pullRequestSummary,
+    capturePullRequestEpoch,
+    setPullRequestSummary,
     delete: remove,
     deleteMany: removeMany,
     reset,
@@ -1740,6 +1832,8 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       subscribedClient = null;
       pendingModelPatches.clear();
       swarmActivity.clear();
+      pullRequestSummaries.clear();
+      pullRequestEpochs.clear();
       stopGateway();
       stopEvents();
       createdListeners.clear();

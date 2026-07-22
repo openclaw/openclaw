@@ -28,8 +28,11 @@ export * from "./schema/board.js";
 export * from "./migration-api.js";
 export type * from "./public-session-catalog.js";
 import {
+  BoardActionParamsSchema,
+  BoardDataReadParamsSchema,
   BoardEventParamsSchema,
   BoardGetParamsSchema,
+  BoardPromptAuthorizeParamsSchema,
   BoardUpdateParamsSchema,
   BoardWidgetContentSchema,
   BoardWidgetAppViewParamsSchema,
@@ -62,6 +65,7 @@ import {
   AgentIdentityResultSchema,
   AgentParamsSchema,
   MessageActionParamsSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsFileEntrySchema,
   AgentsCreateParamsSchema,
@@ -344,6 +348,8 @@ import {
   TerminalUploadParamsSchema,
   TerminalUploadResultSchema,
   UiCommandParamsSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -419,6 +425,10 @@ import {
   SessionPlacementSchema,
   SessionPlacementStateSchema,
   isCloudWorkerPlacementState,
+  SESSION_OBSERVER_HEALTH_VALUES,
+  SessionObserverDigestSchema,
+  SessionObserverHealthSchema,
+  SessionObserverPlanProgressSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -453,6 +463,7 @@ import {
   SessionCatalogDescriptorSchema,
   SessionCatalogHostSchema,
   SessionCatalogLocatorSchema,
+  SessionCatalogPullRequestSummarySchema,
   SessionCatalogSessionSchema,
   SessionCatalogTranscriptItemSchema,
   SessionsCatalogArchiveParamsSchema,
@@ -581,6 +592,7 @@ import {
   WorktreesGcResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
+  WorktreeRepositoryStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,
@@ -684,6 +696,9 @@ export const validateBoardWidgetAppViewParams = lazyCompile(BoardWidgetAppViewPa
 export const validateBoardWidgetPutParams = lazyCompile(BoardWidgetPutParamsSchema);
 export const validateBoardWidgetGrantParams = lazyCompile(BoardWidgetGrantParamsSchema);
 export const validateBoardEventParams = lazyCompile(BoardEventParamsSchema);
+export const validateBoardPromptAuthorizeParams = lazyCompile(BoardPromptAuthorizeParamsSchema);
+export const validateBoardDataReadParams = lazyCompile(BoardDataReadParamsSchema);
+export const validateBoardActionParams = lazyCompile(BoardActionParamsSchema);
 export const validateWorktreesCreateParams = lazyCompile(WorktreesCreateParamsSchema);
 export const validateWorktreesRemoveParams = lazyCompile(WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = lazyCompile(WorktreesRestoreParamsSchema);
@@ -855,6 +870,8 @@ export const validateChannelsStatusParams = lazyCompile(ChannelsStatusParamsSche
 export const validateChannelsStartParams = lazyCompile(ChannelsStartParamsSchema);
 export const validateChannelsStopParams = lazyCompile(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = lazyCompile(ChannelsLogoutParamsSchema);
+export const validateModelsAuthLogoutParams = lazyCompile(ModelsAuthLogoutParamsSchema);
+export const validateModelsAuthStatusParams = lazyCompile(ModelsAuthStatusParamsSchema);
 export const validateModelsListParams = lazyCompile(ModelsListParamsSchema);
 export const validateSkillsStatusParams = lazyCompile(SkillsStatusParamsSchema);
 export const validateToolsCatalogParams = lazyCompile(ToolsCatalogParamsSchema);
@@ -1070,6 +1087,7 @@ export {
   SessionsListParamsSchema,
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
+  SessionCatalogPullRequestSummarySchema,
   SessionCatalogSessionSchema,
   SessionCatalogHostSchema,
   SessionCatalogLocatorSchema,
@@ -1123,6 +1141,10 @@ export {
   SessionsRewindResultSchema,
   SessionPlacementStateSchema,
   SessionPlacementSchema,
+  SESSION_OBSERVER_HEALTH_VALUES,
+  SessionObserverDigestSchema,
+  SessionObserverHealthSchema,
+  SessionObserverPlanProgressSchema,
   SessionWorktreeInfoSchema,
   SessionsCreateParamsSchema,
   SessionsCreateResultSchema,
@@ -1269,6 +1291,7 @@ export {
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
+  AgentKindSchema,
   AgentSummarySchema,
   AgentsFileEntrySchema,
   AgentsCreateParamsSchema,
@@ -1313,6 +1336,8 @@ export {
   PluginsUiDescriptorsResultSchema,
   PluginsUninstallParamsSchema,
   PluginsUninstallResultSchema,
+  ModelsAuthLogoutParamsSchema,
+  ModelsAuthStatusParamsSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
   ModelsProbeParamsSchema,
@@ -1448,6 +1473,7 @@ export {
   WorktreesGcResultSchema,
   WorktreesBranchesParamsSchema,
   WorktreeBranchSchema,
+  WorktreeRepositoryStatusSchema,
   WorktreesBranchesResultSchema,
   FsDirEntrySchema,
   FsListDirParamsSchema,
@@ -1607,6 +1633,7 @@ export type {
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
+  AgentKind,
   AgentSummary,
   AgentsFileEntry,
   AgentsCreateParams,
@@ -1766,6 +1793,9 @@ export type {
   SessionsDescribeParams,
   SessionsResolveParams,
   SessionOperationEvent,
+  SessionObserverDigest,
+  SessionObserverHealth,
+  SessionObserverPlanProgress,
   SessionPlacementState,
   SessionPlacement,
   SessionWorktreeInfo,
@@ -1925,6 +1955,7 @@ export type {
   WorktreesGcResult,
   WorktreesBranchesParams,
   WorktreeBranch,
+  WorktreeRepositoryStatus,
   WorktreesBranchesResult,
   FsDirEntry,
   FsListDirParams,

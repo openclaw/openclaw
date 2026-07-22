@@ -133,7 +133,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
           output: "json",
           input: "stdin",
           modelArg: "--model",
-          sessionArg: "--session",
+          sessionArgs: ["--session", "{sessionId}"],
           sessionMode: "existing",
           sessionIdFields: ["session_id", "conversation_id"],
           systemPromptFileArg: "--system-file",
@@ -185,7 +185,7 @@ runtime behavior. Runtime behavior starts when the plugin entry calls
 | `env` / `clearEnv`                                        | Extra env vars to inject, or names to strip before launch                         |
 | `modelArg`                                                | Flag used before the model id                                                     |
 | `modelAliases`                                            | Map OpenClaw model ids to CLI-native ids                                          |
-| `sessionArg` / `sessionArgs`                              | How to pass a session id                                                          |
+| `sessionArgs`                                             | How to pass a session id using `{sessionId}`                                      |
 | `sessionMode`                                             | `always`, `existing`, or `none`                                                   |
 | `sessionIdFields`                                         | JSON fields OpenClaw reads from CLI output                                        |
 | `systemPromptArg` / `systemPromptFileArg`                 | System prompt transport                                                           |
@@ -254,13 +254,23 @@ requires a no-tools CLI run.
 
 Set `nativeToolMode: "selectable"` only when `resolveExecutionArgs` can disable
 every backend-native tool for an individual run. For those restricted runs,
-`ctx.toolAvailability.native` is an empty tuple and
+`ctx.toolAvailability.native` is the exact backend-native tool list and
 `ctx.toolAvailability.mcp` is the exact host-isolated MCP allowlist. The hook
-must replace conflicting tool flags and return argv that enforces both values;
-OpenClaw calls it once with the final fresh or resume argv and fails closed when
-the backend cannot enforce the restriction. MCP names in this context are safe
-to auto-approve only because the host has already limited the generated MCP
-configuration to those servers and tools.
+must replace conflicting tool flags, disable backend customization surfaces
+that can execute outside those tools, and return argv that enforces both
+values. OpenClaw calls it once with the final fresh or resume argv and fails
+closed when the backend cannot enforce the restriction. MCP names in this
+context are safe to auto-approve only because the host has already limited the
+generated MCP configuration to those servers and tools.
+
+To support OpenClaw runtime caps such as cron `toolsAllow`, also implement
+`resolveRuntimeToolAvailability(ctx)`. OpenClaw passes a normalized,
+group-expanded allowlist and always disables backend-native tools. Return only
+host-isolated MCP names selected from that allowlist. Returning `null` or
+`undefined` keeps the generic runner fail-closed. A backend may omit an allowed
+tool it cannot represent, but must never add authority absent from the
+allowlist. Before minting a grant, the host rejects any returned entry that is
+not the exact `mcp__openclaw__<tool>` name for one of the allowed tools.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

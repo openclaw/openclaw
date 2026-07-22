@@ -14,6 +14,12 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+While you watch a running session, the Gateway can use that agent's utility model to produce a compact status digest. Chat shows it as a one-line status pill that expands into a card with the assessment, plan progress, pull requests, and elapsed time. The card can expand once when a run becomes stuck or needs input; the `/btw` side chat takes priority over the expanded card.
+
+After the first digest arrives, it owns that run's sidebar subtitle instead of heuristic live activity. A final done or failed digest remains visible while the session is unread, then the row returns to its normal work subtitle.
+
+Session observation is enabled by default. In **Settings > Appearance > Sidebar**, you can turn it off gateway-wide, inspect the resolved small model and its provenance, or choose automatic routing, disable utility tasks, or select an explicit `agents.defaults.utilityModel`. The equivalent config controls are `gateway.controlUi.sessionObserver: false` and `agents.defaults.utilityModel: ""`.
+
 ## Quick open (local)
 
 If the Gateway is running on the same computer, open [http://127.0.0.1:18789/](http://127.0.0.1:18789/) (or [http://localhost:18789/](http://localhost:18789/)).
@@ -119,7 +125,7 @@ Theme, theme mode, text size, language, and chat display preferences sync throug
 
 ## OpenClaw system care
 
-Open **OpenClaw** in the sidebar to talk to the system setup and repair agent. Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
+Open **Settings → Ask OpenClaw** to talk to the system setup and repair agent. Outside onboarding, this page can show at most one dismissible event chip per visit. It stays silent for routine Gateway traffic and reacts only to health snapshots that report a disabled configuration reloader, a configured channel disconnect/degradation, a failed channel probe, or unavailable channel credentials. A newer event replaces the pending chip only when it is more severe; dismissing or using the chip silences event prompts for that visit. Clicking the chip sends its diagnosis question as a real `openclaw.chat` message, so the transcript records the request and OpenClaw performs the diagnosis. Onboarding never shows these event chips.
 
 ## Manage plugins
 
@@ -196,9 +202,11 @@ The sidebar organizes everything around the agent. The identity row at the top i
 
 ## New session page
 
-The **+** in the sidebar session-list header opens a full-page draft at `/new`: nothing is created until you send the first message. A target row above the message box picks where the session works: the agent (multi-agent setups), where exec runs (**Gateway · local** or a paired node that exposes `system.run`; requires `operator.admin`), the folder (defaults to the agent workspace; other absolute Gateway paths require `operator.admin` and a worktree), and an optional **Worktree** toggle with a base-branch picker (backed by `worktrees.branches`, so no fetch happens) and an optional worktree name (the branch becomes `openclaw/<name>`). The composer footer chooses the new session's model and reasoning level, and cloud starts persist both choices before dispatching the session to its worker. The folder chip's browse button opens an inline directory picker backed by the admin-only `fs.listDir` method. Its top level shows the Gateway and every known node; offline nodes and nodes without directory-browsing support stay visible but disabled. Selecting the Gateway starts from the current folder or Gateway home. Selecting a capable node browses that node's host filesystem, binds exec to it, and uses the selected absolute node path directly (managed worktrees remain Gateway-only). Submitting calls `sessions.create` with the first message, so the run starts in the same round-trip and the UI jumps to the new session's chat. If the Gateway creates the session but rejects that first send, the chat preserves the prompt and error across reloads; **Retry** sends it through the already-created session instead of creating another one.
+The **+** in the sidebar session-list header opens a full-page draft at `/new`: nothing is created until you send the first message. A unified **Place** picker chooses the working folder and, for admin operators, the execution destination: **Gateway · local**, a paired node that exposes `system.run`, or an available cloud profile. The folder defaults to the agent workspace; another absolute Gateway path requires `operator.admin` but can run directly without being a Git checkout. When the selected Gateway folder is a Git checkout, the same picker offers optional **Worktree** isolation with a base-branch picker backed by `worktrees.branches` (no fetch) and an optional worktree name (the branch becomes `openclaw/<name>`). Cloud workers require that managed-worktree path; paired nodes never expose it. The composer footer chooses the new session's model and reasoning level, and cloud starts persist both choices before dispatching the session to its worker.
 
-Inside **Settings**, the dedicated sidebar starts with a **Search settings** field for quickly finding settings sections.
+**Browse folders** opens the Place picker's inline directory browser, backed by the admin-only `fs.listDir` method and scoped to the selected Gateway or node. Gateway and browse-capable nodes list their filesystem; an execution-capable node without `fs.listDir` still accepts a typed absolute path. Recent places can restore a folder and its owning node together without carrying paths across hosts. Submitting calls `sessions.create` with the first message, so the run starts in the same round-trip and the UI jumps to the new session's chat. If the Gateway creates the session but rejects that first send, the chat preserves the prompt and error across reloads; **Retry** sends it through the already-created session instead of creating another one.
+
+Inside **Settings**, the dedicated sidebar includes **Ask OpenClaw** and starts with a **Search settings** field for quickly finding settings sections.
 
 A **Search** field at the top of the sidebar opens the command palette (⌘K). Clicking the agent identity row at the top of the sidebar opens the agent menu; **Home** opens the main session. When something needs action — failed or overdue cron jobs, expiring or expired model auth — compact attention chips appear above the sidebar footer and click through to the owning page. The identity row shows the agent's avatar (identity image or emoji), name, connection dot, and a live subtitle. Clicking it opens the agent menu: an agent switcher (multi-agent setups), "What can this agent do?", **Agent settings**, **Settings**, mobile pairing, **Docs**, the build chip, and the color-mode toggle. Rosters above ten agents get a filter field and list pinned agents first; pin or unpin agents from the Agents settings page, with the pinned set stored in the browser profile. Choosing an agent scopes Chat plus Usage, Automations, Tasks, Workboard, and Sessions to that agent. Each scoped page exposes an **Agent** control with **All agents** as an escape; this widens the shared page scope without changing the concrete chat agent, while direct session links still open their target. The Agents settings page keeps its own `?agent=` selection and does not follow the shared page scope. The footer bar holds the product logo, the build chip, a gateway connection dot, and a Settings shortcut. When the gateway runs from a source checkout on a branch other than `main`, the footer also shows that branch name in red so a non-release gateway is obvious at a glance (release installs never show it). Shift-Command-Comma opens **Settings** without overriding the browser's Command-Comma shortcut. The sidebar header also holds the collapse toggle (⌘B); collapsing hides the sidebar entirely for a full-width workspace, and a floating expand control (or ⌘B) brings it back; the macOS app hosts that toggle natively in the titlebar instead. The sidebar is the only navigation chrome on desktop, with no top bar. Narrow viewports swap the sidebar for a slide-over drawer behind a compact header row holding the drawer toggle, brand, and command-palette search; on phones, Chat absorbs that navigation row into its title bar, with the menu and search controls beside the session title. In the macOS app the separate header row folds the titlebar clearance into a single compact strip beside the window controls. Navigation uses regular browser history, so the browser's back/forward buttons traverse it; the macOS app adds a native sidebar toggle next to the window controls plus trackpad swipe gestures, with back/forward buttons at the sidebar's right edge while it is expanded and native search (command palette) and new-session buttons while it is collapsed.
 
@@ -223,7 +231,7 @@ select it to open the owning Approvals page.
     - Channels: built-in plus bundled/external plugin channels status, QR login, and per-channel config (`channels.status`, `web.login.*`, `config.patch`).
     - Channel probe refreshes keep the previous snapshot visible while slow provider checks finish, and label partial snapshots when a probe or audit exceeds its UI budget.
     - Threads (a workspace page at `/sessions`, with a **Worktrees** tab alongside it): list configured-agent sessions by default, pin frequent sessions, rename them, archive or restore inactive sessions, fall back from stale unconfigured agent session keys, and apply per-session model/thinking/fast/verbose/trace/reasoning overrides (`sessions.list`, `sessions.patch`). Pinned sessions sort above recent unpinned sessions; archived sessions live in the Threads page's archived view and keep their transcripts. Rows show an unread dot for sessions with activity since their last read, with mark-unread/mark-read actions (`sessions.patch { unread }`), and a Fork action that branches the transcript into a new session (`sessions.create { parentSessionKey, fork: true }`). Overview tiles above the table summarize the loaded roster (session count, live runs, unread sessions, total tokens), each row carries a kind glyph with a live-run dot, status renders as a plain dot plus label, and the Tokens column shows a context-window usage meter when the session reports token and context sizes. Row management actions live in a per-row menu (kebab button or right-click) mirroring the sidebar's session menu, and the row drawer carries the agent runtime and run duration alongside the other session details.
-    - Native Claude and Codex sidebar catalogs stream one host at a time, then reconcile after node connectivity changes, on page focus, and at most every 30 seconds while visible. Catalog changes trigger a faster follow-up pass, so sessions created in the native tools appear without reloading the Control UI.
+    - Native Claude and Codex sidebar catalogs stream one host at a time, then reconcile after node connectivity changes, on page focus, and at most every 30 seconds while visible. Catalog changes trigger a faster follow-up pass, so sessions created in the native tools appear without reloading the Control UI. Claude Desktop rows also retain their local custom-group label when present; OpenClaw reads that mapping from Desktop's local store and never writes it.
     - Session grouping: a Group by control organizes the sessions table into sections by custom groups, channel, kind, agent, or date. Custom groups persist per session via `sessions.patch` (`category`), so sessions started from message channels (Discord, Telegram, WhatsApp, ...) can be categorized too; assign groups by dragging rows onto a section, or with the per-row group selector, and create groups with the New group action.
     - Memory (a tab on the Agents page, scoped to the selected agent): dreaming status, enable/disable toggle, and Dream Diary reader (`doctor.memory.status`, `doctor.memory.dreamDiary`, `config.patch`).
     - Import Memory (`/memory-import`, reached from the Agents page's Memory tab): preview and copy local Claude Code auto-memory, Codex consolidated memory, or Hermes memory files into the selected agent workspace (`migrations.memory.plan`, `migrations.memory.apply`).
@@ -241,10 +249,10 @@ select it to open the owning Approvals page.
   </Accordion>
   <Accordion title="Config">
     - View/edit `~/.openclaw/openclaw.json` (`config.get`, `config.set`).
-    - Settings navigation groups pages by attention: General, Appearance, and Notifications up top; Connections (Connection, Channels, Communications, Devices); Agents & Tools (Agents, AI & Agents, Model Providers, MCP, Automation, Labs); Privacy & Security (Security, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). General is a slim hub with model defaults, language, and gateway host stats; every other setting lives on exactly one page.
+    - Settings navigation starts with Ask OpenClaw, then groups pages by attention: General, Appearance, and Notifications up top; Connections (Connection, Channels, Communications, Devices); Agents & Tools (Agents, AI & Agents, Model Providers, MCP, Automation, Labs); Privacy & Security (Security, Approvals); and System (Infrastructure, Advanced, Debug, Logs, About). General is a slim hub with model defaults, language, and gateway host stats; every other setting lives on exactly one page.
     - Privacy & Security: curated rows for gateway auth, exec policy, browser enablement, tool profile, device auth, and mobile pairing, above the schema-backed `security`/`approvals` sections.
     - Approvals includes newest-first, 30-day history for resolved exec, plugin, and system-agent requests. Filter by kind or page through older rows to review the decision, reason, source session, and resolver attribution recorded by the Gateway.
-    - Labs exposes shipped experimental switches. Code Mode is the current entry and saves `tools.codeMode.enabled` immediately; unshipped experiments do not appear or write speculative config keys.
+    - Labs exposes shipped experimental switches. Code Mode and Swarm are the current entries and save `tools.codeMode.enabled` and `tools.swarm.enabled` immediately; unshipped experiments do not appear or write speculative config keys.
     - Notifications: browser web-push status, subscribe/unsubscribe, and a test send.
     - Advanced: every config section without a curated home, plus the raw JSON5 editor (previously the General page's Advanced mode).
     - Model Setup (`/settings/model-setup`) is a subpage of Model Providers, launched from its header.
@@ -327,8 +335,8 @@ Typical workflow:
 1. Open **MCP** from the sidebar.
 2. Check the summary cards for total, enabled, OAuth, and filtered server counts.
 3. Review each server row for transport, enablement, auth, filters, timeouts, and command hints.
-4. Add, enable, disable, or remove servers directly on the MCP page. Use the **Plugins** page for one-click connectors and discovery.
-5. Edit the scoped `mcp` config section for server definitions, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
+4. Add, enable, disable, or remove servers directly on the MCP page. Choose Streamable HTTP, SSE, or stdio explicitly; stdio command lines accept quoted arguments such as paths with spaces. Use the **Plugins** page for one-click connectors and discovery.
+5. Edit the scoped `mcp` config section for advanced server fields such as environment variables, working directories, headers, TLS/mTLS paths, OAuth metadata, tool filters, and Codex projection metadata.
 6. Use **Save** for a config write, or **Save & Publish** when the running Gateway should apply the changed config.
 7. Run `openclaw mcp status --verbose`, `openclaw mcp doctor --probe`, or `openclaw mcp reload` from a terminal for static diagnostics, live proof, or cached-runtime disposal.
 
@@ -391,7 +399,7 @@ The macOS app keeps its native link-browser sidebar for links clicked in the das
     - During an active send and the final history refresh, the chat view keeps local optimistic user/assistant messages visible if `chat.history` briefly returns an older snapshot; the canonical transcript replaces those local messages once the Gateway history catches up.
     - Live `chat` events are delivery state, while `chat.history` is rebuilt from the durable session transcript. After tool-final events the Control UI reloads history and merges only a small optimistic tail; the transcript boundary is documented in [WebChat](/web/webchat).
     - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
-    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. Set `agents.defaults.utilityModel` (or `agents.list[].utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
+    - The sidebar lists every loaded active session by agent section and pinned/channel/work/custom/Chats buckets with a single New Session action that opens the draft dialog. Opening a visible row moves only the highlight. Sessions can be dropped onto Pinned to pin them, or onto a custom group or Chats to move them; custom groups are collapsible and drag-reorderable, group names and order sync through the gateway, and collapsed state stays in the browser. A new dashboard session asynchronously gets a concise generated title from its first non-command message; explicit names and authenticated sender identity remain separate, so account names are never used as generated titles. Set `agents.defaults.utilityModel` (or `agents.entries.*.utilityModel`) to route this separate model call to a lower-cost model; if that distinct model fails, title generation retries once with the primary model. Expanding another agent section browses that agent's sessions without leaving the open chat.
     - Thread search lives in the command palette (⌘K, or the Search field at the top of the sidebar): typing a query follows a bounded number of matching pages across agents, filters internal child/cron rows, and lists visible matches next to navigation commands. The Threads page keeps the exhaustive searchable list with filters.
     - Each sidebar row keeps direct pin access plus a full context menu for unread state, rename, fork, grouping, archive, and delete. Multi-selected rows (Cmd/Ctrl-click, Shift-click for ranges) get a batch menu covering unread state, grouping, archive, and delete; batch archive/delete stays disabled unless every selected session is archivable. An active run and an agent's main session cannot be archived. Archiving or deleting the currently selected session switches Chat back to that agent's main session.
     - In the macOS app, the OpenClaw mark uses the otherwise-empty native titlebar strip next to the window controls instead of consuming a sidebar row.
@@ -532,7 +540,7 @@ Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed u
 
 ## Chat message width
 
-The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while user bubbles stay right-aligned inside that frame. Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `gateway.controlUi.chatMessageMaxWidth`:
+The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while user bubbles stay right-aligned inside that frame. Wide-monitor deployments can override the transcript width without patching bundled CSS by setting `ui.prefs.chatMessageMaxWidth`:
 
 ```json5
 {
@@ -583,49 +591,13 @@ The value is validated before it reaches the browser. Supported forms include pl
 
 If you open the dashboard over plain HTTP (`http://<lan-ip>` or `http://<tailscale-ip>`), the browser runs in a **non-secure context** and blocks WebCrypto. By default, OpenClaw **blocks** Control UI connections without device identity.
 
-Documented exceptions:
-
-- localhost-only insecure HTTP compatibility with `gateway.controlUi.allowInsecureAuth=true`
-- successful operator Control UI auth through `gateway.auth.mode: "trusted-proxy"`
-- break-glass `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+The supported device-less exception is successful operator Control UI auth
+through `gateway.auth.mode: "trusted-proxy"`. There is no persistent config
+switch that disables device identity.
 
 **Recommended fix:** use HTTPS (Tailscale Serve) or open the UI locally at `https://<magicdns>/` (Serve) or `http://127.0.0.1:18789/` (on the gateway host).
 
 <AccordionGroup>
-  <Accordion title="Insecure-auth toggle behavior">
-    ```json5
-    {
-      gateway: {
-        controlUi: { allowInsecureAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    `allowInsecureAuth` is a local compatibility toggle only:
-
-    - It lets localhost Control UI sessions proceed without device identity in non-secure HTTP contexts.
-    - It does not bypass pairing checks.
-    - It does not relax remote (non-localhost) device identity requirements.
-
-  </Accordion>
-  <Accordion title="Break-glass only">
-    ```json5
-    {
-      gateway: {
-        controlUi: { dangerouslyDisableDeviceAuth: true },
-        bind: "tailnet",
-        auth: { mode: "token", token: "replace-me" },
-      },
-    }
-    ```
-
-    <Warning>
-    `dangerouslyDisableDeviceAuth` disables Control UI device identity checks and is a severe security downgrade. Revert quickly after emergency use.
-    </Warning>
-
-  </Accordion>
   <Accordion title="Trusted-proxy note">
     - Successful trusted-proxy auth can admit **operator** Control UI sessions without device identity.
     - This does **not** extend to node-role Control UI sessions.

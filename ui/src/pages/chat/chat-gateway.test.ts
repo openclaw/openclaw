@@ -845,7 +845,7 @@ describe("handleChatGatewayEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
-  it("clears keyed commentary with the final answer by default", () => {
+  it("persists keyed commentary with the final answer by default", () => {
     const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
     const state = createState({
       sessionKey: "main",
@@ -853,37 +853,6 @@ describe("handleChatGatewayEvent", () => {
       chatMessages: [user],
       chatStream: null,
       chatStreamStartedAt: null,
-    }) as ChatState & {
-      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
-    };
-    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
-    const payload: ChatEventPayload = {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "final",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final answer." }],
-        timestamp: 5,
-      },
-    };
-
-    expect(handleChatGatewayEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toHaveLength(2);
-    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
-    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
-    expect(state.chatStreamSegments).toEqual([]);
-  });
-
-  it("persists keyed commentary alongside the final answer when chatPersistCommentary is true", () => {
-    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
-    const state = createState({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatMessages: [user],
-      chatStream: null,
-      chatStreamStartedAt: null,
-      settings: { chatPersistCommentary: true },
     }) as ChatState & {
       chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
     };
@@ -904,6 +873,37 @@ describe("handleChatGatewayEvent", () => {
     expectTextChatMessage(state.chatMessages[0], "user", "Ask");
     expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
     expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("clears keyed commentary when chatPersistCommentary is false", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+      settings: { chatPersistCommentary: false },
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatGatewayEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
     expect(state.chatStreamSegments).toEqual([]);
   });
 

@@ -27,19 +27,21 @@ function mount(params: {
   loadInfo: SessionDiscussionInfoLoader;
   openDiscussion: SessionDiscussionOpener;
   onStateChange?: SessionDiscussionStateListener;
+  canOpen?: boolean;
 }): DiscussionPanelElement {
   const panel = document.createElement("openclaw-session-discussion") as DiscussionPanelElement;
   panel.sessionKey = "agent:main:first";
   panel.loadInfo = params.loadInfo;
   panel.openDiscussion = params.openDiscussion;
   panel.onStateChange = params.onStateChange ?? vi.fn();
+  panel.canOpen = params.canOpen ?? true;
   document.body.append(panel);
   panels.push(panel);
   return panel;
 }
 
 describe("session discussion panel", () => {
-  it("loads once, opens an available discussion, and renders both URLs", async () => {
+  it("automatically opens an available discussion and renders both URLs", async () => {
     const loadInfo = vi.fn<SessionDiscussionInfoLoader>().mockResolvedValue({
       state: "available",
     });
@@ -51,13 +53,6 @@ describe("session discussion panel", () => {
     const panel = mount({ loadInfo, openDiscussion });
 
     await vi.waitFor(() => {
-      expect(panel.querySelector("button")?.textContent).toContain("Open discussion");
-    });
-    expect(loadInfo).toHaveBeenCalledTimes(1);
-
-    panel.querySelector<HTMLButtonElement>("button")?.click();
-
-    await vi.waitFor(() => {
       expect(panel.querySelector("iframe")?.getAttribute("src")).toBe(
         "https://discussion.example/embed/thread",
       );
@@ -66,10 +61,63 @@ describe("session discussion panel", () => {
       );
     });
     const external = panel.querySelector<HTMLAnchorElement>("a");
+    expect(loadInfo).toHaveBeenCalledTimes(1);
+    expect(openDiscussion).toHaveBeenCalledTimes(1);
     expect(openDiscussion).toHaveBeenCalledWith("agent:main:first");
     expect(external?.href).toBe("https://discussion.example/thread");
     expect(external?.target).toBe("_blank");
     expect(external?.rel).toBe("noopener");
+  });
+
+  it("shows the opening affordance while auto-open is in flight", async () => {
+    const openDiscussion = vi
+      .fn<SessionDiscussionOpener>()
+      .mockImplementation(() => new Promise(() => {}));
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
+      openDiscussion,
+    });
+
+    await vi.waitFor(() => {
+      expect(openDiscussion).toHaveBeenCalledTimes(1);
+      expect(panel.textContent).toContain("Opening discussion");
+    });
+    expect(panel.querySelector("button")).toBeNull();
+  });
+
+  it("does not auto-open without operator write access", async () => {
+    const openDiscussion = vi.fn<SessionDiscussionOpener>();
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
+      openDiscussion,
+      canOpen: false,
+    });
+
+    await vi.waitFor(() => {
+      expect(panel.textContent).toContain("Operator write access is required");
+    });
+    expect(openDiscussion).not.toHaveBeenCalled();
+    expect(panel.querySelector("button")).toBeNull();
+  });
+
+  it("opens once write access is granted after the discussion resolved", async () => {
+    const openDiscussion = vi.fn<SessionDiscussionOpener>().mockResolvedValue({
+      state: "open",
+      embedUrl: "https://clack.example.com/embed/channel/T1/C1",
+    });
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
+      openDiscussion,
+      canOpen: false,
+    });
+    await vi.waitFor(() => {
+      expect(panel.textContent).toContain("Operator write access is required");
+    });
+    expect(openDiscussion).not.toHaveBeenCalled();
+
+    panel.canOpen = true;
+
+    await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
   });
 
   it("refetches on session switch and reports a hidden discussion", async () => {
@@ -91,25 +139,54 @@ describe("session discussion panel", () => {
     expect(panel.querySelector("iframe")).toBeNull();
   });
 
-  it("clears an in-flight open state when the session changes", async () => {
-    const loadInfo = vi.fn<SessionDiscussionInfoLoader>().mockResolvedValue({
-      state: "available",
-    });
-    const openDiscussion = vi
-      .fn<SessionDiscussionOpener>()
-      .mockImplementation(() => new Promise(() => {}));
+  it("ignores an in-flight open result after the session changes", async () => {
+    let resolveFirstOpen: ((value: { state: "open"; embedUrl: string }) => void) | undefined;
+    const loadInfo = vi
+      .fn<SessionDiscussionInfoLoader>()
+      .mockResolvedValueOnce({ state: "available" })
+      .mockResolvedValueOnce({ state: "none" });
+    const openDiscussion = vi.fn<SessionDiscussionOpener>().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveFirstOpen = resolve;
+        }),
+    );
     const panel = mount({ loadInfo, openDiscussion });
-    await vi.waitFor(() => expect(panel.querySelector("button")?.disabled).toBe(false));
-
-    panel.querySelector<HTMLButtonElement>("button")?.click();
-    await vi.waitFor(() => expect(panel.querySelector("button")?.disabled).toBe(true));
+    await vi.waitFor(() => expect(openDiscussion).toHaveBeenCalledTimes(1));
     panel.sessionKey = "agent:main:second";
 
     await vi.waitFor(() => {
       expect(loadInfo).toHaveBeenCalledTimes(2);
-      expect(panel.querySelector("button")?.disabled).toBe(false);
-      expect(panel.querySelector("button")?.textContent).toContain("Open discussion");
     });
+    resolveFirstOpen?.({ state: "open", embedUrl: "https://discussion.example/stale" });
+    await panel.updateComplete;
+
+    expect(openDiscussion).toHaveBeenCalledTimes(1);
+    expect(panel.querySelector("iframe")).toBeNull();
+    expect(panel.textContent).not.toContain("Opening discussion");
+  });
+
+  it("does not auto-open a superseded available resolution", async () => {
+    let resolveFirstLoad: ((value: { state: "available" }) => void) | undefined;
+    const loadInfo = vi
+      .fn<SessionDiscussionInfoLoader>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveFirstLoad = resolve;
+          }),
+      )
+      .mockResolvedValueOnce({ state: "none" });
+    const openDiscussion = vi.fn<SessionDiscussionOpener>();
+    const panel = mount({ loadInfo, openDiscussion });
+    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(1));
+
+    panel.sessionKey = "agent:main:second";
+    await vi.waitFor(() => expect(loadInfo).toHaveBeenCalledTimes(2));
+    resolveFirstLoad?.({ state: "available" });
+    await panel.updateComplete;
+
+    expect(openDiscussion).not.toHaveBeenCalled();
   });
 
   it("does not render non-HTTP discussion URLs", async () => {

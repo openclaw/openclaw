@@ -3250,10 +3250,10 @@ surfaces:
         features:
           - name: TTS
             coverageIds: [media.tts]
-            description: Covers TTS across `tts` agent/tool and Gateway methods, `messages.tts`, provider registry, directives, and related tts and outbound voice audio delivery behavior.
+            description: Covers TTS across `tts` agent/tool and Gateway methods, top-level `tts`, provider registry, directives, and related tts and outbound voice audio delivery behavior.
           - name: Outbound Voice Audio Delivery
             coverageIds: [media.outbound-voice-audio-delivery]
-            description: Covers Outbound Voice Audio Delivery across `tts` agent/tool and Gateway methods, `messages.tts`, provider registry, directives, and related tts and outbound voice audio delivery behavior.
+            description: Covers Outbound Voice Audio Delivery across `tts` agent/tool and Gateway methods, top-level `tts`, provider registry, directives, and related tts and outbound voice audio delivery behavior.
         docs:
           - docs/tools/tts.md
           - docs/tools/media-overview.md

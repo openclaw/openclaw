@@ -316,7 +316,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           state,
           {
             isHiddenStreamText: isHiddenAssistantStreamText,
-            persistCommentary: state.settings?.chatPersistCommentary === true,
+            persistCommentary: state.settings?.chatPersistCommentary !== false,
           },
         );
         if (replacesVisibleStream) {

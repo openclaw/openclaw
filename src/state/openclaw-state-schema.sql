@@ -379,6 +379,12 @@ CREATE TABLE IF NOT EXISTS schema_meta (
   updated_at INTEGER NOT NULL
 ) STRICT;
 
+CREATE TABLE IF NOT EXISTS config_machine_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
   request_id TEXT NOT NULL PRIMARY KEY,
   device_id TEXT NOT NULL,
@@ -954,6 +960,28 @@ CREATE TABLE IF NOT EXISTS agent_databases (
   last_seen_at INTEGER NOT NULL,
   size_bytes INTEGER,
   PRIMARY KEY (agent_id, path)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS agent_deletion_journal (
+  agent_id TEXT PRIMARY KEY,
+  operation_id TEXT NOT NULL DEFAULT '',
+  agent_dir TEXT NOT NULL,
+  workspace_dir TEXT NOT NULL,
+  sessions_dir TEXT NOT NULL,
+  database_paths_json TEXT NOT NULL DEFAULT '[]',
+  cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
+  created_at INTEGER NOT NULL,
+  cleanup_completed INTEGER NOT NULL DEFAULT 0,
+  delete_files INTEGER NOT NULL DEFAULT 1
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS agent_database_leases (
+  lease_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  path TEXT NOT NULL,
+  owner_pid INTEGER NOT NULL,
+  owner_start_time INTEGER,
+  opened_at INTEGER NOT NULL
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS plugin_state_entries (
@@ -1903,4 +1931,58 @@ CREATE TABLE IF NOT EXISTS fleet_cells (
   host_port INTEGER NOT NULL,
   container_name TEXT NOT NULL,
   data_dir TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_installs (
+  agent_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  source_kind TEXT NOT NULL,
+  claw_name TEXT NOT NULL,
+  claw_version TEXT NOT NULL,
+  package_root TEXT NOT NULL,
+  manifest_path TEXT NOT NULL,
+  integrity_kind TEXT NOT NULL,
+  integrity TEXT NOT NULL,
+  source_byte_length INTEGER NOT NULL,
+  manifest_schema_version INTEGER NOT NULL,
+  plan_integrity TEXT NOT NULL,
+  workspace TEXT NOT NULL UNIQUE,
+  agent_config_digest TEXT NOT NULL,
+  agent_owned_paths_json TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (
+    status IN ('pending', 'workspace_ready', 'config_committed', 'complete', 'partial')
+  ),
+  added_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_workspace_files (
+  agent_id TEXT NOT NULL,
+  target_path TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  workspace TEXT NOT NULL,
+  source_path TEXT NOT NULL,
+  content_digest TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, target_path)
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS claw_package_refs (
+  agent_id TEXT NOT NULL,
+  package_kind TEXT NOT NULL,
+  package_source TEXT NOT NULL,
+  package_ref TEXT NOT NULL,
+  package_version TEXT NOT NULL,
+  package_integrity TEXT NOT NULL,
+  schema_version TEXT NOT NULL,
+  claw_name TEXT NOT NULL,
+  package_status TEXT NOT NULL,
+  relationship TEXT NOT NULL CHECK (relationship IN ('managed', 'referenced')),
+  origin TEXT NOT NULL CHECK (origin IN ('claw-introduced', 'pre-existing')),
+  independent_owner INTEGER NOT NULL CHECK (independent_owner IN (0, 1)),
+  installed_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, package_kind, package_source, package_ref, package_version)
 ) STRICT;

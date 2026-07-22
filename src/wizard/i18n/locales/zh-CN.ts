@@ -161,8 +161,9 @@ export const zh_CN = {
       option: "{name} — {reason}（检测到：{app}）",
       optionThirdParty:
         "{name} — {reason}（检测到：{app}）— 第三方 ClawHub 技能；将安装其发布者的代码",
-      scanning:
-        "正在扫描已安装应用 — 应用名称将通过你配置的模型与 ClawHub 搜索进行匹配（可通过 wizard.appRecommendations 关闭）…",
+      scanDisclosure:
+        "应用名称将使用你配置的模型和 ClawHub 搜索进行匹配（可通过 wizard.appRecommendations 关闭）。",
+      scanning: "正在扫描已安装应用…",
       select: "安装推荐的插件和技能",
       skillTrust: "信任并安装 ClawHub 技能 {name}？",
       skipped: "已跳过应用推荐：{reason}",
@@ -345,6 +346,8 @@ export const zh_CN = {
       ttyRequired:
         "Onboarding 需要交互式 TTY。自动化请使用 `openclaw onboard --non-interactive --accept-risk ...`。",
       welcomeTitle: "设置选项",
+      workspaceConflictClassic:
+        "本次验证保留了已配置的工作区。运行 `{command}` 以查看并明确批准迁移现有 agent fleet。",
     },
     setup: {
       authChoiceFailedRetry: "请选择其他提供商或认证方式，或选择暂时跳过。",
@@ -407,6 +410,10 @@ export const zh_CN = {
       testAiSuccess: "AI 访问正常，在 {seconds} 秒内回复。",
       testAiTitle: "AI 访问测试",
       whatSetup: "你想设置什么？",
+      workspaceConflictConfirm: "将现有 agent fleet 迁移到请求的工作区吗？",
+      workspaceConflictNotice:
+        "现有 agent 当前使用 {current}。请求的工作区是 {requested}。更改此 fleet-wide 默认值可能会使 agent 与其记忆和 bootstrap 文件断开连接。",
+      workspaceConflictTitle: "现有 agent 工作区",
       workspaceDirectory: "工作区目录",
     },
     security: {

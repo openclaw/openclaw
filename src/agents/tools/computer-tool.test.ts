@@ -367,6 +367,29 @@ describe("createComputerTool node resolution", () => {
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
+  it.each(["windows", "linux"])("resolves and executes on a capable %s node", async (platform) => {
+    const nodeId = `${platform}-1`;
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId,
+        displayName: `${platform} desktop`,
+        platform,
+        connected: true,
+        commands: ["computer.act", "screen.snapshot"],
+      },
+    ]);
+    callGatewayToolMock.mockResolvedValue(screenshotPayload());
+    const tool = createComputerTool({ modelHasVision: true });
+
+    await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ nodeId, command: "computer.act" }),
+      { signal: undefined },
+    );
+  });
+
   it("rejects a named node that is not computer-capable", async () => {
     listNodesMock.mockResolvedValue([
       { nodeId: "mac-2", platform: "macos", connected: true, commands: ["screen.snapshot"] },
@@ -375,6 +398,17 @@ describe("createComputerTool node resolution", () => {
     await expect(tool.execute("call", { action: "screenshot", node: "mac-2" })).rejects.toThrow(
       /not computer-capable/,
     );
+  });
+
+  it("rejects a node advertising computer.act without screen.snapshot", async () => {
+    listNodesMock.mockResolvedValue([
+      { nodeId: "desktop-1", platform: "windows", connected: true, commands: ["computer.act"] },
+    ]);
+    const tool = createComputerTool({ modelHasVision: true });
+    await expect(tool.execute("call", { action: "screenshot", node: "desktop-1" })).rejects.toThrow(
+      /advertising computer\.act and screen\.snapshot/,
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
   it("captures a screenshot through screen.snapshot and keeps it model-only", async () => {
@@ -458,7 +492,7 @@ describe("createComputerTool node resolution", () => {
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
         throw new Error(
-          'node command not allowed: "computer.act" requires explicit gateway.nodes.allowCommands opt-in',
+          'node command not allowed: "computer.act" requires explicit gateway.nodes.commands.allow opt-in',
         );
       }
       // screen.snapshot succeeds so a frame is established before the click.
@@ -480,7 +514,7 @@ describe("createComputerTool node resolution", () => {
     callGatewayToolMock.mockImplementation(async (_method, _opts, body) => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
         throw new Error(
-          'node command not allowed: "computer.act" is blocked by gateway.nodes.denyCommands',
+          'node command not allowed: "computer.act" is blocked by gateway.nodes.commands.deny',
         );
       }
       return screenshotPayload();
@@ -796,7 +830,7 @@ describe("createComputerTool node resolution", () => {
       if ((body as { command?: string }).command === COMPUTER_ACT_COMMAND) {
         throw Object.assign(
           new Error(
-            'node command not allowed: "computer.act" requires explicit gateway.nodes.allowCommands opt-in',
+            'node command not allowed: "computer.act" requires explicit gateway.nodes.commands.allow opt-in',
           ),
           { name: "GatewayClientRequestError" },
         );

@@ -1,6 +1,7 @@
 // Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -50,8 +51,8 @@ function projectSystemAgentExecutionConfig(
   config: OpenClawConfig,
   routeAgentId: string,
 ): OpenClawConfig {
-  const agents = config.agents?.list;
-  if (!agents) {
+  const agents = listAgentEntries(config);
+  if (agents.length === 0) {
     return config;
   }
   const routeAgent =
@@ -65,26 +66,32 @@ function projectSystemAgentExecutionConfig(
   if (retainedAgents.length === agents.length && !hasProjectedSettings) {
     return config;
   }
+  const projectedAgents = [
+    ...retainedAgents,
+    ...(hasProjectedSettings
+      ? [
+          {
+            id: SYSTEM_AGENT_EXECUTION_AGENT_ID,
+            ...(routeAgent?.params !== undefined
+              ? { params: structuredClone(routeAgent.params) }
+              : {}),
+            ...(routeAgent?.tools !== undefined
+              ? { tools: structuredClone(routeAgent.tools) }
+              : {}),
+          },
+        ]
+      : []),
+  ];
   return {
     ...config,
     agents: {
       ...config.agents,
-      list: [
-        ...retainedAgents,
-        ...(hasProjectedSettings
-          ? [
-              {
-                id: SYSTEM_AGENT_EXECUTION_AGENT_ID,
-                ...(routeAgent?.params !== undefined
-                  ? { params: structuredClone(routeAgent.params) }
-                  : {}),
-                ...(routeAgent?.tools !== undefined
-                  ? { tools: structuredClone(routeAgent.tools) }
-                  : {}),
-              },
-            ]
-          : []),
-      ],
+      ...(config.agents?.entries
+        ? {
+            entries: Object.fromEntries(projectedAgents.map(({ id, ...entry }) => [id, entry])),
+          }
+        : {}),
+      ...(config.agents?.list ? { list: projectedAgents } : {}),
     },
   };
 }
@@ -212,9 +219,9 @@ export async function projectInferenceRoute(
   const defaultAgentId = resolveDefaultAgentId(config);
   const routeAgentId = normalizeAgentId(requestedAgentId ?? defaultAgentId);
   const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId);
-  const list = config.agents?.list ?? [];
+  const list = listAgentEntries(config);
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
-  const executionAgent = route?.runConfig.agents?.list?.find(
+  const executionAgent = listAgentEntries(route?.runConfig ?? {}).find(
     (entry) => normalizeAgentId(entry.id) === SYSTEM_AGENT_EXECUTION_AGENT_ID,
   );
   const defaults = config.agents?.defaults;

@@ -271,7 +271,7 @@ async function requestGatewayDiagnosticsExportApproval(
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
   codexDiagnostics: CodexDiagnosticsApprovalIntegration = {},
 ): Promise<GatewayDiagnosticsApprovalResult> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({
@@ -446,6 +446,7 @@ async function executeCodexDiagnosticsAddon(
     config: params.cfg,
     from: params.command.from,
     to: params.command.to,
+    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
     accountId: params.ctx.AccountId ?? undefined,
     messageThreadId:
       typeof params.ctx.MessageThreadId === "string" ||

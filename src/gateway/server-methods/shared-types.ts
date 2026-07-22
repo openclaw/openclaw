@@ -92,6 +92,8 @@ export type GatewayClient = {
     internalDeliverySuppressText?: boolean;
     /** Plugin-owned tools authorized for this internal subagent run. */
     runtimePluginToolGrant?: RuntimePluginToolGrant;
+    /** In-process subagent-completion handoff eligible for verified policy inheritance. */
+    delegatedToolPolicyHandoff?: true;
   };
 };
 
@@ -134,6 +136,8 @@ type GatewaySystemAgentSession = {
   };
   welcome: string;
   welcomeQuestion?: SystemAgentChatQuestion;
+  /** Audit cursor captured with the pending caretaker welcome; cleared after delivery. */
+  welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
   pendingApproval?: { id: string; proposalHash: string };
@@ -147,6 +151,7 @@ export type GatewayRequestContext = {
   getRuntimeConfig: () => OpenClawConfig;
   notifyPluginMetadataChanged: () => void;
   getMcpAppSandboxPort?: () => number | undefined;
+  ensureSandboxHostPort?: () => Promise<number>;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;
@@ -193,10 +198,10 @@ export type GatewayRequestContext = {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   nodeSendToAllSubscribed: (event: string, payload: unknown) => void;
-  nodeSubscribe: (nodeId: string, sessionKey: string) => void;
-  nodeUnsubscribe: (nodeId: string, sessionKey: string) => void;
+  nodeSubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
+  nodeUnsubscribe: (nodeId: string, sessionKey: string, connId?: string) => void;
   nodeUnsubscribeAll: (nodeId: string) => void;
-  hasConnectedTalkNode: () => boolean;
+  hasConnectedTalkNode: () => Promise<boolean>;
   isConnectionActive?: (connId: string) => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
   /** Instance-local native approval subscribers; never derived from a network client. */

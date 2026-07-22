@@ -7,6 +7,7 @@ import {
   type GatewayEventListener,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
+import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
 import { resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
@@ -115,7 +116,9 @@ export function createApplicationGateway(
       const entries = readPresenceEntries(event.payload);
       if (entries) {
         const selfUser = resolveSelfPresenceUser(entries, client?.instanceId);
-        if (!sameSelfUser(snapshot.selfUser, selfUser)) {
+        // A live connection owns its authenticated identity until onClose. Older
+        // gateways can omit still-connected clients after presence TTL pruning.
+        if (selfUser && !sameSelfUser(snapshot.selfUser, selfUser)) {
           setSnapshot({ ...snapshot, selfUser });
         }
       }
@@ -170,7 +173,7 @@ export function createApplicationGateway(
         : undefined,
       password: nextConnection.password.trim() ? nextConnection.password : undefined,
       clientName: "openclaw-control-ui",
-      clientVersion: "dev",
+      clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
       mode: "webchat",
       instanceId: generateUUID(),
       onHello: (hello: GatewayHelloOk) => {

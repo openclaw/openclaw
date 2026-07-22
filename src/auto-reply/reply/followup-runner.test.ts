@@ -5098,8 +5098,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     registerFollowupTestSessionStore(storePath, sessionStore);
 
     const cfg = {
-      messages: {
-        responsePrefix: "agent",
+      channels: {
+        slack: { responsePrefix: "agent" },
       },
     };
     const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");

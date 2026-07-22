@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
+import { createSlackAgentViewState } from "./agent-view-state.js";
 import { normalizeAllowList, normalizeAllowListLower, normalizeSlackSlug } from "./allow-list.js";
 import type { SlackChannelConfigEntries } from "./channel-config.js";
 import { resolveSlackChannelConfig } from "./channel-config.js";
@@ -32,13 +33,13 @@ import type { SlackInstallationIdentity } from "./enterprise-install.js";
 import type { SlackEventScope } from "./event-scope.js";
 import { readLruMapEntry, writeLruMapEntry } from "./lru-map-cache.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
+import {
+  type SlackSuggestedPromptsInput,
+  updateSlackSuggestedPrompts,
+} from "./suggested-prompts.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
-
-export type SlackAssistantSuggestedPrompt = {
-  title: string;
-  message: string;
-};
+export { DEFAULT_SLACK_SUGGESTED_PROMPTS } from "./suggested-prompts.js";
 
 export type SlackAssistantThreadContext = {
   assistantChannelId: string;
@@ -199,12 +200,11 @@ export type SlackMonitorContext = {
     context: Omit<SlackAssistantThreadContext, "updatedAt">,
     eventScope?: SlackEventScope,
   ) => void;
-  setSlackAssistantSuggestedPrompts: (params: {
-    channelId: string;
-    threadTs: string;
-    title?: string;
-    prompts: SlackAssistantSuggestedPrompt[];
-  }) => Promise<boolean>;
+  setSlackSuggestedPrompts: (params: SlackSuggestedPromptsInput) => Promise<boolean>;
+  recordSlackAgentView: () => Promise<void>;
+  isSlackAgentView: () => Promise<boolean>;
+  recordSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<void>;
+  isSlackManagedViewThread: (channelId: string, threadTs: string) => Promise<boolean>;
 };
 
 const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -263,6 +263,13 @@ export function createSlackMonitorContext(params: {
   });
   const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
   let lastAssistantContextCleanupAt = Date.now();
+  const agentViewState = createSlackAgentViewState({
+    accountId: params.accountId,
+    teamId: params.teamId,
+    apiAppId: params.apiAppId,
+    warn: (action, error) =>
+      logger.warn({ error: formatSlackError(error) }, `Slack Agent View state failed to ${action}`),
+  });
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
@@ -543,38 +550,12 @@ export function createSlackMonitorContext(params: {
     }
   };
 
-  const setSlackAssistantSuggestedPrompts = async (p: {
-    channelId: string;
-    threadTs: string;
-    title?: string;
-    prompts: SlackAssistantSuggestedPrompt[];
-  }) => {
-    const prompts = p.prompts
-      .map((prompt) => ({
-        title: prompt.title.trim(),
-        message: prompt.message.trim(),
-      }))
-      .filter((prompt) => prompt.title && prompt.message)
-      .slice(0, 4);
-    if (prompts.length === 0) {
-      return false;
-    }
-    try {
-      await params.app.client.assistant.threads.setSuggestedPrompts({
-        token: params.botToken,
-        channel_id: p.channelId,
-        thread_ts: p.threadTs,
-        ...(p.title?.trim() ? { title: p.title.trim() } : {}),
-        prompts,
-      });
-      return true;
-    } catch (err) {
-      logVerbose(
-        `slack suggested prompts update failed for channel ${p.channelId}: ${formatSlackError(err)}`,
-      );
-      return false;
-    }
-  };
+  const setSlackSuggestedPrompts = (input: SlackSuggestedPromptsInput) =>
+    updateSlackSuggestedPrompts({
+      ...input,
+      botToken: params.botToken,
+      client: params.app.client,
+    });
 
   const isChannelAllowed = (p: {
     channelId?: string;
@@ -748,6 +729,10 @@ export function createSlackMonitorContext(params: {
     setSlackThreadStatus,
     getSlackAssistantThreadContext,
     saveSlackAssistantThreadContext,
-    setSlackAssistantSuggestedPrompts,
+    setSlackSuggestedPrompts,
+    recordSlackAgentView: agentViewState.record,
+    isSlackAgentView: agentViewState.isEnabled,
+    recordSlackManagedViewThread: agentViewState.recordManagedThread,
+    isSlackManagedViewThread: agentViewState.isManagedThread,
   };
 }

@@ -42,9 +42,10 @@ async function prepare(
   input: Parameters<
     NonNullable<typeof clickClackSetupAdapter.prepareAccountConfigInput>
   >[0]["input"],
+  cfg: OpenClawConfig = {},
 ) {
   return await clickClackSetupAdapter.prepareAccountConfigInput?.({
-    cfg: {},
+    cfg,
     accountId: DEFAULT_ACCOUNT_ID,
     input,
     runtime: createNonExitingRuntimeEnv(),
@@ -97,7 +98,40 @@ describe("ClickClack setup adapter", () => {
       agentActivity: true,
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      baseUrl: "https://clickclack.example",
+      claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("claims an exact v1 endpoint and keeps the returned API base path", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      contract_version: 1,
+      api_base_url: "https://api.clickclack.example/services/clickclack",
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    const exactClaimUrl =
+      "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
+    await expect(
+      prepare({
+        code: `${exactClaimUrl}#abcd-efgh-jkmn`,
+      }),
+    ).resolves.toMatchObject({
+      baseUrl: "https://api.clickclack.example/services/clickclack",
+      token: "test-token",
+      workspace: "wsp_1",
+    });
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      claimUrl: exactClaimUrl,
+      expectedClaimUrl: exactClaimUrl,
       code: "ABCDEFGHJKMN",
     });
   });
@@ -126,7 +160,75 @@ describe("ClickClack setup adapter", () => {
       workspace: "wsp_1",
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      baseUrl: "https://clickclack.example",
+      claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("claims setup codes through an existing private API base", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    await prepare(
+      {
+        code: "ABCD-EFGH-JKMN",
+        baseUrl: "https://clack.openclaw.ai",
+      },
+      {
+        channels: {
+          clickclack: {
+            apiBaseUrl: "http://127.0.0.1:8484",
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
+      code: "ABCDEFGHJKMN",
+    });
+  });
+
+  it("uses a private API transport while validating the public exact endpoint", async () => {
+    claimClickClackSetupCode.mockResolvedValue({
+      contract_version: 1,
+      api_base_url: "https://api.clickclack.example/services/clickclack",
+      token: "test-token",
+      bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
+      workspace: {
+        id: "wsp_1",
+        route_id: "clickclack",
+        slug: "default",
+        name: "ClickClack",
+      },
+      defaults: {},
+    });
+
+    const exactClaimUrl =
+      "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
+    await expect(
+      prepare({ code: `${exactClaimUrl}#ABCD-EFGH-JKMN` }, {
+        channels: {
+          clickclack: {
+            apiBaseUrl: "http://127.0.0.1:8484",
+          },
+        },
+      } as OpenClawConfig),
+    ).resolves.toMatchObject({
+      baseUrl: "https://api.clickclack.example/services/clickclack",
+    });
+    expect(claimClickClackSetupCode).toHaveBeenCalledWith({
+      claimUrl: "http://127.0.0.1:8484/api/bot-setup-codes/claim",
+      expectedClaimUrl: exactClaimUrl,
       code: "ABCDEFGHJKMN",
     });
   });
@@ -154,7 +256,7 @@ describe("ClickClack setup adapter", () => {
       workspace: "wsp_1",
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      baseUrl: "http://localhost:3000",
+      claimUrl: "http://localhost:3000/api/bot-setup-codes/claim",
       code: "ABCDEFGHJKMN",
     });
   });
@@ -189,6 +291,19 @@ describe("ClickClack setup adapter", () => {
     await expect(
       prepare({ code: "not-a-code", baseUrl: "https://clickclack.example" }),
     ).rejects.toThrow("12 valid base32 characters");
+    await expect(
+      prepare({
+        code: "https://clickclack.example/?next=api#ABCD-EFGH-JKMN",
+      }),
+    ).rejects.toThrow("must not include a query");
+    await expect(
+      prepare({
+        code:
+          "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim" +
+          "#ABCD-EFGH-JKMN",
+        baseUrl: "https://api.clickclack.example",
+      }),
+    ).rejects.toThrow("does not match");
     expect(claimClickClackSetupCode).not.toHaveBeenCalled();
   });
 

@@ -102,9 +102,11 @@ describe("configureGatewayForSetup", () => {
     const result = await runGatewayConfig();
 
     expect(result.settings.gatewayToken).toBe("generated-token");
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).toEqual(DEFAULT_DANGEROUS_NODE_COMMANDS);
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).not.toContain("screen.snapshot");
-    expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
+    expect(result.nextConfig.gateway?.nodes?.commands?.deny).toEqual(
+      DEFAULT_DANGEROUS_NODE_COMMANDS,
+    );
+    expect(result.nextConfig.gateway?.nodes?.commands?.deny).not.toContain("screen.snapshot");
+    expect(result.nextConfig.gateway?.nodes?.commands?.deny).toContain("screen.record");
   });
 
   it.each(["1e3", "0x1000"])("rejects loose gateway port input: %s", async (port) => {
@@ -187,7 +189,7 @@ describe("configureGatewayForSetup", () => {
     }
   });
 
-  it("enables insecure local control ui auth for fresh quickstart loopback setups", async () => {
+  it("does not add a Control UI auth bypass for fresh quickstart loopback setups", async () => {
     mocks.randomToken.mockReturnValue("generated-token");
 
     const result = await runGatewayConfig({
@@ -195,54 +197,7 @@ describe("configureGatewayForSetup", () => {
       textQueue: [],
     });
 
-    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
-  });
-
-  it("preserves explicit control ui auth policy in quickstart", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-
-    const result = await runGatewayConfig({
-      flow: "quickstart",
-      textQueue: [],
-      nextConfig: {
-        gateway: {
-          controlUi: {
-            allowInsecureAuth: false,
-          },
-        },
-      },
-    });
-
-    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(false);
-  });
-
-  it("enables insecure local control ui auth when quickstart reuses an existing loopback config", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
-    const prompter = createPrompter({
-      selectQueue: [],
-      textQueue: [],
-    });
-    const runtime = createRuntime();
-
-    const result = await configureGatewayForSetup({
-      flow: "quickstart",
-      baseConfig: {},
-      nextConfig: {
-        gateway: {
-          port: 18789,
-          bind: "loopback",
-        },
-      },
-      localPort: 18789,
-      quickstartGateway: {
-        ...createQuickstartGateway("token"),
-        hasExisting: true,
-      },
-      prompter,
-      runtime,
-    });
-
-    expect(result.nextConfig.gateway?.controlUi?.allowInsecureAuth).toBe(true);
+    expect(result.nextConfig.gateway?.controlUi).toBeUndefined();
   });
 
   it("does not set password to literal 'undefined' when prompt returns undefined", async () => {
@@ -366,8 +321,6 @@ describe("configureGatewayForSetup", () => {
             gatewaytokens: {
               source: "exec",
               command: process.execPath,
-              allowInsecurePath: true,
-              allowSymlinkCommand: true,
               args: [
                 "-e",
                 "let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',d=>input+=d);process.stdin.on('end',()=>{const req=JSON.parse(input||'{}');const values={};for(const id of req.ids||[]){values[id]='token-from-exec';}process.stdout.write(JSON.stringify({protocolVersion:1,values}));});",

@@ -56,6 +56,97 @@ function changeWorkboardSelect(select: Element | null | undefined, value: string
 }
 
 describe("renderWorkboard", () => {
+  it("shows a card dashboard only for linked cards while the plugin is active", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Dashboard-aware card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+    const props: WorkboardRenderProps = {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
+
+    state.cards = [{ ...state.cards[0]!, sessionKey: "agent:main:dashboard-aware" }];
+    renderInto(container, props);
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).not.toBeNull();
+
+    renderInto(container, { ...props, pluginEnabled: false });
+    expect(container.querySelector("openclaw-workboard-card-dashboard")).toBeNull();
+  });
+
+  it("releases the card dashboard provider when the details panel closes", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const sessionKey = "agent:main:dashboard-panel-close";
+    state.loaded = true;
+    state.detailCardId = "card-1";
+    state.cards = [
+      {
+        id: "card-1",
+        title: "Disposable dashboard card",
+        status: "running",
+        priority: "normal",
+        labels: [],
+        position: 1,
+        createdAt: 1,
+        updatedAt: 1,
+        sessionKey,
+      },
+    ];
+    const removeListener = vi.fn();
+    const request = vi.fn(async () => ({
+      sessionKey,
+      revision: 0,
+      tabs: [],
+      widgets: [],
+    }));
+    const container = document.createElement("div");
+    document.body.append(container);
+    const props: WorkboardRenderProps = {
+      host,
+      client: {
+        request,
+        addEventListener: vi.fn(() => removeListener),
+      } as unknown as GatewayBrowserClient,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    };
+
+    renderInto(container, props);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("board.get", { sessionKey }));
+
+    state.detailCardId = null;
+    renderInto(container, props);
+    await nextFrame();
+
+    expect(removeListener).toHaveBeenCalledOnce();
+    container.remove();
+  });
+
   it("keeps manual recovery refresh visible while data is loading", () => {
     const host = {};
     const state = getWorkboardState(host);
@@ -2612,6 +2703,80 @@ describe("renderWorkboard", () => {
     expect(onBoardFilterChange).toHaveBeenCalledWith("ops");
     expect(container.textContent).not.toContain("Default work");
     expect(container.textContent).toContain("Ops work");
+  });
+
+  it("shows the board switcher at two boards with icon, color, and fallback glyphs", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boards = [
+      { id: "default", total: 0, active: 0, archived: 0, byStatus: {} },
+      {
+        id: "ops",
+        name: "Operations",
+        icon: "⚙",
+        color: "#22c55e",
+        total: 0,
+        active: 0,
+        archived: 0,
+        byStatus: {},
+      },
+    ];
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    const boardFilter = container.querySelector(".workboard-select--toolbar-board");
+    expect(boardFilter).not.toBeNull();
+    const defaultGlyph = boardFilter?.querySelector(
+      'wa-option[value="default"] .workboard-board-glyph',
+    );
+    const opsGlyph = boardFilter?.querySelector('wa-option[value="ops"] .workboard-board-glyph');
+    expect(defaultGlyph?.textContent?.trim()).toBe("D");
+    expect(opsGlyph?.textContent?.trim()).toBe("⚙");
+    expect(opsGlyph?.getAttribute("style")).toContain("#22c55e");
+  });
+
+  it("keeps a deleted routed board filtered instead of exposing every board", () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.boardFilter = "deleted";
+    state.boards = [{ id: "default", total: 1, active: 1, archived: 0, byStatus: { todo: 1 } }];
+    state.cards = [
+      {
+        id: "default-card",
+        title: "Default board work",
+        status: "todo",
+        priority: "normal",
+        labels: [],
+        position: 1000,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ];
+    const container = document.createElement("div");
+
+    renderInto(container, {
+      host,
+      client: null,
+      connected: true,
+      pluginEnabled: true,
+      agentsList: null,
+      sessions: [],
+      onOpenSession: () => undefined,
+    });
+
+    expect(container.textContent).not.toContain("Default board work");
+    expect(container.querySelector(".workboard-empty-state")).not.toBeNull();
   });
 
   it("filters cards by linked agent", () => {

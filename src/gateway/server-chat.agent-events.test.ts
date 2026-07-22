@@ -4614,7 +4614,7 @@ describe("agent event handler", () => {
 
   it("keeps heartbeat alert text in final chat output when remainder exceeds ackMaxChars", () => {
     vi.mocked(getRuntimeConfig).mockReturnValue({
-      agents: { defaults: { heartbeat: { ackMaxChars: 10 } } },
+      agents: { defaults: { heartbeat: {} } },
     });
 
     const { broadcast, chatRunState, handler } = createHarness({ now: 3_000 });
@@ -4628,13 +4628,14 @@ describe("agent event handler", () => {
       verboseLevel: "off",
     });
 
+    const alert = `Disk usage crossed 95 percent on /data. ${"Cleanup required. ".repeat(20)}`;
     handler({
       runId: "run-heartbeat-alert",
       seq: 1,
       stream: "assistant",
       ts: Date.now(),
       data: {
-        text: "HEARTBEAT_OK Disk usage crossed 95 percent on /data and needs cleanup now.",
+        text: `HEARTBEAT_OK ${alert}`,
       },
     });
 
@@ -4643,9 +4644,7 @@ describe("agent event handler", () => {
     const payload = expectSingleFinalChatPayload(broadcast) as {
       message?: { content?: Array<{ text?: string }> };
     };
-    expect(payload.message?.content?.[0]?.text).toBe(
-      "Disk usage crossed 95 percent on /data and needs cleanup now.",
-    );
+    expect(payload.message?.content?.[0]?.text).toBe(alert.trim());
   });
 
   describe("spawnedBy enrichment in chat and agent broadcasts", () => {
