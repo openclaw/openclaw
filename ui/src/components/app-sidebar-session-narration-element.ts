@@ -6,6 +6,7 @@ import type {
   SidebarNarrationSyncInput,
   SidebarSessionNarrationController,
 } from "./app-sidebar-session-narration.ts";
+import { visibleSessionChildren } from "./app-sidebar-session-row-render.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 /** Gateway subscription and reactive narration state for the session-list renderer. */
@@ -21,16 +22,15 @@ export abstract class AppSidebarSessionNarrationElement extends AppSidebarMenusE
   private narrationLoad: Promise<void> | null = null;
   private readonly narrationSubscriptions = new SubscriptionsController(this);
 
-  protected abstract visibleSessionChildren(
-    session: SidebarRecentSession,
-  ): readonly SidebarRecentSession[];
-
   private visibleNarrationRowsInOrder(): SidebarRecentSession[] {
     const rows: SidebarRecentSession[] = [];
     const append = (session: SidebarRecentSession) => {
       rows.push(session);
       if (this.isSessionChildrenExpanded(session)) {
-        this.visibleSessionChildren(session).forEach(append);
+        visibleSessionChildren({
+          session,
+          fullyShownChildSessionKeys: this.fullyShownChildSessionKeys,
+        }).forEach(append);
       }
     };
     this.visibleSessionRowsInOrder().forEach(append);

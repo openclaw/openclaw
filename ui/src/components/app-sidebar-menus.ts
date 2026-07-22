@@ -26,9 +26,7 @@ import {
   isSidebarRouteActive,
   renderSidebarCustomizeMenu,
   renderSidebarMoreMenu,
-  renderSidebarMoreRow,
   renderSidebarNavRoute,
-  sidebarMoreMenuHoldsActiveRoute,
 } from "./app-sidebar-nav-menus.ts";
 import { AppSidebarSessionGroupsElement } from "./app-sidebar-session-groups.ts";
 import {
@@ -591,21 +589,6 @@ export abstract class AppSidebarMenusElement extends AppSidebarSessionGroupsElem
       },
       onPreload: (event, immediate) => this.preloadRoute(routeId, event, immediate),
       onCancelPreload: this.cancelPreload,
-    });
-  }
-
-  protected renderMoreRow() {
-    return renderSidebarMoreRow({
-      open: this.moreMenuPosition !== null,
-      active: sidebarMoreMenuHoldsActiveRoute({
-        activeRouteId: this.activeRouteId,
-        activeWorkboardBoardId: this.activeWorkboardBoardIsPinned()
-          ? this.activeWorkboardBoardId
-          : "",
-        sidebarEntries: this.sidebarEntries,
-        isRouteEnabled: (routeId) => this.isRouteEnabled(routeId),
-      }),
-      onToggle: (trigger) => this.toggleMoreMenu(trigger),
     });
   }
 

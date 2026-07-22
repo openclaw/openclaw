@@ -9,7 +9,6 @@ import { t } from "../i18n/index.ts";
 import { sessionHasBoard } from "../lib/board/provider.ts";
 import { formatDurationCompact } from "../lib/format.ts";
 import { startHoverMarquee, stopHoverMarquee } from "../lib/hover-marquee.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
@@ -27,7 +26,6 @@ import {
 import { icons } from "./icons.ts";
 import { renderSessionLeadingState } from "./session-leading-indicator.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
-import type { SessionCreatedBy } from "./session-owner-chip.ts";
 import { renderSessionOwnerChip } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import {
@@ -40,83 +38,69 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 
 export type SessionListRenderContext = {
   data: {
-    sidebarLiveActivity: boolean;
-    narrationLines: ReadonlyMap<string, string>;
-    observerDigests: ReadonlyMap<string, SessionObserverDigest>;
-    pullRequestStates: ReadonlyMap<string, SessionPullRequestIndicatorState>;
-    approvalBadges: ApprovalBadgeSnapshot;
-    selectedSessionKeys: ReadonlySet<string>;
-    draggingSessionKey: string | null;
+    live: boolean;
+    narration: ReadonlyMap<string, string>;
+    digests: ReadonlyMap<string, SessionObserverDigest>;
+    prStates: ReadonlyMap<string, SessionPullRequestIndicatorState>;
+    approvals: ApprovalBadgeSnapshot;
+    selected: ReadonlySet<string>;
+    drag: string | null;
     connected: boolean;
-    presencePayload: unknown;
-    presenceInstanceId: string | undefined;
-    expandedSessionKeys: ReadonlySet<string>;
-    fullyShownChildSessionKeys: ReadonlySet<string>;
-    sessionsGrouping: SidebarSessionsGrouping;
-    collapsedSessionSections: ReadonlySet<string>;
-    draggingSessionGroup: string | null;
-    sessionDropTarget: string | null;
-    sessionGroupDropTarget: SidebarSessionGroupDropTarget | null;
-    sessionSortMenuOpen: boolean;
-    sessionMenuKey: string | null;
-    sessionGroupMenuGroup: string | null;
-    sessionsStatusFilter: SidebarSessionStatusFilter;
-    sessionListRemovalDrop: boolean;
-    sessionMutationError: string | null;
-    sessionOwnershipVisible: boolean;
-    sessionCreatorOptions: readonly SessionCreatedBy[];
-    sessionCreatorFilterId: string | null;
+    presence: unknown;
+    presenceId: string | undefined;
+    expanded: ReadonlySet<string>;
+    fullKeys: ReadonlySet<string>;
+    grouping: SidebarSessionsGrouping;
+    collapsed: ReadonlySet<string>;
+    dragGroup: string | null;
+    drop: string | null;
+    groupDrop: SidebarSessionGroupDropTarget | null;
+    sortOpen: boolean;
+    menuKey: string | null;
+    groupMenu: string | null;
+    status: SidebarSessionStatusFilter;
+    remove: boolean;
+    error: string | null;
+    owners: boolean;
   };
   callbacks: {
-    startSessionDrag: (session: SidebarRecentSession) => void;
-    finishSessionDrag: () => void;
-    openSessionMenuAt: (
-      session: SidebarRecentSession,
-      x: number,
-      y: number,
-      trigger?: HTMLElement,
-    ) => void;
-    handleSessionRowClick: (event: MouseEvent, session: SidebarRecentSession) => void;
-    toggleSessionChildren: (session: SidebarRecentSession) => void;
-    pinSession: (session: SidebarRecentSession) => void;
-    toggleSessionMenu: (
+    startDrag: (session: SidebarRecentSession) => void;
+    endDrag: () => void;
+    openMenu: (session: SidebarRecentSession, x: number, y: number, trigger?: HTMLElement) => void;
+    rowClick: (event: MouseEvent, session: SidebarRecentSession) => void;
+    children: (session: SidebarRecentSession) => void;
+    pin: (session: SidebarRecentSession) => void;
+    menuClick: (
       session: SidebarRecentSession,
       menuSession: SidebarRecentSession,
       trigger: HTMLElement,
     ) => void;
-    showAllSessionChildren: (sessionKey: string) => void;
-    handleSessionSectionDragOver: (event: DragEvent, sectionId: string, group?: string) => void;
-    handleSessionSectionDragLeave: (event: DragEvent, sectionId: string, group?: string) => void;
-    handleSessionSectionDrop: (event: DragEvent, sectionId: string, group?: string) => void;
-    startSessionGroupDrag: (group: string) => void;
-    finishSessionGroupDrag: () => void;
-    openSessionGroupMenu: (
-      group: string,
-      x: number,
-      y: number,
-      trigger: HTMLElement | null,
-    ) => void;
-    toggleSessionSection: (sectionId: string) => void;
-    toggleSessionSortMenu: (trigger: HTMLElement) => void;
-    openNewSessionForExpandedAgent: () => void;
-    setVisibleSessionLimit: (limit: number) => void;
-    clearSessionSelection: () => void;
-    handleSessionListDragOver: (event: DragEvent) => void;
-    handleSessionListDragLeave: (event: DragEvent) => void;
-    handleSessionListDrop: (event: DragEvent) => void;
-    dismissSessionMutationError: () => void;
-    changeSessionCreatorFilter: (creatorId: string | null) => void;
-    toggleCatalogProjectGrouping: () => void;
-    loadMoreSessionCatalog: (catalogId: string) => void;
-    onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
-    onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-    openCatalogSessionMenu: (
+    showChildren: (sessionKey: string) => void;
+    sectionOver: (event: DragEvent, sectionId: string, group?: string) => void;
+    sectionLeave: (event: DragEvent, sectionId: string, group?: string) => void;
+    sectionDrop: (event: DragEvent, sectionId: string, group?: string) => void;
+    groupStart: (group: string) => void;
+    groupEnd: () => void;
+    groupMenu: (group: string, x: number, y: number, trigger: HTMLElement | null) => void;
+    section: (sectionId: string) => void;
+    sort: (trigger: HTMLElement) => void;
+    newSession: () => void;
+    setLimit: (limit: number) => void;
+    clear: () => void;
+    listDragOver: (event: DragEvent) => void;
+    listDragLeave: (event: DragEvent) => void;
+    listDrop: (event: DragEvent) => void;
+    dismissError: () => void;
+    catalogGroup: () => void;
+    more: (catalogId: string) => Promise<void>;
+    newTarget?: (agentId: string, target?: NewSessionTarget) => void;
+    navigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+    catalog: (
       request: CatalogSessionMenuRequest,
       x: number,
       y: number,
       trigger?: HTMLElement,
     ) => void;
-    openCatalogSessionInTerminal: (key: CatalogSessionKey) => void;
   };
 };
 
@@ -134,7 +118,7 @@ export function visibleSessionChildren(params: {
       );
 }
 
-function renderRecentSession(params: {
+export function renderRecentSession(params: {
   context: SessionListRenderContext;
   session: SidebarRecentSession;
   display?: CatalogBackingSessionDisplay;
@@ -146,13 +130,13 @@ function renderRecentSession(params: {
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
-    sidebarLiveActivity: data.sidebarLiveActivity,
-    narrationLine: data.narrationLines.get(session.key),
-    observerDigest: data.observerDigests.get(session.key) ?? null,
+    sidebarLiveActivity: data.live,
+    narrationLine: data.narration.get(session.key),
+    observerDigest: data.digests.get(session.key) ?? null,
   });
   const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
     session,
-    data.pullRequestStates.get(session.key) ?? "none",
+    data.prStates.get(session.key) ?? "none",
   );
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;
@@ -166,7 +150,7 @@ function renderRecentSession(params: {
     session.isChild ? "sidebar-recent-session--child" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
-    data.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
+    data.selected.has(session.key) ? "sidebar-recent-session--selected" : "",
     session.pinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.attention.kind === "error"
@@ -174,11 +158,11 @@ function renderRecentSession(params: {
       : session.attention.kind !== "none"
         ? "sidebar-recent-session--attention-amber"
         : "",
-    data.draggingSessionKey === session.key ? "sidebar-recent-session--dragging" : "",
+    data.drag === session.key ? "sidebar-recent-session--dragging" : "",
   ]
     .filter(Boolean)
     .join(" ");
-  const childrenExpanded = data.expandedSessionKeys.has(session.key);
+  const childrenExpanded = data.expanded.has(session.key);
   const row = html`
     <div
       class=${rowClass}
@@ -190,19 +174,19 @@ function renderRecentSession(params: {
         : (event: DragEvent) => {
             if (event.dataTransfer) {
               writeSessionDragData(event.dataTransfer, session.key);
-              callbacks.startSessionDrag(session);
+              callbacks.startDrag(session);
             }
           }}
       @dragend=${session.isChild
         ? nothing
         : () => {
-            callbacks.finishSessionDrag();
+            callbacks.endDrag();
           }}
       @contextmenu=${session.isChild
         ? nothing
         : (event: MouseEvent) => {
             event.preventDefault();
-            callbacks.openSessionMenuAt(menuSession, event.clientX, event.clientY);
+            callbacks.openMenu(menuSession, event.clientX, event.clientY);
           }}
       @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
@@ -214,10 +198,10 @@ function renderRecentSession(params: {
         title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
         aria-describedby=${metaId ?? nothing}
-        @click=${(event: MouseEvent) => callbacks.handleSessionRowClick(event, session)}
+        @click=${(event: MouseEvent) => callbacks.rowClick(event, session)}
       >
         <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
-          data.sessionOwnershipVisible ? session.createdBy : undefined,
+          data.owners ? session.createdBy : undefined,
           "row",
         )}
         <span class="sidebar-recent-session__text">
@@ -243,8 +227,8 @@ function renderRecentSession(params: {
             >`
           : nothing}
         <openclaw-viewer-facepile
-          .presencePayload=${data.presencePayload}
-          .selfInstanceId=${data.presenceInstanceId}
+          .presencePayload=${data.presence}
+          .selfInstanceId=${data.presenceId}
           .sessionKey=${session.key}
           .maxVisible=${3}
           variant="session"
@@ -252,7 +236,7 @@ function renderRecentSession(params: {
         ${renderSessionRowBadges({
           ...session,
           pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(data.approvalBadges, session.key),
+          hasApproval: sessionHasPendingApproval(data.approvals, session.key),
         })}
         ${pinnedState}
       </a>
@@ -272,7 +256,7 @@ function renderRecentSession(params: {
                 : "sessionsView.showChildSessions",
               { count: String(session.childSessionKeys.length), session: label },
             )}
-            @click=${() => callbacks.toggleSessionChildren(session)}
+            @click=${() => callbacks.children(session)}
           >
             <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
               >${childrenExpanded ? icons.chevronDown : icons.chevronRight}</span
@@ -313,7 +297,7 @@ function renderRecentSession(params: {
                   ? t("sessionsView.unpinSession")
                   : t("sessionsView.pinSession")}
                 ?disabled=${!data.connected}
-                @click=${() => callbacks.pinSession(session)}
+                @click=${() => callbacks.pin(session)}
               >
                 ${icons.pin}
               </button>
@@ -324,11 +308,11 @@ function renderRecentSession(params: {
                 title=${t("chat.sidebar.openSessionMenu")}
                 aria-label=${t("chat.sidebar.openSessionMenu")}
                 aria-haspopup="menu"
-                aria-expanded=${String(data.sessionMenuKey === session.key)}
+                aria-expanded=${String(data.menuKey === session.key)}
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   const trigger = event.currentTarget as HTMLElement;
-                  callbacks.toggleSessionMenu(session, menuSession, trigger);
+                  callbacks.menuClick(session, menuSession, trigger);
                 }}
               >
                 ${icons.moreHorizontal}
@@ -346,10 +330,11 @@ export function renderSessionTree(params: {
   session: SidebarRecentSession;
 }): TemplateResult {
   const { context, session } = params;
-  const expanded = context.data.expandedSessionKeys.has(session.key);
+  const { data, callbacks } = context;
+  const expanded = data.expanded.has(session.key);
   const visibleChildren = visibleSessionChildren({
     session,
-    fullyShownChildSessionKeys: context.data.fullyShownChildSessionKeys,
+    fullyShownChildSessionKeys: data.fullKeys,
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
   return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
@@ -368,7 +353,7 @@ export function renderSessionTree(params: {
                 aria-label=${t("sessionsView.showMoreChildren", {
                   count: String(hiddenChildCount),
                 })}
-                @click=${() => context.callbacks.showAllSessionChildren(session.key)}
+                @click=${() => callbacks.showChildren(session.key)}
               >
                 ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
               </button>`
@@ -379,19 +364,4 @@ export function renderSessionTree(params: {
         </div>`
       : nothing}
   </div>`;
-}
-
-export function renderPinnedSidebarSession(params: {
-  context: SessionListRenderContext;
-  session: SidebarRecentSession;
-}): TemplateResult {
-  return renderSessionTree(params);
-}
-
-export function renderCatalogBackingSession(params: {
-  context: SessionListRenderContext;
-  session: SidebarRecentSession;
-  display: CatalogBackingSessionDisplay;
-}) {
-  return renderRecentSession(params);
 }

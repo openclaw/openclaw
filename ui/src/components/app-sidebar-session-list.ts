@@ -1,12 +1,10 @@
 import type { PropertyValues, TemplateResult } from "lit";
 import { state } from "lit/decorators.js";
-import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderSessionList } from "./app-sidebar-session-list-render.ts";
 import { AppSidebarSessionNarrationElement } from "./app-sidebar-session-narration-element.ts";
 import {
-  renderPinnedSidebarSession as renderPinnedSidebarSessionTemplate,
-  visibleSessionChildren as selectVisibleSessionChildren,
+  renderSessionTree,
   type SessionListRenderContext,
 } from "./app-sidebar-session-row-render.ts";
 import {
@@ -15,16 +13,7 @@ import {
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
 import type { SessionPullRequestIndicatorState } from "./session-menu-work.ts";
-
-function collectSessionTreeRows(rows: readonly SidebarRecentSession[]): SidebarRecentSession[] {
-  const collected: SidebarRecentSession[] = [];
-  const append = (row: SidebarRecentSession) => {
-    collected.push(row);
-    row.children.forEach(append);
-  };
-  rows.forEach(append);
-  return collected;
-}
+import { renderSessionCreatorFilter } from "./session-owner-chip.ts";
 
 /** Session-list presentation and catalog renderer wiring. */
 export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarrationElement {
@@ -44,75 +33,66 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
     }
   }
 
-  protected visibleSessionChildren(session: SidebarRecentSession): readonly SidebarRecentSession[] {
-    return selectVisibleSessionChildren({
-      session,
-      fullyShownChildSessionKeys: this.fullyShownChildSessionKeys,
-    });
-  }
-
   private createSessionListRenderContext(
     rows: readonly SidebarRecentSession[],
   ): SessionListRenderContext {
-    const treeRows = collectSessionTreeRows(rows);
     const pullRequestStates = new Map<string, SessionPullRequestIndicatorState>();
     const expandedSessionKeys = new Set<string>();
-    for (const row of treeRows) {
-      pullRequestStates.set(
-        row.key,
-        row.worktreeId ? this.sessionPullRequestIndicatorState(row.key, row.worktreeId) : "none",
-      );
+    const append = (row: SidebarRecentSession) => {
+      if (row.worktreeId) {
+        pullRequestStates.set(
+          row.key,
+          this.sessionPullRequestIndicatorState(row.key, row.worktreeId),
+        );
+      }
       if (this.isSessionChildrenExpanded(row)) {
         expandedSessionKeys.add(row.key);
       }
-    }
+      row.children.forEach(append);
+    };
+    rows.forEach(append);
 
     return {
       data: {
-        sidebarLiveActivity: this.sidebarLiveActivity,
-        narrationLines: this.sidebarNarrationLines,
-        observerDigests: this.sidebarObserverDigests,
-        pullRequestStates,
-        approvalBadges: this.approvalBadgeSnapshot(),
-        selectedSessionKeys: this.selectedSessionKeys,
-        draggingSessionKey: this.draggingSessionKey,
+        live: this.sidebarLiveActivity,
+        narration: this.sidebarNarrationLines,
+        digests: this.sidebarObserverDigests,
+        prStates: pullRequestStates,
+        approvals: this.approvalBadgeSnapshot(),
+        selected: this.selectedSessionKeys,
+        drag: this.draggingSessionKey,
         connected: this.connected,
-        presencePayload: this.presencePayload,
-        presenceInstanceId: this.presenceInstanceId,
-        expandedSessionKeys,
-        fullyShownChildSessionKeys: this.fullyShownChildSessionKeys,
-        sessionsGrouping: this.sessionsGrouping,
-        collapsedSessionSections: this.collapsedSessionSections,
-        draggingSessionGroup: this.draggingSessionGroup,
-        sessionDropTarget: this.sessionDropTarget,
-        sessionGroupDropTarget: this.sessionGroupDropTarget,
-        sessionSortMenuOpen: this.sessionSortMenuPosition !== null,
-        sessionMenuKey: this.sessionMenu?.session.key ?? null,
-        sessionGroupMenuGroup: this.sessionGroupMenu?.group ?? null,
-        sessionsStatusFilter: this.sessionsStatusFilter,
-        sessionListRemovalDrop: this.sessionListRemovalDrop,
-        sessionMutationError: this.sessionMutationError,
-        sessionOwnershipVisible: this.sessionOwnershipVisible,
-        sessionCreatorOptions: this.sessionOwnershipVisible ? this.sessionCreatorOptions : [],
-        sessionCreatorFilterId: this.sessionCreatorFilterActive
-          ? this.sessionCreatorFilterId
-          : null,
+        presence: this.presencePayload,
+        presenceId: this.presenceInstanceId,
+        expanded: expandedSessionKeys,
+        fullKeys: this.fullyShownChildSessionKeys,
+        grouping: this.sessionsGrouping,
+        collapsed: this.collapsedSessionSections,
+        dragGroup: this.draggingSessionGroup,
+        drop: this.sessionDropTarget,
+        groupDrop: this.sessionGroupDropTarget,
+        sortOpen: this.sessionSortMenuPosition !== null,
+        menuKey: this.sessionMenu?.session.key ?? null,
+        groupMenu: this.sessionGroupMenu?.group ?? null,
+        status: this.sessionsStatusFilter,
+        remove: this.sessionListRemovalDrop,
+        error: this.sessionMutationError,
+        owners: this.sessionOwnershipVisible,
       },
       callbacks: {
-        startSessionDrag: (session) => {
+        startDrag: (session) => {
           this.draggingSessionKey = session.key;
           this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
         },
-        finishSessionDrag: () => {
+        endDrag: () => {
           this.finishSidebarEntryDrag();
           this.sessionDropTarget = null;
         },
-        openSessionMenuAt: (session, x, y, trigger) =>
-          this.openSessionMenuForRow(session, x, y, trigger),
-        handleSessionRowClick: (event, session) => this.handleSessionRowClick(event, session),
-        toggleSessionChildren: (session) => this.toggleSessionChildren(session),
-        pinSession: (session) => void this.patchSession(session, { pinned: !session.pinned }),
-        toggleSessionMenu: (session, menuSession, trigger) => {
+        openMenu: this.openSessionMenuForRow.bind(this),
+        rowClick: this.handleSessionRowClick.bind(this),
+        children: this.toggleSessionChildren.bind(this),
+        pin: (session) => void this.patchSession(session, { pinned: !session.pinned }),
+        menuClick: (session, menuSession, trigger) => {
           if (this.sessionMenu?.session.key === session.key) {
             this.closeSessionMenu();
             return;
@@ -120,58 +100,48 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           const rect = trigger.getBoundingClientRect();
           this.openSessionMenuForRow(menuSession, rect.right, rect.bottom + 4, trigger);
         },
-        showAllSessionChildren: (sessionKey) => this.showAllSessionChildren(sessionKey),
-        handleSessionSectionDragOver: (event, sectionId, group) =>
-          this.handleSessionSectionDragOver(event, sectionId, group),
-        handleSessionSectionDragLeave: (event, sectionId, group) =>
-          this.handleSessionSectionDragLeave(event, sectionId, group),
-        handleSessionSectionDrop: (event, sectionId, group) =>
-          this.handleSessionSectionDrop(event, sectionId, group),
-        startSessionGroupDrag: (group) => {
+        showChildren: this.showAllSessionChildren.bind(this),
+        sectionOver: this.handleSessionSectionDragOver.bind(this),
+        sectionLeave: this.handleSessionSectionDragLeave.bind(this),
+        sectionDrop: this.handleSessionSectionDrop.bind(this),
+        groupStart: (group) => {
           this.draggingSessionGroup = group;
         },
-        finishSessionGroupDrag: () => {
+        groupEnd: () => {
           this.draggingSessionGroup = null;
           this.sessionGroupDropTarget = null;
         },
-        openSessionGroupMenu: (group, x, y, trigger) =>
-          this.openSessionGroupMenu(group, x, y, trigger),
-        toggleSessionSection: (sectionId) => this.toggleSessionSection(sectionId),
-        toggleSessionSortMenu: (trigger) => this.toggleSessionSortMenu(trigger),
-        openNewSessionForExpandedAgent: () => {
+        groupMenu: this.openSessionGroupMenu.bind(this),
+        section: this.toggleSessionSection.bind(this),
+        sort: this.toggleSessionSortMenu.bind(this),
+        newSession: () => {
           this.onOpenNewSession?.(this.expandedAgentId());
         },
-        setVisibleSessionLimit: (limit) => {
+        setLimit: (limit) => {
           this.visibleSessionLimit = limit;
         },
-        clearSessionSelection: () => this.clearSessionSelection(),
-        handleSessionListDragOver: (event) => this.handleSessionListDragOver(event),
-        handleSessionListDragLeave: (event) => this.handleSessionListDragLeave(event),
-        handleSessionListDrop: (event) => this.handleSessionListDrop(event),
-        dismissSessionMutationError: () => {
+        clear: this.clearSessionSelection.bind(this),
+        listDragOver: this.handleSessionListDragOver.bind(this),
+        listDragLeave: this.handleSessionListDragLeave.bind(this),
+        listDrop: this.handleSessionListDrop.bind(this),
+        dismissError: () => {
           this.sessionMutationError = null;
         },
-        changeSessionCreatorFilter: (creatorId) => {
-          this.sessionCreatorFilterId = creatorId;
-          void this.context?.sessions.setCreatorFilter(creatorId);
-        },
-        toggleCatalogProjectGrouping: () => {
+        catalogGroup: () => {
           const next = this.catalogProjectGrouping === "project" ? "none" : "project";
           storeSidebarCatalogGrouping(next);
           this.catalogProjectGrouping = next;
         },
-        loadMoreSessionCatalog: (catalogId) => void this.loadMoreSessionCatalog(catalogId),
-        onOpenNewSession: this.onOpenNewSession,
-        onNavigate: this.onNavigate,
-        openCatalogSessionMenu: (request, x, y, trigger) =>
-          this.catalogMenu.open(request, x, y, trigger),
-        openCatalogSessionInTerminal: (key) => openCatalogSessionInTerminal(key),
+        more: this.loadMoreSessionCatalog.bind(this),
+        newTarget: this.onOpenNewSession,
+        navigate: this.onNavigate,
+        catalog: this.catalogMenu.open.bind(this.catalogMenu),
       },
     };
   }
 
   protected renderPinnedSidebarSession(session: SidebarRecentSession): TemplateResult {
-    return renderPinnedSidebarSessionTemplate({
+    return renderSessionTree({
       context: this.createSessionListRenderContext([session]),
       session,
     });
@@ -206,13 +176,21 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       showDraft:
         Boolean(this.draftSessionAgentId) &&
         normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
+      creatorFilter: renderSessionCreatorFilter({
+        creators: this.sessionOwnershipVisible ? this.sessionCreatorOptions : [],
+        selectedId: this.sessionCreatorFilterActive ? this.sessionCreatorFilterId : null,
+        onChange: (creatorId) => {
+          this.sessionCreatorFilterId = creatorId;
+          void this.context?.sessions.setCreatorFilter(creatorId);
+        },
+      }),
       catalogs: {
         catalogs: this.sessionCatalogs,
         connected: context.data.connected,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,
-        collapsedSections: context.data.collapsedSessionSections,
+        collapsedSections: context.data.collapsed,
         loadingMoreCatalogIds: this.loadingMoreSessionCatalogIds,
         projectGrouping: this.catalogProjectGrouping,
         liveRows,
