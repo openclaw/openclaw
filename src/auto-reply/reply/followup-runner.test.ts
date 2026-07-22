@@ -488,6 +488,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   }));
   vi.doMock("../../cli/command-secret-targets.js", () => ({
     getAgentRuntimeCommandSecretTargetIds: () => new Set(["skills.entries."]),
+    getAgentRuntimeOptionalCommandSecretPaths: () => new Set<string>(),
     getScopedChannelsCommandSecretTargets: ({
       channel,
       accountId,
