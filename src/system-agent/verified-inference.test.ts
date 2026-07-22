@@ -549,7 +549,6 @@ describe("verified OpenClaw inference binding", () => {
           valid: true,
           config: cliConfig,
         })) as never,
-        loadAuthProfileStoreForRuntime: loadStore,
         ...cliRuntimeArtifactDeps(),
         loadAuthProfileStoreForRuntime: ensureStore,
         ensureAuthProfileStore: ensureStore,
