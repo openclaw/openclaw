@@ -15,6 +15,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
+  authorizeResolvedSessionMutation,
   authorizeSessionMutation,
   canReceiveSessionEvent,
   filterDraftSessionsForClient,
@@ -150,6 +151,46 @@ describe("session sharing handlers", () => {
         expect.anything(),
         expect.anything(),
       );
+    });
+  });
+
+  it("authorizes runs against the resolved session so keyless runs cannot bypass restriction", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:main";
+      const owner = { id: "owner@example.com", label: "Owner" };
+      const outsider: GatewayClient = { ...soloClient(), operatorIdentity: { id: "outsider" } };
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        { sessionId: "session-main", updatedAt: 1, createdBy: owner, visibility: "read-only" },
+      );
+
+      // The agent-run handler authorizes this resolved (default/effective) key
+      // even when the request omitted sessionKey; a non-participant is blocked.
+      expect(
+        authorizeResolvedSessionMutation({
+          cfg: {},
+          client: outsider,
+          sessionKey,
+          agentId: "main",
+        }),
+      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+      // The owner, and a not-yet-created session, both pass.
+      expect(
+        authorizeResolvedSessionMutation({
+          cfg: {},
+          client: { ...soloClient(), operatorIdentity: owner },
+          sessionKey,
+          agentId: "main",
+        }),
+      ).toBeNull();
+      expect(
+        authorizeResolvedSessionMutation({
+          cfg: {},
+          client: outsider,
+          sessionKey: "agent:main:fresh",
+          agentId: "main",
+        }),
+      ).toBeNull();
     });
   });
 
