@@ -1,6 +1,6 @@
 // E2E coverage for experimental grouped Claw inspection and add planning.
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -79,10 +79,14 @@ describe("claws lifecycle cli e2e", () => {
     });
   });
 
-  it("builds a complete read-only plan with deferred package blockers", async () => {
-    const result = await runOpenClaw(["claws", "add", manifestPath, "--dry-run", "--json"], {
-      expectFailure: true,
-    });
+  it("builds a complete package-free read-only plan without network access", async () => {
+    const result = await runOpenClaw([
+      "claws",
+      "add",
+      "src/claws/fixtures/workspace-agent.claw.json",
+      "--dry-run",
+      "--json",
+    ]);
     const add = parseJson(result.stdout);
 
     expect(add).toMatchObject({
@@ -90,22 +94,19 @@ describe("claws lifecycle cli e2e", () => {
       stability: "experimental",
       dryRun: true,
       mutationAllowed: false,
-      agent: { requestedId: "incident-response", finalId: "incident-response" },
+      agent: { requestedId: "workspace-agent", finalId: "workspace-agent" },
       summary: {
-        totalActions: 8,
+        totalActions: 5,
         agentActions: 1,
-        workspaceActions: 3,
-        packageActions: 2,
-        mcpServerActions: 1,
-        cronJobActions: 1,
-        blockedActions: 2,
+        workspaceActions: 4,
+        packageActions: 0,
+        mcpServerActions: 0,
+        cronJobActions: 0,
+        blockedActions: 0,
       },
-      blockers: [
-        { code: "package_install_unavailable", phase: "plan" },
-        { code: "package_install_unavailable", phase: "plan" },
-      ],
+      blockers: [],
     });
-    expect(result.code).toBe(1);
+    expect(result.ok).toBe(true);
   });
 
   it("preserves implicit main and creates exactly one agent after explicit consent", async () => {
@@ -197,12 +198,43 @@ describe("claws lifecycle cli e2e", () => {
   });
 
   it("blocks mutation when declared components need later lifecycle slices", async () => {
-    const preview = await runOpenClaw(["claws", "add", manifestPath, "--dry-run", "--json"], {
-      expectFailure: true,
-    });
+    const root = tempDirs.make("openclaw-claws-deferred-components-");
+    const deferredManifestPath = join(root, "deferred.claw.json");
+    await writeFile(
+      deferredManifestPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        agent: { id: "deferred-components" },
+        mcpServers: { status: { command: "status-mcp" } },
+        cronJobs: [
+          {
+            id: "status-check",
+            schedule: { cron: "0 * * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Check status",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const preview = await runOpenClaw([
+      "claws",
+      "add",
+      deferredManifestPath,
+      "--dry-run",
+      "--json",
+    ]);
     const plan = parseJson(preview.stdout) as { planIntegrity: string };
     const result = await runOpenClaw(
-      ["claws", "add", manifestPath, "--yes", "--plan-integrity", plan.planIntegrity, "--json"],
+      [
+        "claws",
+        "add",
+        deferredManifestPath,
+        "--yes",
+        "--plan-integrity",
+        plan.planIntegrity,
+        "--json",
+      ],
       {
         expectFailure: true,
         stateDir: preview.stateDir,
@@ -211,10 +243,9 @@ describe("claws lifecycle cli e2e", () => {
 
     expect(result.code).toBe(1);
     expect(parseJson(result.stdout)).toMatchObject({
-      schemaVersion: "openclaw.clawAddPlan.v1",
-      blockers: expect.arrayContaining([
-        expect.objectContaining({ code: "package_install_unavailable" }),
-      ]),
+      schemaVersion: "openclaw.clawAddResult.v1",
+      status: "failed",
+      error: { code: "unsupported_components" },
     });
   });
 

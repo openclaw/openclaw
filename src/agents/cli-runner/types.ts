@@ -179,11 +179,11 @@ export type RunCliAgentParams = {
   bashElevated?: ExecElevatedDefaults;
   /** Device-scoped operator session allowed to review approvals initiated by this run. */
   approvalReviewerDeviceId?: string;
-  /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
+  /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
   /** Exact native surface plus host-isolated MCP permissions for a selectable CLI backend. */
   cliToolAvailability?: {
-    native: [];
+    native: string[];
     mcp: string[];
   };
   disableTools?: boolean;

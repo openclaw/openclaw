@@ -67,6 +67,34 @@ sources and workspace-relative targets:
 }
 ```
 
+Skills and plugins use exact ClawHub versions:
+
+```json
+{
+  "packages": [
+    {
+      "kind": "skill",
+      "source": "clawhub",
+      "ref": "incident-triage",
+      "version": "1.0.0"
+    },
+    {
+      "kind": "plugin",
+      "source": "clawhub",
+      "ref": "@acme/audit-plugin",
+      "version": "2.0.0"
+    }
+  ]
+}
+```
+
+The dry run uses the existing skill and plugin preflight paths to resolve the
+exact artifact, integrity, and any ClawHub trust warning before consent. The
+warning remains visible in the integrity-bound plan. Apply installs missing artifacts
+or reuses matching ones and records whether the Claw introduced or referenced
+each resource. Plugins remain process-wide OpenClaw capabilities rather than
+per-agent installations.
+
 ## Inspect and preview
 
 Validate the source without planning local changes:
@@ -98,9 +126,9 @@ when the source, destination, or live configuration changed after preview. Use
 defaults collide with local state.
 
 Adding a Claw creates the new agent and workspace configuration, writes declared
-workspace files, and records installation and per-file provenance. Existing
-files are not overwritten, and retries fail closed when owned content drifted.
-Later Claws stages add other declared resources.
+workspace files, installs or reuses declared skill and plugin artifacts, and
+records provenance. Existing files are not overwritten, and retries fail closed
+when owned content drifted. Later Claws stages add other declared resources.
 
 ## Command reference
 

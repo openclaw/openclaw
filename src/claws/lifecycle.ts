@@ -19,6 +19,7 @@ import {
   type ClawDiagnostic,
   type ClawManifest,
   type ClawLocalPrerequisite,
+  type ClawPackage,
   type ClawSourceIdentity,
 } from "./types.js";
 
@@ -43,6 +44,19 @@ type ClawAddPlanContext = {
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
   existingCronJobIds?: Iterable<string>;
+  packagePreflight?: (
+    pkg: ClawPackage,
+    workspace: string,
+  ) => Promise<{
+    ok: boolean;
+    action?: "install" | "reuse";
+    integrity?: string;
+    installId?: string;
+    warning?: string;
+    installedVersion?: string;
+    code?: string;
+    message?: string;
+  }>;
 };
 
 function canonicalWorkspacePath(value: string): string {
@@ -369,20 +383,43 @@ export async function buildClawAddPlan(params: {
   }
 
   for (const pkg of params.manifest.packages) {
-    const diagnostic = blocker(
-      "package_install_unavailable",
-      "$.packages",
-      `Package ${JSON.stringify(`${pkg.kind}:${pkg.ref}@${pkg.version}`)} cannot be preflighted until the package-owner lifecycle slice is available.`,
-    );
-    blockers.push(diagnostic);
+    const preflight = context.packagePreflight
+      ? await context.packagePreflight(pkg, workspace)
+      : {
+          ok: false,
+          code: "package_install_unavailable",
+          message: "Package preflight is unavailable.",
+        };
+    const diagnostic = preflight.ok
+      ? undefined
+      : blocker(
+          preflight.code ?? "package_install_unavailable",
+          "$.packages",
+          preflight.message ?? "Package preflight failed.",
+        );
+    if (diagnostic) {
+      blockers.push(diagnostic);
+    }
     actions.push({
       kind: "package",
       id: `${pkg.kind}:${pkg.ref}`,
       action: "install",
       target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
-      details: { ...pkg, expectedState: "unresolved" },
-      blocked: true,
-      reason: diagnostic.message,
+      digest: preflight.integrity,
+      details: {
+        ...pkg,
+        ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
+        ...(preflight.installId ? { installId: preflight.installId } : {}),
+        ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
+        expectedState: !preflight.ok
+          ? "unresolved"
+          : preflight.action === "reuse"
+            ? "present-exact"
+            : "absent",
+        ownerAction: preflight.action,
+      },
+      blocked: !preflight.ok,
+      ...(diagnostic ? { reason: diagnostic.message } : {}),
     });
     capabilityChanges.push(
       capabilityChange({
@@ -396,7 +433,9 @@ export async function buildClawAddPlan(params: {
           source: pkg.source,
           ref: pkg.ref,
           version: pkg.version,
-          integrity: "unresolved",
+          integrity: preflight.integrity ?? "unresolved",
+          ...(preflight.installId ? { installId: preflight.installId } : {}),
+          ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),
     );

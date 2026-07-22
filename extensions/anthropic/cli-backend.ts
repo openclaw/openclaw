@@ -20,6 +20,7 @@ import {
   normalizeClaudeBackendConfig,
   resolveClaudeCliAutoCompactEnv,
   resolveClaudeCliExecutionArgs,
+  resolveClaudeCliRuntimeToolAvailability,
 } from "./cli-shared.js";
 
 type ClaudeCliAuthCredential =
@@ -209,5 +210,6 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
         : undefined;
     },
     resolveExecutionArgs: resolveClaudeCliExecutionArgs,
+    resolveRuntimeToolAvailability: resolveClaudeCliRuntimeToolAvailability,
   };
 }
