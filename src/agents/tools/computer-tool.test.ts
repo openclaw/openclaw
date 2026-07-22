@@ -1,7 +1,8 @@
 /**
  * computer tool tests.
  *
- * Cover the computer.act wire mapping and node resolution / arming behavior.
+ * Cover the computer.act wire mapping, frame binding, and arming behavior.
+ * Node selection lives in computer-tool.node-resolution.test.ts.
  */
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -226,7 +227,7 @@ describe("createComputerTool schema", () => {
   });
 });
 
-describe("createComputerTool node resolution", () => {
+describe("createComputerTool execution", () => {
   beforeEach(() => {
     listNodesMock.mockReset();
     callGatewayToolMock.mockReset();
@@ -354,62 +355,6 @@ describe("createComputerTool node resolution", () => {
       ).rejects.toThrow(/coordinate/);
     },
   );
-
-  it("errors when no computer-capable node is connected", async () => {
-    listNodesMock.mockResolvedValue([
-      macComputerNode({ connected: false }),
-      { nodeId: "phone", platform: "ios", connected: true, commands: [] },
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot" })).rejects.toThrow(
-      /no connected computer-capable node/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it.each(["windows", "linux"])("resolves and executes on a capable %s node", async (platform) => {
-    const nodeId = `${platform}-1`;
-    listNodesMock.mockResolvedValue([
-      {
-        nodeId,
-        displayName: `${platform} desktop`,
-        platform,
-        connected: true,
-        commands: ["computer.act", "screen.snapshot"],
-      },
-    ]);
-    callGatewayToolMock.mockResolvedValue(screenshotPayload());
-    const tool = createComputerTool({ modelHasVision: true });
-
-    await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();
-    expect(callGatewayToolMock).toHaveBeenCalledWith(
-      "node.invoke",
-      expect.anything(),
-      expect.objectContaining({ nodeId, command: "computer.act" }),
-      { signal: undefined },
-    );
-  });
-
-  it("rejects a named node that is not computer-capable", async () => {
-    listNodesMock.mockResolvedValue([
-      { nodeId: "mac-2", platform: "macos", connected: true, commands: ["screen.snapshot"] },
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot", node: "mac-2" })).rejects.toThrow(
-      /not computer-capable/,
-    );
-  });
-
-  it("rejects a node advertising computer.act without screen.snapshot", async () => {
-    listNodesMock.mockResolvedValue([
-      { nodeId: "desktop-1", platform: "windows", connected: true, commands: ["computer.act"] },
-    ]);
-    const tool = createComputerTool({ modelHasVision: true });
-    await expect(tool.execute("call", { action: "screenshot", node: "desktop-1" })).rejects.toThrow(
-      /advertising computer\.act and screen\.snapshot/,
-    );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
 
   it("captures a screenshot through screen.snapshot and keeps it model-only", async () => {
     listNodesMock.mockResolvedValue([macComputerNode()]);
