@@ -105,13 +105,9 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       }),
     );
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      {
-        agentId: "ops",
-        agentDir: "/tmp/ops-agent",
-        workspaceDir: "/tmp/ops-workspace",
-      },
+      "/tmp/ops-workspace",
       runtime,
-      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
     );
     expect(mocks.logJson).toHaveBeenCalledWith(
       expect.objectContaining({ workspaceDir: "/tmp/ops-workspace" }),

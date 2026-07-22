@@ -46,12 +46,14 @@ import {
 } from "./configure.shared.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommand } from "./health.js";
-import { resolveOnboardingAgentTarget } from "./onboard-agent-target.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   guardCancel,
   probeGatewayReachable,
   resolveAdvertisedControlUiLinks,
@@ -656,7 +658,7 @@ export async function runConfigureWizard(
     };
 
     const provisionWorkspace = async () => {
-      await ensureWorkspaceAndSessions(resolveSetupTarget(), runtime, {
+      await ensureOnboardingAgentWorkspace(resolveSetupTarget(), runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
       });

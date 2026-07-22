@@ -378,13 +378,9 @@ describe("applySystemAgentSetup transaction boundaries", () => {
     expect(mocks.state.persistedConfig?.agents?.defaults?.workspace).toBe("/tmp/current-workspace");
     expect(mocks.state.persistedConfig?.agents?.entries).toEqual(config.agents.entries);
     expect(mocks.ensureWorkspace).toHaveBeenCalledWith(
-      {
-        agentId: "ops",
-        agentDir: "/agents/ops",
-        workspaceDir: "/tmp/ops-workspace",
-      },
+      "/tmp/ops-workspace",
       runtime,
-      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
     );
   });
 

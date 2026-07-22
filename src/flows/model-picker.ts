@@ -1756,5 +1756,4 @@ function mergeFallbackSelection(params: {
   return fallbacks;
 }
 
-export const testing = { resolveModelPickerConfig };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

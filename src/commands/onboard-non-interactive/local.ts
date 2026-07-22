@@ -12,7 +12,10 @@ import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js"
 import { resolveConfiguredSecretInputWithFallback } from "../../gateway/resolve-configured-secret-input-string.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
-import { resolveOnboardingAgentTarget } from "../onboard-agent-target.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "../onboard-agent-target.js";
 import {
   applyLocalSetupWorkspaceConfig,
   applySkipBootstrapConfig,
@@ -21,7 +24,6 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  ensureWorkspaceAndSessions,
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
@@ -264,7 +266,7 @@ export async function runNonInteractiveLocalSetup(params: {
   logConfigUpdated(runtime);
 
   const finalTarget = resolveOnboardingAgentTarget(nextConfig);
-  await ensureWorkspaceAndSessions(finalTarget, runtime, {
+  await ensureOnboardingAgentWorkspace(finalTarget, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
   });

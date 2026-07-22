@@ -141,13 +141,9 @@ describe("runConfigureWizard default-agent ownership", () => {
       expect.any(Object),
     );
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      {
-        agentId: "ops",
-        agentDir: "/tmp/ops-agent",
-        workspaceDir: "/tmp/new-ops-workspace",
-      },
+      "/tmp/new-ops-workspace",
       runtime,
-      expect.any(Object),
+      expect.objectContaining({ agentId: "ops" }),
     );
   });
 

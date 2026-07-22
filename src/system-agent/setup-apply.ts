@@ -556,9 +556,10 @@ export async function applySystemAgentSetup(
 
   const workspaceResult = await runCommittedFollowUp(
     async () =>
-      await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget, runtime, {
+      await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+        agentId: onboardingTarget.agentId,
       }),
     (error) => lines.push(`Workspace files: ${formatErrorMessage(error)}`),
   );

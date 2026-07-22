@@ -662,9 +662,10 @@ async function runSetupWizardOnce(
   let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget, runtime, {
+  await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget.workspaceDir, runtime, {
     skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
     skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+    agentId: onboardingTarget.agentId,
   });
 
   if (!usedImportFlow) {

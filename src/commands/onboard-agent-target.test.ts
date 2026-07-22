@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { resolveOnboardingAgentTarget } from "./onboard-agent-target.js";
-import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
+import {
+  ensureOnboardingAgentWorkspace,
+  resolveOnboardingAgentTarget,
+} from "./onboard-agent-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -32,7 +34,7 @@ describe("onboarding agent target", () => {
         workspaceDir: opsWorkspace,
       });
       expect(resolveOnboardingAgentTarget(config, " OPS ")).toEqual(target);
-      await ensureWorkspaceAndSessions(target, runtime, { skipBootstrap: true });
+      await ensureOnboardingAgentWorkspace(target, runtime, { skipBootstrap: true });
 
       expect((await fs.stat(opsWorkspace)).isDirectory()).toBe(true);
       expect((await fs.stat(path.join(stateDir, "agents", "ops", "sessions"))).isDirectory()).toBe(

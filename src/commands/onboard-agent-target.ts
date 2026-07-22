@@ -9,9 +9,12 @@ import {
   normalizeAgentModelRefForConfig,
   resolveAgentModelFallbackValues,
 } from "../config/model-input.js";
+import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { ensureWorkspaceAndSessions } from "./onboard-helpers.js";
 
 export type OnboardingAgentTarget = {
   agentId: string;
@@ -29,6 +32,20 @@ export function resolveOnboardingAgentTarget(
     agentDir: resolveAgentDir(config, agentId),
     workspaceDir: resolveAgentWorkspaceDir(config, agentId),
   };
+}
+
+export async function ensureOnboardingAgentWorkspace(
+  target: OnboardingAgentTarget,
+  runtime: RuntimeEnv,
+  options?: {
+    skipBootstrap?: boolean;
+    skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
+  },
+): Promise<{ bootstrapPending: boolean }> {
+  return ensureWorkspaceAndSessions(target.workspaceDir, runtime, {
+    ...options,
+    agentId: target.agentId,
+  });
 }
 
 export function applyOnboardingPrimaryModel(

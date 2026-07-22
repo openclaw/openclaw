@@ -201,9 +201,9 @@ describe("runSetupWizard default-agent ownership", () => {
       workspaceDir: "/tmp/ops-workspace",
     };
     expect(mocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      target,
+      target.workspaceDir,
       runtime,
-      expect.any(Object),
+      expect.objectContaining({ agentId: target.agentId }),
     );
     expect(mocks.setupSkills).toHaveBeenCalledWith(
       expect.any(Object),

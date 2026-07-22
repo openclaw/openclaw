@@ -1,33 +1,47 @@
 // Model picker tests read the configured target agent without rewriting global defaults.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { testing } from "../flows/model-picker.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
 
-describe("model picker default-agent ownership", () => {
-  it("projects the resolved agent override into picker defaults", () => {
+vi.mock("./model-picker.runtime.js", () => ({
+  modelPickerRuntime: { resolvePluginProviders: () => [] },
+}));
+
+import { promptDefaultModel } from "./model-picker.js";
+
+describe("promptDefaultModel default-agent ownership", () => {
+  it("offers the resolved agent override as the current model", async () => {
     const config = {
       agents: {
-        defaults: {
-          model: "openai/global-model",
-          models: { "openai/global-model": {} },
-        },
+        defaults: { model: "openai/global-model" },
         entries: {
           ops: {
             default: true,
             model: "anthropic/ops-model",
-            models: { "anthropic/ops-model": {} },
           },
         },
       },
     } satisfies OpenClawConfig;
-
-    const pickerConfig = testing.resolveModelPickerConfig(config, "ops");
-
-    expect(pickerConfig.agents?.defaults?.model).toBe("anthropic/ops-model");
-    expect(pickerConfig.agents?.defaults?.models).toEqual({
-      "openai/global-model": {},
-      "anthropic/ops-model": {},
+    const select = vi.fn(async (params: { options: Array<{ value: string; label: string }> }) => {
+      const keep = params.options[0];
+      expect(keep?.label).toContain("anthropic/ops-model");
+      return keep?.value;
     });
-    expect(config.agents.defaults.model).toBe("openai/global-model");
+    const prompter = {
+      select,
+      progress: vi.fn(() => ({ stop: vi.fn(), update: vi.fn() })),
+    } as unknown as WizardPrompter;
+
+    await expect(
+      promptDefaultModel({
+        config,
+        prompter,
+        agentId: "ops",
+        agentDir: "/tmp/ops-agent",
+        workspaceDir: "/tmp/ops-workspace",
+        loadCatalog: false,
+      }),
+    ).resolves.toEqual({});
+    expect(select).toHaveBeenCalledOnce();
   });
 });

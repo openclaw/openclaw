@@ -298,12 +298,9 @@ describe("agents add command", () => {
       }),
     );
     expect(onboardHelpersMocks.ensureWorkspaceAndSessions).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "jon",
-        workspaceDir: "/tmp/openclaw-jon",
-      }),
+      "/tmp/openclaw-jon",
       runtime,
-      expect.any(Object),
+      expect.objectContaining({ agentId: "jon" }),
     );
   });
 

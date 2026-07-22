@@ -47,7 +47,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
 import { listAgentSessionDirs } from "./cleanup-utils.js";
-import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
@@ -246,20 +245,21 @@ function resolveSshTargetHint(): string {
 
 /** Ensures workspace bootstrap files and session transcript directories exist. */
 export async function ensureWorkspaceAndSessions(
-  target: OnboardingAgentTarget,
+  workspaceDir: string,
   runtime: RuntimeEnv,
   options?: {
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
+    agentId?: string;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
-    dir: target.workspaceDir,
+    dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(target.agentId);
+  const sessionsDir = resolveSessionTranscriptsDirForAgent(options?.agentId);
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
