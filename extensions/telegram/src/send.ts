@@ -840,6 +840,11 @@ async function sendMessageTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
+  const threadSpec = resolveTelegramSendThreadSpec({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+  });
   const reportDelivery = async (
     messageId: string | number,
     deliveredChatId: string | number,
@@ -865,6 +870,8 @@ async function sendMessageTelegramWithContext(
       account,
       ...(botUserId !== undefined ? { botUserId } : {}),
       chatId,
+      ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+      ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
       ...params,
       promptContextProjection: projection,
     });
@@ -880,11 +887,6 @@ async function sendMessageTelegramWithContext(
     (typeof account.config.mediaMaxMb === "number" ? account.config.mediaMaxMb : 100) * 1024 * 1024;
   const replyMarkup = buildInlineKeyboard(opts.buttons);
 
-  const threadSpec = resolveTelegramSendThreadSpec({
-    targetMessageThreadId: target.messageThreadId,
-    messageThreadId: opts.messageThreadId,
-    chatType: target.chatType,
-  });
   const singleUseReplyTo =
     opts.replyToIdSource === "implicit" &&
     opts.replyToMode !== undefined &&
@@ -1659,12 +1661,13 @@ async function sendLocationTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
+  const threadSpec = resolveTelegramSendThreadSpec({
+    targetMessageThreadId: target.messageThreadId,
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+  });
   const threadParams = buildTelegramThreadReplyParams({
-    thread: resolveTelegramSendThreadSpec({
-      targetMessageThreadId: target.messageThreadId,
-      messageThreadId: opts.messageThreadId,
-      chatType: target.chatType,
-    }),
+    thread: threadSpec,
     replyToMessageId: opts.replyToMessageId,
     replyQuoteText: opts.quoteText,
     useReplyIdAsQuoteSource: true,
@@ -1726,6 +1729,8 @@ async function sendLocationTelegramWithContext(
     message: result,
     messageId,
     text: formatLocationText(location),
+    ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
+    ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
     ...(acceptedParams?.message_thread_id !== undefined
       ? { messageThreadId: acceptedParams.message_thread_id }
       : {}),

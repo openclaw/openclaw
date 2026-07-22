@@ -149,6 +149,10 @@ export function createTelegramDraftController(params: {
               chatId: params.chatId,
               message,
               messageId: message.message_id,
+              ...(params.threadSpec.id !== undefined
+                ? { messageThreadId: params.threadSpec.id }
+                : {}),
+              successfulSendThread: params.threadSpec,
             });
           },
           log: logVerbose,

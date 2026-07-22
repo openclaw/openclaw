@@ -119,6 +119,7 @@ describe("recordOutboundMessageForPromptContext", () => {
     } as const;
     const callerOnlyThread = await recordAndRead({
       ...common,
+      successfulSendThread: { id: 77, scope: "forum" },
       message: {
         chat: { id: -1001, type: "supergroup", title: "QA" },
         date: 1_736_380_700,
@@ -142,6 +143,44 @@ describe("recordOutboundMessageForPromptContext", () => {
       },
     });
     expect(hasProviderObservedTelegramThreadBinding(providerThread, 77)).toBe(true);
+  });
+
+  it("binds a successful General-topic response from trusted send context", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: -1001,
+      message: {
+        chat: { id: -1001, type: "supergroup", title: "QA" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 702,
+        text: "Bot replied in General",
+      },
+      messageId: 702,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "forum" },
+    });
+
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(true);
+  });
+
+  it("does not infer a General-topic binding for DM thread context", async () => {
+    const cached = await recordAndRead({
+      account: { accountId: "default", name: "Configured Agent" },
+      chatId: 42,
+      message: {
+        chat: { id: 42, type: "private" },
+        date: 1_736_380_700,
+        from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+        message_id: 703,
+        text: "Bot replied in a DM topic",
+      },
+      messageId: 703,
+      messageThreadId: 1,
+      successfulSendThread: { id: 1, scope: "dm" },
+    });
+
+    expect(hasProviderObservedTelegramThreadBinding(cached, 1)).toBe(false);
   });
 
   it("falls back to the Telegram bot name when no configured name exists", async () => {
