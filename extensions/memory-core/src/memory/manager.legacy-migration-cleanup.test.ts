@@ -133,14 +133,10 @@ describe("memory legacy migration cleanup", () => {
 
     const db = Reflect.get(manager, "db") as DatabaseSync;
     expect(
-      db
-        .prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/deleted.md'")
-        .get(),
+      db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/deleted.md'").get(),
     ).toEqual({ hash: "" });
     expect(
-      db
-        .prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'")
-        .get(),
+      db.prepare("SELECT hash FROM memory_index_sources WHERE path = 'memory/ownerless.md'").get(),
     ).toEqual({ hash: "" });
     expect(
       db

@@ -71,7 +71,7 @@ describe("memory index schema", () => {
           id: 1,
           path: "MEMORY.md",
           source: "memory",
-          hash: "file-hash",
+          hash: "",
           mtime: 10.75,
           size: 20,
         },
