@@ -9986,6 +9986,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: askFallback
   - H3: tools.exec.strictInlineEval
   - H3: tools.exec.commandHighlighting
+  - H3: tools.exec.denylist
   - H2: YOLO mode (no-approval)
   - H3: Persistent gateway-host "never prompt" setup
   - H3: Local shortcut

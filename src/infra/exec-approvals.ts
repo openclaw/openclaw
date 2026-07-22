@@ -14,6 +14,7 @@ import {
   AgentDeletionCommitUncertainError,
   isAgentDeletionBlocked,
 } from "../agents/agent-lifecycle-registry.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
@@ -23,11 +24,30 @@ import {
   canonicalizeExecApprovalPolicyRules,
   type ExecApprovalPolicySnapshot,
 } from "./exec-approval-policy-snapshot.js";
+export { requiresExecApproval } from "./exec-approval-requirement.js";
 import {
   type AllowAlwaysPattern,
   resolveAllowAlwaysPatternEntries,
 } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import type {
+  ExecApprovalsAgent,
+  ExecApprovalsDefaults,
+  ExecApprovalsFile,
+  ExecApprovalsResolved,
+  ExecApprovalsSnapshot,
+} from "./exec-approvals-file.js";
+export type {
+  ExecApprovalsAgent,
+  ExecApprovalsDefaults,
+  ExecApprovalsFile,
+  ExecApprovalsResolved,
+  ExecApprovalsSnapshot,
+} from "./exec-approvals-file.js";
+import {
+  assertCurrentDenylistAuthorization,
+  type ExecDenylistAuthorizationBinding,
+} from "./exec-approvals-denylist-authorization.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import type { ExecAuthorizationPlan } from "./exec-authorization-plan.js";
 import {
@@ -267,50 +287,6 @@ export type ExecApprovalResolved = {
   request?: ExecApprovalRequest["request"];
 };
 
-export type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-};
-
-export type ExecApprovalsAgent = ExecApprovalsDefaults & {
-  allowlist?: ExecAllowlistEntry[];
-};
-
-export type ExecApprovalsFile = {
-  version: 1;
-  socket?: {
-    path?: string;
-    token?: string;
-  };
-  defaults?: ExecApprovalsDefaults;
-  agents?: Record<string, ExecApprovalsAgent>;
-};
-
-export type ExecApprovalsSnapshot = {
-  path: string;
-  exists: boolean;
-  raw: string | null;
-  file: ExecApprovalsFile;
-  hash: string;
-};
-
-export type ExecApprovalsResolved = {
-  path: string;
-  socketPath: string;
-  token: string;
-  defaults: Required<ExecApprovalsDefaults>;
-  agent: Required<ExecApprovalsDefaults>;
-  agentSources: {
-    security: string | null;
-    ask: string | null;
-    askFallback: string | null;
-  };
-  allowlist: ExecAllowlistEntry[];
-  file: ExecApprovalsFile;
-};
-
 // Keep CLI + gateway defaults in sync.
 export const DEFAULT_EXEC_APPROVAL_TIMEOUT_MS = 1_800_000;
 
@@ -337,7 +313,9 @@ const EXEC_APPROVALS_LOCK_OPTIONS = {
 const EXEC_APPROVALS_LOCK_QUEUE = resolveGlobalMap<string, Promise<unknown>>(
   Symbol.for("openclaw.execApprovalsLockQueue"),
 );
+const execApprovalsLog = createSubsystemLogger("exec-approvals");
 let execApprovalsProcessStartTime: number | null | undefined;
+let warnedAboutIgnoredPersistedDenylist = false;
 
 function getExecApprovalsProcessStartTime(): number | null {
   if (execApprovalsProcessStartTime === undefined) {
@@ -499,10 +477,38 @@ function isValidPersistedExecApprovals(value: unknown): value is ExecApprovalsFi
   return true;
 }
 
+function hasIgnoredPersistedDenylist(value: unknown): boolean {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  if (isPlainObject(value.defaults) && value.defaults.denylist !== undefined) {
+    return true;
+  }
+  if (!isPlainObject(value.agents)) {
+    return false;
+  }
+  return Object.values(value.agents).some(
+    (agent) => isPlainObject(agent) && agent.denylist !== undefined,
+  );
+}
+
+function warnIgnoredPersistedDenylistOnce(): void {
+  if (warnedAboutIgnoredPersistedDenylist) {
+    return;
+  }
+  warnedAboutIgnoredPersistedDenylist = true;
+  execApprovalsLog.warn(
+    "Ignoring denylist entries in exec-approvals.json; use openclaw.json tools.exec.denylist for exec STOP rules.",
+  );
+}
+
 function parsePersistedExecApprovals(raw: string): ExecApprovalsFile {
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (isValidPersistedExecApprovals(parsed)) {
+      if (hasIgnoredPersistedDenylist(parsed)) {
+        warnIgnoredPersistedDenylistOnce();
+      }
       return normalizeExecApprovals(parsed);
     }
   } catch {
@@ -988,18 +994,22 @@ export function normalizeExecApprovals(file: ExecApprovalsFile): ExecApprovalsFi
     delete agents.default;
   }
   for (const [key, agent] of Object.entries(agents)) {
+    const { denylist: _ignoredDenylist, ...agentWithoutDenylist } = agent as ExecApprovalsAgent & {
+      denylist?: unknown;
+    };
     const coerced = coerceAllowlistEntries(agent.allowlist);
     const withIds = ensureAllowlistIds(coerced);
     const allowlist = stripAllowlistCommandText(withIds);
     const sanitizedPolicy = sanitizeExecApprovalPolicy(agent);
     const agentChanged =
+      _ignoredDenylist !== undefined ||
       allowlist !== agent.allowlist ||
       sanitizedPolicy.security !== agent.security ||
       sanitizedPolicy.ask !== agent.ask ||
       sanitizedPolicy.askFallback !== agent.askFallback;
     if (agentChanged) {
       agents[key] = {
-        ...agent,
+        ...agentWithoutDenylist,
         allowlist,
         security: sanitizedPolicy.security,
         ask: sanitizedPolicy.ask,
@@ -1837,26 +1847,6 @@ export function resolveExecApprovalsFromFile(params: {
   };
 }
 
-export function requiresExecApproval(params: {
-  ask: ExecAsk;
-  security: ExecSecurity;
-  analysisOk: boolean;
-  allowlistSatisfied: boolean;
-  durableApprovalSatisfied?: boolean;
-}): boolean {
-  if (params.ask === "always") {
-    return true;
-  }
-  if (params.durableApprovalSatisfied === true) {
-    return false;
-  }
-  return (
-    params.ask === "on-miss" &&
-    params.security === "allowlist" &&
-    (!params.analysisOk || !params.allowlistSatisfied)
-  );
-}
-
 function normalizeCommandName(value: string | undefined): string {
   return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
 }
@@ -2120,6 +2110,8 @@ export type ExecApprovalUsageAuthorization = {
   requireAutoAllowSkills?: boolean;
   requireExactCommandApproval?: boolean;
   requireDurableAllowlistApproval?: boolean;
+  /** Denylist provenance for locked pre-dispatch revalidation. */
+  denylistBinding?: ExecDenylistAuthorizationBinding;
 };
 
 function assertCurrentUsageAuthorization(params: {
@@ -2129,6 +2121,9 @@ function assertCurrentUsageAuthorization(params: {
   matchKeys: ReadonlySet<string>;
   authorization: ExecApprovalUsageAuthorization;
 }): void {
+  assertCurrentDenylistAuthorization({
+    binding: params.authorization.denylistBinding,
+  });
   const current = resolveExecApprovalsFromFile({
     file: params.file,
     agentId: params.agentId,

@@ -11,6 +11,7 @@ import {
 } from "../agents/agent-lifecycle-registry.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { buildExecDenylistRuleKey } from "./exec-approvals-denylist.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -374,6 +375,58 @@ describe("exec approvals store helpers", () => {
     expect(ensured.socket?.token).not.toBe("default-profile-token");
     expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(true);
     expect(fs.readFileSync(defaultPath, "utf8")).toBe(defaultBefore);
+  });
+
+  it("loads stray approvals-file denylist fields but strips them on rewrite", async () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(
+      approvalsPath,
+      `${JSON.stringify({
+        version: 1,
+        socket: { path: "~/.openclaw/exec-approvals.sock", token: "existing-token" },
+        defaults: {
+          security: "full",
+          ask: "off",
+          denylist: [{ pattern: "printf*", reason: "legacy stray" }],
+        },
+        agents: {
+          main: {
+            denylist: [{ pattern: "rm *" }],
+            allowlist: [{ pattern: "echo *" }],
+          },
+        },
+      })}\n`,
+      "utf8",
+    );
+
+    const snapshot = readExecApprovalsSnapshot();
+    expect(snapshot.file.defaults).toEqual({
+      security: "full",
+      ask: "off",
+      askFallback: undefined,
+      autoAllowSkills: undefined,
+    });
+    expect(snapshot.file.agents?.main).toEqual({
+      allowlist: [expect.objectContaining({ pattern: "echo *" })],
+      security: undefined,
+      ask: undefined,
+      askFallback: undefined,
+    });
+
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, ask: "on-miss" },
+      }),
+    });
+    const rewritten = JSON.parse(fs.readFileSync(approvalsPath, "utf8")) as {
+      defaults?: Record<string, unknown>;
+      agents?: Record<string, Record<string, unknown>>;
+    };
+    expect(rewritten.defaults?.denylist).toBeUndefined();
+    expect(rewritten.agents?.main?.denylist).toBeUndefined();
   });
 
   it("keeps the default approvals path when only legacy state exists", () => {
@@ -1833,6 +1886,212 @@ describe("exec approvals store helpers", () => {
       }),
     ).rejects.toThrow("Allow-always persistence requires explicit approval");
     expect(allowlistEntries(dir, "main")).toEqual([]);
+  });
+
+  it("ignores approvals-file denylist rules added while approval was pending", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // Denylist provenance captured at approval time: no rules were effective.
+    const denylistBinding = {
+      command: "printf approved",
+      segments: [{ argv: ["printf", "approved"] }],
+      analysisOk: true,
+      configDenylist: [],
+      approvedRuleKeys: [],
+    };
+
+    // A stray approvals-file denylist is no longer an authorization source.
+    await updateExecApprovals({
+      update: (current) => ({
+        ...current,
+        defaults: { ...current.defaults, denylist: [{ pattern: "printf*" }] },
+      }),
+    });
+
+    // Snapshot deliberately matches the post-tightening policy so the denylist
+    // provenance gate, not the snapshot comparison, is the code under test.
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a commit when a config denylist rule added mid-wait matches only the resolved dispatch argv", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // The binding carries the RESOLVED absolute dispatch argv alongside the
+    // bare request segments; the command text itself stays unresolved.
+    const denylistBinding = {
+      command: "printf ok",
+      segments: [{ argv: ["printf", "ok"] }, { argv: ["/usr/bin/printf", "ok"] }],
+      analysisOk: true,
+      configDenylist: [],
+      resolveCurrentConfigDenylist: () => [{ pattern: "/usr/bin/printf *", reason: "hot config" }],
+      approvedRuleKeys: [],
+    };
+
+    // Snapshot matches the post-tightening policy so the denylist provenance
+    // gate, not the snapshot comparison, is the code under test.
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf ok",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("rejects a commit when the config denylist resolver tightens during approval", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    const denylistBinding = {
+      command: "printf approved",
+      segments: [{ argv: ["printf", "approved"] }],
+      analysisOk: true,
+      configDenylist: [],
+      resolveCurrentConfigDenylist: () => [{ pattern: "printf*", reason: "hot config" }],
+      approvedRuleKeys: [],
+    };
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
+  });
+
+  it("commits when the matching denylist rule was already effective at approval time", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // The rule matched at request time and the human approved anyway; the same
+    // rule being current at dispatch must not revoke the explicit decision.
+    const denylistBinding = {
+      command: "printf approved",
+      segments: [{ argv: ["printf", "approved"] }],
+      analysisOk: true,
+      configDenylist: [{ pattern: "printf*" }],
+      approvedRuleKeys: [buildExecDenylistRuleKey({ pattern: "printf*" })],
+    };
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails closed when the pending command cannot be screened against a new denylist rule", async () => {
+    createHomeDir();
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "full", ask: "off" },
+      agents: { main: {} },
+    });
+    // Unanalyzable command binding: no segments and analysis failed.
+    const denylistBinding = {
+      command: "printf approved | obscure",
+      segments: [],
+      analysisOk: false,
+      configDenylist: [],
+      resolveCurrentConfigDenylist: () => [{ pattern: "unrelated*" }],
+      approvedRuleKeys: [],
+    };
+
+    // Snapshot deliberately matches the post-tightening policy so the denylist
+    // provenance gate, not the snapshot comparison, is the code under test.
+    const policySnapshot = createExecApprovalPolicySnapshot({
+      file: readExecApprovalsSnapshot().file,
+      agentId: "main",
+    });
+
+    await expect(
+      commitExecAuthorization({
+        agentId: "main",
+        matches: [],
+        command: "printf approved | obscure",
+        authorization: {
+          source: "explicit-approval",
+          security: "full",
+          ask: "off",
+          allowlistSatisfied: false,
+          policySnapshot,
+          denylistBinding,
+        },
+      }),
+    ).rejects.toThrow("Exec approval changed before execution");
   });
 
   it("rejects unprompted full execution after policy changes to deny", async () => {

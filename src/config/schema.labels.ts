@@ -1,7 +1,6 @@
 // Defines user-facing config field labels used by schema metadata.
 import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
-
 export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.activities": "Discord Activities",
   "channels.discord.activities.clientSecret": "Discord Activities Client Secret",
@@ -278,6 +277,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.pathPrepend": "Exec PATH Prepend",
   "tools.exec.safeBins": "Exec Safe Bins",
   "tools.exec.strictInlineEval": "Require Inline-Eval Approval",
+  "tools.exec.denylist": "Exec Command Denylist",
   "tools.exec.commandHighlighting": "Exec Command Highlighting",
   "tools.exec.safeBinTrustedDirs": "Exec Safe Bin Trusted Dirs",
   "tools.exec.safeBinProfiles": "Exec Safe Bin Profiles",

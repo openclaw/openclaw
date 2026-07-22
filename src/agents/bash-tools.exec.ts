@@ -1,8 +1,3 @@
-/**
- * Exec tool factory and request pipeline.
- * Resolves host/sandbox/node target, policy, approval, env, script preflight,
- * process launch, foreground result, and background session handoff.
- */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -53,6 +48,7 @@ import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
+import { resolveCurrentExecConfigDenylist } from "./bash-tools.exec-denylist.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
@@ -1318,7 +1314,6 @@ function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
   return normalizeChatChannelId(defaults?.messageProvider) !== null;
 }
 
-/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1372,11 +1367,12 @@ export function createExecTool(
     threadId: defaults?.currentThreadTs,
   });
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
-  // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const resolveCurrentConfigDenylist = () =>
+    resolveCurrentExecConfigDenylist({ fallback: defaults?.denylist, agentId });
   const resolveHostForParams = (params: ExecToolArgs): ExecHost => {
     const elevatedDefaults = defaults?.elevated;
     const elevatedAllowed = Boolean(elevatedDefaults?.enabled && elevatedDefaults.allowed);
@@ -1904,6 +1900,7 @@ export function createExecTool(
             agentId,
             security,
             ask,
+            bypassApprovals,
             autoReview,
             autoReviewer,
             signal,
@@ -1918,6 +1915,8 @@ export function createExecTool(
             notifySessionKey,
             notifyOnExit,
             trustedSafeBinDirs,
+            execConfigDenylist: defaults?.denylist,
+            resolveCurrentExecConfigDenylist: resolveCurrentConfigDenylist,
           });
         }
 
@@ -1943,6 +1942,8 @@ export function createExecTool(
             safeBins,
             safeBinProfiles,
             strictInlineEval: defaults?.strictInlineEval,
+            execConfigDenylist: defaults?.denylist,
+            resolveCurrentExecConfigDenylist: resolveCurrentConfigDenylist,
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
             agentId,
