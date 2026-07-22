@@ -139,7 +139,7 @@ const CONTROLLER_SOURCE = String.raw`
   function safe(value) {
     if (value === undefined) return null;
     try {
-      return JSON.parse(JSON.stringify(value));
+      return structuredClone(value);
     } catch {
       if (value instanceof Error) {
         return { name: value.name, message: value.message };

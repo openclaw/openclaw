@@ -206,7 +206,7 @@ function toJsonSafe(value) {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value));
+    return structuredClone(value);
   } catch {
     if (value instanceof Error) {
       return value.message;
