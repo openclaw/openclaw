@@ -1414,6 +1414,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: config set modes
   - H3: Provider builder flags
   - H2: config patch
+  - H2: config unset
+  - H3: Dry-run options
   - H2: Dry run
   - H3: JSON output shape
   - H2: Applying changes
