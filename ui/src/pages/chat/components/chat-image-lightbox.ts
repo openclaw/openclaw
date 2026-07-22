@@ -24,6 +24,9 @@ export function openInlineChatImage(
   event: Event,
   onOpenImage: ((item: ImageLightboxItem) => void) | undefined,
 ) {
+  if (event.defaultPrevented) {
+    return;
+  }
   const image = inlineChatImageFromEvent(event);
   if (!image) {
     return;

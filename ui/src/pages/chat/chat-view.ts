@@ -286,6 +286,14 @@ export function renderChatResizableDivider(props: {
   ></resizable-divider>`;
 }
 
+function isImageLightboxEvent(event: Event): boolean {
+  return event
+    .composedPath()
+    .some(
+      (target) => target instanceof HTMLElement && target.localName === "openclaw-image-lightbox",
+    );
+}
+
 export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
@@ -492,6 +500,9 @@ export function renderChat(props: ChatProps) {
       @click=${(event: Event) => openInlineChatImage(event, openImmediateImage)}
       @dragover=${attachmentDropHandlers.onDragover}
       @keydown=${(event: KeyboardEvent) => {
+        if (isImageLightboxEvent(event)) {
+          return;
+        }
         if ((event.key === "Enter" || event.key === " ") && inlineChatImageFromEvent(event)) {
           openInlineChatImage(event, openImmediateImage);
           return;

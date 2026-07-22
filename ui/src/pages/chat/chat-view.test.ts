@@ -1744,6 +1744,51 @@ describe("chat composer workbench", () => {
     expect(onCloseImage).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps lightbox Escape from clearing the pending reply", () => {
+    const onClearReply = vi.fn();
+    const container = renderChatView({
+      replyTarget: { messageId: "reply-1", text: "Keep this reply" },
+      onClearReply,
+      imageLightbox: {
+        src: "data:image/png;base64,cG5n",
+        title: "Artifact preview",
+      },
+      onCloseImage: vi.fn(),
+    });
+    const lightbox = container.querySelector("openclaw-image-lightbox");
+
+    lightbox?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, composed: true }),
+    );
+
+    expect(onClearReply).not.toHaveBeenCalled();
+  });
+
+  it("opens sidebar Markdown images once", async () => {
+    const onOpenImage = vi.fn();
+    const container = renderChatView({
+      sidebarOpen: true,
+      sidebarContent: {
+        kind: "markdown",
+        content: "![Preview](data:image/png;base64,cG5n)",
+      },
+      onCloseSidebar: vi.fn(),
+      onOpenImage,
+    });
+    document.body.append(container);
+    const panel = container.querySelector("openclaw-chat-detail-panel");
+    await panel?.updateComplete;
+
+    panel?.querySelector<HTMLButtonElement>(".markdown-inline-image-button")?.click();
+
+    expect(onOpenImage).toHaveBeenCalledOnce();
+    expect(onOpenImage).toHaveBeenCalledWith({
+      src: "data:image/png;base64,cG5n",
+      title: "Preview",
+    });
+    container.remove();
+  });
+
   it("forces the workspace rail to the bottom dock and drops side-dock controls on narrow panes", () => {
     const container = renderChatView({
       sessionWorkspace: {
