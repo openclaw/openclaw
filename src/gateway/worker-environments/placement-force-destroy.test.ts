@@ -122,4 +122,43 @@ describe("forced worker environment destruction", () => {
       expect.objectContaining({ message: "destroy pending" }),
     );
   });
+
+  it("retries remote teardown when a failed rollback journal remains", async () => {
+    const harness = createHarness(placementStore, {
+      destroyFails: true,
+      destroyFailureState: "destroying",
+      failAt: "workspace",
+    });
+    const active = harness.placements.seedActive(harness.attached.ownerEpoch);
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    placementStore.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "e".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"e".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+
+    await expect(
+      harness.service.forceDestroyEnvironment(active.environmentId),
+    ).resolves.toMatchObject({ state: "destroying" });
+    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    vi.mocked(harness.environments.destroy).mockClear();
+
+    await harness.service.reconcileActive(active.environmentId);
+
+    expect(harness.environments.destroy).toHaveBeenCalledExactlyOnceWith(active.environmentId);
+  });
 });

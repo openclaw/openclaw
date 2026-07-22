@@ -53,6 +53,7 @@ export async function forceAbandonWorkerEnvironment(params: {
     .listWorkspaceReconciliationOwners()
     .filter((owner) => owner.environmentId === environmentId);
   const journalCleanups: Array<{
+    owner: (typeof journalOwners)[number];
     placement: { sessionId: string; sessionKey: string; agentId: string };
     journal: NonNullable<ReturnType<typeof placements.loadWorkspaceReconciliation>>;
   }> = [];
@@ -67,7 +68,7 @@ export async function forceAbandonWorkerEnvironment(params: {
       try {
         const journal = placements.loadWorkspaceReconciliation(owner);
         if (journal) {
-          journalCleanups.push({ placement, journal });
+          journalCleanups.push({ owner, placement, journal });
         }
       } catch (error) {
         reportCleanupError(params.onCleanupError, error);
@@ -128,26 +129,25 @@ export async function forceAbandonWorkerEnvironment(params: {
 
   // The durable fence is now closed. Filesystem rollback and ref cleanup are
   // useful hygiene, but a changed or missing workspace must not revive it.
+  const retainedJournalSessions = new Set<string>();
   for (const cleanup of journalCleanups) {
     if (cleanup.journal.appliedManifestRef) {
       continue;
     }
     try {
-      const root = await tryResolveWorkspacePath(
-        params.resolveWorkspacePath,
-        cleanup.placement,
-        params.onCleanupError,
-      );
-      if (root) {
-        await recoverWorkerWorkspaceReconciliation({ root, journal: cleanup.journal });
-      }
+      const root = await params.resolveWorkspacePath(cleanup.placement);
+      await recoverWorkerWorkspaceReconciliation({ root, journal: cleanup.journal });
     } catch (error) {
       reportCleanupError(params.onCleanupError, error);
+      retainedJournalSessions.add(cleanup.owner.sessionId);
     }
   }
   // Placement failure is durable before journal removal. A crash during the
   // best-effort rollback therefore leaves a fenced placement and retriable journal.
   for (const owner of journalOwners) {
+    if (retainedJournalSessions.has(owner.sessionId)) {
+      continue;
+    }
     placements.abortWorkspaceReconciliation(owner, { force: true });
   }
   for (const cleanup of stagedResultCleanups) {

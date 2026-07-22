@@ -145,4 +145,46 @@ describe("forced worker environment abandonment", () => {
     expect(store.listWorkspaceReconciliationOwners()).toEqual([]);
     expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
   });
+
+  it("retains a current journal when its best-effort rollback fails", async () => {
+    const store = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
+    const { environmentId } = createDispatchEnvironmentFixtures();
+    const active = seedActivePlacement(store, { environmentId, ownerEpoch: 2 });
+    if (active.state !== "active") {
+      throw new Error("active placement fixture was not active");
+    }
+    const owner = {
+      sessionId: active.sessionId,
+      environmentId: active.environmentId,
+      ownerEpoch: active.activeOwnerEpoch,
+      placementGeneration: active.generation,
+    };
+    store.beginWorkspaceReconciliation(owner, {
+      version: 1,
+      temporaryNonce: "c".repeat(32),
+      baseManifestRef: active.workspaceBaseManifestRef,
+      currentManifestRef: `sha256:${"d".repeat(64)}`,
+      baseEntries: [],
+      appliedEntries: [],
+      baseTree: "f".repeat(40),
+      basePackSha256: createHash("sha256").update("").digest("hex"),
+      basePack: Buffer.alloc(0),
+    });
+    const onCleanupError = vi.fn();
+
+    await forceAbandonWorkerEnvironment({
+      placements: store,
+      environmentId,
+      resolveWorkspacePath: async () => {
+        throw new Error("workspace temporarily unavailable");
+      },
+      onCleanupError,
+    });
+
+    expect(store.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+    expect(store.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(onCleanupError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "workspace temporarily unavailable" }),
+    );
+  });
 });
