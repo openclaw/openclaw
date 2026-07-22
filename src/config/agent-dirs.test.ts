@@ -1,5 +1,13 @@
 // Covers agent directory resolution across config and environment overrides.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  canonicalizePathIdentity,
+  pathCaseInsensitive,
+  type PathChildCaseProbe,
+} from "../infra/path-case-sensitivity.js";
 import { findDuplicateAgentDirs } from "./agent-dirs.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -44,5 +52,104 @@ describe("resolveEffectiveAgentDir via findDuplicateAgentDirs", () => {
     // No duplicates for a single default agent
     const dupes = findDuplicateAgentDirs(cfg, { env });
     expect(dupes).toHaveLength(0);
+  });
+
+  it("still rejects identical agentDir paths", () => {
+    const shared = path.join(os.tmpdir(), `openclaw-agentdir-shared-${process.pid}`);
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "a", agentDir: shared },
+          { id: "b", agentDir: shared },
+        ],
+      },
+    };
+    const dupes = findDuplicateAgentDirs(cfg);
+    expect(dupes).toHaveLength(1);
+    expect(dupes[0]?.agentIds).toEqual(["a", "b"]);
+  });
+
+  it("keys agentDir collision identity to the target volume case semantics", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agentdir-case-"));
+    try {
+      const caseInsensitive = pathCaseInsensitive(root);
+      const upper = path.join(root, "AgentState");
+      const lower = path.join(root, "agentstate");
+      // Leave paths absent so collision keys use closest-parent child probes.
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "a", agentDir: upper },
+            { id: "b", agentDir: lower },
+          ],
+        },
+      };
+      const dupes = findDuplicateAgentDirs(cfg);
+      if (caseInsensitive) {
+        // Common macOS/Windows volumes: case variants are one directory identity.
+        expect(dupes).toHaveLength(1);
+        expect(dupes[0]?.agentIds).toEqual(["a", "b"]);
+      } else {
+        // Case-sensitive volume: distinct case paths are valid distinct agent dirs.
+        expect(dupes).toHaveLength(0);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keys absent nested agentDir paths using parent volume child semantics", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agentdir-absent-"));
+    try {
+      const caseInsensitive = pathCaseInsensitive(root);
+      const upper = path.join(root, "Nested", "AgentState");
+      const lower = path.join(root, "Nested", "agentstate");
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "a", agentDir: upper },
+            { id: "b", agentDir: lower },
+          ],
+        },
+      };
+      const dupes = findDuplicateAgentDirs(cfg);
+      if (caseInsensitive) {
+        expect(dupes).toHaveLength(1);
+        expect(dupes[0]?.agentIds).toEqual(["a", "b"]);
+      } else {
+        expect(dupes).toHaveLength(0);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps case-distinct agentDirs distinct across a case-sensitive ancestor", () => {
+    // Component-aware identity: mixed CS ancestor must not collapse Foo/foo
+    // even when a leaf would fold under whole-path semantics.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agentdir-mixed-"));
+    try {
+      const rootResolved = path.resolve(root);
+      const probe: PathChildCaseProbe = (dir) => {
+        const rel = path.relative(rootResolved, path.resolve(dir));
+        if (rel.startsWith("..") || path.isAbsolute(rel)) {
+          return null;
+        }
+        const parts = rel.split(path.sep).filter((part) => part.length > 0);
+        return parts.includes("CI");
+      };
+      const upper = path.join(root, "Foo", "CI", "agent");
+      const lower = path.join(root, "foo", "CI", "agent");
+      // Mixed mounts: validate via canonicalizePathIdentity injection (same helper
+      // production canonicalizeAgentDir uses).
+      expect(canonicalizePathIdentity(upper, { probeChildCaseInsensitive: probe })).not.toBe(
+        canonicalizePathIdentity(lower, { probeChildCaseInsensitive: probe }),
+      );
+      expect(canonicalizePathIdentity(upper, { probeChildCaseInsensitive: probe })).toBe(
+        canonicalizePathIdentity(upper, { probeChildCaseInsensitive: probe }),
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

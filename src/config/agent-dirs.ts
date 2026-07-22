@@ -1,8 +1,8 @@
 // Resolves agent-specific config and workspace directories.
 import os from "node:os";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { canonicalizePathIdentity } from "../infra/path-case-sensitivity.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
@@ -24,13 +24,14 @@ export class DuplicateAgentDirError extends Error {
   }
 }
 
+/**
+ * Collision key for agentDir identity.
+ * Component-aware: fold only segments whose parent resolves children
+ * case-insensitively. Case-sensitive ancestors keep Foo/foo distinct even when
+ * a descendant is case-insensitive (mixed mount / per-dir semantics).
+ */
 function canonicalizeAgentDir(agentDir: string): string {
-  const resolved = path.resolve(agentDir);
-  if (process.platform === "darwin" || process.platform === "win32") {
-    // Agent dirs collide case-insensitively on the common macOS/Windows filesystems.
-    return normalizeLowercaseStringOrEmpty(resolved);
-  }
-  return resolved;
+  return canonicalizePathIdentity(agentDir);
 }
 
 function collectReferencedAgentIds(cfg: OpenClawConfig): string[] {

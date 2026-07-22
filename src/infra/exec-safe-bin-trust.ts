@@ -6,6 +6,7 @@ import {
   sortUniqueStrings,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import { canonicalizePathIdentity } from "./path-case-sensitivity.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -29,46 +30,10 @@ export type WritableTrustedSafeBinDir = {
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
 
-function swapAsciiCase(value: string): string {
-  return value.replace(/[A-Za-z]/g, (char) => {
-    const lower = char.toLowerCase();
-    return char === lower ? char.toUpperCase() : lower;
-  });
-}
-
-function sameFsObject(a: fs.Stats, b: fs.Stats): boolean {
-  return a.dev === b.dev && a.ino === b.ino;
-}
-
-function pathCaseInsensitive(value: string): boolean {
-  let candidate = value;
-  for (;;) {
-    const swapped = swapAsciiCase(candidate);
-    if (swapped !== candidate) {
-      try {
-        const original = fs.statSync(candidate);
-        try {
-          const alternate = fs.statSync(swapped);
-          return sameFsObject(original, alternate);
-        } catch {
-          return false;
-        }
-      } catch {
-        // The compared path may not exist yet; probe the closest existing parent.
-      }
-    }
-
-    const parent = path.dirname(candidate);
-    if (parent === candidate) {
-      return process.platform === "win32";
-    }
-    candidate = parent;
-  }
-}
-
 function normalizeTrustComparisonPath(value: string): string {
-  const resolved = path.resolve(value);
-  return pathCaseInsensitive(resolved) ? resolved.toLowerCase() : resolved;
+  // Component-aware identity (fail-closed on unknown probes): do not fold
+  // case-sensitive ancestor components when a descendant mount is CI.
+  return canonicalizePathIdentity(value);
 }
 
 function normalizeTrustedDir(value: string, forComparison = true): string | null {
