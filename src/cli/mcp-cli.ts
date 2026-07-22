@@ -38,6 +38,7 @@ import { defaultRuntime } from "../runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
+import { resolveMcpCallInput } from "./mcp-call-input.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 function fail(message: string): never {
@@ -802,6 +803,120 @@ export function registerMcpCli(program: Command) {
         await runtime.dispose();
       }
     });
+
+  mcp
+    .command("call")
+    .description(
+      "Invoke one configured MCP tool (stdout JSON); use probe for connection/catalog diagnosis",
+    )
+    .argument("<server>", "MCP server name")
+    .argument("<tool>", "MCP tool name as advertised by the server")
+    .option("--input <json>", "JSON object tool arguments (default: {})")
+    .option("--input-file <path>", "Read one JSON object from a file, or - for stdin")
+    .action(
+      async (
+        serverName: string,
+        toolName: string,
+        opts: { input?: string; inputFile?: string },
+      ) => {
+        const inputResult = await resolveMcpCallInput(opts);
+        if (!inputResult.ok) {
+          fail(inputResult.error);
+        }
+        const loaded = await listConfiguredMcpServers();
+        if (!loaded.ok) {
+          fail(loaded.error);
+        }
+        const server = loaded.mcpServers[serverName];
+        if (!server) {
+          fail(
+            `No MCP server named "${serverName}" in ${loaded.path}. Run ${formatCliCommand("openclaw mcp list")} to see configured servers.`,
+          );
+        }
+        if (server.enabled === false) {
+          fail(
+            `MCP server "${serverName}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${serverName} --enable`)} before calling it.`,
+          );
+        }
+        const resolved = resolveMcpTransportConfig(serverName, server);
+        if (!resolved) {
+          fail(`MCP server "${serverName}" has an invalid transport in ${loaded.path}.`);
+        }
+        if (server.auth === "oauth" && resolved.kind === "http") {
+          const authStatus = await readMcpOAuthCredentialsStatus({
+            serverName,
+            serverUrl: resolved.url,
+          });
+          if (authStatus.requiresAuthorization || !authStatus.hasTokens) {
+            fail(
+              `MCP server "${serverName}" requires OAuth authorization. Run ${formatCliCommand(`openclaw mcp login ${serverName}`)}.`,
+            );
+          }
+        }
+
+        const runtime = createSessionMcpRuntime({
+          sessionId: "openclaw-cli-mcp-call",
+          workspaceDir: process.cwd(),
+          cfg: buildMcpProbeConfig({
+            config: loaded.config,
+            servers: { [serverName]: server },
+          }),
+          manifestRegistry: { plugins: [] },
+        });
+        let disposePromise: Promise<void> | undefined;
+        const disposeRuntime = () => {
+          disposePromise ??= runtime.dispose();
+          return disposePromise;
+        };
+        const onSignal = () => {
+          void disposeRuntime().finally(() => {
+            defaultRuntime.exit(130, { resetStream: process.stderr });
+          });
+        };
+        process.once("SIGINT", onSignal);
+        process.once("SIGTERM", onSignal);
+        try {
+          const catalog = await runtime.getCatalog();
+          const diagnostic = catalog.diagnostics?.find((entry) => entry.serverName === serverName);
+          if (diagnostic) {
+            fail(`MCP call failed for "${serverName}" in ${loaded.path}: ${diagnostic.message}`);
+          }
+          if (!catalog.servers[serverName]) {
+            fail(`MCP call did not connect to "${serverName}" in ${loaded.path}.`);
+          }
+          const matchedTool = catalog.tools.find(
+            (tool) => tool.serverName === serverName && tool.toolName === toolName,
+          );
+          if (!matchedTool) {
+            const available = catalog.tools
+              .filter((tool) => tool.serverName === serverName)
+              .map((tool) => tool.toolName)
+              .toSorted();
+            fail(
+              `MCP tool "${toolName}" is unavailable on server "${serverName}" (unknown, filtered, or not advertised). Available tools: ${available.length > 0 ? available.join(", ") : "(none)"}.`,
+            );
+          }
+          const result = await runtime.callTool(serverName, toolName, inputResult.value);
+          printJson(result);
+          if (result.isError === true) {
+            fail(`MCP tool "${toolName}" on server "${serverName}" returned isError=true.`);
+          }
+        } catch (err) {
+          // fail()/runtime.exit throw ExitError or test "__exit__:N" sentinels; rethrow them.
+          if (
+            (err instanceof Error && err.name === "ExitError") ||
+            (err instanceof Error && err.message.startsWith("__exit__:"))
+          ) {
+            throw err;
+          }
+          fail(`MCP call failed for "${serverName}"/${toolName}: ${formatErrorMessage(err)}`);
+        } finally {
+          process.off("SIGINT", onSignal);
+          process.off("SIGTERM", onSignal);
+          await disposeRuntime();
+        }
+      },
+    );
 
   mcp
     .command("doctor")

@@ -11,7 +11,7 @@ sidebarTitle: "MCP"
 `openclaw mcp` has two jobs:
 
 - run OpenClaw as an MCP server with `openclaw mcp serve`
-- manage OpenClaw-managed outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
+- manage OpenClaw-managed outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `call`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
 
 `serve` is OpenClaw acting as an MCP server. The other subcommands are OpenClaw acting as an MCP client-side registry for servers its own runtimes may consume later.
 
@@ -27,7 +27,7 @@ Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness sessio
 | ------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Let an external MCP client read/send OpenClaw channel conversations | `openclaw mcp serve`                                                 | OpenClaw is the MCP server and exposes Gateway-backed conversations over stdio.                                 |
 | Save third-party MCP servers for OpenClaw-managed agent runs        | `openclaw mcp add`, `set`, `configure`, `tools`, `login`             | OpenClaw is the MCP client-side registry and later projects those servers into eligible runtimes.               |
-| Check a saved server without running an agent turn                  | `openclaw mcp status`, `doctor`, `probe`                             | `status` and `doctor` inspect config; `probe` opens a live MCP connection and lists capabilities.               |
+| Check a saved server without running an agent turn                  | `openclaw mcp status`, `doctor`, `probe`, `call`                     | `status` and `doctor` inspect config; `probe` lists live capabilities; `call` invokes one filtered tool.        |
 | Edit MCP config from a browser                                      | Control UI `/settings/mcp` (`/mcp` alias)                            | The page shows inventory, enablement, OAuth/filter summaries, command hints, and a scoped `mcp` editor.         |
 | Give Codex app-server a scoped native MCP server                    | `mcp.servers.<name>.codex`                                           | The `codex` block only affects Codex app-server thread projection and is stripped before native config handoff. |
 | Run ACP-hosted harness sessions                                     | [`openclaw acp`](/cli/acp) and [ACP Agents](/tools/acp-agents-setup) | ACP bridge mode does not accept per-session MCP server injection; configure gateway/plugin bridges instead.     |
@@ -349,7 +349,7 @@ For broader testing context, see [Testing](/help/testing).
 
 ## OpenClaw as an MCP client registry
 
-This is the `openclaw mcp list`, `show`, `status`, `doctor`, `probe`, `add`, `set`,
+This is the `openclaw mcp list`, `show`, `status`, `doctor`, `probe`, `call`, `add`, `set`,
 `configure`, `tools`, `login`, `logout`, `reload`, and `unset` path.
 
 These commands do not expose OpenClaw over MCP. They manage OpenClaw-managed MCP server definitions under `mcp.servers` in OpenClaw config. They do not read mcporter servers from `config/mcporter.json`.
@@ -365,6 +365,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
     - `doctor` checks saved definitions for local setup problems such as missing stdio commands, invalid working directories, missing TLS files, disabled servers, literal sensitive header/env values, and incomplete OAuth authorization
     - `doctor --probe` adds the same live connection proof as `probe` after static checks pass
     - `probe` connects to the selected server or all configured servers, lists tools, and reports capabilities/diagnostics
+    - `call` connects to one enabled server, resolves the named tool from the filtered catalog, and invokes it with a JSON object; it prints the MCP tool result as JSON on stdout
     - `add` builds a definition from flags and probes before saving unless `--no-probe` is set or OAuth authorization is needed first
     - runtime adapters decide which transport shapes they actually support at execution time
     - `enabled: false` keeps a server saved but excludes it from embedded runtime discovery
@@ -403,6 +404,7 @@ Commands:
 - `openclaw mcp status [--verbose]`
 - `openclaw mcp doctor [name] [--probe]`
 - `openclaw mcp probe [name]`
+- `openclaw mcp call <server> <tool> [--input <json> | --input-file <path-or->]`
 - `openclaw mcp add <name> [flags]`
 - `openclaw mcp set <name> <json>`
 - `openclaw mcp configure <name> [flags]`
@@ -418,7 +420,8 @@ Notes:
 - `show` without a name prints the full configured MCP server object.
 - `status` classifies configured transports without connecting. `--verbose` includes resolved launch, timeout, OAuth, filter, and parallel-call details, including when stored OAuth tokens require additional authorization. Credential-bearing stdio arguments are redacted in text and JSON output.
 - `doctor` performs static checks without connecting. Add `--probe` when the command should also verify that enabled servers connect.
-- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics.
+- `probe` connects and reports tool counts, resources/prompts support, list-change support, and diagnostics. Use it to diagnose connection and catalog state.
+- `call` verifies one tool end-to-end through the same configured MCP runtime, OAuth store, timeouts, and `toolFilter` as agent sessions. Omitted input means `{}`. `--input-file -` reads one JSON object from stdin. Conflicting `--input` / `--input-file`, non-object JSON, unknown/disabled servers, filtered tools, missing OAuth, transport failures, timeouts, and MCP `isError` results exit non-zero. Structured MCP results stay on stdout; diagnostics go to stderr. This is an operator escape hatch, not a replacement for native agent tool projection.
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition. Add `--probe` to verify the updated server before saving.
@@ -437,6 +440,8 @@ openclaw mcp show context7 --json
 openclaw mcp status --verbose
 openclaw mcp doctor --probe
 openclaw mcp probe context7 --json
+openclaw mcp call context7 resolve-library-id --input '{"libraryName":"openclaw"}'
+echo '{"libraryName":"openclaw"}' | openclaw mcp call context7 resolve-library-id --input-file -
 openclaw mcp add memory --command npx --arg -y --arg @modelcontextprotocol/server-memory
 openclaw mcp set context7 '{"command":"uvx","args":["context7-mcp"]}'
 openclaw mcp tools context7 --include 'resolve-library-id,get-library-docs'
@@ -802,7 +807,7 @@ Example:
 ```
 
 <Note>
-Registry commands do not start the channel bridge. Only `probe` and `doctor --probe` open a live MCP client session to prove the target server is reachable.
+Registry commands do not start the channel bridge. Only `probe`, `call`, and `doctor --probe` open a live MCP client session to prove the target server is reachable. `probe` diagnoses connection and catalog state; `call` invokes one filtered tool and prints the MCP result as JSON.
 </Note>
 
 ## Control UI
