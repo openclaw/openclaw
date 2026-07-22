@@ -1330,7 +1330,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       agents: {
         defaults: {
           models: state.defaultRuntimeConfig.agents.defaults.models,
-          cliBackends: { codex: { command: "codex" } },
         },
       },
     };

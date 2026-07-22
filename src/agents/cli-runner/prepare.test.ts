@@ -154,35 +154,13 @@ async function createTestMcpLoopbackServer(port = 0) {
 }
 
 function createCliBackendConfig(
-  params: {
+  _params: {
     bundleMcp?: boolean;
     reseedFromRawTranscriptWhenUncompacted?: boolean;
     systemPromptWhen?: "first" | "always" | "never";
   } = {},
 ): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        cliBackends: {
-          "test-cli": {
-            command: "test-cli",
-            args: ["--print"],
-            systemPromptArg: "--system-prompt",
-            systemPromptWhen: params.systemPromptWhen ?? "first",
-            sessionMode: "existing",
-            output: "text",
-            input: "arg",
-            ...(params.reseedFromRawTranscriptWhenUncompacted
-              ? { reseedFromRawTranscriptWhenUncompacted: true }
-              : {}),
-            ...(params.bundleMcp
-              ? { bundleMcp: true, bundleMcpMode: "claude-config-file" as const }
-              : {}),
-          },
-        },
-      },
-    },
-  } satisfies OpenClawConfig;
+  return {};
 }
 
 function setCliBackendForPrepareTest(

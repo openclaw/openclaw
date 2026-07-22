@@ -509,44 +509,13 @@ Z.AI GLM-4.x models automatically enable thinking mode unless you set `--thinkin
 Z.AI models enable `tool_stream` by default for tool call streaming. Set `agents.defaults.models["zai/<model>"].params.tool_stream` to `false` to disable it.
 Anthropic Claude Opus 4.8 keeps thinking off by default in OpenClaw; when adaptive thinking is explicitly enabled, Anthropic's provider-owned effort default is `high`. Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
 
-### `agents.defaults.cliBackends`
+### CLI backend selection
 
-Optional CLI backends for text-only fallback runs (no tool calls). Useful as a backup when API providers fail.
-
-```json5
-{
-  agents: {
-    defaults: {
-      cliBackends: {
-        "claude-cli": {
-          command: "/opt/homebrew/bin/claude",
-        },
-        "my-cli": {
-          command: "my-cli",
-          args: ["--json"],
-          output: "json",
-          modelArg: "--model",
-          sessionArgs: ["--session", "{sessionId}"],
-          sessionMode: "existing",
-          systemPromptArg: "--system",
-          // Or use systemPromptFileArg when the CLI accepts a prompt file flag.
-          systemPromptWhen: "first",
-          imageArg: "--image",
-          imageMode: "repeat",
-        },
-      },
-    },
-  },
-}
-```
-
-- CLI backends are text-first; tools are always disabled.
-- Sessions are supported when `sessionArgs` includes `{sessionId}`.
-- Image pass-through supported when `imageArg` accepts file paths.
-- `reseedFromRawTranscriptWhenUncompacted: true` lets a backend recover safe
-  invalidated sessions from a bounded raw OpenClaw transcript tail before the
-  first compaction summary exists. Auth profile or credential-epoch changes
-  still never raw-reseed.
+CLI adapter mechanics are registered by plugins, not configured under agent
+defaults. Select a registered CLI backend with model-scoped `agentRuntime.id`,
+as shown above. See [CLI backends](/gateway/cli-backends) for operations and
+[building CLI backend plugins](/plugins/cli-backend-plugins) for command,
+session, image, and parser registration.
 
 ### `agents.defaults.promptOverlays`
 

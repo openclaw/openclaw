@@ -78,15 +78,12 @@ vi.mock("../cli-runner/claude-live-session.js", () => ({
 }));
 
 vi.mock("../model-selection.js", () => ({
-  isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+  isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
     const normalized = provider.trim().toLowerCase();
     return (
       normalized === "claude-cli" ||
       normalized === "codex-cli" ||
-      normalized === "google-gemini-cli" ||
-      Object.keys(cfg?.agents?.defaults?.cliBackends ?? {}).some(
-        (candidate) => candidate.trim().toLowerCase() === normalized,
-      )
+      normalized === "google-gemini-cli"
     );
   },
   normalizeProviderId: (provider: string) => provider.trim().toLowerCase(),
@@ -3007,7 +3004,6 @@ describe("embedded attempt harness pinning", () => {
       cfg: {
         agents: {
           defaults: {
-            cliBackends: { codex: { command: "codex" } },
             models: {
               "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             },
@@ -3103,13 +3099,7 @@ describe("embedded attempt harness pinning", () => {
       providerOverride: "openai",
       originalProvider: "openai",
       modelOverride: "gpt-5.4",
-      cfg: {
-        agents: {
-          defaults: {
-            cliBackends: { "claude-cli": { command: "claude" } },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: {} as OpenClawConfig,
       sessionEntry,
       sessionId: sessionEntry.sessionId,
       sessionKey: "agent:main:main",

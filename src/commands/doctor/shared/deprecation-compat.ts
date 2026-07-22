@@ -63,6 +63,22 @@ function deprecatedCompatRecord<Code extends string>(
 // architecture because ownership and config footprint can shift during rollout.
 const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
   deprecatedCompatRecord({
+    code: "doctor-cli-backends-plugin-registration",
+    deprecated: "2026-07-21",
+    warningStarts: "2026-07-21",
+    removeAfter: "2026-09-22",
+    owner: "agent-runtime",
+    introduced: "2026-07-21",
+    source: "agents.defaults.cliBackends adapter DSL",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts",
+    replacement: "registerCliBackend plugin registrations and model-scoped agentRuntime.id",
+    docsPath: "/plugins/cli-backend-plugins",
+    tests: [
+      "src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.test.ts",
+      "src/config/dead-config-keys.test.ts",
+    ],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-tier-eval-tranche",
     deprecated: "2026-07-20",
     warningStarts: "2026-07-20",

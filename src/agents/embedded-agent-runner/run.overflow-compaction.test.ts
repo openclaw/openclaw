@@ -666,9 +666,6 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
         },
         agents: {
           defaults: {
-            cliBackends: {
-              "claude-cli": { command: "claude" },
-            },
             models: {
               "anthropic/test-model": { agentRuntime: { id: "claude-cli" } },
             },

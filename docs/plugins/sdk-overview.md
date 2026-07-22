@@ -573,11 +573,12 @@ descriptor-backed placeholders for parse-time lazy loading.
 AI CLI backend such as `claude-cli` or `my-cli`.
 
 - The backend `id` becomes the provider prefix in model refs like `my-cli/gpt-5`.
-- The backend `config` uses the same shape as `agents.defaults.cliBackends.<id>`.
-- User config still wins. OpenClaw merges `agents.defaults.cliBackends.<id>` over the
-  plugin default before running the CLI.
-- Use `normalizeConfig` when a backend needs compatibility rewrites after merge
-  (for example normalizing old flag shapes).
+- The backend `config` is the authoritative command adapter: argv, environment,
+  parser, session, image, and reliability behavior live in plugin code.
+- Users select the backend through model refs or model-scoped `agentRuntime.id`;
+  `openclaw.json` does not rewrite the adapter.
+- Use `normalizeConfig` when registered static fields need a runtime-aware
+  normalization pass.
 - Use `resolveExecutionArgs` for request-scoped argv rewrites that belong to
   the CLI dialect, such as mapping OpenClaw thinking levels to a native effort
   flag. The hook receives `ctx.executionMode`; use `"side-question"` to add

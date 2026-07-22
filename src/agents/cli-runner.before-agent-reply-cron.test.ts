@@ -368,21 +368,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     const result = await runCliAgent({
       ...baseRunParams,
       trigger: "cron",
-      config: {
-        agents: {
-          defaults: {
-            cliBackends: {
-              "codex-cli": {
-                command: "codex",
-                args: ["exec"],
-                output: "text",
-                input: "arg",
-                sessionMode: "none",
-              },
-            },
-          },
-        },
-      },
+      config: {},
     });
 
     expect(result.meta.agentMeta?.sessionId).toBe("");

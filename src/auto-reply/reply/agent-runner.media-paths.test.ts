@@ -58,13 +58,12 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
       const normalized = provider.trim().toLowerCase();
       return (
         normalized === "claude-cli" ||
         normalized === "google-gemini-cli" ||
-        normalized === "codex-cli" ||
-        Boolean(cfg?.agents?.defaults?.cliBackends?.[normalized])
+        normalized === "codex-cli"
       );
     },
   };

@@ -3312,7 +3312,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
-  - H3: agents.defaults.cliBackends
+  - H3: CLI backend selection
   - H3: agents.defaults.promptOverlays
   - H3: agents.defaults.heartbeat
   - H3: agents.defaults.compaction
@@ -5713,7 +5713,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Advanced backend hooks
   - H3: ownsNativeCompaction: opting out of OpenClaw compaction
   - H2: MCP tool bridge
-  - H2: User configuration
+  - H2: Selecting the backend
   - H2: Verification
   - H2: Checklist
   - H2: Related

@@ -2166,7 +2166,6 @@ describe("OpenClaw agent loop backends", () => {
       agents: {
         defaults: {
           model: { primary: "claude-cli/claude-opus-4-8" },
-          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
     } satisfies OpenClawConfig;
@@ -2230,7 +2229,6 @@ describe("OpenClaw agent loop backends", () => {
       agents: {
         defaults: {
           model: { primary: "claude-cli/claude-opus-4-8" },
-          cliBackends: { "claude-cli": { command: "claude" } },
         },
       },
     } satisfies OpenClawConfig;
