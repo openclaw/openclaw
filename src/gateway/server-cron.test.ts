@@ -145,6 +145,10 @@ vi.mock("../infra/heartbeat-wake.js", async () => {
 
 vi.mock("../infra/heartbeat-runner.js", () => ({
   runHeartbeatOnce,
+  // Heartbeat monitor convergence enumerates agents at cron start; keep it
+  // inert so these tests exercise cron wiring, not heartbeat enrollment.
+  resolveHeartbeatAgents: () => [],
+  resolveHeartbeatSchedulerSeed: () => "test-seed",
 }));
 
 vi.mock("../infra/restart-coordinator.js", async () => {

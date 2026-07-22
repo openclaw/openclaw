@@ -52,7 +52,9 @@ export type CronFormState = {
   staggerUnit: "seconds" | "minutes";
   sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: "next-heartbeat" | "now";
-  payloadKind: "systemEvent" | "agentTurn" | "command" | "script";
+  // "heartbeat" is system-owned and always payloadLocked; the form only
+  // displays it, never submits it.
+  payloadKind: "systemEvent" | "agentTurn" | "command" | "script" | "heartbeat";
   payloadLocked: boolean;
   payloadText: string;
   payloadModel: string;
