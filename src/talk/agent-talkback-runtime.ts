@@ -13,13 +13,13 @@ export type RealtimeVoiceAgentTalkbackResult = {
 };
 
 /** Minimal queue API owned by a realtime voice session. */
-export type RealtimeVoiceAgentTalkbackQueue = {
+export type RealtimeVoiceAgentTalkbackQueue<TMetadata = unknown> = {
   close(): void;
-  enqueue(question: string, metadata?: unknown): void;
+  enqueue(question: string, metadata?: TMetadata): void;
 };
 
 /** Runtime dependencies and policy knobs for the talkback queue. */
-export type RealtimeVoiceAgentTalkbackQueueParams = {
+export type RealtimeVoiceAgentTalkbackQueueParams<TMetadata = unknown> = {
   /** Delay used to merge nearby transcript fragments into one consult. */
   debounceMs: number;
   isStopped: () => boolean;
@@ -30,25 +30,25 @@ export type RealtimeVoiceAgentTalkbackQueueParams = {
   /** Delegates a batched question to OpenClaw and respects the abort signal. */
   consult: (args: {
     question: string;
-    metadata?: unknown;
+    metadata?: TMetadata;
     responseStyle: string;
     signal: AbortSignal;
   }) => Promise<RealtimeVoiceAgentTalkbackResult>;
   /** Delivers final speakable text back to the realtime provider/session. */
-  deliver: (text: string) => void;
+  deliver: (text: string, metadata?: TMetadata) => void;
 };
 
-type PendingQuestion = {
+type PendingQuestion<TMetadata> = {
   question: string;
-  metadata?: unknown;
+  metadata?: TMetadata;
 };
 
 /** Create a serial consult queue for realtime transcript talkback. */
-export function createRealtimeVoiceAgentTalkbackQueue(
-  params: RealtimeVoiceAgentTalkbackQueueParams,
-): RealtimeVoiceAgentTalkbackQueue {
+export function createRealtimeVoiceAgentTalkbackQueue<TMetadata = unknown>(
+  params: RealtimeVoiceAgentTalkbackQueueParams<TMetadata>,
+): RealtimeVoiceAgentTalkbackQueue<TMetadata> {
   let active = false;
-  let pendingQuestions: PendingQuestion[] = [];
+  let pendingQuestions: PendingQuestion<TMetadata>[] = [];
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let activeAbortController: AbortController | undefined;
 
@@ -60,7 +60,15 @@ export function createRealtimeVoiceAgentTalkbackQueue(
     debounceTimer = undefined;
   };
 
-  const run = async (pending: PendingQuestion): Promise<void> => {
+  const deliver = (text: string, metadata: TMetadata | undefined) => {
+    if (metadata === undefined) {
+      params.deliver(text);
+    } else {
+      params.deliver(text, metadata);
+    }
+  };
+
+  const run = async (pending: PendingQuestion<TMetadata>): Promise<void> => {
     const trimmed = pending.question.trim();
     if (!trimmed || params.isStopped()) {
       return;
@@ -76,7 +84,7 @@ export function createRealtimeVoiceAgentTalkbackQueue(
     }
 
     active = true;
-    let nextQuestion: PendingQuestion | undefined = {
+    let nextQuestion: PendingQuestion<TMetadata> | undefined = {
       question: trimmed,
       metadata: pending.metadata,
     };
@@ -104,7 +112,7 @@ export function createRealtimeVoiceAgentTalkbackQueue(
           `${params.logPrefix} consult done: elapsedMs=${Date.now() - consultStartedAt} answerChars=${text.length} queued=${pendingQuestions.length}`,
         );
         if (!params.isStopped() && text) {
-          params.deliver(text);
+          deliver(text, currentQuestion.metadata);
         }
         nextQuestion = pendingQuestions.shift();
       }
@@ -117,7 +125,7 @@ export function createRealtimeVoiceAgentTalkbackQueue(
       const elapsedDetail =
         consultStartedAt === undefined ? "" : ` elapsedMs=${Date.now() - consultStartedAt}`;
       params.logger.warn(`${params.logPrefix} consult failed:${elapsedDetail} ${message}`);
-      params.deliver(params.fallbackText);
+      deliver(params.fallbackText, nextQuestion?.metadata);
     } finally {
       active = false;
       const queuedQuestion = pendingQuestions.shift();
@@ -164,7 +172,10 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   };
 }
 
-function appendPendingQuestion(queue: PendingQuestion[], next: PendingQuestion): void {
+function appendPendingQuestion<TMetadata>(
+  queue: PendingQuestion<TMetadata>[],
+  next: PendingQuestion<TMetadata>,
+): void {
   const current = queue.at(-1);
   if (current && Object.is(current.metadata, next.metadata)) {
     // Metadata identity represents the caller/context lane; merge only when the

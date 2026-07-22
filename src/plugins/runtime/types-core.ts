@@ -338,6 +338,11 @@ export type PluginRuntimeCore = {
     runCommandWithTimeout: typeof import("../../process/exec.js").runCommandWithTimeout;
     formatNativeDependencyHint: typeof import("./native-deps.js").formatNativeDependencyHint;
   };
+  talk: {
+    openSession: (
+      params: import("../../talk/plugin-session.js").OpenPluginTalkSessionParams,
+    ) => Promise<import("../../talk/plugin-session.js").PluginTalkSession>;
+  };
   media: {
     loadWebMedia: typeof import("../../media/web-media.js").loadWebMedia;
     detectMime: typeof import("@openclaw/media-core/mime").detectMime;

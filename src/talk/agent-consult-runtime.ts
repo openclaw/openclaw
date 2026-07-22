@@ -241,6 +241,7 @@ export async function consultRealtimeVoiceAgent(params: {
   messageProvider: string;
   lane: string;
   runIdPrefix: string;
+  onRunStarted?: (runId: string) => void;
   args: unknown;
   transcript: RealtimeVoiceAgentConsultTranscriptEntry[];
   surface: string;
@@ -337,6 +338,8 @@ export async function consultRealtimeVoiceAgent(params: {
 
       // Voice consults suppress verbose/reasoning output because the bridge needs a short,
       // speakable answer, not agent-run diagnostics or hidden reasoning artifacts.
+      const runId = `${params.runIdPrefix}:${Date.now()}`;
+      params.onRunStarted?.(runId);
       const result = await params.agentRuntime.runEmbeddedAgent({
         sessionId,
         sessionKey: params.sessionKey,
@@ -378,7 +381,7 @@ export async function consultRealtimeVoiceAgent(params: {
         toolsAllow: params.toolsAllow,
         timeoutMs:
           params.timeoutMs ?? params.agentRuntime.resolveAgentTimeoutMs({ cfg: params.cfg }),
-        runId: `${params.runIdPrefix}:${Date.now()}`,
+        runId,
         lane: params.lane,
         extraSystemPrompt:
           params.extraSystemPrompt ??

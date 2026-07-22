@@ -212,6 +212,7 @@ describe("realtime voice agent consult runtime", () => {
 
   it("runs an embedded agent using the shared session and prompt contract", async () => {
     const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    const onRunStarted = vi.fn();
 
     const result = await consultRealtimeVoiceAgent({
       cfg: { agents: { list: [{ id: "operator", default: true }] } } as never,
@@ -221,6 +222,7 @@ describe("realtime voice agent consult runtime", () => {
       messageProvider: "voice",
       lane: "voice",
       runIdPrefix: "voice-realtime-consult:call-1",
+      onRunStarted,
       args: { question: "What should I say?", context: "Caller asked about PR #123." },
       transcript: [{ role: "user", text: "Can you check this?" }],
       surface: "a live phone call",
@@ -249,6 +251,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(call.agentId).toBe("operator");
     expect(call.messageProvider).toBe("voice");
     expect(call.lane).toBe("voice");
+    expect(onRunStarted).toHaveBeenCalledWith(call.runId);
     expect(call.toolsAllow).toStrictEqual(["read"]);
     expect(call.provider).toBe("openai");
     expect(call.model).toBe("gpt-5.4");
