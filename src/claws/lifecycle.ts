@@ -8,6 +8,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root as fsSafeRoot, type Root } from "../infra/fs-safe.js";
 import { resolveUserPath } from "../utils.js";
+import { digestClawMcpServer } from "./mcp.js";
 import { MAX_MANAGED_FILE_BYTES, MAX_MANAGED_WORKSPACE_BYTES } from "./source-limits.js";
 import {
   CLAW_ADD_PLAN_SCHEMA_VERSION,
@@ -43,7 +44,7 @@ type ClawAddPlanContext = {
   existingAgentIds?: Iterable<string>;
   existingWorkspacePaths?: Iterable<string>;
   existingMcpServerNames?: Iterable<string>;
-  existingCronJobIds?: Iterable<string>;
+  existingMcpServers?: Record<string, Record<string, unknown>>;
   packagePreflight?: (
     pkg: ClawPackage,
     workspace: string,
@@ -443,13 +444,18 @@ export async function buildClawAddPlan(params: {
 
   const existingMcpServerNames = new Set(context.existingMcpServerNames ?? []);
   for (const [name, server] of Object.entries(params.manifest.mcpServers)) {
-    const blocked = existingMcpServerNames.has(name);
+    const existingServer = context.existingMcpServers?.[name];
+    const exactExisting =
+      existingServer !== undefined &&
+      digestClawMcpServer(existingServer) === digestClawMcpServer(server);
+    const blocked =
+      !exactExisting && (existingMcpServerNames.has(name) || existingServer !== undefined);
     if (blocked) {
       blockers.push(
         blocker(
           "mcp_server_collision",
           `$.mcpServers.${name}`,
-          `MCP server ${JSON.stringify(name)} already exists and will not be overwritten.`,
+          `MCP server ${JSON.stringify(name)} already exists with different or unresolved configuration and will not be overwritten.`,
         ),
       );
     }
@@ -472,7 +478,7 @@ export async function buildClawAddPlan(params: {
       target: `mcp.servers.${name}`,
       details: {
         ...server,
-        expectedState: "absent",
+        expectedState: exactExisting ? "present-exact" : "absent",
         prerequisites: readinessRequirements.filter(
           (requirement) => requirement.mcpServer === name,
         ),
@@ -494,18 +500,8 @@ export async function buildClawAddPlan(params: {
     );
   }
 
-  const existingCronJobIds = new Set(context.existingCronJobIds ?? []);
+  // Strict v1 validation permits only deterministic main or isolated targets.
   for (const job of params.manifest.cronJobs) {
-    const blocked = existingCronJobIds.has(job.id);
-    if (blocked) {
-      blockers.push(
-        blocker(
-          "cron_job_collision",
-          `$.cronJobs.${job.id}`,
-          `Cron job ${JSON.stringify(job.id)} already exists and will not be overwritten.`,
-        ),
-      );
-    }
     actions.push({
       kind: "cronJob",
       id: job.id,
@@ -519,7 +515,7 @@ export async function buildClawAddPlan(params: {
           ? { deliveryResolution: "local-channel-state:last" }
           : {}),
       },
-      blocked,
+      blocked: false,
     });
     capabilityChanges.push(
       capabilityChange({

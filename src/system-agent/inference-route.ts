@@ -295,11 +295,6 @@ export async function projectInferenceRoute(
         rawModel,
       }),
       agentRuntime: structuredClone(defaults?.agentRuntime),
-      cliBackends: Object.fromEntries(
-        Object.entries(defaults?.cliBackends ?? {}).filter(([provider]) =>
-          providerIds.has(normalizeProviderId(provider)),
-        ),
-      ),
     },
     ...(agent
       ? {

@@ -574,7 +574,7 @@ describe("buildClawAddPlan", () => {
     );
   });
 
-  it("blocks agent, configured workspace, MCP, and cron collisions", async () => {
+  it("blocks agent, configured workspace, and MCP collisions", async () => {
     const { source, workspace } = await createPlanSource();
     const plan = await buildClawAddPlan({
       manifest: requireManifest(),
@@ -584,7 +584,6 @@ describe("buildClawAddPlan", () => {
         existingAgentIds: ["github-triage"],
         existingWorkspacePaths: [workspace],
         existingMcpServerNames: ["github"],
-        existingCronJobIds: ["weekday-triage"],
       },
     });
 
@@ -594,9 +593,8 @@ describe("buildClawAddPlan", () => {
       "package_install_unavailable",
       "package_install_unavailable",
       "mcp_server_collision",
-      "cron_job_collision",
     ]);
-    expect(plan.summary.blockedActions).toBe(8);
+    expect(plan.summary.blockedActions).toBe(7);
   });
 
   it("canonicalizes a missing workspace through an existing aliased parent", async () => {
@@ -619,6 +617,29 @@ describe("buildClawAddPlan", () => {
 
     expect(plan.agent.workspace).toBe(canonicalWorkspace);
     expect(plan.blockers).toContainEqual(expect.objectContaining({ code: "workspace_collision" }));
+  });
+
+  it("plans reuse for an exact existing MCP server", async () => {
+    const { source, workspace } = await createPlanSource();
+    const manifest = requireManifest();
+    const plan = await buildClawAddPlan({
+      manifest,
+      source,
+      context: {
+        workspace,
+        existingMcpServers: { github: manifest.mcpServers.github! },
+      },
+    });
+
+    expect(plan.blockers.map((item) => item.code)).not.toContain("mcp_server_collision");
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "mcpServer",
+        id: "github",
+        blocked: false,
+        details: expect.objectContaining({ expectedState: "present-exact" }),
+      }),
+    );
   });
 
   it("uses an explicit unused agent id for every derived action", async () => {
@@ -745,5 +766,15 @@ describe("buildClawAddPlan", () => {
     expect(repeated.planIntegrity).toBe(first.planIntegrity);
     expect(changed.planIntegrity).not.toBe(first.planIntegrity);
     expect(changedCapability.planIntegrity).not.toBe(first.planIntegrity);
+  });
+
+  it("rejects current-session cron jobs before planning", () => {
+    const result = parseClawManifest({
+      ...baseManifest,
+      cronJobs: [{ ...baseManifest.cronJobs[0], session: "current" }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics[0]?.path).toBe("$.cronJobs[0].session");
   });
 });

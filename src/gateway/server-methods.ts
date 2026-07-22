@@ -81,6 +81,10 @@ const loadChannelsHandlers = lazyHandlerModule(
   () => import("./server-methods/channels.js"),
   (module) => module.channelsHandlers,
 );
+const loadChannelPairingHandlers = lazyHandlerModule(
+  () => import("./server-methods/channel-pairing.js"),
+  (module) => module.channelPairingHandlers,
+);
 const loadChatHandlers = lazyHandlerModule(
   () => import("./server-methods/chat.js"),
   (module) => module.chatHandlers,
@@ -427,6 +431,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadChannelsHandlers,
   }),
   ...createLazyCoreHandlers({
+    methods: ["channels.pairing.list", "channels.pairing.approve", "channels.pairing.dismiss"],
+    loadHandlers: loadChannelPairingHandlers,
+  }),
+  ...createLazyCoreHandlers({
     methods: [
       "chat.history",
       "chat.startup",
@@ -699,7 +707,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
     loadHandlers: loadSessionDiscussionHandlers,
   }),
   ...createLazyCoreHandlers({
-    methods: ["sessions.observer.ask"],
+    methods: ["sessions.observer.ask", "sessions.observer.visibility"],
     loadHandlers: loadSessionObserverHandlers,
   }),
   ...createLazyCoreHandlers({

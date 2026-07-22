@@ -73,6 +73,51 @@ function requireNonEmptyString(value: string | undefined, label: string): string
   return value;
 }
 
+test("sessions.create stamps the trusted creator and preserves it until reset", async () => {
+  await createSessionStoreDir();
+  const adaClient = {
+    operatorIdentity: { id: "profile-ada", label: "Ada Lovelace" },
+    connect: { scopes: ["operator.admin"] },
+  } as never;
+  const bobClient = {
+    operatorIdentity: { id: "profile-bob", label: "Bob Hopper" },
+    connect: { scopes: ["operator.admin"] },
+  } as never;
+
+  const created = await directSessionReq<{
+    key: string;
+    entry: { createdBy?: { id: string; label?: string } };
+  }>("sessions.create", { agentId: "main" }, { client: adaClient });
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry.createdBy).toEqual({
+    id: "profile-ada",
+    label: "Ada Lovelace",
+  });
+  const key = requireNonEmptyString(created.payload?.key, "created session key");
+
+  const reused = await directSessionReq<{ entry: { createdBy?: { id: string } } }>(
+    "sessions.create",
+    { agentId: "main", key },
+    { client: bobClient },
+  );
+  expect(reused.payload?.entry.createdBy?.id).toBe("profile-ada");
+
+  const listed = await directSessionReq<{
+    sessions: Array<{ key: string; createdBy?: { id: string; label?: string } }>;
+  }>("sessions.list", { agentId: "main" });
+  expect(listed.payload?.sessions.find((row) => row.key === key)?.createdBy).toEqual({
+    id: "profile-ada",
+    label: "Ada Lovelace",
+  });
+
+  const reset = await directSessionReq<{ entry: { createdBy?: { id: string; label?: string } } }>(
+    "sessions.reset",
+    { agentId: "main", key },
+    { client: bobClient },
+  );
+  expect(reset.payload?.entry.createdBy).toEqual({ id: "profile-bob", label: "Bob Hopper" });
+});
+
 test("sessions.create provisions and reuses a session worktree for later runs", async () => {
   const root = await fs.mkdtemp(
     path.join(await fs.realpath(os.tmpdir()), "openclaw-session-worktree-"),
@@ -790,9 +835,9 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
-  // Explicit parents include visible spawn children, whose depth is derived by
-  // walking parentSessionKey; a stored root depth here would let them over-spawn.
-  expect(created.payload?.entry?.spawnDepth).toBeUndefined();
+  // Operator creations with a parent (UI forks/threads) are still roots: only a
+  // declared spawnDepth marks spawn lineage.
+  expect(created.payload?.entry?.spawnDepth).toBe(0);
 
   const reused = await directSessionReq<{
     entry?: { parentSessionKey?: string };
@@ -803,6 +848,42 @@ test("sessions.create preserves an explicit parent under main dmScope", async ()
 
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry?.parentSessionKey).toBe("agent:main:explicit-parent");
+});
+
+test("sessions.create persists declared spawn lineage for spawn-owned creations", async () => {
+  await createSessionStoreDir();
+  testState.sessionConfig = { dmScope: "main" };
+  await writeSessionStore({
+    entries: {
+      "agent:main:main": sessionStoreEntry("sess-spawn-parent"),
+    },
+  });
+
+  const created = await directSessionReq<{
+    entry?: { parentSessionKey?: string; spawnDepth?: number };
+  }>("sessions.create", {
+    agentId: "main",
+    parentSessionKey: "agent:main:main",
+    spawnDepth: 2,
+  });
+
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.spawnDepth).toBe(2);
+});
+
+test("sessions.create rejects spawnDepth without parentSessionKey", async () => {
+  await createSessionStoreDir();
+
+  const created = await directSessionReq("sessions.create", {
+    agentId: "main",
+    spawnDepth: 1,
+  });
+
+  expect(created.ok).toBe(false);
+  expect(created.error).toMatchObject({
+    message: "spawnDepth requires parentSessionKey",
+  });
 });
 
 test("sessions.create leaves dashboard sessions unparented under per-channel-peer dmScope", async () => {

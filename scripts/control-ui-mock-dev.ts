@@ -1068,9 +1068,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
     sessionRow(OBSERVER_DEMO_SESSION_KEY, "Session observer demo", baseTime - 3_000, {
       activeRunIds: [OBSERVER_DEMO_RUN_ID],
       hasActiveRun: true,
+      lastReadAt: baseTime + 2_000,
       observerDigest: {
-        headline: "Third run of the same vitest file - two assertions still failing",
-        health: "grinding",
+        headline: "Opening the focused observer tests",
+        health: "on-track",
         revision: 1,
         runId: OBSERVER_DEMO_RUN_ID,
         updatedAt: baseTime - 2_000,
@@ -1718,7 +1719,7 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         {
           event: "session.observer",
           payload: {
-            headline: "Reading the failing test",
+            headline: "Reading the failing test and its board caller",
             health: "on-track",
             revision: 2,
             runId: OBSERVER_DEMO_RUN_ID,
@@ -1729,8 +1730,11 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         {
           event: "session.observer",
           payload: {
+            assessment:
+              "The first fix was incomplete, so the agent is narrowing the assertion path.",
             headline: "Third run of the same vitest file - two assertions still failing",
             health: "grinding",
+            planProgress: { completed: 2, total: 4 },
             revision: 3,
             runId: OBSERVER_DEMO_RUN_ID,
             sessionKey: OBSERVER_DEMO_SESSION_KEY,
@@ -1740,8 +1744,10 @@ async function createChatPickerScenario(): Promise<ControlUiMockGatewayScenario>
         {
           event: "session.observer",
           payload: {
+            assessment: "Repeated identical failures suggest the current approach needs a reset.",
             headline: "Same failure five runs in a row - it may be circling",
             health: "stuck",
+            planProgress: { completed: 2, total: 4 },
             revision: 4,
             runId: OBSERVER_DEMO_RUN_ID,
             sessionKey: OBSERVER_DEMO_SESSION_KEY,

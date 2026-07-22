@@ -23,6 +23,51 @@ type ClaudePreparedExecutionWithSecret = {
 const CLAUDE_CLI_DISALLOWED_TOOLS =
   "ScheduleWakeup,CronCreate,Bash(run_in_background:true),Monitor";
 
+describe("Claude CLI adapter equivalence", () => {
+  const commonArgs = [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--include-partial-messages",
+    "--verbose",
+    "--setting-sources",
+    "user",
+    "--allowedTools",
+    "mcp__openclaw__*",
+    "--disallowedTools",
+    CLAUDE_CLI_DISALLOWED_TOOLS,
+  ];
+
+  it.each([
+    { phase: "fresh", key: "args" as const, expected: commonArgs },
+    {
+      phase: "resume",
+      key: "resumeArgs" as const,
+      expected: [...commonArgs, "--resume", "{sessionId}"],
+    },
+  ])("preserves the legacy $phase command bytes in plugin code", ({ key, expected }) => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(backend.config.command).toBe("claude");
+    expect(backend.config[key]).toEqual(expected);
+    expect(backend.config.env).toBeUndefined();
+    expect(backend.config.clearEnv).toEqual([...CLAUDE_CLI_CLEAR_ENV]);
+  });
+
+  it("preserves the prepared launch environment for the same context budget", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp/openclaw-claude-cli",
+        provider: "claude-cli",
+        modelId: "claude-opus-4-8",
+        contextTokenBudget: 100_000,
+      }),
+    ).toEqual({ env: { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "100000" } });
+  });
+});
+
 describe("resolveClaudeCliAutoCompactEnv", () => {
   it("maps the effective OpenClaw context budget into Claude Code compaction", () => {
     expect(resolveClaudeCliAutoCompactEnv(100_000.9)).toEqual({

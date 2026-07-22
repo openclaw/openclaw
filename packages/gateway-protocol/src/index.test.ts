@@ -15,7 +15,9 @@ import {
   validateNodePluginToolsUpdateParams,
   validateNodeSkillsUpdateParams,
   validateNodePresenceActivityPayload,
+  validateSessionsListParams,
   validateSessionsObserverAskParams,
+  validateSessionsObserverVisibilityParams,
   validateSessionsSearchParams,
   validateSessionsUsageParams,
   validateTasksCancelParams,
@@ -63,6 +65,14 @@ describe("lazy protocol validators", () => {
     expect(validateCommandsListParams({ includeArgs: true })).toBe(true);
     expect(validateCommandsListParams({ includeArgs: "yes" })).toBe(false);
     expect(formatValidationErrors(validateCommandsListParams.errors)).toContain("must be boolean");
+  });
+
+  it("accepts every sessions.list archive filter mode", () => {
+    expect(validateSessionsListParams({})).toBe(true);
+    expect(validateSessionsListParams({ archived: false })).toBe(true);
+    expect(validateSessionsListParams({ archived: true })).toBe(true);
+    expect(validateSessionsListParams({ archived: "all" })).toBe(true);
+    expect(validateSessionsListParams({ archived: "archived" })).toBe(false);
   });
 
   it("keeps validation errors readable on the exported validator", () => {
@@ -281,6 +291,13 @@ describe("lazy protocol validators", () => {
         question: "x".repeat(401),
       }),
     ).toBe(false);
+  });
+
+  it("validates closed session observer visibility declarations", () => {
+    expect(validateSessionsObserverVisibilityParams({ visible: true })).toBe(true);
+    expect(validateSessionsObserverVisibilityParams({})).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: "true" })).toBe(false);
+    expect(validateSessionsObserverVisibilityParams({ visible: false, extra: true })).toBe(false);
   });
 
   it("validates chat sends that suppress command interpretation", () => {

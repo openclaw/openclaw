@@ -346,6 +346,82 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
   });
 
+  it("prepares provider endpoint and request facts with the metadata snapshot", () => {
+    const index = makeIndex("demo");
+    const registry = makeManifestRegistry("demo");
+    const plugin = registry.plugins[0];
+    if (!plugin) {
+      throw new Error("expected manifest plugin fixture");
+    }
+    plugin.providerEndpoints = [
+      {
+        endpointClass: "openai-public",
+        hosts: [" API.EXAMPLE.COM "],
+        baseUrls: ["https://api.example.com/v1/"],
+        googleVertexRegion: " global ",
+        googleVertexRegionHostSuffix: " -AIPLATFORM.GOOGLEAPIS.COM ",
+      },
+    ];
+    plugin.providerRequest = {
+      providers: {
+        demo: {
+          family: " demo-family ",
+          compatibilityFamily: " moonshot " as never,
+          openAICompletions: { supportsStreamingUsage: true },
+        },
+      },
+    };
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: index,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
+
+    expect(snapshot.owners.providerEndpoints).toContainEqual({
+      endpointClass: "openai-public",
+      hosts: ["api.example.com"],
+      hostSuffixes: [],
+      baseUrls: ["https://api.example.com/v1"],
+      googleVertexRegion: "global",
+      googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
+    });
+    expect(snapshot.owners.providerRequests?.get("demo")).toEqual({
+      family: "demo-family",
+      compatibilityFamily: "moonshot",
+      openAICompletions: { supportsStreamingUsage: true },
+    });
+  });
+
+  it("ignores malformed optional provider facts", () => {
+    const index = makeIndex("demo");
+    const registry = makeManifestRegistry("demo");
+    const plugin = registry.plugins[0];
+    if (!plugin) {
+      throw new Error("expected manifest plugin fixture");
+    }
+    plugin.providerEndpoints = [
+      { endpointClass: "openai-public", hosts: { invalid: true } } as never,
+      null as never,
+    ];
+    plugin.providerRequest = { providers: { demo: null } } as never;
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: index,
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index });
+
+    expect(snapshot.owners.providerRequests?.has("demo")).toBe(false);
+    expect(
+      snapshot.owners.providerEndpoints?.some((endpoint) => (endpoint.hosts ?? []).length === 0),
+    ).toBe(true);
+  });
+
   it("keeps scoped and unscoped metadata snapshots in separate memo slots", () => {
     const index = makeIndex();
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({

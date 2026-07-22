@@ -1752,7 +1752,7 @@ describeLive("live models (profile keys)", () => {
         ? []
         : collectProviderApiKeys("anthropic");
       if (anthropicKeys.length > 0) {
-        process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
+        vi.stubEnv("ANTHROPIC_API_KEY", expectDefined(anthropicKeys[0], "Anthropic API key 1"));
         logProgress(`[live-models] anthropic keys loaded: ${anthropicKeys.length}`);
       }
 
@@ -1952,9 +1952,6 @@ describeLive("live models (profile keys)", () => {
             model.provider === "anthropic" && anthropicKeys.length > 0
               ? expectDefined(anthropicKeys[attempt], `Anthropic API key ${attempt + 1}`)
               : undefined;
-          if (anthropicApiKey) {
-            process.env.ANTHROPIC_API_KEY = anthropicApiKey;
-          }
           const apiKey = anthropicApiKey ?? requireApiKey(apiKeyInfo, model.provider);
           try {
             // Special regression: OpenAI requires replayed `reasoning` items for tool-only turns.

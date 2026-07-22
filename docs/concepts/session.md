@@ -194,6 +194,11 @@ Maintenance preserves durable external conversation pointers, including group
 sessions and thread-scoped chat sessions, while still allowing synthetic cron,
 hook, heartbeat, ACP, and sub-agent entries to age out.
 
+Archived sessions are user-shelved and exempt from every automatic maintenance
+path, including age pruning, entry caps, model-run cleanup, and disk-budget
+eviction. They remain archived until you unarchive them or explicitly delete
+them.
+
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
 `openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag

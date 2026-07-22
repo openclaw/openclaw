@@ -65,7 +65,7 @@ export function projectSessionTree(params: {
     isChild: boolean,
     ancestors: ReadonlySet<string>,
   ): SidebarRecentSession => {
-    const childSessionKeys = childKeysByParent.get(row.key) ?? [];
+    const childSessionKeys = row.archived === true ? [] : (childKeysByParent.get(row.key) ?? []);
     const nextAncestors = new Set(ancestors);
     nextAncestors.add(row.key);
     const children = childSessionKeys.flatMap((key) => {

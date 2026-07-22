@@ -226,9 +226,7 @@ const ModelCompatSchema = z
     requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
-    nativeWebSearchTool: z.boolean().optional(),
     toolCallArgumentsEncoding: z.string().optional(),
-    requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
@@ -762,66 +760,6 @@ export const HumanDelaySchema = z
     mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),
     minMs: z.number().int().nonnegative().optional(),
     maxMs: z.number().int().nonnegative().optional(),
-  })
-  .strict();
-
-const CliBackendWatchdogModeSchema = z
-  .object({
-    noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
-    minMs: z.number().int().min(1000).optional(),
-    maxMs: z.number().int().min(1000).optional(),
-  })
-  .strict()
-  .optional();
-
-export const CliBackendSchema = z
-  .object({
-    command: z.string(),
-    args: z.array(z.string()).optional(),
-    output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    jsonlDialect: z
-      .union([z.literal("claude-stream-json"), z.literal("gemini-stream-json")])
-      .optional(),
-    liveSession: z.literal("claude-stdio").optional(),
-    input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
-    maxPromptArgChars: z.number().int().positive().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    clearEnv: z.array(z.string()).optional(),
-    modelArg: z.string().optional(),
-    modelAliases: z.record(z.string(), z.string()).optional(),
-    sessionArgs: z.array(z.string()).optional(),
-    resumeArgs: z.array(z.string()).optional(),
-    forkArg: z.string().optional(),
-    sessionMode: z
-      .union([z.literal("always"), z.literal("existing"), z.literal("none")])
-      .optional(),
-    sessionIdFields: z.array(z.string()).optional(),
-    systemPromptArg: z.string().optional(),
-    systemPromptFileArg: z.string().optional(),
-    systemPromptFileConfigArg: z.string().optional(),
-    systemPromptFileConfigKey: z.string().optional(),
-    systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
-    systemPromptWhen: z
-      .union([z.literal("first"), z.literal("always"), z.literal("never")])
-      .optional(),
-    imageArg: z.string().optional(),
-    imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
-    imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
-    serialize: z.boolean().optional(),
-    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
-    reliability: z
-      .object({
-        watchdog: z
-          .object({
-            fresh: CliBackendWatchdogModeSchema,
-            resume: CliBackendWatchdogModeSchema,
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 

@@ -192,6 +192,14 @@ import {
   BoardWidgetSchema,
 } from "./board.js";
 import {
+  ChannelsPairingApproveParamsSchema,
+  ChannelsPairingApproveResultSchema,
+  ChannelsPairingDismissParamsSchema,
+  ChannelsPairingDismissResultSchema,
+  ChannelsPairingListParamsSchema,
+  ChannelsPairingListResultSchema,
+} from "./channel-pairing.js";
+import {
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -296,6 +304,7 @@ import {
   McpAppViewExpiredErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   UnknownAgentIdErrorDetailsSchema,
+  WizardNotFoundErrorDetailsSchema,
 } from "./error-codes.js";
 import {
   ExecApprovalsGetParamsSchema,
@@ -511,6 +520,8 @@ import {
   SessionObserverPlanProgressSchema,
   SessionsObserverAskParamsSchema,
   SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResultSchema,
   SessionWorktreeInfoSchema,
   SessionsCleanupParamsSchema,
   SessionsCreateParamsSchema,
@@ -669,6 +680,7 @@ export const ProtocolSchemas = {
   MissingScopeErrorDetails: MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetails: McpAppViewExpiredErrorDetailsSchema,
   UnknownAgentIdErrorDetails: UnknownAgentIdErrorDetailsSchema,
+  WizardNotFoundErrorDetails: WizardNotFoundErrorDetailsSchema,
   GatewayErrorDetails: GatewayErrorDetailsSchema,
   GatewaySuspendTaskBlocker: GatewaySuspendTaskBlockerSchema,
   GatewaySuspendBlocker: GatewaySuspendBlockerSchema,
@@ -806,6 +818,8 @@ export const ProtocolSchemas = {
   SessionObserverDigest: SessionObserverDigestSchema,
   SessionsObserverAskParams: SessionsObserverAskParamsSchema,
   SessionsObserverAskResult: SessionsObserverAskResultSchema,
+  SessionsObserverVisibilityParams: SessionsObserverVisibilityParamsSchema,
+  SessionsObserverVisibilityResult: SessionsObserverVisibilityResultSchema,
   ...SessionPlacementProtocolSchemas,
   SessionDiscussionState: SessionDiscussionStateSchema,
   SessionDiscussionInfo: SessionDiscussionInfoSchema,
@@ -969,6 +983,12 @@ export const ProtocolSchemas = {
   TtsSpeakResult: TtsSpeakResultSchema,
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
+  ChannelsPairingListParams: ChannelsPairingListParamsSchema,
+  ChannelsPairingListResult: ChannelsPairingListResultSchema,
+  ChannelsPairingApproveParams: ChannelsPairingApproveParamsSchema,
+  ChannelsPairingApproveResult: ChannelsPairingApproveResultSchema,
+  ChannelsPairingDismissParams: ChannelsPairingDismissParamsSchema,
+  ChannelsPairingDismissResult: ChannelsPairingDismissResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
   ChannelsStopParams: ChannelsStopParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,

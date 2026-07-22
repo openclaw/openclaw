@@ -37,15 +37,28 @@ export async function writeSecretInputToChild(
     // End the parent pipe immediately after delivery so descendants cannot
     // inherit a still-readable credential stream.
     await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => {
-        stream.off("error", onError);
-        reject(error);
+      let settled = false;
+      const settle = (error?: Error | null) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
       };
-      stream.once("error", onError);
-      stream.end(data, () => {
+      const onError = (error: Error) => {
+        settle(error);
+      };
+      // A child-process pipe can emit its terminal error after end's callback.
+      // Keep it handled until close while only the first outcome settles delivery.
+      stream.on("error", onError);
+      stream.once("close", () => {
         stream.off("error", onError);
-        resolve();
       });
+      stream.end(data, settle);
     });
   } finally {
     data?.fill(0);

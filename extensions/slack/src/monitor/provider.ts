@@ -341,7 +341,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const typingReaction = slackCfg.typingReaction?.trim() ?? "";
   const mediaMaxBytes = (opts.mediaMaxMb ?? slackCfg.mediaMaxMb ?? 20) * 1024 * 1024;
-  const removeAckAfterReply = false;
   const clientOptions = resolveSlackWebClientOptions();
   const durableIngress = createSlackDurableIngress({
     accountId: account.accountId,
@@ -506,7 +505,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ackReactionScope,
     typingReaction,
     mediaMaxBytes,
-    removeAckAfterReply,
   });
 
   // Slack's socket-mode client keeps ping/pong health private and closes on

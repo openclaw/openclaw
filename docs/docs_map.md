@@ -784,7 +784,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /channels/pairing
 - Headings:
   - H2: 1) DM pairing (inbound chat access)
-  - H3: Approve a sender
+  - H3: Approve from the Control UI
+  - H3: Approve from the CLI
   - H3: Reusable sender groups
   - H3: Where the state lives
   - H2: 2) Node device pairing (iOS/Android/macOS/headless nodes)
@@ -1374,7 +1375,9 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Create a grouped manifest
   - H2: Inspect and preview
   - H2: Inspect installed state
+  - H2: Preview an update
   - H2: Remove an installed Claw
+  - H2: Export an installed agent
   - H2: Command reference
   - H2: See also
 
@@ -2777,6 +2780,15 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Per-agent sandbox and tool configuration
   - H2: Related
 
+## concepts/multi-user.md
+
+- Route: /concepts/multi-user
+- Headings:
+  - H2: Trust boundary
+  - H2: Ownership and presence
+  - H2: Turn attribution
+  - H2: Related
+
 ## concepts/oauth.md
 
 - Route: /concepts/oauth
@@ -3312,7 +3324,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: agents.defaults.timeFormat
   - H3: agents.defaults.model
   - H3: Runtime policy
-  - H3: agents.defaults.cliBackends
+  - H3: CLI backend selection
   - H3: agents.defaults.promptOverlays
   - H3: agents.defaults.heartbeat
   - H3: agents.defaults.compaction
@@ -4815,6 +4827,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Recommended: openclaw update
   - H2: Switch between npm and git installs
+  - H2: Source-checkout servers (reference script)
   - H2: Alternative: re-run the installer
   - H2: Alternative: manual npm, pnpm, or bun
   - H3: Advanced npm install topics
@@ -5713,7 +5726,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Advanced backend hooks
   - H3: ownsNativeCompaction: opting out of OpenClaw compaction
   - H2: MCP tool bridge
-  - H2: User configuration
+  - H2: Selecting the backend
   - H2: Verification
   - H2: Checklist
   - H2: Related
@@ -7456,6 +7469,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
   - H3: Terminal tool outcomes
+  - H3: Settled tool finalization
   - H2: Current limitations
   - H2: Related
 
@@ -7553,6 +7567,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Why
   - H2: Compatibility policy
   - H3: Channel setup input field compatibility
+  - H4: Verifying readers
   - H2: How to migrate
   - H2: Import path reference
   - H2: Removed compatibility surfaces

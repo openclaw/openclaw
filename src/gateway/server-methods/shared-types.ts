@@ -1,4 +1,5 @@
 import type {
+  SessionCreatorIdentity,
   SessionApprovalReplay,
   SystemAgentChatQuestion,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -77,6 +78,8 @@ export type GatewayClient = {
     hasAvatar: boolean;
     updatedAt: number;
   };
+  /** Trusted operator identity resolved once during connection admission. */
+  operatorIdentity?: SessionCreatorIdentity;
   pluginSurfaceUrls?: Record<string, string>;
   pluginNodeCapabilitySurfaces?: Record<string, PluginNodeCapabilitySurface>;
   pluginNodeCapabilities?: Record<string, { capability: string; expiresAtMs: number }>;

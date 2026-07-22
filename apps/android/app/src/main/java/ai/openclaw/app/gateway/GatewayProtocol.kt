@@ -414,6 +414,9 @@ enum class GatewayMethod(
   TerminalInput("terminal.input"),
   TerminalResize("terminal.resize"),
   TerminalClose("terminal.close"),
+  ChannelsPairingList("channels.pairing.list"),
+  ChannelsPairingApprove("channels.pairing.approve"),
+  ChannelsPairingDismiss("channels.pairing.dismiss"),
   AssistantMediaGet("assistant.media.get"),
   SessionsGet("sessions.get"),
   SessionsResolve("sessions.resolve"),
@@ -481,6 +484,7 @@ enum class GatewayMethod(
   BoardDataRead("board.data.read"),
   BoardAction("board.action"),
   SessionsObserverAsk("sessions.observer.ask"),
+  SessionsObserverVisibility("sessions.observer.visibility"),
 }
 
 enum class GatewayEvent(

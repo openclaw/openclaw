@@ -104,96 +104,55 @@ type ChannelSetupEnvelope = {
   allowFrom?: string[];
 };
 
+/**
+ * Compatibility fields with known published readers in the 2026-07-22 registry sweep.
+ * Each field is deleted as soon as no published plugin reads it; no version boundary is needed.
+ */
 type DeprecatedChannelSetupFields = {
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   privateKey?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   secret?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  secretFile?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   botToken?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   appToken?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  userToken?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   signingSecret?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  identity?: "bot" | "user";
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   mode?: "socket" | "http" | "relay";
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  signalNumber?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   cliPath?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  dbPath?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  service?: "imessage" | "sms" | "auto";
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  region?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   authDir?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   httpUrl?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  httpHost?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   httpPort?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   webhookPath?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   webhookUrl?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  audienceType?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  audience?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  homeserver?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  dangerouslyAllowPrivateNetwork?: boolean;
-  /**
-   * Compatibility alias for `dangerouslyAllowPrivateNetwork`.
-   * @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238).
-   */
-  allowPrivateNetwork?: boolean;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  proxy?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   userId?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   accessToken?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   password?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   deviceName?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  avatarUrl?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  initialSyncLimit?: number;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  profile?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  ship?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   url?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   baseUrl?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  relayUrls?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   code?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   groupChannels?: string[];
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   dmAllowlist?: string[];
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
+  /** @deprecated Declare this field in the owning plugin's setup input type: https://docs.openclaw.ai/plugins/sdk-setup#channel-owned-setup-input-fields. Removed once no published plugin reads it. */
   autoDiscoverChannels?: boolean;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  workspace?: string;
-  /** @deprecated Channel-owned setup field; declare it in the owning plugin's setup input type. Removed at the next Plugin SDK major (#112238). */
-  agentActivity?: boolean;
 };
 
 /** Generic setup envelope used by CLI, onboarding, and channel-owned setup adapters. */

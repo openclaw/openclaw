@@ -655,7 +655,12 @@ function installControlUiMockGateway(input: {
     if (!isRecord(response) || !Array.isArray(response.sessions)) {
       return response;
     }
-    const showArchived = isRecord(params) && params.archived === true;
+    const archivedFilter =
+      isRecord(params) && params.archived === "all"
+        ? "all"
+        : isRecord(params) && params.archived === true
+          ? "archived"
+          : "active";
     const sessions = response.sessions.map((row) => {
       if (!isRecord(row) || typeof row.key !== "string") {
         return row;
@@ -681,7 +686,9 @@ function installControlUiMockGateway(input: {
       return { ...response, sessions };
     }
     const filteredSessions = sessions.filter(
-      (row) => isRecord(row) && (row.archived === true) === showArchived,
+      (row) =>
+        isRecord(row) &&
+        (archivedFilter === "all" || (row.archived === true) === (archivedFilter === "archived")),
     );
     return {
       ...response,

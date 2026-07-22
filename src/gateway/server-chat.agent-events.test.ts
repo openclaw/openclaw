@@ -45,8 +45,8 @@ vi.mock("./server-chat.load-gateway-session-row.runtime.js", () => ({
   loadGatewaySessionRow: vi.fn(),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: vi.fn(() => ({
+vi.mock("./session-utils.js", () => {
+  const loadSessionEntry = vi.fn(() => ({
     cfg: {},
     storePath: "/tmp/sessions.json",
     store: {},
@@ -54,8 +54,12 @@ vi.mock("./session-utils.js", () => ({
     canonicalKey: "session-1",
     storeKeys: ["session-1"],
     legacyKey: undefined,
-  })),
-}));
+  }));
+  return {
+    loadSessionEntry,
+    loadSessionEntryReadOnly: loadSessionEntry,
+  };
+});
 
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";

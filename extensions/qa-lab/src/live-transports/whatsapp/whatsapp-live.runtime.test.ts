@@ -2177,9 +2177,7 @@ describe("WhatsApp QA live runtime", () => {
       overrides: {
         inboundDebounceMs: 250,
         replyToMode: "all",
-        statusReactions: {
-          removeAckAfterReply: true,
-        },
+        statusReactions: true,
       },
     });
 
@@ -2189,7 +2187,6 @@ describe("WhatsApp QA live runtime", () => {
       direct: true,
       emoji: "👀",
     });
-    expect(cfg.messages?.removeAckAfterReply).toBe(true);
     expect(cfg.messages?.statusReactions?.enabled).toBe(true);
   });
 

@@ -239,7 +239,9 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   listSessionEntries: mocks.listSessionEntries,
+  listSessionEntriesReadOnly: mocks.listSessionEntries,
   loadSessionEntry: mocks.loadSessionEntry,
+  loadSessionEntryReadOnly: mocks.loadSessionEntry,
   patchSessionEntry: mocks.patchSessionEntry,
 }));
 

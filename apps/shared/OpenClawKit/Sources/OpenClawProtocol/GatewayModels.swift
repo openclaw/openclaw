@@ -1456,6 +1456,20 @@ public struct UnknownAgentIdErrorDetails: Codable, Sendable {
     }
 }
 
+public struct WizardNotFoundErrorDetails: Codable, Sendable {
+    public let code: String
+
+    public init(
+        code: String)
+    {
+        self.code = code
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+    }
+}
+
 public struct GatewaySuspendTaskBlocker: Codable, Sendable {
     public let taskid: String
     public let status: String
@@ -3962,10 +3976,11 @@ public struct SessionsListParams: Codable, Sendable {
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
+    public let creatorid: String?
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
-    public let archived: Bool?
+    public let archived: AnyCodable?
 
     public init(
         limit: Int? = nil,
@@ -3979,10 +3994,11 @@ public struct SessionsListParams: Codable, Sendable {
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil,
         label: String? = nil,
+        creatorid: String? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
         search: String? = nil,
-        archived: Bool? = nil)
+        archived: AnyCodable? = nil)
     {
         self.limit = limit
         self.offset = offset
@@ -3995,6 +4011,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
+        self.creatorid = creatorid
         self.spawnedby = spawnedby
         self.agentid = agentid
         self.search = search
@@ -4013,6 +4030,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label
+        case creatorid = "creatorId"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case search
@@ -4102,6 +4120,7 @@ public struct SessionCatalogSession: Codable, Sendable {
     public let pullrequest: SessionCatalogPullRequestSummary?
     public let archived: Bool
     public let sessionkey: String?
+    public let createdby: [String: AnyCodable]?
     public let cancontinue: Bool
     public let canarchive: Bool
     public let canopenterminal: Bool?
@@ -4122,6 +4141,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         pullrequest: SessionCatalogPullRequestSummary? = nil,
         archived: Bool,
         sessionkey: String? = nil,
+        createdby: [String: AnyCodable]? = nil,
         cancontinue: Bool,
         canarchive: Bool,
         canopenterminal: Bool? = nil)
@@ -4141,6 +4161,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         self.pullrequest = pullrequest
         self.archived = archived
         self.sessionkey = sessionkey
+        self.createdby = createdby
         self.cancontinue = cancontinue
         self.canarchive = canarchive
         self.canopenterminal = canopenterminal
@@ -4162,6 +4183,7 @@ public struct SessionCatalogSession: Codable, Sendable {
         case pullrequest = "pullRequest"
         case archived
         case sessionkey = "sessionKey"
+        case createdby = "createdBy"
         case cancontinue = "canContinue"
         case canarchive = "canArchive"
         case canopenterminal = "canOpenTerminal"
@@ -4861,6 +4883,34 @@ public struct SessionsObserverAskResult: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case answer
         case digestrevision = "digestRevision"
+    }
+}
+
+public struct SessionsObserverVisibilityParams: Codable, Sendable {
+    public let visible: Bool
+
+    public init(
+        visible: Bool)
+    {
+        self.visible = visible
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case visible
+    }
+}
+
+public struct SessionsObserverVisibilityResult: Codable, Sendable {
+    public let ok: Bool
+
+    public init(
+        ok: Bool)
+    {
+        self.ok = ok
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
     }
 }
 
@@ -6334,6 +6384,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public let thinkinglevel: String?
     public let catalogid: String?
     public let parentsessionkey: String?
+    public let spawndepth: Int?
     public let fork: Bool?
     public let emitcommandhooks: Bool?
     public let succeedsparent: Bool?
@@ -6354,6 +6405,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         thinkinglevel: String? = nil,
         catalogid: String? = nil,
         parentsessionkey: String? = nil,
+        spawndepth: Int? = nil,
         fork: Bool? = nil,
         emitcommandhooks: Bool? = nil,
         succeedsparent: Bool? = nil,
@@ -6373,6 +6425,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.thinkinglevel = thinkinglevel
         self.catalogid = catalogid
         self.parentsessionkey = parentsessionkey
+        self.spawndepth = spawndepth
         self.fork = fork
         self.emitcommandhooks = emitcommandhooks
         self.succeedsparent = succeedsparent
@@ -6394,6 +6447,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case thinkinglevel = "thinkingLevel"
         case catalogid = "catalogId"
         case parentsessionkey = "parentSessionKey"
+        case spawndepth = "spawnDepth"
         case fork
         case emitcommandhooks = "emitCommandHooks"
         case succeedsparent = "succeedsParent"
@@ -9867,6 +9921,146 @@ public struct ChannelsStatusResult: Codable, Sendable {
         case eventloop = "eventLoop"
         case partial
         case warnings
+    }
+}
+
+public struct ChannelsPairingListParams: Codable, Sendable {
+    public let channel: String?
+    public let accountid: String?
+
+    public init(
+        channel: String? = nil,
+        accountid: String? = nil)
+    {
+        self.channel = channel
+        self.accountid = accountid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case accountid = "accountId"
+    }
+}
+
+public struct ChannelsPairingListResult: Codable, Sendable {
+    public let accounts: [[String: AnyCodable]]
+    public let requests: [[String: AnyCodable]]
+    public let commandownerconfigured: Bool
+    public let limits: [String: AnyCodable]
+
+    public init(
+        accounts: [[String: AnyCodable]],
+        requests: [[String: AnyCodable]],
+        commandownerconfigured: Bool,
+        limits: [String: AnyCodable])
+    {
+        self.accounts = accounts
+        self.requests = requests
+        self.commandownerconfigured = commandownerconfigured
+        self.limits = limits
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case accounts
+        case requests
+        case commandownerconfigured = "commandOwnerConfigured"
+        case limits
+    }
+}
+
+public struct ChannelsPairingApproveParams: Codable, Sendable {
+    public let channel: String
+    public let accountid: String
+    public let requestid: String
+    public let notify: Bool?
+    public let bootstrapcommandowner: Bool?
+
+    public init(
+        channel: String,
+        accountid: String,
+        requestid: String,
+        notify: Bool? = nil,
+        bootstrapcommandowner: Bool? = nil)
+    {
+        self.channel = channel
+        self.accountid = accountid
+        self.requestid = requestid
+        self.notify = notify
+        self.bootstrapcommandowner = bootstrapcommandowner
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case accountid = "accountId"
+        case requestid = "requestId"
+        case notify
+        case bootstrapcommandowner = "bootstrapCommandOwner"
+    }
+}
+
+public struct ChannelsPairingApproveResult: Codable, Sendable {
+    public let requestid: String
+    public let senderid: String
+    public let notification: String
+    public let commandownerbootstrap: String
+
+    public init(
+        requestid: String,
+        senderid: String,
+        notification: String,
+        commandownerbootstrap: String)
+    {
+        self.requestid = requestid
+        self.senderid = senderid
+        self.notification = notification
+        self.commandownerbootstrap = commandownerbootstrap
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case senderid = "senderId"
+        case notification
+        case commandownerbootstrap = "commandOwnerBootstrap"
+    }
+}
+
+public struct ChannelsPairingDismissParams: Codable, Sendable {
+    public let channel: String
+    public let accountid: String
+    public let requestid: String
+
+    public init(
+        channel: String,
+        accountid: String,
+        requestid: String)
+    {
+        self.channel = channel
+        self.accountid = accountid
+        self.requestid = requestid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case accountid = "accountId"
+        case requestid = "requestId"
+    }
+}
+
+public struct ChannelsPairingDismissResult: Codable, Sendable {
+    public let requestid: String
+    public let senderid: String
+
+    public init(
+        requestid: String,
+        senderid: String)
+    {
+        self.requestid = requestid
+        self.senderid = senderid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+        case senderid = "senderId"
     }
 }
 
@@ -16243,6 +16437,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
     case missingScope(MissingScopeErrorDetails)
     case mcpAppViewExpired(McpAppViewExpiredErrorDetails)
     case unknownAgentId(UnknownAgentIdErrorDetails)
+    case wizardNotFound(WizardNotFoundErrorDetails)
 
     public init(code: String, missingscope: String, requiredscopes: [String]) {
         self = .missingScope(
@@ -16259,6 +16454,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .missingScope(let value): value.code
         case .mcpAppViewExpired(let value): value.code
         case .unknownAgentId(let value): value.code
+        case .wizardNotFound(let value): value.code
         }
     }
 
@@ -16283,6 +16479,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case "MISSING_SCOPE": self = try .missingScope(MissingScopeErrorDetails(from: decoder))
         case "MCP_APP_VIEW_EXPIRED": self = try .mcpAppViewExpired(McpAppViewExpiredErrorDetails(from: decoder))
         case "UNKNOWN_AGENT_ID": self = try .unknownAgentId(UnknownAgentIdErrorDetails(from: decoder))
+        case "WIZARD_NOT_FOUND": self = try .wizardNotFound(WizardNotFoundErrorDetails(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .discriminator,
@@ -16297,6 +16494,7 @@ public enum GatewayErrorDetails: Codable, Sendable {
         case .missingScope(let value): try value.encode(to: encoder)
         case .mcpAppViewExpired(let value): try value.encode(to: encoder)
         case .unknownAgentId(let value): try value.encode(to: encoder)
+        case .wizardNotFound(let value): try value.encode(to: encoder)
         }
     }
 }

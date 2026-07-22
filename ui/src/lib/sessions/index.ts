@@ -33,7 +33,7 @@ import {
   type SessionCreateParams,
 } from "./create.ts";
 import { readSessionCustomGroupNames } from "./custom-groups.ts";
-import { scopedAgentListParamsForSession } from "./navigation.ts";
+import { scopedAgentListParamsForSession, type SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
 import {
   readSessionChangedEvent,
@@ -72,18 +72,21 @@ type SessionState = {
 
 type SessionGroupMutationResult = "completed" | "stale";
 
+export type { SessionArchivedFilter } from "./navigation.ts";
+
 export type SessionListOptions = {
   agentId?: string;
   spawnedBy?: string;
   activeMinutes?: number;
   search?: string;
+  creatorId?: string;
   offset?: number;
   limit?: number;
   includeGlobal?: boolean;
   includeUnknown?: boolean;
   configuredAgentsOnly?: boolean;
   includeDerivedTitles?: boolean;
-  showArchived?: boolean;
+  archivedFilter?: SessionArchivedFilter;
   append?: boolean;
 };
 
@@ -189,6 +192,7 @@ export type SessionCapability = {
   /** Advances only when a canonical sessions.list response is published. */
   readonly canonicalListRevision: number;
   list: (options?: SessionListOptions) => Promise<SessionsListResult | null>;
+  setCreatorFilter: (creatorId: string | null) => Promise<void>;
   reconcile: (
     row: GatewaySessionRow | undefined,
     defaults?: SessionsListResult["defaults"],
@@ -292,6 +296,7 @@ export {
   filterVisibleSessionRows,
   getVisibleSessionRows,
   resolveSessionNavigation,
+  sessionMatchesArchivedFilter,
   scopedAgentIdForSession,
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
@@ -356,11 +361,13 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   if (options.includeDerivedTitles === true) {
     params.includeDerivedTitles = true;
   }
-  if (options.showArchived === true) {
+  if (options.archivedFilter === "archived") {
     params.archived = true;
+  } else if (options.archivedFilter === "all") {
+    params.archived = "all";
   }
   const activeMinutes =
-    options.showArchived === true
+    options.archivedFilter === "archived" || options.archivedFilter === "all"
       ? 0
       : typeof options.activeMinutes === "number" && options.activeMinutes > 0
         ? Math.floor(options.activeMinutes)
@@ -371,6 +378,7 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   const agentId = options.agentId?.trim();
   const spawnedBy = options.spawnedBy?.trim();
   const search = options.search?.trim();
+  const creatorId = options.creatorId?.trim();
   if (agentId) {
     params.agentId = agentId;
   }
@@ -379,6 +387,9 @@ function buildSessionListParams(options: SessionListOptions = {}): Record<string
   }
   if (search) {
     params.search = search;
+  }
+  if (creatorId) {
+    params.creatorId = creatorId;
   }
   if (typeof options.offset === "number" && options.offset > 0) {
     params.offset = Math.floor(options.offset);
@@ -1062,6 +1073,12 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
     if (normalizedAgentId) {
       options.agentId = normalizedAgentId;
     }
+    return refresh({ ...options, force: true });
+  };
+
+  const setCreatorFilter = (creatorId: string | null) => {
+    const options = { ...lastListOptions, creatorId: creatorId?.trim() || undefined };
+    delete options.offset;
     return refresh({ ...options, force: true });
   };
 
@@ -1830,7 +1847,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       }
       const reconciled = reconcileSessionChanged(state.result, event.payload, {
         resultAgentId: state.agentId,
-        showArchived: lastListOptions.showArchived,
+        archivedFilter: lastListOptions.archivedFilter,
       });
       const eventInfo = readSessionChangedEvent(event.payload);
       // Catalog mutations from other clients invalidate the per-connection
@@ -1873,6 +1890,7 @@ export function createSessionCapability(gateway: SessionGateway): SessionCapabil
       return canonicalListRevision;
     },
     list: requestList,
+    setCreatorFilter,
     reconcile,
     reconcileChanged,
     reconcileRunTerminal,

@@ -1,6 +1,6 @@
 import type { GatewayClientInfo } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { projectMediaFacts } from "../../media/media-facts.js";
+import { projectMediaFacts, type MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { SavedMedia } from "../../media/store.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -17,6 +17,7 @@ import type { prepareChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { normalizeOptionalChatText } from "./chat-text-normalization.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type PreparedChatSendAttachments = Extract<
@@ -99,6 +100,18 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
   }));
 }
 
+function buildChatSendPromptMedia(
+  attachments: PreparedChatSendAttachments,
+): MediaFact[] | undefined {
+  if (!attachments.imageOrder.includes("offloaded")) {
+    return undefined;
+  }
+  const media = attachments.offloadedRefs
+    .filter((ref) => ref.mimeType.startsWith("image/"))
+    .map((ref) => ({ path: ref.path, url: ref.mediaRef, contentType: ref.mimeType }));
+  return media.length > 0 ? media : undefined;
+}
+
 function buildChatSendMessageContext(params: {
   agentId: string;
   client: GatewayRequestHandlerOptions["client"];
@@ -167,6 +180,9 @@ function buildChatSendMessageContext(params: {
           body: commandBody,
         },
     MessageSid: params.clientRunId,
+    ...(gatewayClientSessionCreator(params.client)
+      ? { SessionCreator: gatewayClientSessionCreator(params.client) }
+      : {}),
     ApprovalReviewerDeviceId: queuedFollowupOwnerDeviceId,
     ...(!isOperatorUiClient(params.clientInfo)
       ? {
@@ -273,5 +289,6 @@ export function prepareChatSendUserTurn(params: {
       : attachments.parsedImages.length > 0
         ? attachments.parsedImages
         : undefined,
+    replyOptionMedia: buildChatSendPromptMedia(attachments),
   };
 }

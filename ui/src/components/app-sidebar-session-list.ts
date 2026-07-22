@@ -86,6 +86,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       "sidebar-recent-session",
       "session-row-host",
       session.isChild ? "sidebar-recent-session--child" : "",
+      session.archived ? "sidebar-session--archived" : "",
       session.visuallyActive ? "sidebar-recent-session--active" : "",
       this.selectedSessionKeys.has(session.key) ? "sidebar-recent-session--selected" : "",
       session.pinned ? "session-row-host--pinned" : "",
@@ -138,9 +139,19 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           aria-describedby=${metaId ?? nothing}
           @click=${(event: MouseEvent) => this.handleSessionRowClick(event, session)}
         >
-          <span class="sidebar-session-indicator">${leadingIndicator}</span>
+          <span class="sidebar-session-indicator">${leadingIndicator}</span
+          >${this.renderSidebarSessionOwnerChip(session)}
           <span class="sidebar-recent-session__text">
-            <span class="sidebar-recent-session__name hover-marquee">${label}</span>
+            <span class="sidebar-recent-session__name hover-marquee"
+              >${session.archived
+                ? html`<span
+                    class="sidebar-session__archive-glyph"
+                    aria-label=${t("sessionsView.archived")}
+                    title=${t("sessionsView.archived")}
+                    >${icons.archive}</span
+                  >`
+                : nothing}${label}</span
+            >
             ${renderSidebarSessionSubtitle({ subtitle, narration })}
           </span>
           ${!session.isChild && sessionHasBoard(session.key)
@@ -549,14 +560,13 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           }
           return this.renderSessionSection(section, options.codingTrailing ?? nothing);
         }
-        // Threads hides its bare header when empty, except while a draft needs
-        // a home or a session drag needs the unpin drop target. Empty custom
-        // categories keep rendering: they are user-created containers and the
-        // "New group…" / drag-into-group flows depend on seeing them.
+        // Threads hides its bare empty header; unfiltered custom categories stay
+        // visible because creation and drag flows depend on them as drop targets.
         if (
           section.id === "ungrouped" &&
           section.totalRowCount === 0 &&
           !showDraft &&
+          this.sessionsStatusFilter === "active" &&
           this.draggingSessionKey === null
         ) {
           return nothing;
@@ -642,20 +652,23 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
             `
           : nothing}
         <div class="sidebar-recent-sessions" aria-label=${titleForRoute("sessions")}>
+          ${this.renderSidebarSessionCreatorFilter()}
           ${this.renderSessionListBody(visibleSessions, {
             showDraft:
               Boolean(this.draftSessionAgentId) &&
               normalizeAgentId(this.draftSessionAgentId) === expandedAgentId,
-            codingTrailing: html`${this.renderSessionCatalogs(navigationState)}`,
-            codingTrailingPresent: this.sessionCatalogs.length > 0,
+            codingTrailing:
+              this.sessionsStatusFilter === "archived"
+                ? nothing
+                : html`${this.renderSessionCatalogs(navigationState)}`,
+            codingTrailingPresent:
+              this.sessionsStatusFilter !== "archived" && this.sessionCatalogs.length > 0,
           })}
-          <button
-            type="button"
-            class="sidebar-view-archived"
-            @click=${() => this.onNavigate?.("sessions", { search: "?showArchived=1" })}
-          >
-            ${icons.archive} ${t("sessionsView.viewArchived")}
-          </button>
+          ${this.sessionsStatusFilter === "archived" && visibleSessions.length === 0
+            ? html`<span class="sidebar-session-empty-hint"
+                >${t("sessionsView.noArchivedSessions")}</span
+              >`
+            : nothing}
         </div>
       </section>
     `;
@@ -677,6 +690,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
         ...(this.sessionsResult?.sessions ?? []),
         ...Object.values(this.sessionRowsByAgent).flat(),
       ],
+      creatorId: this.activeSessionCreatorId,
       renderLiveRow: (row, display) =>
         this.renderRecentSession(navigationState.toSidebarSession(row), display),
       onToggleSection: (sectionId) => this.toggleSessionSection(sectionId),

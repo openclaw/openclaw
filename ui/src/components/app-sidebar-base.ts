@@ -22,6 +22,10 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) activeWorkboardBoardId = "";
   @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
+  @property({ attribute: false }) offline = false;
+  @property({ attribute: false }) outboxCountForSession: (sessionKey: string) => number = () => 0;
+  @property({ attribute: false }) queuedOutboxCount = 0;
+  @property({ attribute: false }) lastError: string | null = null;
   @property({ attribute: false }) terminalAvailable = false;
   @property({ attribute: false }) catalogOpenTarget: CatalogOpenTarget = "viewer";
   @property({ attribute: false }) canPairDevice = false;
@@ -44,6 +48,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onOpenPalette?: () => void;
   @property({ attribute: false }) onOpenApprovals?: () => void;
   @property({ attribute: false }) onToggleSidebar?: () => void;
+  @property({ attribute: false }) onRetryConnect?: () => void;
   @property({ attribute: false }) onOpenNewSession?: (
     agentId: string,
     target?: NewSessionTarget,
