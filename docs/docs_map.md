@@ -7242,6 +7242,14 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Surface
   - H2: Related docs
 
+## plugins/reference/tenki.md
+
+- Route: /plugins/reference/tenki
+- Headings:
+  - H1: Tenki plugin
+  - H2: Distribution
+  - H2: Surface
+
 ## plugins/reference/tlon.md
 
 - Route: /plugins/reference/tlon

@@ -1,0 +1,116 @@
+{
+  "id": "tenki",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Tenki Cloud Sandbox",
+  "description": "OpenClaw sandbox backend that runs tool execution in remote Tenki Cloud microVM sessions.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "authToken": {
+        "type": "string",
+        "minLength": 1
+      },
+      "baseUrl": {
+        "type": "string",
+        "minLength": 1
+      },
+      "projectId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "workspaceId": {
+        "type": "string",
+        "minLength": 1
+      },
+      "image": {
+        "type": "string",
+        "minLength": 1
+      },
+      "workspaceRoot": {
+        "type": "string",
+        "minLength": 1
+      },
+      "idleTimeoutMinutes": {
+        "type": "number",
+        "minimum": 1
+      },
+      "cpuCores": {
+        "type": "number",
+        "minimum": 1
+      },
+      "memoryMb": {
+        "type": "number",
+        "minimum": 1
+      },
+      "diskSizeGb": {
+        "type": "number",
+        "minimum": 1
+      },
+      "tags": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "authToken": {
+      "label": "Auth Token",
+      "help": "Tenki API token. Prefer the TENKI_AUTH_TOKEN or TENKI_API_KEY environment variable over storing it in config.",
+      "sensitive": true
+    },
+    "baseUrl": {
+      "label": "API Base URL",
+      "help": "Tenki API endpoint override. Defaults to the SDK's TENKI_API_ENDPOINT / TENKI_API_URL environment fallback.",
+      "advanced": true
+    },
+    "projectId": {
+      "label": "Project ID",
+      "help": "Tenki project the sessions are created in. Required for user tokens; see `tenki status`."
+    },
+    "workspaceId": {
+      "label": "Workspace ID",
+      "help": "Tenki workspace the sessions are created in.",
+      "advanced": true
+    },
+    "image": {
+      "label": "Base Image",
+      "help": "Base image id for created sandbox sessions. Omit for the Tenki default image."
+    },
+    "workspaceRoot": {
+      "label": "Workspace Root",
+      "help": "Absolute path inside the session used for per-scope workspaces.",
+      "advanced": true
+    },
+    "idleTimeoutMinutes": {
+      "label": "Idle Timeout Minutes",
+      "help": "Terminate the session after this many idle minutes.",
+      "advanced": true
+    },
+    "cpuCores": {
+      "label": "CPU Cores",
+      "help": "CPU cores per session.",
+      "advanced": true
+    },
+    "memoryMb": {
+      "label": "Memory MiB",
+      "help": "Memory per session in MiB.",
+      "advanced": true
+    },
+    "diskSizeGb": {
+      "label": "Disk GiB",
+      "help": "Disk per session in GiB.",
+      "advanced": true
+    },
+    "tags": {
+      "label": "Session Tags",
+      "help": "Extra tags attached to created sessions.",
+      "advanced": true
+    }
+  }
+}

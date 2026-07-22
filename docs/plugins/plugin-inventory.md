@@ -167,6 +167,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[telegram](/plugins/reference/telegram)** (`@openclaw/telegram`) - included in OpenClaw. Adds the Telegram channel surface for sending and receiving OpenClaw messages.
 
+- **[tenki](/plugins/reference/tenki)** (`@openclaw/tenki-sandbox`) - included in OpenClaw. OpenClaw sandbox backend that runs tool execution in remote Tenki Cloud microVM sessions.
+
 - **[together](/plugins/reference/together)** (`@openclaw/together-provider`) - included in OpenClaw. Adds Together model provider support to OpenClaw.
 
 - **[tts-local-cli](/plugins/reference/tts-local-cli)** (`@openclaw/tts-local-cli`) - included in OpenClaw. Adds text-to-speech provider support.

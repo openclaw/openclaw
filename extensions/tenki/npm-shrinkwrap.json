@@ -1,0 +1,89 @@
+{
+  "name": "@openclaw/tenki-sandbox",
+  "version": "2026.6.11",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/tenki-sandbox",
+      "version": "2026.6.11",
+      "dependencies": {
+        "@tenkicloud/sandbox": "0.4.0",
+        "zod": "4.4.3"
+      }
+    },
+    "node_modules/@bufbuild/protobuf": {
+      "version": "2.12.1",
+      "resolved": "https://registry.npmjs.org/@bufbuild/protobuf/-/protobuf-2.12.1.tgz",
+      "integrity": "sha512-BvAMfS6LrgZiryOAZ4pBYucu4wG/Ei/9o9DZ9akbREnMLbPJiom2i8b9C8IsKErQoiKqVhrerzt3kOT/RrzLHg==",
+      "license": "(Apache-2.0 AND BSD-3-Clause)"
+    },
+    "node_modules/@connectrpc/connect": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/@connectrpc/connect/-/connect-2.1.2.tgz",
+      "integrity": "sha512-MXkBijtcX09R10Eb6sFeIetc6w6746eio6xtfuyVOH7oQAacT1X0GzMIQFux6Qy8cq3W/T5qX5Bei8YbFtmRGA==",
+      "license": "Apache-2.0",
+      "peerDependencies": {
+        "@bufbuild/protobuf": "^2.7.0"
+      }
+    },
+    "node_modules/@connectrpc/connect-node": {
+      "version": "2.1.2",
+      "resolved": "https://registry.npmjs.org/@connectrpc/connect-node/-/connect-node-2.1.2.tgz",
+      "integrity": "sha512-+i/aAOpsI8sIx1mbYp6d99zvxaUSF6t/jP9Ux9maAmjsZPgmIQ3JuIeYi0zJIP9zlCnBlJjkpPosshCgdRuThQ==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=20"
+      },
+      "peerDependencies": {
+        "@bufbuild/protobuf": "^2.7.0",
+        "@connectrpc/connect": "2.1.2"
+      }
+    },
+    "node_modules/@tenkicloud/sandbox": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tenkicloud/sandbox/-/sandbox-0.4.0.tgz",
+      "integrity": "sha512-p9GiQutfqEhEEAQlEOph/wuP2Vk0kDof4GjhIvnV96TbvzoqPFp1pD6iEjUcJMri6sJsEXBGf0Grsyl+X52GiA==",
+      "license": "MIT",
+      "dependencies": {
+        "@bufbuild/protobuf": "2.12.1",
+        "@connectrpc/connect": "2.1.2",
+        "@connectrpc/connect-node": "2.1.2",
+        "ws": "8.21.0"
+      },
+      "engines": {
+        "node": ">=18"
+      }
+    },
+    "node_modules/ws": {
+      "version": "8.21.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
+      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=10.0.0"
+      },
+      "peerDependencies": {
+        "bufferutil": "^4.0.1",
+        "utf-8-validate": ">=5.0.2"
+      },
+      "peerDependenciesMeta": {
+        "bufferutil": {
+          "optional": true
+        },
+        "utf-8-validate": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/zod": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
+    }
+  }
+}

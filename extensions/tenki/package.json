@@ -1,0 +1,38 @@
+{
+  "name": "@openclaw/tenki-sandbox",
+  "version": "2026.6.11",
+  "description": "OpenClaw sandbox backend for Tenki Cloud microVM sessions via the @tenkicloud/sandbox SDK.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "dependencies": {
+    "@tenkicloud/sandbox": "0.4.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/tenki-sandbox",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.5.12-beta.1"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.11"
+    },
+    "build": {
+      "openclawVersion": "2026.6.11",
+      "bundledDist": false
+    },
+    "release": {
+      "publishToClawHub": false,
+      "publishToNpm": false
+    }
+  }
+}
