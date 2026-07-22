@@ -163,22 +163,20 @@ async function buildChatStartupMetadataResult(params: {
     return undefined;
   }
   try {
+    if (params.modelCatalog.agentId !== params.agentId) {
+      return undefined;
+    }
     const { buildModelsListResult } = await import("./models-list-result.js");
-    const canUsePreloadedCatalog = params.modelCatalog.agentId === params.agentId;
     return await buildModelsListResult({
       context: params.context,
       agentId: params.agentId,
       params: { view: "configured" },
-      ...(canUsePreloadedCatalog
-        ? {
-            preloadedCatalog: {
-              agentId: params.agentId,
-              config: params.cfg,
-              snapshot: params.modelCatalog,
-            },
-            ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
-          }
-        : {}),
+      preloadedCatalog: {
+        agentId: params.agentId,
+        config: params.cfg,
+        snapshot: params.modelCatalog,
+      },
+      ...(params.catalogProjector ? { catalogProjector: params.catalogProjector } : {}),
     });
   } catch (err) {
     params.context.logGateway.debug(

@@ -157,8 +157,15 @@ describe("models.list OpenAI routes", () => {
       agents: {
         defaults: {},
         list: [
-          { id: "main", default: true, models: { "openai/gpt-owner": {} } },
-          { id: "worker", models: { "openai/gpt-worker": {} } },
+          {
+            id: "main",
+            default: true,
+            models: { "openai/gpt-owner": { agentRuntime: { id: "codex" } } },
+          },
+          {
+            id: "worker",
+            models: { "openai/gpt-owner": { agentRuntime: { id: "openclaw" } } },
+          },
         ],
       },
     } as OpenClawConfig;
@@ -177,19 +184,24 @@ describe("models.list OpenAI routes", () => {
       logGateway: { debug: vi.fn() },
     } as unknown as GatewayRequestContext;
 
-    const routeResolverFactory = vi.fn(() => () => null);
     const result = await buildModelsListResult({
       context,
       agentId: "worker",
-      params: { view: "configured" },
-      routeResolverFactory,
+      params: { view: "all" },
     });
 
-    expect(result).toEqual({ models: [] });
-    expect(routeResolverFactory).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+    expect(result).toEqual({
+      models: [
+        expect.objectContaining({
+          id: "gpt-owner",
+          provider: "openai",
+          agentRuntime: { id: "codex", source: "model" },
+        }),
+      ],
+    });
     expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
       agentId: "worker",
-      readOnly: true,
+      readOnly: false,
     });
   });
 

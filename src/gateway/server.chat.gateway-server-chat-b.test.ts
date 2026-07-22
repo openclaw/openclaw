@@ -779,6 +779,63 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.startup omits model metadata from a fallback owner", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [{ id: "main", default: true }, { id: "work" }],
+      },
+    } as OpenClawConfig;
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
+        agentId: "main",
+        agentDir: "/tmp/chat-main-agent",
+        config,
+        entries: [{ id: "main-only", name: "Main only", provider: "test" }],
+        routeVariants: [],
+      })),
+      logGateway: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
+      chatAbortControllers: new Map(),
+      chatRunBuffers: new Map(),
+    } as unknown as GatewayRequestContext;
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: { "agent:work:main": { sessionId: "sess-work", updatedAt: Date.now() } },
+      });
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const { chatHandlers } = await import("./server-methods/chat.js");
+
+      await expectDefined(
+        chatHandlers["chat.startup"],
+        'chatHandlers["chat.startup"] test invariant',
+      )({
+        req: {
+          type: "req",
+          id: "startup-fallback-owner",
+          method: "chat.startup",
+          params: { sessionKey: "agent:work:main" },
+        },
+        params: { sessionKey: "agent:work:main" },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => responses.push({ ok, payload, error })) as RespondFn,
+        context,
+      });
+
+      expect(responses[0]?.ok).toBe(true);
+      expect(
+        (responses[0]?.payload as { metadata?: { models?: unknown[] } })?.metadata?.models,
+      ).toBe(undefined);
+      expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({ agentId: "work" });
+    } finally {
+      testState.sessionStorePath = undefined;
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.startup does not wait for slow optional model catalog metadata", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
