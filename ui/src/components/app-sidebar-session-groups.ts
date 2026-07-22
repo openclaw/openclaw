@@ -1,5 +1,6 @@
 import { state } from "lit/decorators.js";
 import {
+  parseSidebarEntry,
   SIDEBAR_NAV_ROUTES,
   serializeSidebarEntry,
   type SidebarNavRoute,
@@ -20,6 +21,8 @@ import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { AppSidebarSessionMutationsElement } from "./app-sidebar-session-mutations.ts";
 import {
   loadStoredCollapsedSessionSections,
+  SIDEBAR_SESSION_PAGE_SIZE,
+  storeSidebarSessionStatusFilter,
   storeCollapsedSessionSections,
   storeSidebarSessionsGrouping,
   storeSidebarSessionsShowCron,
@@ -27,6 +30,7 @@ import {
   type SidebarSessionGroupDropTarget,
   type SidebarSessionMutationResult,
   type SidebarSessionMutationScope,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 
 /** Custom session groups, collapse state, and drag-and-drop assignment. */
@@ -51,6 +55,15 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     this.draggingSidebarEntry = serializeSidebarEntry({ type: "route", route });
   }
 
+  protected startSidebarWorkboardDrag(event: DragEvent, boardId: string) {
+    if (!event.dataTransfer) {
+      return;
+    }
+    const entry = serializeSidebarEntry({ type: "workboard", boardId });
+    writeSidebarRouteDragData(event.dataTransfer, entry);
+    this.draggingSidebarEntry = entry;
+  }
+
   protected finishSidebarEntryDrag() {
     this.draggingSidebarEntry = null;
     this.draggingSessionKey = null;
@@ -62,6 +75,10 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     const route = readSidebarRouteDragData(dataTransfer);
     if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
       return serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute });
+    }
+    const dynamicEntry = parseSidebarEntry(route);
+    if (dynamicEntry?.type === "workboard") {
+      return serializeSidebarEntry(dynamicEntry);
     }
     const sessionKey = readSessionDragData(dataTransfer);
     return sessionKey ? serializeSidebarEntry({ type: "session", key: sessionKey }) : null;
@@ -172,12 +189,17 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
   }
 
   protected handleSessionListDrop(event: DragEvent) {
-    const route = readSidebarRouteDragData(event.dataTransfer);
-    if (route && SIDEBAR_NAV_ROUTES.includes(route as SidebarNavRoute)) {
+    const draggedNavigation = readSidebarRouteDragData(event.dataTransfer);
+    const dynamicEntry = parseSidebarEntry(draggedNavigation);
+    const entry =
+      draggedNavigation && SIDEBAR_NAV_ROUTES.includes(draggedNavigation as SidebarNavRoute)
+        ? ({ type: "route", route: draggedNavigation as SidebarNavRoute } as const)
+        : dynamicEntry?.type === "workboard"
+          ? dynamicEntry
+          : null;
+    if (entry) {
       event.preventDefault();
-      this.removeSidebarEntry(
-        serializeSidebarEntry({ type: "route", route: route as SidebarNavRoute }),
-      );
+      this.removeSidebarEntry(serializeSidebarEntry(entry));
       this.finishSidebarEntryDrag();
       return;
     }
@@ -464,5 +486,29 @@ export abstract class AppSidebarSessionGroupsElement extends AppSidebarSessionMu
     } catch {
       // Keep the in-memory preference when storage is unavailable.
     }
+  }
+
+  protected setSessionsStatusFilter(statusFilter: SidebarSessionStatusFilter) {
+    if (statusFilter === this.sessionsStatusFilter) {
+      return;
+    }
+    this.sessionsStatusFilter = statusFilter;
+    this.clearSessionSelection();
+    this.visibleSessionLimit = SIDEBAR_SESSION_PAGE_SIZE;
+    this.childSessionRowsByParent = {};
+    this.loadedChildSessionKeys = new Set();
+    this.failedChildSessionKeys = new Set();
+    this.loadingChildSessionKeys = new Set();
+    this.sessionRowsByAgent = {};
+    if (statusFilter === "active" && this.context) {
+      this.sessionsResult = this.context.sessions.state.result;
+      this.sessionsAgentId = this.context.sessions.state.agentId;
+    }
+    try {
+      storeSidebarSessionStatusFilter(statusFilter);
+    } catch {
+      // Keep the in-memory preference when storage is unavailable.
+    }
+    void this.refreshSidebarSessions();
   }
 }
