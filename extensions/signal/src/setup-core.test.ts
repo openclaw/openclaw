@@ -17,7 +17,7 @@ async function prepareInput(
     signalTransport?: "external-native" | "container";
     httpUrl?: string;
   },
-  cfg: object = {},
+  cfg: OpenClawConfig = {},
 ) {
   const prepared = await signalSetupAdapter.prepareAccountConfigInput?.({
     cfg,
@@ -81,7 +81,7 @@ describe("signalSetupAdapter", () => {
 
   it("preserves an existing container account when detection is unreachable", async () => {
     detectSignalTransportMock.mockRejectedValue(new Error("unreachable"));
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         signal: {
           account: "+15555550123",
