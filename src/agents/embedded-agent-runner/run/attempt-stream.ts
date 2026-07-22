@@ -317,6 +317,9 @@ export function installEmbeddedAttemptStreamGuards(input: {
     };
   }
   let diagnosticModelCallSeq = 0;
+  // Only the actual selected credential mode from the resolved runtime plan.
+  // Never invent auth from defaults, oauth meters, or configured primary alone.
+  const selectedAuthMode = attempt.runtimePlan?.auth?.selectedAuthMode;
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
     runId: attempt.runId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
@@ -334,6 +337,7 @@ export function installEmbeddedAttemptStreamGuards(input: {
     ...(attempt.contextWindowInfo?.referenceTokens
       ? { contextWindowReferenceTokens: attempt.contextWindowInfo.referenceTokens }
       : {}),
+    ...(selectedAuthMode ? { selectedAuthMode } : {}),
     trace: input.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,

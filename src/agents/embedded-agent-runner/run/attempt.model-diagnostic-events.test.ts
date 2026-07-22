@@ -25,7 +25,10 @@ import {
 } from "../../../plugins/hook-runner-global.js";
 import { createHookRunnerWithRegistry } from "../../../plugins/hooks.test-fixtures.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
+import {
+  sanitizeSuccessfulAttemptAuthType,
+  wrapStreamFnWithDiagnosticModelCallEvents,
+} from "./attempt.model-diagnostic-events.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -136,6 +139,28 @@ async function collectProviderTimelineEvents(run: () => Promise<void>) {
     .map((line) => requireRecord(JSON.parse(line), "provider timeline event"))
     .filter((event) => event.type === "provider.request");
 }
+
+describe("sanitizeSuccessfulAttemptAuthType", () => {
+  it("maps selected credential modes to sanitized oauth|api only", () => {
+    expect(sanitizeSuccessfulAttemptAuthType("oauth")).toBe("oauth");
+    expect(sanitizeSuccessfulAttemptAuthType("OAuth")).toBe("oauth");
+    expect(sanitizeSuccessfulAttemptAuthType("api")).toBe("api");
+    expect(sanitizeSuccessfulAttemptAuthType("api-key")).toBe("api");
+    expect(sanitizeSuccessfulAttemptAuthType("api_key")).toBe("api");
+    expect(sanitizeSuccessfulAttemptAuthType("token")).toBe("api");
+    expect(sanitizeSuccessfulAttemptAuthType(" TOKEN ")).toBe("api");
+  });
+
+  it("omits unknown, empty, and non-string modes instead of inventing auth", () => {
+    expect(sanitizeSuccessfulAttemptAuthType(undefined)).toBeUndefined();
+    expect(sanitizeSuccessfulAttemptAuthType(null)).toBeUndefined();
+    expect(sanitizeSuccessfulAttemptAuthType("")).toBeUndefined();
+    expect(sanitizeSuccessfulAttemptAuthType("   ")).toBeUndefined();
+    expect(sanitizeSuccessfulAttemptAuthType("aws-sdk")).toBeUndefined();
+    expect(sanitizeSuccessfulAttemptAuthType("bearer")).toBeUndefined();
+    expect(sanitizeSuccessfulAttemptAuthType("usage-meter")).toBeUndefined();
+  });
+});
 
 describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
   beforeEach(() => {
@@ -1217,6 +1242,215 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(Object.isFrozen(startedCtx)).toBe(true);
     expect(Object.isFrozen(startedCtx.trace)).toBe(true);
     expect(JSON.stringify([started.mock.calls, ended.mock.calls])).not.toContain(secretChunk);
+  });
+
+  it("emits sanitized authType only on successful model_call_ended hooks", async () => {
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+
+    async function* stream() {
+      yield { type: "text", text: "ok" };
+    }
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => stream()) as unknown as StreamFn,
+      {
+        runId: "run-auth-success",
+        provider: "openai",
+        model: "gpt-5.4",
+        selectedAuthMode: "api_key",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-auth-success",
+      },
+    );
+
+    await collectModelCallEvents(async () => {
+      await drain(wrapped({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
+    expect(endedEvent.outcome).toBe("completed");
+    expect(endedEvent.authType).toBe("api");
+    expect(endedEvent).not.toHaveProperty("selectedAuthMode");
+    expect(JSON.stringify(endedEvent)).not.toMatch(/api[_-]key|token|profile/i);
+  });
+
+  it("omits authType on failed model_call_ended so consumers can preserve last success", async () => {
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        throw new Error("provider failed");
+      }) as unknown as StreamFn,
+      {
+        runId: "run-auth-fail",
+        provider: "openai",
+        model: "gpt-5.4",
+        selectedAuthMode: "oauth",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-auth-fail",
+      },
+    );
+
+    await collectModelCallEvents(async () => {
+      expect(() => wrapped({} as never, {} as never, {} as never)).toThrow("provider failed");
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
+    expect(endedEvent.outcome).toBe("error");
+    expect(endedEvent).not.toHaveProperty("authType");
+  });
+
+  it("emits only the fallback-winning successful authType across ordered attempts", async () => {
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+
+    let callSeq = 0;
+    const nextCallId = () => `call-fallback-${(callSeq += 1)}`;
+
+    // First attempt fails on oauth; second succeeds on api-key fallback.
+    const failing = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        throw new Error("oauth exhausted");
+      }) as unknown as StreamFn,
+      {
+        runId: "run-fallback",
+        provider: "openai",
+        model: "gpt-5.4",
+        selectedAuthMode: "oauth",
+        trace: createDiagnosticTraceContext(),
+        nextCallId,
+      },
+    );
+    async function* successStream() {
+      yield { type: "text", text: "fallback-ok" };
+    }
+    const succeeding = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => successStream()) as unknown as StreamFn,
+      {
+        runId: "run-fallback",
+        provider: "openai",
+        model: "gpt-5.4",
+        selectedAuthMode: "api-key",
+        trace: createDiagnosticTraceContext(),
+        nextCallId,
+      },
+    );
+
+    await collectModelCallEvents(async () => {
+      expect(() => failing({} as never, {} as never, {} as never)).toThrow("oauth exhausted");
+      await drain(succeeding({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(ended).toHaveBeenCalledTimes(2);
+    const failedEvent = requireMockRecordArg(ended, 0, 0, "failed ended hook");
+    const successEvent = requireMockRecordArg(ended, 1, 0, "success ended hook");
+    expect(failedEvent.outcome).toBe("error");
+    expect(failedEvent).not.toHaveProperty("authType");
+    expect(successEvent.outcome).toBe("completed");
+    expect(successEvent.authType).toBe("api");
+
+    // Consumer preserve-last-success: only completed events with authType update the cache.
+    let lastSuccessfulAuthType: "oauth" | "api" | undefined;
+    for (const call of ended.mock.calls) {
+      const event = requireRecord(call[0], "ended hook event");
+      if (
+        event.outcome === "completed" &&
+        (event.authType === "oauth" || event.authType === "api")
+      ) {
+        lastSuccessfulAuthType = event.authType;
+      }
+    }
+    expect(lastSuccessfulAuthType).toBe("api");
+  });
+
+  it("preserves prior successful authType when a later attempt fails", async () => {
+    const ended = vi.fn();
+    const { registry } = createHookRunnerWithRegistry([
+      { hookName: "model_call_ended", handler: ended },
+    ]);
+    initializeGlobalHookRunner(registry);
+
+    let callSeq = 0;
+    const nextCallId = () => `call-preserve-${(callSeq += 1)}`;
+
+    async function* successStream() {
+      yield { type: "text", text: "first-ok" };
+    }
+    const succeeding = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => successStream()) as unknown as StreamFn,
+      {
+        runId: "run-preserve",
+        provider: "xai",
+        model: "grok-4",
+        selectedAuthMode: "oauth",
+        trace: createDiagnosticTraceContext(),
+        nextCallId,
+      },
+    );
+    const failing = wrapStreamFnWithDiagnosticModelCallEvents(
+      (() => {
+        throw new Error("later failure");
+      }) as unknown as StreamFn,
+      {
+        runId: "run-preserve",
+        provider: "xai",
+        model: "grok-4",
+        selectedAuthMode: "api-key",
+        trace: createDiagnosticTraceContext(),
+        nextCallId,
+      },
+    );
+
+    await collectModelCallEvents(async () => {
+      await drain(succeeding({} as never, {} as never, {} as never) as AsyncIterable<unknown>);
+      expect(() => failing({} as never, {} as never, {} as never)).toThrow("later failure");
+    });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(ended).toHaveBeenCalledTimes(2);
+    const successEvent = requireMockRecordArg(ended, 0, 0, "success ended hook");
+    const failedEvent = requireMockRecordArg(ended, 1, 0, "failed ended hook");
+    expect(successEvent.outcome).toBe("completed");
+    expect(successEvent.authType).toBe("oauth");
+    expect(failedEvent.outcome).toBe("error");
+    expect(failedEvent).not.toHaveProperty("authType");
+
+    let lastSuccessfulAuthType: "oauth" | "api" | undefined = "api"; // stale prior value
+    for (const call of ended.mock.calls) {
+      const event = requireRecord(call[0], "ended hook event");
+      if (
+        event.outcome === "completed" &&
+        (event.authType === "oauth" || event.authType === "api")
+      ) {
+        lastSuccessfulAuthType = event.authType;
+      }
+      // Failures must not clear or overwrite last success.
+      if (event.outcome === "error") {
+        expect(event.authType).toBeUndefined();
+      }
+    }
+    expect(lastSuccessfulAuthType).toBe("oauth");
   });
 
   it("emits completed events when stream consumption stops early", async () => {
