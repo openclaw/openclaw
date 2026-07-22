@@ -14,6 +14,7 @@ import {
   resolveSecretProviderIntegrationConfig,
 } from "./provider-integrations.js";
 import { resolveSecretRefString } from "./resolve.js";
+import { withSecureTestNodeExecPath } from "./test-node-command.test-support.js";
 
 const tempDirs: string[] = [];
 
@@ -587,36 +588,38 @@ describe("secret provider integration presets", () => {
       "utf8",
     );
 
-    const registry = loadPluginManifestRegistry({
-      candidates: [createCandidate(rootDir, "vault-secrets", "global")],
-    });
-    const [preset] = listSecretProviderIntegrationPresets({ manifestRegistry: registry });
-    if (!preset) {
-      throw new Error("Expected vault preset");
-    }
+    await withSecureTestNodeExecPath(async () => {
+      const registry = loadPluginManifestRegistry({
+        candidates: [createCandidate(rootDir, "vault-secrets", "global")],
+      });
+      const [preset] = listSecretProviderIntegrationPresets({ manifestRegistry: registry });
+      if (!preset) {
+        throw new Error("Expected vault preset");
+      }
 
-    expect(preset.providerConfig).toEqual({
-      source: "exec",
-      pluginIntegration: {
-        pluginId: "vault-secrets",
-        integrationId: "vault",
-      },
-    });
-    await expect(
-      resolveSecretRefString(
-        { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
-        {
-          config: {
-            secrets: {
-              providers: {
-                vault: preset.providerConfig,
+      expect(preset.providerConfig).toEqual({
+        source: "exec",
+        pluginIntegration: {
+          pluginId: "vault-secrets",
+          integrationId: "vault",
+        },
+      });
+      await expect(
+        resolveSecretRefString(
+          { source: "exec", provider: "vault", id: "providers/openrouter/apiKey" },
+          {
+            config: {
+              secrets: {
+                providers: {
+                  vault: preset.providerConfig,
+                },
               },
             },
+            manifestRegistry: registry,
           },
-          manifestRegistry: registry,
-        },
-      ),
-    ).resolves.toBe("value:providers/openrouter/apiKey");
+        ),
+      ).resolves.toBe("value:providers/openrouter/apiKey");
+    });
   });
 
   it("fails closed when a plugin-managed provider is disabled", async () => {
