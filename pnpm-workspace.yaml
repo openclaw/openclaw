@@ -140,9 +140,7 @@ allowBuilds:
   esbuild: true
   koffi: false
   node-llama-cpp: false
-  onnxruntime-node: false
   protobufjs: true
-  sharp: false
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true

@@ -230,12 +230,12 @@
       }
     },
     "node_modules/@clack/prompts": {
-      "version": "1.7.0",
-      "resolved": "https://registry.npmjs.org/@clack/prompts/-/prompts-1.7.0.tgz",
-      "integrity": "sha512-y7/yvZ2TPAnR9+jnc00klvNNLkJiXFFrQA/hlLCcxA9a2A4zQIOimyFQ9XfwYKiGD1fb5GY8vbKIIgO8d5Tb2A==",
+      "version": "1.6.0",
+      "resolved": "https://registry.npmjs.org/@clack/prompts/-/prompts-1.6.0.tgz",
+      "integrity": "sha512-EYlRokl8szrP9Z25qT5aepMdBjzBvHF9ZEhzIiUBc9guz/T31EqRgvD0QSgZcpE93xiwrr+OkB4nz0BZyF6fSA==",
       "license": "MIT",
       "dependencies": {
-        "@clack/core": "1.4.3",
+        "@clack/core": "1.4.2",
         "fast-string-width": "^3.0.2",
         "fast-wrap-ansi": "^0.2.0",
         "sisteransi": "^1.0.5"
@@ -934,9 +934,9 @@
       }
     },
     "node_modules/bare-fs": {
-      "version": "4.7.4",
-      "resolved": "https://registry.npmjs.org/bare-fs/-/bare-fs-4.7.4.tgz",
-      "integrity": "sha512-y1kC+ffIx/tPLdTE693uNjHfzTfr+ravR5tvWlMXe25nELbkqV400S71qHDwbkAQ1FVEZobB1NFRzFbCCcyBCQ==",
+      "version": "4.7.2",
+      "resolved": "https://registry.npmjs.org/bare-fs/-/bare-fs-4.7.2.tgz",
+      "integrity": "sha512-aTvMFUWkBmjzKtEQMDGGDNF8bkfpD5N1b/FCwt7A3wrU4t1o/e/85Wzkluh6JlODCjqVESYCkQCdTXqZ9G7VFg==",
       "license": "Apache-2.0",
       "dependencies": {
         "bare-events": "^2.5.4",
@@ -957,11 +957,23 @@
         }
       }
     },
+    "node_modules/bare-os": {
+      "version": "3.9.3",
+      "resolved": "https://registry.npmjs.org/bare-os/-/bare-os-3.9.3.tgz",
+      "integrity": "sha512-fF4Q7QsyKVF5Rj0qvI8BgUNjqzC2JvQlpTaPLjVJVxYVUX5Zr9un+y3w1HmA4nNKdFmRBT8z/WmrjvXzXVerKQ==",
+      "license": "Apache-2.0",
+      "engines": {
+        "bare": ">=1.14.0"
+      }
+    },
     "node_modules/bare-path": {
-      "version": "3.1.1",
-      "resolved": "https://registry.npmjs.org/bare-path/-/bare-path-3.1.1.tgz",
-      "integrity": "sha512-JprUlveX3QjApC1cTpsUOiscADftCGVWkzitbHsRqv84hzYwYHw2mbluddsq5TvI8mH/8Ov1f4BiMAdcB0oYnQ==",
-      "license": "Apache-2.0"
+      "version": "3.0.1",
+      "resolved": "https://registry.npmjs.org/bare-path/-/bare-path-3.0.1.tgz",
+      "integrity": "sha512-ghj2DSK/2e99a1anTVPCV4m4YIYtrbXhfM7V3D7XZLOTsybnYyaJloymGqssQc8l/or0UoDyRtNQkmkEF/ysgQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "bare-os": "^3.0.1"
+      }
     },
     "node_modules/bare-stream": {
       "version": "2.13.3",
@@ -1433,12 +1445,11 @@
       }
     },
     "node_modules/express-rate-limit": {
-      "version": "8.6.0",
-      "resolved": "https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.6.0.tgz",
-      "integrity": "sha512-XKJXDsASUOo0LLtFwW5hCcQGH0N4WQc/Rn8/Pvoia+TJFOkkFPvrtW9lZOeeNcxQJspvOIERMwiRLsVFlhHEkA==",
+      "version": "8.5.2",
+      "resolved": "https://registry.npmjs.org/express-rate-limit/-/express-rate-limit-8.5.2.tgz",
+      "integrity": "sha512-5Kb34ipNX694DH48vN9irak1Qx30nb0PLYHXfJgw4YEjiC3ZEmZJhwOp+VfiCYwFzvFTdB9QkArYS5kXa2cx2A==",
       "license": "MIT",
       "dependencies": {
-        "debug": "^4.4.3",
         "ip-address": "^10.2.0"
       },
       "engines": {
