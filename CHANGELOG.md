@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **CLI-harness source replies:** count an explicit-route `message` send that reaches the current source conversation as a delivered source reply in Claude Code/Codex-style CLI harness runs, so `message_tool_only` channel sessions no longer fire stranded-reply recovery (and duplicate the message into the channel) after a successful send.
 - **Standalone plugin files:** let manifestless files explicitly listed in `plugins.load.paths` pass config validation and load independently when several files share a directory.
 - **Control UI terminal error messages:** preserve message-only assistant output beginning with `Error:` or a warning marker instead of treating text prefixes as synthetic failures. Thanks @shakkernerd.
 - **Channel outbound echo suppression:** drop recently emitted platform message and source identities at shared inbound admission and migrate Discord thread unbinds off channel-local expiry state, preventing delayed webhook copies from re-entering agents.
