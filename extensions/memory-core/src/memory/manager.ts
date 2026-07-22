@@ -1,8 +1,10 @@
 // Memory Core plugin module implements manager behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-sdk/memory-core-host-embedding-registry";
+import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
   resolveAgentDir,
@@ -210,11 +212,8 @@ function resolveConfiguredMemoryEmbeddingProvider(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): string | undefined {
-  const normalizedAgentId = normalizeAgentId(params.agentId);
-  const agentEntry = params.cfg.agents?.list?.find(
-    (entry) => entry && normalizeAgentId(entry.id) === normalizedAgentId,
-  );
-  return agentEntry?.memorySearch?.provider ?? params.cfg.agents?.defaults?.memorySearch?.provider;
+  const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
+  return agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider;
 }
 
 function resolveMemoryEmbeddingProviderRequirement(params: {
@@ -1213,14 +1212,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private mergeHybridResults(params: {
     query: string;
     vector: Array<MemorySearchResult & { id: string }>;
-    keyword: Array<
-      MemorySearchResult & {
-        id: string;
-        textScore: number;
-        pathScore: number;
-        exactPathSpecificity: ExactPathSpecificity;
-      }
-    >;
+    keyword: KeywordSearchHit[];
     vectorWeight: number;
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
@@ -1251,6 +1243,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
+      isNonTextMediaPath: (path) =>
+        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,

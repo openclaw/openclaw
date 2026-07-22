@@ -49,6 +49,9 @@ not install or modify anything on the remote host.
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
     - Seeds workspace files needed for first-run bootstrap.
+    - On rerun, an existing agent roster keeps its fleet-wide workspace unless
+      you explicitly confirm the move. Non-interactive reruns warn and preserve
+      the current value.
     - Workspace layout: [Agent workspace](/concepts/agent-workspace).
 
   </Step>
@@ -338,7 +341,7 @@ Typical fields in `~/.openclaw/openclaw.json`:
 - `wizard.lastRunMode`
 - `wizard.securityAcknowledgedAt`
 
-`openclaw agents add` writes `agents.list[]` and optional `bindings`.
+`openclaw agents add` writes `agents.entries.*` and optional `bindings`.
 
 WhatsApp credentials go under `~/.openclaw/credentials/whatsapp/<accountId>/`.
 Active sessions and transcripts are stored in

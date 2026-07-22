@@ -1,6 +1,5 @@
 /** Cron timer loop, execution, catch-up, and run-result state transitions. */
 import pMap, { pMapSkip } from "p-map";
-import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { resolveCronTriggerMinIntervalMs } from "../../config/cron-limits.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { CronConfig } from "../../config/types.cron.js";
@@ -35,8 +34,14 @@ import {
   normalizeCronRunDiagnostics,
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
+import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+import {
+  appendCronPayloadText,
+  createCronStreamSourceIdentity,
+  cronStreamScheduleKey,
+} from "../stream-schedule.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -45,6 +50,7 @@ import type {
   CronFailureNotificationDelivery,
   CronJob,
   CronNextCheckProposal,
+  CronRunErrorClassification,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -211,6 +217,11 @@ type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  streamBatch?: string;
+  // Source definition and logical identity are an inseparable admission claim.
+  // The key catches edits; the identity catches disable→re-enable and A→B→A.
+  streamScheduleKey?: string;
+  streamSourceIdentity?: string;
 };
 
 /** Script payloads run headlessly even when their notifications target main. */
@@ -251,6 +262,9 @@ export async function executeJobCoreWithTimeout(
     runId?: string;
     activeJobMarker?: CronActiveJobMarker;
     owningCronLaneTaskMarker?: CommandLaneTaskMarker;
+    streamBatch?: string;
+    streamScheduleKey?: string;
+    streamSourceIdentity?: string;
   },
 ): Promise<CronCoreRunOutcome> {
   const runAbortController = new AbortController();
@@ -297,6 +311,9 @@ export async function executeJobCoreWithTimeout(
       const corePromise = executeJobCore(state, job, runAbortController.signal, {
         activeJobMarker: opts?.activeJobMarker,
         owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
+        streamBatch: opts?.streamBatch,
+        streamScheduleKey: opts?.streamScheduleKey,
+        streamSourceIdentity: opts?.streamSourceIdentity,
         onExecutionStarted: accumulateExecution,
         onExecutionPhase: accumulateExecution,
       });
@@ -352,6 +369,9 @@ export async function executeJobCoreWithTimeout(
     const corePromise = executeJobCore(state, job, runAbortController.signal, {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
+      streamBatch: opts?.streamBatch,
+      streamScheduleKey: opts?.streamScheduleKey,
+      streamSourceIdentity: opts?.streamSourceIdentity,
       onExecutionStarted: deferTimeoutUntilExecutionStart ? watchdog.noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
@@ -537,15 +557,26 @@ function resolveRetryConfig() {
 function resolveTransientCronRetryDecision(params: {
   cronConfig?: CronConfig;
   error: string | undefined;
+  errorClassification?: CronRunErrorClassification;
   lastErrorReason?: string;
   executionStarted?: boolean;
   consecutiveErrors: number | undefined;
 }): TransientCronRetryDecision {
   const retryConfig = resolveRetryConfig();
+  if (params.errorClassification?.kind === "permanent") {
+    return {
+      retryable: false,
+      consecutiveErrors: params.consecutiveErrors ?? 0,
+      reason: "permanent error",
+    };
+  }
   const retryHint = resolveCronExecutionRetryHint({
     error: params.error,
     retryOn: retryConfig.retryOn,
-    classifiedReason: params.lastErrorReason,
+    classifiedReason:
+      params.errorClassification?.kind === "reason"
+        ? params.errorClassification.reason
+        : params.lastErrorReason,
     executionStarted: params.executionStarted,
   });
   const consecutiveErrors = params.consecutiveErrors ?? 0;
@@ -671,7 +702,7 @@ function resolveDeliveryState(params: {
   runStatus: CronRunStatus;
   delivered?: boolean;
   error?: string;
-  globalFailureDestination?: CronConfig["failureDestination"];
+  globalFailureDestination?: CronConfig["failureAlert"];
 }): {
   delivered?: boolean;
   status: CronDeliveryStatus;
@@ -773,7 +804,7 @@ export function applyJobResult(
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
     result.status === "error" && typeof result.error === "string"
-      ? (resolveFailoverReasonFromError(result.error, result.provider) ?? undefined)
+      ? resolveCronRunErrorReason(result.error, result.provider, result.errorClassification)
       : undefined;
   if (result.status === "error") {
     state.deps.log.warn(
@@ -795,7 +826,7 @@ export function applyJobResult(
     // so `lastDeliveryError` is populated without conflating it with a
     // run-level failure. Error runs fall back to the run error as before.
     error: result.deliveryError ?? result.error,
-    globalFailureDestination: state.deps.cronConfig?.failureDestination,
+    globalFailureDestination: state.deps.cronConfig?.failureAlert,
   });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
@@ -820,7 +851,7 @@ export function applyJobResult(
       alertConfig,
       status: "error",
       error: result.error,
-      provider: result.provider,
+      errorReason: job.state.lastErrorReason,
       consecutiveCount: job.state.consecutiveErrors,
       ...(opts?.replayFailureAlertAtMs !== undefined
         ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
@@ -835,7 +866,6 @@ export function applyJobResult(
         alertConfig,
         status: "skipped",
         error: result.error,
-        provider: result.provider,
         consecutiveCount: job.state.consecutiveSkipped,
         ...(opts?.replayFailureAlertAtMs !== undefined
           ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
@@ -897,6 +927,7 @@ export function applyJobResult(
         const retryDecision = resolveTransientCronRetryDecision({
           cronConfig: state.deps.cronConfig,
           error: result.error,
+          errorClassification: result.errorClassification,
           lastErrorReason: job.state.lastErrorReason,
           executionStarted: result.executionStarted,
           consecutiveErrors: job.state.consecutiveErrors,
@@ -945,6 +976,7 @@ export function applyJobResult(
       const retryDecision = resolveTransientCronRetryDecision({
         cronConfig: state.deps.cronConfig,
         error: result.error,
+        errorClassification: result.errorClassification,
         lastErrorReason: job.state.lastErrorReason,
         executionStarted: result.executionStarted,
         consecutiveErrors: job.state.consecutiveErrors,
@@ -1125,6 +1157,11 @@ export function applyTriggerRunResult(
   // A once trigger disarms only after the fired payload succeeds. Errors keep
   // it armed so the normal backoff path can evaluate and retry later.
   if (result.triggerEval.fired && job.trigger?.once === true && result.status === "ok") {
+    if (job.schedule.kind === "stream") {
+      // Auto-disable is a source retirement just like an explicit disable. Rotate
+      // in the same persisted result so queued sibling batches cannot gain admission.
+      job.state.streamSourceIdentity = createCronStreamSourceIdentity();
+    }
     job.enabled = false;
     job.state.nextRunAtMs = undefined;
   }
@@ -2491,6 +2528,21 @@ async function executeJobCore(
   if (abortSignal?.aborted) {
     return resolveAbortError();
   }
+  if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
+    // Defense in depth over the locked admission checks: stream-origin work must
+    // carry both the source definition and logical identity, and both must still
+    // match the execution snapshot.
+    const currentKey =
+      job.schedule.kind === "stream" ? cronStreamScheduleKey(job.schedule) : undefined;
+    if (
+      options.streamScheduleKey === undefined ||
+      options.streamSourceIdentity === undefined ||
+      currentKey !== options.streamScheduleKey ||
+      job.state.streamSourceIdentity !== options.streamSourceIdentity
+    ) {
+      return { status: "skipped", error: "stream batch source no longer current" };
+    }
+  }
   let effectiveJob = job;
   let triggerEval: CronTriggerEvalOutcome | undefined;
   if (job.trigger) {
@@ -2502,6 +2554,7 @@ async function executeJobCore(
       job,
       script: job.trigger.script,
       state: job.state.triggerState,
+      streamBatch: options?.streamBatch,
       abortSignal,
     });
     if (evaluation.kind === "busy") {
@@ -2528,13 +2581,7 @@ async function executeJobCore(
       return { status: "ok", triggerEval };
     }
     if (evaluation.message !== undefined) {
-      const payload =
-        job.payload.kind === "systemEvent"
-          ? { ...job.payload, text: `${job.payload.text}\n\n${evaluation.message}` }
-          : job.payload.kind === "agentTurn"
-            ? { ...job.payload, message: `${job.payload.message}\n\n${evaluation.message}` }
-            : job.payload;
-      effectiveJob = { ...job, payload };
+      effectiveJob = { ...job, payload: appendCronPayloadText(job.payload, evaluation.message) };
     }
   }
   if (effectiveJob.payload.kind === "script") {
@@ -2543,8 +2590,15 @@ async function executeJobCore(
       effectiveJob,
       abortSignal,
       options?.activeJobMarker,
+      options?.streamBatch,
     );
     return triggerEval ? { ...result, triggerEval } : result;
+  }
+  if (options?.streamBatch !== undefined) {
+    effectiveJob = {
+      ...effectiveJob,
+      payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
+    };
   }
   if (effectiveJob.sessionTarget === "main") {
     const result = await executeMainSessionCronJob(
@@ -2809,6 +2863,7 @@ async function executeDetachedCronJob(
   return {
     status: res.status,
     error: res.error,
+    errorClassification: res.errorClassification,
     executionStarted: res.executionStarted,
     // Forward the post-run delivery failure recorded on an otherwise
     // successful run so the service can persist it as `lastDeliveryError` and
@@ -2833,6 +2888,7 @@ async function executeScriptCronJob(
   job: CronJob,
   abortSignal: AbortSignal | undefined,
   activeJobMarker?: CronActiveJobMarker,
+  streamBatch?: string,
 ) {
   if (state.deps.cronConfig?.triggers?.enabled !== true) {
     return {
@@ -2844,7 +2900,7 @@ async function executeScriptCronJob(
   if (!state.deps.runScriptJob) {
     return { status: "error" as const, error: "cron script payload executor is unavailable" };
   }
-  const result = await state.deps.runScriptJob({ job, abortSignal });
+  const result = await state.deps.runScriptJob({ job, streamBatch, abortSignal });
   // Script runners may settle after ignoring an abort. Recheck both operator
   // cancellation and scheduler ownership before any notify/wake side effect.
   if (!isCronActiveJobMarkerCurrent(activeJobMarker)) {
@@ -2930,6 +2986,7 @@ function emitJobFinished(
     taskRunId: result.taskRunId,
     job,
     event,
+    errorClassification: result.errorClassification,
     ...(result.scriptStateChanged === true ? { scriptResult: result } : {}),
     ...(result.triggerEval ? { triggerEval: result.triggerEval } : {}),
   });

@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as assistantIdentity from "../../app/assistant-identity.ts";
+import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import {
   buildFallbackSlashCommands,
   replaceSlashCommands,
@@ -49,6 +50,92 @@ afterEach(() => {
 });
 
 describe("ChatStateController render lifecycle", () => {
+  it("rejects a run-less observer digest during an identified active run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "run-1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: "run-1",
+      observerDigest: projectedDigest,
+      requestUpdate,
+    } as unknown as ChatPageHost;
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "session.observer",
+      payload: {
+        sessionKey: projectedDigest.sessionKey,
+        revision: 2,
+        updatedAt: 2_000,
+        headline: "Run-less live status",
+        health: "stuck",
+      },
+    });
+
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the row-active observer run when attaching mid-run", () => {
+    const projectedDigest = {
+      sessionKey: "agent:main:current",
+      runId: "r1",
+      revision: 1,
+      updatedAt: 1_000,
+      headline: "Projected current status",
+      health: "on-track" as const,
+    };
+    const requestUpdate = vi.fn();
+    const state = {
+      sessionKey: projectedDigest.sessionKey,
+      assistantAgentId: "main",
+      agentsList: { defaultId: "main" },
+      chatRunId: null,
+      observerDigest: projectedDigest,
+      sessionsResult: {
+        sessions: [
+          {
+            key: projectedDigest.sessionKey,
+            hasActiveRun: true,
+            activeRunIds: ["r1"],
+          },
+        ],
+      },
+      requestUpdate,
+    } as unknown as ChatPageHost;
+    const observerEvent = (runId?: string) =>
+      ({
+        type: "event" as const,
+        event: "session.observer",
+        payload: {
+          sessionKey: projectedDigest.sessionKey,
+          ...(runId ? { runId } : {}),
+          revision: 2,
+          updatedAt: 2_000,
+          headline: `Live status ${runId ?? "without run"}`,
+          health: "grinding",
+        },
+      }) satisfies Parameters<typeof handlePageGatewayEvent>[1];
+
+    handlePageGatewayEvent(state, observerEvent());
+    handlePageGatewayEvent(state, observerEvent("r2"));
+    expect(state.observerDigest).toBe(projectedDigest);
+    expect(requestUpdate).not.toHaveBeenCalled();
+
+    handlePageGatewayEvent(state, observerEvent("r1"));
+    expect(state.observerDigest?.headline).toBe("Live status r1");
+    expect(requestUpdate).toHaveBeenCalledOnce();
+  });
+
   it("tracks waiting approval only for the selected session until resolution", () => {
     const state = {
       sessionKey: "agent:main:current",
@@ -346,6 +433,168 @@ describe("ChatStateController render lifecycle", () => {
   });
 });
 
+describe("session pull request refresh", () => {
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  function createFinalReplyState(refreshSessionPullRequests: ReturnType<typeof vi.fn>) {
+    return {
+      chatComposerFallbackByScope: {},
+      chatMessages: [],
+      chatMessagesBySession: new Map(),
+      chatQueue: [],
+      chatQueueByScope: {},
+      chatRunId: null,
+      chatSideResultTerminalRuns: new Set(),
+      chatStream: null,
+      chatStreamRenderFrame: null,
+      chatStreamSegments: [],
+      chatToolMessages: [],
+      lastError: null,
+      pendingSessionMessageReloadSessionKey: null,
+      refreshSessionPullRequests,
+      requestUpdate: vi.fn(),
+      sessionKey: "main",
+      sessions: { reconcileRunTerminal: vi.fn() },
+      settings: {},
+      toolStreamById: new Map(),
+      toolStreamOrder: [],
+    } as unknown as ChatPageHost;
+  }
+
+  it("requests an authoritative refresh after a final assistant PR link", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Opened `https://github.com/openclaw/openclaw/pull/111532`.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it("refreshes for a visible same-session final from another run", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+    state.chatRunId = "active-run";
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "announcement-run",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Opened https://github.com/openclaw/openclaw/pull/111532",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).toHaveBeenCalledWith({ refresh: true });
+  });
+
+  it("does not inspect the active stream for another run's final", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+    state.chatRunId = "active-run";
+    state.chatStream = "Opened https://github.com/openclaw/openclaw/pull/111532";
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        runId: "announcement-run",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Finished the background task." }],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh for an issue link", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey: "main",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Tracked in https://github.com/openclaw/openclaw/issues/111532.",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+
+  it("does not refresh for another session's PR announcement", () => {
+    vi.useFakeTimers();
+    const refreshSessionPullRequests = vi.fn(async () => undefined);
+    const state = createFinalReplyState(refreshSessionPullRequests);
+
+    handlePageGatewayEvent(state, {
+      type: "event",
+      event: "chat",
+      payload: {
+        state: "final",
+        sessionKey: "agent:main:other",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Opened https://github.com/openclaw/openclaw/pull/111532",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(refreshSessionPullRequests).not.toHaveBeenCalled();
+  });
+});
+
 describe("route composer fallback", () => {
   function createRouteState(chatMessage: string) {
     const resetChatInputHistoryNavigation = vi.fn();
@@ -355,6 +604,7 @@ describe("route composer fallback", () => {
       assistantAgentId: "main",
       agentsList: { defaultId: "main", mainKey: "main" },
       hello: null,
+      initialUserMessage: createInitialUserMessageHandoff(),
       sessionKey: "agent:main:first",
       chatMessage,
       chatComposerFallbackByScope: {},

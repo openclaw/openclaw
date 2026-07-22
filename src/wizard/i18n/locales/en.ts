@@ -162,8 +162,9 @@ export const en = {
       option: "{name} — {reason} (detected: {app})",
       optionThirdParty:
         "{name} — {reason} (detected: {app}) — third-party ClawHub skill; installs its publisher's code",
-      scanning:
-        "Scanning installed apps — names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations)…",
+      scanDisclosure:
+        "App names are matched with your configured model and ClawHub search (disable via wizard.appRecommendations).",
+      scanning: "Scanning installed apps…",
       select: "Install recommended plugins and skills",
       skillTrust: "Trust and install the ClawHub skill {name}?",
       skipped: "App recommendations skipped: {reason}",
@@ -352,6 +353,8 @@ export const en = {
       ttyRequired:
         "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
       welcomeTitle: "Setup choices",
+      workspaceConflictClassic:
+        "This verification run kept the configured workspace. Run `{command}` to review and explicitly approve moving the existing agent fleet.",
     },
     setup: {
       authChoiceFailedRetry: "Pick another provider or auth method, or choose Skip for now.",
@@ -414,6 +417,10 @@ export const en = {
       testAiSuccess: "AI access works. Replied in {seconds}s.",
       testAiTitle: "AI access test",
       whatSetup: "What do you want to set up?",
+      workspaceConflictConfirm: "Move the existing agent fleet to the requested workspace?",
+      workspaceConflictNotice:
+        "Existing agents currently use {current}. The requested workspace is {requested}. Changing this fleet-wide default can disconnect agents from their memory and bootstrap files.",
+      workspaceConflictTitle: "Existing agent workspace",
       workspaceDirectory: "Workspace directory",
     },
     security: {

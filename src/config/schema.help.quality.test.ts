@@ -160,24 +160,12 @@ describe("config help copy quality", () => {
     expect(/hides|hide/i.test(help)).toBe(true);
   });
 
-  it("includes concrete examples on path and interval fields", () => {
+  it("includes a concrete example on memory path fields", () => {
     expect(
       expectDefined(
         FIELD_HELP["memory.qmd.paths.pattern"],
         'FIELD_HELP["memory.qmd.paths.pattern"] test invariant',
       ).includes("**/*.md"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.interval"],
-        'FIELD_HELP["memory.qmd.update.interval"] test invariant',
-      ).includes("5m"),
-    ).toBe(true);
-    expect(
-      expectDefined(
-        FIELD_HELP["memory.qmd.update.embedInterval"],
-        'FIELD_HELP["memory.qmd.update.embedInterval"] test invariant',
-      ).includes("60m"),
     ).toBe(true);
   });
 
@@ -307,20 +295,12 @@ describe("config help copy quality", () => {
     expect(bind.includes('"tailnet"')).toBe(true);
   });
 
-  it("documents metadata/admin semantics for logging, wizard, and plugins", () => {
-    const wizardMode = expectDefined(
-      FIELD_HELP["wizard.lastRunMode"],
-      'FIELD_HELP["wizard.lastRunMode"] test invariant',
-    );
-    expect(wizardMode.includes('"local"')).toBe(true);
-    expect(wizardMode.includes('"remote"')).toBe(true);
-
+  it("documents admin semantics for logging and plugins", () => {
     const consoleStyle = expectDefined(
       FIELD_HELP["logging.consoleStyle"],
       'FIELD_HELP["logging.consoleStyle"] test invariant',
     );
     expect(consoleStyle.includes('"pretty"')).toBe(true);
-    expect(consoleStyle.includes('"compact"')).toBe(true);
     expect(consoleStyle.includes('"json"')).toBe(true);
 
     const pluginApiKey = expectDefined(
@@ -400,7 +380,6 @@ describe("config help copy quality", () => {
     );
     expect(identifierPolicy.includes('"strict"')).toBe(true);
     expect(identifierPolicy.includes('"off"')).toBe(true);
-    expect(identifierPolicy.includes('"custom"')).toBe(true);
 
     const recentTurnsPreserve = expectDefined(
       FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"],
@@ -414,16 +393,6 @@ describe("config help copy quality", () => {
       'FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"] test invariant',
     );
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
-
-    const postCompactionSections = expectDefined(
-      FIELD_HELP["agents.defaults.compaction.postCompactionSections"],
-      'FIELD_HELP["agents.defaults.compaction.postCompactionSections"] test invariant',
-    );
-    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
-    expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
-    expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
-    expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
-    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
     const compactionModel = expectDefined(
       FIELD_HELP["agents.defaults.compaction.model"],

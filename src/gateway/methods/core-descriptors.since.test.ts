@@ -9,6 +9,9 @@ const CURRENT_TRAIN_METHODS = [
   "question.list",
   "session.discussion.info",
   "session.discussion.open",
+  "board.prompt.authorize",
+  "board.data.read",
+  "board.action",
   "terminal.open",
   "terminal.input",
   "terminal.resize",
@@ -50,6 +53,7 @@ const CURRENT_TRAIN_METHODS = [
   "gateway.suspend.resume",
   "ui.command",
   "device.pair.rename",
+  "sessions.observer.ask",
 ] as const;
 
 describe("core gateway method release trains", () => {

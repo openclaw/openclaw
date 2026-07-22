@@ -11,7 +11,7 @@ import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   canvasWidgetNameForDocument,
-  mcpAppWidgetNameForToolCall,
+  mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "../../../lib/board/provider.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
@@ -23,7 +23,6 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { showToast } from "../../../lib/toast.ts";
 import type { SidebarContent } from "./chat-sidebar.ts";
-import { buildMcpAppPinDescriptor, type McpAppPinDescriptor } from "./widget-card-mcp-app.ts";
 import { exportWidget } from "./widget-export.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "./widget-theme.ts";
 
@@ -47,14 +46,15 @@ async function pinCanvasWidget(
   name: string,
 ): Promise<void> {
   const button = event.currentTarget;
-  if (!(button instanceof HTMLButtonElement) || !preview.viewId) {
+  const docId = preview.viewId?.trim();
+  if (!(button instanceof HTMLButtonElement) || !docId) {
     return;
   }
   button.disabled = true;
   button.textContent = t("chat.toolCards.pinToDashboardPending");
   try {
     await provider.pinWidget({
-      docId: preview.viewId,
+      docId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
     });
@@ -72,7 +72,7 @@ async function pinMcpAppWidget(
   preview: ToolPreview,
   provider: BoardProvider,
   name: string,
-  descriptor: McpAppPinDescriptor,
+  viewId: string,
 ): Promise<void> {
   const button = event.currentTarget;
   if (!(button instanceof HTMLButtonElement)) {
@@ -82,7 +82,7 @@ async function pinMcpAppWidget(
   button.textContent = t("chat.toolCards.pinToDashboardPending");
   try {
     await provider.pinMcpApp({
-      descriptor,
+      viewId,
       name,
       ...(preview.title?.trim() ? { title: preview.title.trim() } : {}),
     });
@@ -99,7 +99,8 @@ function canvasWidgetName(preview: ToolPreview): string | undefined {
   if (preview.boardWidgetName) {
     return preview.boardWidgetName;
   }
-  return preview.viewId ? canvasWidgetNameForDocument(preview.viewId) : undefined;
+  const viewId = preview.viewId?.trim();
+  return viewId ? canvasWidgetNameForDocument(viewId) : undefined;
 }
 
 function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
@@ -132,6 +133,7 @@ function isManagedCanvasDocumentPreview(preview: ToolPreview): boolean {
 const WIDGET_SIZE_MESSAGE_TYPE = "openclaw:widget-size";
 const WIDGET_PROMPT_OFFER_MESSAGE_TYPE = "openclaw:widget-prompt-offer";
 const WIDGET_PROMPT_MESSAGE_TYPE = "openclaw:widget-prompt";
+const WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE = "openclaw:widget-prompt-host-ready";
 const WIDGET_FRAME_MIN_HEIGHT = 160;
 const WIDGET_FRAME_MAX_HEIGHT = 1200;
 // Preview frames render inside lit shadow roots, so a document query cannot
@@ -204,6 +206,9 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
+  // The wrapper waits for this trusted adoption signal before using the
+  // legacy inline channel, so board widgets can wait for their view ticket.
+  port.postMessage({ type: WIDGET_PROMPT_HOST_READY_MESSAGE_TYPE });
 }
 
 function installWidgetPromptOfferListener() {
@@ -460,25 +465,28 @@ function renderWidgetCard(
   }
   const label = preview.title?.trim() || t("chat.toolCards.canvas");
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
-  const mcpDescriptor = options?.boardProvider
-    ? buildMcpAppPinDescriptor(preview, options.boardProvider.sessionKey)
-    : undefined;
+  const provider = options?.boardProvider;
+  const mcpAppViewId = preview.mcpApp?.viewId?.trim();
   const pinName = preview.mcpApp
-    ? mcpDescriptor
-      ? mcpAppWidgetNameForToolCall(mcpDescriptor.toolCallId)
+    ? mcpAppViewId
+      ? mcpAppWidgetNameForViewId(mcpAppViewId)
       : undefined
     : canvasWidgetName(preview);
-  const pinned = Boolean(
-    pinName &&
-    options?.boardProvider?.snapshot$.value.widgets.some((widget) => widget.name === pinName),
-  );
+  const pinnedWidget = pinName
+    ? provider?.snapshot$.value.widgets.find((widget) => widget.name === pinName)
+    : undefined;
+  const pinned = Boolean(pinnedWidget);
+  // Chat keeps its labeled card shell, but the inner inset follows the pinned
+  // widget's presentation so authored edge-to-edge content matches the board.
+  const bleed = pinned && (pinnedWidget?.presentation ?? "card") !== "card";
   const pinAction =
-    options?.boardProvider?.canPinWidgets &&
+    provider &&
+    (contentKind === "mcp-app" ? provider.canPinMcpApps : provider.canPinWidgets) &&
     pinName &&
     ((contentKind === "canvas-html" &&
       preview.sandbox === "scripts" &&
       isManagedCanvasDocumentPreview(preview)) ||
-      (contentKind === "mcp-app" && mcpDescriptor))
+      (contentKind === "mcp-app" && mcpAppViewId))
       ? html`<button
           class="chat-tool-card__widget-action"
           type="button"
@@ -490,9 +498,9 @@ function renderWidgetCard(
             pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard",
           )}
           @click=${(event: Event) =>
-            contentKind === "mcp-app" && mcpDescriptor
-              ? void pinMcpAppWidget(event, preview, options.boardProvider!, pinName, mcpDescriptor)
-              : void pinCanvasWidget(event, preview, options.boardProvider!, pinName)}
+            contentKind === "mcp-app" && mcpAppViewId
+              ? void pinMcpAppWidget(event, preview, provider, pinName, mcpAppViewId)
+              : void pinCanvasWidget(event, preview, provider, pinName)}
         >
           ${t(pinned ? "chat.toolCards.pinnedToDashboard" : "chat.toolCards.pinToDashboard")}
         </button>`
@@ -506,7 +514,7 @@ function renderWidgetCard(
           ${renderWidgetActions(preview)}
         </div>
       </div>
-      <div class="chat-tool-card__preview-panel" data-side="canvas">
+      <div class="chat-tool-card__preview-panel" data-side="canvas" ?data-bleed=${bleed}>
         ${renderWidgetContent(contentKind, preview, options)}
       </div>
     </div>

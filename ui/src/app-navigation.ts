@@ -1,3 +1,4 @@
+import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 // Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type { IconName } from "./components/icons.ts";
@@ -50,6 +51,7 @@ export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
 
 export type SidebarZoneEntry =
   | { type: "route"; route: SidebarNavRoute }
+  | { type: "workboard"; boardId: string }
   | { type: "session"; key: string };
 
 // Keep the highest-value operational destinations visible on first use. Users
@@ -75,11 +77,18 @@ export function parseSidebarEntry(value: unknown): SidebarZoneEntry | null {
     const key = value.slice("session:".length).trim();
     return key ? { type: "session", key } : null;
   }
+  if (value.startsWith("workboard:")) {
+    const boardId = value.slice("workboard:".length).trim();
+    return isValidWorkboardBoardId(boardId) ? { type: "workboard", boardId } : null;
+  }
   return null;
 }
 
 export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
-  return entry.type === "route" ? `route:${entry.route}` : `session:${entry.key}`;
+  if (entry.type === "route") {
+    return `route:${entry.route}`;
+  }
+  return entry.type === "workboard" ? `workboard:${entry.boardId}` : `session:${entry.key}`;
 }
 
 /**
@@ -200,7 +209,7 @@ const NAVIGATION_ICONS: NavigationItem = {
   agents: "bot",
   activity: "activity",
   apps: "layoutGrid",
-  approvals: "shieldCheck",
+  approvals: "badgeCheck",
   workboard: "kanban",
   worktrees: "folder",
   channels: "link",
@@ -216,19 +225,19 @@ const NAVIGATION_ICONS: NavigationItem = {
   chat: "messageSquare",
   custodian: "lobster",
   config: "settings",
-  profile: "lobster",
+  profile: "circleUser",
   communications: "send",
-  appearance: "spark",
+  appearance: "palette",
   automation: "terminal",
   mcp: "wrench",
   infrastructure: "globe",
-  labs: "spark",
+  labs: "flaskConical",
   about: "fileText",
   "ai-agents": "brain",
   "model-setup": "spark",
   "model-providers": "plug",
   "memory-import": "download",
-  notifications: "send",
+  notifications: "bell",
   security: "shieldCheck",
   advanced: "fileCode",
   debug: "bug",
@@ -330,13 +339,16 @@ const NAVIGATION_COPY: Record<NavigationRouteId, { titleKey: string; subtitleKey
   "ai-agents": { titleKey: "tabs.aiAgents", subtitleKey: "subtitles.aiAgents" },
   "model-setup": { titleKey: "tabs.modelSetup", subtitleKey: "subtitles.modelSetup" },
   "model-providers": {
-    titleKey: "tabs.modelProviders",
+    titleKey: "routeTitles.modelProviders",
     subtitleKey: "subtitles.modelProviders",
   },
   "memory-import": { titleKey: "tabs.memoryImport", subtitleKey: "subtitles.memoryImport" },
-  notifications: { titleKey: "tabs.notifications", subtitleKey: "subtitles.notifications" },
+  notifications: {
+    titleKey: "routeTitles.notifications",
+    subtitleKey: "subtitles.notifications",
+  },
   security: { titleKey: "tabs.security", subtitleKey: "subtitles.security" },
-  advanced: { titleKey: "tabs.advanced", subtitleKey: "subtitles.advanced" },
+  advanced: { titleKey: "routeTitles.advanced", subtitleKey: "subtitles.advanced" },
   debug: { titleKey: "tabs.debug", subtitleKey: "subtitles.debug" },
   logs: { titleKey: "tabs.logs", subtitleKey: "subtitles.logs" },
   plugin: { titleKey: "tabs.plugin", subtitleKey: "subtitles.plugin" },

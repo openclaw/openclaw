@@ -1686,6 +1686,8 @@
                     "group": "Protocols and APIs",
                     "pages": [
                       "gateway/protocol",
+                      "gateway/clients",
+                      "gateway/embedding",
                       "gateway/bridge-protocol",
                       "gateway/openai-http-api",
                       "gateway/openresponses-http-api",
@@ -1756,6 +1758,7 @@
                   "web/index",
                   "web/control-ui",
                   "web/dashboard",
+                  "web/dashboards",
                   "web/dashboard-architecture",
                   "web/webchat",
                   "web/tui",
@@ -1798,6 +1801,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/claws",
                       "cli/audit",
                       "cli/hooks",
                       "cli/infer",

@@ -54,6 +54,11 @@ export type ControlUiMockGatewayScenario = {
     label: string;
     pluginId: string;
   }>;
+  controlUiWidgetKinds?: Array<{
+    kind: string;
+    label: string;
+    pluginId: string;
+  }>;
   featureCapabilities?: string[];
   defaultAgentId?: string;
   deferredMethods?: string[];
@@ -79,7 +84,7 @@ export type ControlUiMockGatewayScenario = {
   }>;
   /** Subscription-scoped Gateway events replayed on a fixed browser-side cycle. */
   repeatingSessionEvents?: {
-    events: Array<{ event: "agent" | "session.tool"; payload: unknown }>;
+    events: Array<{ event: "agent" | "session.observer" | "session.tool"; payload: unknown }>;
     intervalMs?: number;
   };
   /** Session run state served alongside history (hasActiveRun/activeRunIds). */
@@ -96,6 +101,7 @@ export type ControlUiMockGatewayScenario = {
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   terminalEnabled?: boolean;
+  workspace?: string;
   workspaceGit?: boolean;
 };
 
@@ -270,6 +276,7 @@ function normalizeScenario(
     assistantName: scenario.assistantName?.trim() || "OpenClaw",
     basePath,
     controlUiTabs: scenario.controlUiTabs ?? [],
+    controlUiWidgetKinds: scenario.controlUiWidgetKinds ?? [],
     featureCapabilities: scenario.featureCapabilities ?? [],
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
@@ -287,6 +294,7 @@ function normalizeScenario(
     sessionKey,
     sessionGroups: scenario.sessionGroups ?? [],
     terminalEnabled: scenario.terminalEnabled ?? false,
+    workspace: scenario.workspace ?? "",
     workspaceGit: scenario.workspaceGit ?? false,
   };
 }
@@ -845,6 +853,7 @@ function installControlUiMockGateway(input: {
             methods: scenario.featureMethods,
           },
           controlUiTabs: scenario.controlUiTabs,
+          controlUiWidgetKinds: scenario.controlUiWidgetKinds,
           protocol: protocolVersion,
           server: { connId: "control-ui-e2e", version: "e2e" },
           snapshot: {
@@ -872,6 +881,7 @@ function installControlUiMockGateway(input: {
               id: scenario.defaultAgentId,
               identity: { name: scenario.assistantName },
               name: scenario.assistantName,
+              ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
               workspaceGit: scenario.workspaceGit,
             },
           ],
@@ -923,6 +933,7 @@ function installControlUiMockGateway(input: {
                 id: scenario.defaultAgentId,
                 identity: { name: scenario.assistantName },
                 name: scenario.assistantName,
+                ...(scenario.workspace ? { workspace: scenario.workspace } : {}),
                 workspaceGit: scenario.workspaceGit,
               },
             ],

@@ -3,6 +3,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { SIDEBAR_NAV_ROUTES, serializeSidebarEntry } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
   isCronSessionKey,
   resolveChannelSessionInfo,
@@ -34,11 +35,11 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import { AppSidebarSessionAttentionElement } from "./app-sidebar-session-attention.ts";
 import {
   adoptedCatalogSessionKeys,
   formatSidebarTimestamp,
 } from "./app-sidebar-session-catalogs.ts";
+import { AppSidebarSessionProjectionElement } from "./app-sidebar-session-projection.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
   limitSidebarSessionRows,
@@ -47,17 +48,15 @@ import {
   SIDEBAR_AGENT_SESSION_LIST_LIMIT,
   SIDEBAR_SESSION_PAGE_SIZE,
   type SidebarRecentSession,
-  type SidebarSessionSortMode,
 } from "./app-sidebar-session-types.ts";
 import { isStoppableCloudWorkerPlacement } from "./session-row-badges.ts";
 
 /** Session-row projection, selection, sorting, and agent scope navigation. */
-export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionAttentionElement {
+export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessionProjectionElement {
   @state() protected selectedSessionKeys: ReadonlySet<string> = new Set();
   @state() protected expandedChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected collapsedActiveChildSessionKeys: ReadonlySet<string> = new Set();
   @state() protected fullyShownChildSessionKeys: ReadonlySet<string> = new Set();
-  @state() protected sessionSortMode: SidebarSessionSortMode = "created";
   @state() protected sessionsGrouping: SidebarSessionsGrouping =
     loadStoredSidebarSessionsGrouping();
   @state() protected sessionsShowCron = loadStoredSidebarSessionsShowCron();
@@ -109,35 +108,12 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     }
   }
 
-  protected getRouteSessionKey(): string {
-    return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
+  protected projectSidebarSession(row: GatewaySessionRow): SidebarRecentSession {
+    return this.getSessionNavigationState().toSidebarSession(row);
   }
 
-  private readonly compareSidebarSessionRows = (
-    a: SessionsListResult["sessions"][number],
-    b: SessionsListResult["sessions"][number],
-  ) => {
-    if (this.sessionSortMode === "updated") {
-      return compareSessionRowsByUpdatedAt(a, b);
-    }
-    return (
-      (this.sessionCreatedOrder.get(a.key) ?? Number.MAX_SAFE_INTEGER) -
-      (this.sessionCreatedOrder.get(b.key) ?? Number.MAX_SAFE_INTEGER)
-    );
-  };
-
-  protected promoteCreatedSession(sessionKey: string) {
-    const currentOrder = this.sessionCreatedOrder.get(sessionKey);
-    if (currentOrder === 0) {
-      return;
-    }
-    for (const [key, order] of this.sessionCreatedOrder) {
-      if (key !== sessionKey && (currentOrder === undefined || order < currentOrder)) {
-        this.sessionCreatedOrder.set(key, order + 1);
-      }
-    }
-    this.sessionCreatedOrder.set(sessionKey, 0);
-    this.requestUpdate();
+  protected getRouteSessionKey(): string {
+    return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
   protected getSessionNavigationState() {
@@ -177,6 +153,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         active: row.key === navigation.activeRowKey,
         visuallyActive: highlightCurrentSession && row.key === navigation.currentSessionKey,
         hasActiveRun: Boolean(row.hasActiveRun),
+        activeRunIds: row.activeRunIds,
         modelSelectionLocked: row.modelSelectionLocked === true,
         kind: row.kind,
         pinned: row.pinned === true,
@@ -188,11 +165,21 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         acpSession: isAcpSessionKey(row.key),
         worktreeId: row.worktree?.id,
         placementState: row.placement?.state,
+        workspaceConflictCount:
+          row.placement && "workspaceResultConflict" in row.placement
+            ? Math.max(
+                row.placement.workspaceResultConflict?.paths.length ?? 0,
+                row.placement.workspaceResultConflict?.totalCount ?? 0,
+              ) || undefined
+            : undefined,
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
+        pullRequest: context?.sessions.pullRequestSummary(row.key),
         unread: row.unread === true,
+        lastReadAt: row.lastReadAt,
         attention: this.resolveSessionAttention(row),
         agentStatusNote: this.resolveSessionAgentStatus(row)?.note,
+        observerDigest: row.observerDigest,
         spawnedBy: row.spawnedBy,
         status: row.status,
         startedAt: row.startedAt,
@@ -283,10 +270,14 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
       pinnedRows,
       SIDEBAR_NAV_ROUTES,
       knownUnpinnedKeys,
+      this.workboardBoards,
+      this.enabledRouteIds?.includes("workboard") ?? true,
+      this.workboardBoardsReady,
     );
     return {
       ...reconciled,
       sessionRows: new Map(pinnedRows.map((row) => [row.key, row])),
+      workboardRows: new Map(this.workboardBoards.map((board) => [board.id, board])),
     };
   }
 
@@ -440,10 +431,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
   }
 
   protected activeChipAgent() {
-    const agents = this.context?.agents.state.agentsList?.agents ?? [];
+    const roster = this.context?.agents.state.agentsList?.agents ?? [];
     const activeId = this.expandedAgentId();
-    const agent = agents.find((entry) => normalizeAgentId(entry.id) === activeId);
-    return { activeId, agent, agents };
+    const agent = roster.find((entry) => normalizeAgentId(entry.id) === activeId);
+    return { activeId, agent, agents: listSelectableAgents(roster) };
   }
 
   /** Newest visible session for an agent; the chip menu resumes here. */

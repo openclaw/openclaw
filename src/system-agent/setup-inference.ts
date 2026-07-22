@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentEntries,
+  resolveAgentEffectiveModelPrimary,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { normalizeAuthProfileCredential } from "../agents/auth-profiles/credential-normalize.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import {
@@ -281,6 +285,7 @@ type SetupInferenceRunEmbeddedAgent = (
   params: Parameters<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>[0] & {
     onSuccessfulAuthBinding?: (binding: AgentExecutionAuthBinding) => void;
     authProfileStateMode?: "read-write" | "read-only";
+    preparedModelRuntimeMode?: "isolated-read-only";
   },
 ) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
 
@@ -804,7 +809,9 @@ function projectSetupTargetModelMetadata(config: OpenClawConfig, modelRef: strin
       ]),
     );
   const defaultAgentId = resolveDefaultAgentId(config);
-  const agent = config.agents?.list?.find((entry) => normalizeAgentId(entry.id) === defaultAgentId);
+  const agent = listAgentEntries(config).find(
+    (entry) => normalizeAgentId(entry.id) === defaultAgentId,
+  );
   return {
     defaultAgentId,
     defaults: project(config.agents?.defaults?.models),
@@ -908,30 +915,27 @@ function copySelectedModelMetadata(params: {
   }
 
   const defaultAgentId = resolveDefaultAgentId(params.target);
-  const preparedAgent = params.prepared.agents?.list?.find((agent) => agent.id === defaultAgentId);
+  const preparedAgent = listAgentEntries(params.prepared).find(
+    (agent) => normalizeAgentId(agent.id) === defaultAgentId,
+  );
   if (!preparedAgent?.models || !Object.hasOwn(preparedAgent.models, params.modelRef)) {
     return;
   }
-  const targetAgents = params.target.agents?.list;
-  const targetAgentIndex = targetAgents?.findIndex((agent) => agent.id === defaultAgentId) ?? -1;
-  if (!targetAgents || targetAgentIndex < 0) {
-    return;
-  }
-  const nextAgents = structuredClone(targetAgents);
-  const targetAgent = expectDefined(
-    nextAgents[targetAgentIndex],
-    "next agents entry at target agent index",
+  const targetEntryKey = Object.keys(params.target.agents?.entries ?? {}).find(
+    (agentId) => normalizeAgentId(agentId) === defaultAgentId,
   );
-  if (!targetAgent) {
+  if (!targetEntryKey || !params.target.agents?.entries?.[targetEntryKey]) {
     return;
   }
+  const nextEntries = structuredClone(params.target.agents.entries);
+  const targetAgent = expectDefined(nextEntries[targetEntryKey], "target agent entry");
   targetAgent.models = {
     ...targetAgent.models,
     [params.modelRef]: structuredClone(
       expectDefined(preparedAgent.models[params.modelRef], "models entry at params.model ref"),
     ),
   };
-  params.target.agents = { ...params.target.agents, list: nextAgents };
+  params.target.agents = { ...params.target.agents, entries: nextEntries };
 }
 
 function findSelectedProviderConfigKey(
@@ -3175,7 +3179,7 @@ function configReferencesManualAuthProfiles(
   if (modelSelectionReferencesProfile(config.agents?.defaults?.model, profileIds)) {
     return true;
   }
-  return (config.agents?.list ?? []).some((agent) =>
+  return listAgentEntries(config).some((agent) =>
     modelSelectionReferencesProfile(agent.model, profileIds),
   );
 }
@@ -3411,6 +3415,7 @@ async function runSetupInferenceTest(params: {
           ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
           : {}),
         authProfileStateMode,
+        preparedModelRuntimeMode: "isolated-read-only",
         ...(plan.cleanupBundleMcpOnRunEnd ? { cleanupBundleMcpOnRunEnd: true } : {}),
         ...(plan.agentHarnessRuntimeOverride
           ? { agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride }

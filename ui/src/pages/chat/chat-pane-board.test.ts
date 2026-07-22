@@ -345,6 +345,89 @@ describe("chat pane board shell", () => {
     expect(pane.resolveBoardProvider().snapshot$.value.sessionKey).toBe("agent:work:primary");
   });
 
+  it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
+    window.history.replaceState({}, "", "/");
+    const cases = [
+      { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
+      { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
+      {
+        suffix: "complete",
+        methods: ["board.get", "board.widget.appView", "board.widget.put"],
+        expected: true,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const pane = createTestPane();
+      const sessionKey = `agent:main:${testCase.suffix}`;
+      const client = {
+        request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
+        addEventListener: vi.fn(() => () => {}),
+      } as unknown as GatewayBrowserClient;
+      pane.state.sessionKey = sessionKey;
+      pane.context = {
+        ...pane.context,
+        gateway: {
+          ...pane.context.gateway,
+          snapshot: {
+            client,
+            connected: true,
+            hello: { features: { methods: testCase.methods } },
+          } as never,
+        },
+      };
+
+      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+    }
+  });
+
+  it.each([
+    {
+      profile: "read-only",
+      scopes: ["operator.read"],
+      canMutate: false,
+      canGrant: false,
+    },
+    {
+      profile: "writer with approvals",
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+      canMutate: true,
+      canGrant: true,
+    },
+  ])("derives board actions from the $profile connection scopes", (profile) => {
+    window.history.replaceState({}, "", "/");
+    const pane = createTestPane();
+    const sessionKey = `agent:main:scope-${profile.profile.replaceAll(" ", "-")}`;
+    const client = {
+      request: vi.fn(async () => ({ sessionKey, revision: 0, tabs: [], widgets: [] })),
+      addEventListener: vi.fn(() => () => {}),
+    } as unknown as GatewayBrowserClient;
+    pane.state.sessionKey = sessionKey;
+    pane.context = {
+      ...pane.context,
+      gateway: {
+        ...pane.context.gateway,
+        snapshot: {
+          client,
+          connected: true,
+          hello: {
+            auth: { role: "operator", scopes: profile.scopes },
+            features: {
+              methods: ["board.get", "board.widget.appView", "board.widget.put"],
+              capabilities: ["board-widget-put-canvas-doc"],
+            },
+          },
+        } as never,
+      },
+    };
+
+    const provider = pane.resolveBoardProvider();
+    expect(provider.canMutate).toBe(profile.canMutate);
+    expect(provider.canGrant).toBe(profile.canGrant);
+    expect(provider.canPinWidgets).toBe(profile.canMutate);
+    expect(provider.canPinMcpApps).toBe(profile.canMutate);
+  });
+
   it("uses the side dock width for rail and detail breakpoints", () => {
     expect(
       resolveBoardChatLayoutWidth({

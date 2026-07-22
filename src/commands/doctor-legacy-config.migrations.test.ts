@@ -5,6 +5,8 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { validateConfigObject } from "../config/validation.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { maybeRepairCodexRoutes } from "./doctor/shared/codex-route-warnings.js";
 import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
 import { LEGACY_CONFIG_MIGRATIONS } from "./doctor/shared/legacy-config-migrations.js";
@@ -163,6 +165,7 @@ describe("normalizeCompatibilityConfigValues", () => {
   });
 
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     fs.rmSync(tempOauthDir, { recursive: true, force: true });
     fs.mkdirSync(tempOauthDir, { recursive: true });
   });
@@ -439,6 +442,101 @@ describe("normalizeCompatibilityConfigValues", () => {
     );
   });
 
+  it("defers the whole promotion for uncovered keys on an undeclared channel", () => {
+    const config = {
+      channels: {
+        "uninstalled-demo": {
+          dmPolicy: "allowlist",
+          appToken: "covered-legacy-key",
+          customAuth: "keep-at-root",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config).toEqual(config);
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("promotes the legacy tier when a loaded adapter is undeclared", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "undeclared-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "undeclared-demo", label: "Undeclared Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "undeclared-demo": {
+          dmPolicy: "allowlist",
+          appToken: "legacy-app-token",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["undeclared-demo"] as
+      | { dmPolicy?: string; appToken?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.appToken).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      appToken: "legacy-app-token",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
+  });
+
+  it("promotes generic and declared keys together after the plugin becomes available", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "late-demo",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "late-demo", label: "Late Demo" }),
+            setup: {
+              applyAccountConfig: ({ cfg }: { cfg: OpenClawConfig }) => cfg,
+              singleAccountKeysToMove: ["customAuth"],
+            },
+          },
+        },
+      ]),
+    );
+
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        "late-demo": {
+          dmPolicy: "allowlist",
+          customAuth: "move-with-plugin",
+          accounts: { work: { enabled: true } },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const channel = res.config.channels?.["late-demo"] as
+      | { dmPolicy?: string; customAuth?: string; accounts?: Record<string, unknown> }
+      | undefined;
+    expect(channel?.dmPolicy).toBeUndefined();
+    expect(channel?.customAuth).toBeUndefined();
+    expect(channel?.accounts?.default).toEqual({
+      dmPolicy: "allowlist",
+      customAuth: "move-with-plugin",
+    });
+    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
+  });
+
   it.each(["discord", "slack", "telegram", "signal", "imessage", "irc"])(
     "preserves inherited %s access policy when seeding accounts.default",
     (channelId) => {
@@ -616,7 +714,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "google/gemini-3-pro-image-preview",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
@@ -630,7 +728,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.mediaModels.image.primary (google/gemini-3-pro-image-preview).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);
@@ -1501,8 +1599,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {
         defaults: {
-          imageGenerationModel: {
-            primary: "fal/fal-ai/flux/dev",
+          mediaModels: {
+            image: { primary: "fal/fal-ai/flux/dev" },
           },
         },
       },
@@ -1525,7 +1623,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       },
     });
 
-    expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(res.config.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "fal/fal-ai/flux/dev",
     });
     expect(res.config.models?.providers?.google?.apiKey).toBe("existing-google-key");
@@ -2054,6 +2152,35 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Normalized models.providers.mistral.models[0].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
       "Normalized models.providers.mistral.models[1].maxTokens (128000 → 40000) to avoid Mistral context-window rejects.",
       "Normalized models.providers.mistral.models[1].cost.cacheRead (0 → 0.05) for Mistral prompt-cache billing.",
+    ]);
+  });
+
+  it("caps explicit mistral maxTokens above the named model limit", () => {
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://api.mistral.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "mistral-large-latest",
+                name: "Mistral Large",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0.05, cacheWrite: 0 },
+                contextWindow: 32_768,
+                maxTokens: 17_000,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config.models?.providers?.mistral?.models?.[0]?.maxTokens).toBe(16_384);
+    expect(res.changes).toEqual([
+      "Normalized models.providers.mistral.models[0].maxTokens (17000 → 16384) to avoid Mistral context-window rejects.",
     ]);
   });
 

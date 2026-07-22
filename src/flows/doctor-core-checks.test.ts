@@ -1,7 +1,7 @@
 // Doctor core checks tests cover core doctor checks and repair hints.
 import { promises as fs } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
@@ -638,7 +638,6 @@ describe("CORE_HEALTH_CHECKS", () => {
               command: "/bin/sh",
               args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
               jsonOnly: false,
-              allowInsecurePath: true,
             },
           },
         },
@@ -690,8 +689,7 @@ describe("CORE_HEALTH_CHECKS", () => {
               command: process.execPath,
               args: [resolverPath, markerPath],
               jsonOnly: false,
-              allowInsecurePath: true,
-              allowSymlinkCommand: true,
+              trustedDirs: [dirname(process.execPath), tmp],
             },
           },
         },
@@ -737,8 +735,7 @@ describe("CORE_HEALTH_CHECKS", () => {
                 command: process.execPath,
                 args: [resolverPath],
                 jsonOnly: false,
-                allowInsecurePath: true,
-                allowSymlinkCommand: true,
+                trustedDirs: [dirname(process.execPath), tmp!],
               },
             },
           },
