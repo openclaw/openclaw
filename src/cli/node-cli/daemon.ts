@@ -17,6 +17,10 @@ import {
   buildPlatformServiceStartHints,
 } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import {
+  isSystemdUserServiceAvailable,
+  readSystemdUserLingerStatus,
+} from "../../daemon/systemd.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
@@ -68,6 +72,30 @@ function renderNodeServiceStartHints(): string[] {
     systemdServiceName: resolveNodeSystemdServiceName(),
     windowsTaskName: resolveNodeWindowsTaskName(),
   });
+}
+
+async function checkSystemdLingerForNodeInstall(warnings: string[], json: boolean): Promise<void> {
+  if (process.platform !== "linux") {
+    return;
+  }
+  const available = await isSystemdUserServiceAvailable().catch(() => false);
+  if (!available) {
+    return;
+  }
+  const status = await readSystemdUserLingerStatus(process.env).catch(() => null);
+  if (!status || status.linger === "yes") {
+    return;
+  }
+  const cmd = `sudo loginctl enable-linger ${status.user}`;
+  const message =
+    `Systemd lingering is not enabled for user ${status.user}. ` +
+    `The node service will stop when you log out. ` +
+    `Run \`${cmd}\` to keep the service alive after logout.`;
+  if (json) {
+    warnings.push(message);
+  } else {
+    defaultRuntime.log(message);
+  }
 }
 
 function buildNodeRuntimeHints(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -180,6 +208,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       defaultRuntime.log(message);
     }
   };
+
+  // Check systemd lingering before emitting terminal success so the warning
+  // is included in the JSON/text response, not logged after the emitted output.
+  await checkSystemdLingerForNodeInstall(warnings, json);
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",

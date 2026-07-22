@@ -131,6 +131,10 @@ openclaw node restart
 
 `node install` also accepts `--context-path`, `--tls`, `--tls-fingerprint`, `--node-id` (legacy client instance ID only), `--share-installed-apps` / `--no-share-installed-apps`, `--runtime <node>` (default: node), and `--force` to reinstall. `node status`, `node stop`, and `node uninstall` are also available.
 
+<Warning>
+On Linux, `openclaw node install` creates a **user-level** systemd service. Without lingering, systemd stops all user services when you log out. Run `sudo loginctl enable-linger <user>` after installing to keep the node alive after SSH logout. `openclaw node install` prints a warning if lingering is not detected.
+</Warning>
+
 ### Pair + name
 
 On the gateway host:
