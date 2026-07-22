@@ -243,11 +243,16 @@ function getSilentLeadingAttachedRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token where the final token
-  // is glued directly to visible word-start content (for example
-  // `NO_REPLYhello`), without treating punctuation-start text like
-  // `NO_REPLY: explanation` as a silent prefix.
-  const regex = new RegExp(`^\\s*(?:${escaped}\\s+)*${escaped}(?=[\\p{L}\\p{N}])`, "iu");
+  // Match one or more leading occurrences of the token when the final token is
+  // either glued to word-start content (`NO_REPLYhello`) or separated from it by
+  // whitespace/newlines (`NO_REPLY\n\nWait`). Preserve punctuation-start
+  // substantive forms such as `NO_REPLY: explanation` and `NO_REPLY -- nope`.
+  // Without the whitespace branch, newline-separated leading sentinels fall
+  // through both glued-leading and trailing-only strippers and leak to channels.
+  const regex = new RegExp(
+    `^\\s*(?:${escaped}\\s+)*${escaped}(?:(?=[\\p{L}\\p{N}])|\\s+(?=[\\p{L}\\p{N}]))`,
+    "iu",
+  );
   silentLeadingAttachedRegexByToken.set(token, regex);
   return regex;
 }
@@ -266,8 +271,8 @@ function getSilentLeadingRegex(token: string): RegExp {
 
 /**
  * Strip leading silent reply tokens from text.
- * Handles cases like "NO_REPLYThe user is saying..." where the token
- * is not separated from the following text.
+ * Handles glued forms (`NO_REPLYThe user…`) and whitespace/newline-separated
+ * forms (`NO_REPLY\n\nWait…`) when paired with startsWithSilentToken.
  */
 export function stripLeadingSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
   return text.replace(getSilentLeadingRegex(token), "").trim();
@@ -275,7 +280,8 @@ export function stripLeadingSilentToken(text: string, token: string = SILENT_REP
 
 /**
  * Check whether text starts with one or more leading silent reply tokens where
- * the final token is glued directly to visible content.
+ * the final token is followed by visible word-start content, either glued or
+ * separated by whitespace/newlines.
  */
 export function startsWithSilentToken(
   text: string | undefined,

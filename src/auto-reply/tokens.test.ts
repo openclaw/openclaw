@@ -266,6 +266,14 @@ describe("stripLeadingSilentToken", () => {
   it("strips glued leading token text", () => {
     expect(stripLeadingSilentToken("NO_REPLYThe user is saying")).toBe("The user is saying");
   });
+
+  it("strips newline-separated leading token text (#103735)", () => {
+    expect(
+      stripLeadingSilentToken(
+        "NO_REPLY\n\nWait — the user mentioned me directly.\n\nHi! How can I help?",
+      ),
+    ).toBe("Wait — the user mentioned me directly.\n\nHi! How can I help?");
+  });
 });
 
 describe("startsWithSilentToken", () => {
@@ -273,6 +281,12 @@ describe("startsWithSilentToken", () => {
     expect(startsWithSilentToken("NO_REPLYThe user is saying")).toBe(true);
     expect(startsWithSilentToken("No_RePlYThe user is saying")).toBe(true);
     expect(startsWithSilentToken("no_replyThe user is saying")).toBe(true);
+  });
+
+  it("matches whitespace- or newline-separated leading tokens before word content (#103735)", () => {
+    expect(startsWithSilentToken("NO_REPLY\n\nWait — the user mentioned me")).toBe(true);
+    expect(startsWithSilentToken("NO_REPLY\nHi!")).toBe(true);
+    expect(startsWithSilentToken("no_reply  Hello")).toBe(true);
   });
 
   it("rejects separated substantive prefixes and exact-token-only text", () => {

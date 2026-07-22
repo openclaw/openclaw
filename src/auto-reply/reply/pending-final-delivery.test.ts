@@ -42,6 +42,14 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK NO_REPLY")).toBe("HEARTBEAT_OK");
   });
 
+  it("strips newline-separated leading NO_REPLY like normal delivery (#103735)", () => {
+    expect(
+      sanitizePendingFinalDeliveryText(
+        "NO_REPLY\n\nWait — the user mentioned me directly.\n\nHi! How can I help?",
+      ),
+    ).toBe("Wait — the user mentioned me directly.\n\nHi! How can I help?");
+  });
+
   it("preserves heartbeat ack text for ack-aware classification", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK short")).toBe("HEARTBEAT_OK short");
   });
