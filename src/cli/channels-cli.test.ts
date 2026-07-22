@@ -5,10 +5,10 @@ import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
-  registerChannelsCli,
   resolveChannelsAddChannelFromArgv,
   resolveChannelsAddOptions,
-} from "./channels-cli.js";
+} from "./channels-cli-add-args.js";
+import { registerChannelsCli } from "./channels-cli.js";
 
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
   vi.fn<() => readonly PluginPackageChannel[]>(() => []),
@@ -25,7 +25,6 @@ const runtimeMock = vi.hoisted(() => ({
 
 vi.mock("../plugins/bundled-package-channel-metadata.js", () => ({
   listBundledPackageChannelMetadata: listBundledPackageChannelMetadataMock,
-  listPackageChannelMetadata: listBundledPackageChannelMetadataMock,
 }));
 
 vi.mock("../channels/plugins/catalog.js", () => ({

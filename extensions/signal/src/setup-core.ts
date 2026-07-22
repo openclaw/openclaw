@@ -137,8 +137,8 @@ function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: 
 export function buildSignalSetupPatch(input: SignalSetupInput) {
   const transport = input.httpUrl
     ? {
-        // Bare --http-url is classified once by prepareAccountConfigInput. If that setup-time
-        // probe is inconclusive, external-native remains the shipped compatibility fallback.
+        // Bare --http-url is classified once by prepareAccountConfigInput. Keep the historical
+        // external-native default for direct adapter callers that already bypass preparation.
         kind: input.signalTransport ?? ("external-native" as const),
         url: normalizeSignalTransportUrl(input.httpUrl),
       }
@@ -180,10 +180,15 @@ async function prepareSignalSetupInput(params: {
       signalTransport: detected.kind === "container" ? "container" : "external-native",
     };
   } catch {
-    // Leave the kind unset on an inconclusive probe: applyAccountConfig then
-    // preserves an existing container/external kind for URL-only edits, and
-    // buildSignalSetupPatch still defaults fresh accounts to external-native.
-    return params.input;
+    const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
+    if (existing?.kind === "container" || existing?.kind === "external-native") {
+      // Leave the kind unset so applyAccountConfig preserves the established protocol while
+      // changing only its URL. A fresh account has no such fact and must choose explicitly.
+      return params.input;
+    }
+    throw new Error(
+      "Signal could not detect the HTTP transport; start the endpoint or pass --signal-transport external-native|container.",
+    );
   }
 }
 

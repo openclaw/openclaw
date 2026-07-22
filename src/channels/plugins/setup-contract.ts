@@ -2,10 +2,9 @@ import { Option } from "commander";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { ChannelSetupAdapter } from "./types.adapters.js";
-import type { ChannelSetupInput } from "./types.core.js";
+import type { ChannelSetupInput } from "./setup-input.js";
 
-export type ChannelSetupCliOption = {
+type ChannelSetupCliOption = {
   flags: string;
   negatedFlags?: string;
   description: string;
@@ -40,7 +39,7 @@ type ChannelSetupChoiceField<Choices extends readonly string[] = readonly string
   cli: ChannelSetupCliOption;
 };
 
-export type ChannelSetupField =
+type ChannelSetupField =
   | ChannelSetupStringField
   | ChannelSetupBooleanField
   | ChannelSetupIntegerField
@@ -89,24 +88,22 @@ type ChannelSetupFieldValue<Field extends ChannelSetupField> = Field extends {
         ? Choices[number]
         : string;
 
-export type ChannelSetupInputForFields<Fields extends Record<string, ChannelSetupField>> = {
+type ChannelSetupInputForFields<Fields extends Record<string, ChannelSetupField>> = {
   name?: string;
 } & {
   [Key in keyof Fields]?: ChannelSetupFieldValue<Fields[Key]>;
 };
 
-export type ChannelSetupParseResult = { ok: true; value: unknown } | { ok: false; error: string };
-
-export type TypedChannelSetupAdapter<Input extends { name?: string }> = ChannelSetupAdapter<Input>;
+type ChannelSetupParseResult = { ok: true; value: unknown } | { ok: false; error: string };
 
 type ChannelSetupContractAdapterParams<Fields extends Record<string, ChannelSetupField>> =
   | {
-      adapter: TypedChannelSetupAdapter<ChannelSetupInputForFields<Fields>>;
+      adapter: ChannelOwnedSetupAdapterShape<ChannelSetupInputForFields<Fields>>;
       legacyAdapter?: never;
     }
   | {
       adapter?: never;
-      legacyAdapter: ChannelSetupAdapter;
+      legacyAdapter: ChannelOwnedSetupAdapterShape<ChannelSetupInput>;
     };
 
 type ChannelOwnedSetupAdapterShape<Input extends { name?: string }> = {
@@ -194,7 +191,7 @@ export type ChannelOwnedSetupContract = {
   }>["resolveSingleAccountPromotionTarget"];
 };
 
-export type ChannelSetupExecutionAdapter = Omit<
+type ChannelSetupExecutionAdapter = Omit<
   ChannelOwnedSetupContract,
   "kind" | "metadata" | "parseInput"
 >;
@@ -202,7 +199,7 @@ export type ChannelSetupExecutionAdapter = Omit<
 /** Adapts the released shared-bag contract at one explicit compatibility boundary. */
 export function resolveChannelSetupExecutionAdapter(plugin: {
   setupContract?: ChannelOwnedSetupContract;
-  setup?: ChannelSetupAdapter;
+  setup?: ChannelOwnedSetupAdapterShape<ChannelSetupInput>;
 }): ChannelSetupExecutionAdapter | undefined {
   if (plugin.setupContract) {
     return plugin.setupContract;
@@ -369,7 +366,7 @@ export function defineChannelSetupContract<const Fields extends Record<string, C
   }
   const adapter =
     params.adapter ??
-    (params.legacyAdapter as TypedChannelSetupAdapter<ChannelSetupInputForFields<Fields>>);
+    (params.legacyAdapter as ChannelOwnedSetupAdapterShape<ChannelSetupInputForFields<Fields>>);
   const prepareAccountConfigInput = adapter.prepareAccountConfigInput;
   const metadata: ChannelSetupMetadata = {
     fields: fieldEntries.map(([key, field]) => Object.assign({}, field, { key })),

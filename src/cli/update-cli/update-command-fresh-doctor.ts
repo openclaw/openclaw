@@ -11,6 +11,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
+  applyPostPluginConfigValidation,
+  POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
+} from "./update-command-post-plugin-validation.js";
+import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,
 } from "./update-command-service.js";
@@ -59,8 +63,6 @@ async function withNormalConfigValidation<T>(run: () => Promise<T>): Promise<T> 
   }
 }
 
-export const POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON = "post-plugin-doctor-execution-failed";
-
 function createPostPluginDoctorExecutionFailure(
   pluginUpdate: PostCorePluginUpdateResult,
   reason: string,
@@ -80,7 +82,7 @@ function createPostPluginDoctorExecutionFailure(
   };
 }
 
-export async function runPostPluginDoctorInFreshProcess(params: {
+async function runPostPluginDoctorInFreshProcess(params: {
   root: string;
   yes: boolean;
   json: boolean;
@@ -147,7 +149,7 @@ async function validatePostPluginConfigInFreshProcess(params: {
   }
 }
 
-export async function applyFreshPostPluginDoctor(params: {
+async function applyFreshPostPluginDoctor(params: {
   root: string;
   pluginUpdate: PostCorePluginUpdateResult;
   yes: boolean;
@@ -223,31 +225,4 @@ export async function completePostCorePluginUpdate(params: {
     freshConfigValid ?? configSnapshot.valid,
   );
   return { pluginUpdate, configSnapshot };
-}
-
-export function applyPostPluginConfigValidation(
-  pluginUpdate: PostCorePluginUpdateResult,
-  configValid: boolean,
-): PostCorePluginUpdateResult {
-  if (
-    configValid ||
-    (pluginUpdate.status === "error" &&
-      pluginUpdate.reason !== POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON)
-  ) {
-    return pluginUpdate;
-  }
-  return {
-    ...pluginUpdate,
-    status: "error",
-    reason: "post-plugin-doctor-invalid-config",
-    warnings: [
-      ...(pluginUpdate.warnings ?? []),
-      {
-        reason: "Config remained invalid after updated plugin migrations.",
-        message:
-          "Post-update plugin migration did not produce a valid config; refusing to restart.",
-        guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
-      },
-    ],
-  };
 }

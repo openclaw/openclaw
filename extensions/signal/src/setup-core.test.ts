@@ -62,21 +62,12 @@ describe("signalSetupAdapter", () => {
     });
   });
 
-  it("falls back to external native when bare HTTP URL detection is unreachable", async () => {
+  it("requires an explicit kind when bare HTTP URL detection is unreachable", async () => {
     detectSignalTransportMock.mockRejectedValue(new Error("unreachable"));
 
-    const input = await prepareInput({ httpUrl: "http://signal:8080" });
-    const next = signalSetupAdapter.applyAccountConfig?.({
-      cfg: {},
-      accountId: "default",
-      input,
-    });
-
-    expect(input.signalTransport).toBeUndefined();
-    expect(next?.channels?.signal?.transport).toEqual({
-      kind: "external-native",
-      url: "http://signal:8080",
-    });
+    await expect(prepareInput({ httpUrl: "http://signal:8080" })).rejects.toThrow(
+      "Signal could not detect the HTTP transport; start the endpoint or pass --signal-transport external-native|container.",
+    );
   });
 
   it("preserves an existing container account when detection is unreachable", async () => {

@@ -21,6 +21,7 @@ import type { SecretTargetRegistryEntry } from "../../secrets/target-registry-ty
 import type { ChannelApprovalNativeAdapter } from "./approval-native.types.js";
 import type { ChannelRuntimeSurface } from "./channel-runtime-surface.types.js";
 import type { ConfigWriteTarget } from "./config-writes.js";
+import type { ChannelSetupInput } from "./setup-input.js";
 export type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
@@ -39,7 +40,6 @@ import type {
   ChannelLogSink,
   ChannelSecurityContext,
   ChannelSecurityDmPolicy,
-  ChannelSetupInput,
   ChannelStatusIssue,
 } from "./types.core.js";
 export type { ChannelPairingAdapter } from "./pairing.types.js";

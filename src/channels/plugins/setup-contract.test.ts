@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { defineChannelSetupContract, type ChannelSetupField } from "./setup-contract.js";
+import { defineChannelSetupContract } from "./setup-contract.js";
 
 describe("defineChannelSetupContract", () => {
   it("requires field keys to match camelCased long flag names", () => {
@@ -35,7 +35,7 @@ describe("defineChannelSetupContract", () => {
           key: "credential",
           kind: "string",
           cli: { flags: "--api-token <value>", description: "API token" },
-        } as ChannelSetupField,
+        } as const,
       },
       adapter: { applyAccountConfig: ({ cfg }) => cfg },
     });

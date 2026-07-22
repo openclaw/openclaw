@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
-import { applyPostPluginConfigValidation } from "./update-command-fresh-doctor.js";
 import {
   updatePluginsAfterCoreUpdate,
   type PostCorePluginUpdateResult,
@@ -17,6 +16,7 @@ import {
   resolvePostSyncPluginUpdateSkipIds,
 } from "./update-command-plugins.test-support.js";
 import { resolvePostCoreUpdateChildStdio } from "./update-command-post-core.js";
+import { applyPostPluginConfigValidation } from "./update-command-post-plugin-validation.js";
 import {
   resolvePostInstallDoctorEnv,
   resolvePostUpdateServiceStateReadEnv,

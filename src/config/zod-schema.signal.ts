@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { ExecutableTokenSchema } from "./zod-schema.core.js";
 
-export const SIGNAL_RETIRED_TRANSPORT_KEYS = [
+const SIGNAL_RETIRED_TRANSPORT_KEYS = [
   "apiMode",
   "configPath",
   "httpUrl",

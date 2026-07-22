@@ -8,7 +8,7 @@ import {
 } from "./optional-channel-setup.js";
 
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
-export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
+export type { ChannelSetupInput } from "../channels/plugins/setup-input.js";
 export type { ChannelSetupDmPolicy, ChannelSetupWizard } from "./setup.js";
 export {
   DEFAULT_ACCOUNT_ID,
