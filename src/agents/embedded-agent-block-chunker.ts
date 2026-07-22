@@ -151,6 +151,10 @@ export class EmbeddedBlockChunker {
     const { force, emit } = params;
     const minChars = Math.max(1, Math.floor(this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
+    // The paragraph fast path appends this separator to the emitted chunk, so its
+    // length must be reserved in the fit check below to keep emitted chunks within
+    // maxChars (#94216).
+    const paragraphSeparator = "\n\n";
 
     if (this.#buffer.length < minChars && !force) {
       return;
@@ -180,10 +184,20 @@ export class EmbeddedBlockChunker {
       if (this.#chunking.flushOnParagraph && !force) {
         const paragraphBreak = findNextParagraphBreak(source, fenceSpans, start, minChars);
         const paragraphLimit = Math.max(1, maxChars - reopenPrefix.length);
-        if (paragraphBreak && paragraphBreak.index - start <= paragraphLimit) {
+        // Reserve the appended separator so the emitted chunk (slice + separator)
+        // stays within maxChars; a paragraph that would overflow falls through to the
+        // size-split path below instead of breaching the delivery limit (#94216).
+        if (
+          paragraphBreak &&
+          paragraphBreak.index - start <= paragraphLimit - paragraphSeparator.length
+        ) {
           const chunk = `${reopenPrefix}${source.slice(start, paragraphBreak.index)}`;
           if (chunk.trim().length > 0) {
-            emit(chunk);
+            // Attach the canonical paragraph boundary the chunk just ended at so a
+            // downstream client that concatenates successive deliveries reconstructs
+            // the separator (issue #42106). The coalescer normalizes any trailing
+            // newline run before re-joining, so this never compounds into 4+ newlines.
+            emit(`${chunk}${paragraphSeparator}`);
           }
           start = skipLeadingNewlines(source, paragraphBreak.index + paragraphBreak.length);
           reopenFence = undefined;
@@ -214,6 +228,8 @@ export class EmbeddedBlockChunker {
         reopenPrefix,
         source,
         start,
+        maxChars,
+        paragraphSeparator,
       });
       if (consumed === null) {
         continue;
@@ -241,8 +257,10 @@ export class EmbeddedBlockChunker {
     reopenPrefix: string;
     source: string;
     start: number;
+    maxChars: number;
+    paragraphSeparator: string;
   }): { start: number; reopenFence?: FenceSpan } | null {
-    const { breakResult, emit, reopenPrefix, source, start } = params;
+    const { breakResult, emit, reopenPrefix, source, start, maxChars, paragraphSeparator } = params;
     const breakIdx = breakResult.index;
     if (breakIdx <= 0) {
       return null;
@@ -260,6 +278,25 @@ export class EmbeddedBlockChunker {
         ? `${fenceSplit.closeFenceLine}\n`
         : `\n${fenceSplit.closeFenceLine}\n`;
       rawChunk = `${rawChunk}${closeFence}`;
+    }
+
+    // When this break consumed a genuine paragraph boundary (a blank line, i.e.
+    // "\n[ \t]*\n" follows in the source), re-attach the canonical "\n\n" separator the
+    // chunk just ended at — mirroring the non-forced paragraph fast path (~line 198) —
+    // so a downstream client concatenating successive separate deliveries reconstructs
+    // the separator (issue #42106). The size-split / force path (message_end flush,
+    // leftover-buffer flush) otherwise drops the boundary. Skipped for fence splits
+    // (they manage their own newline handling) and only applied when it stays within
+    // maxChars, preserving the #94216 delivery-bound invariant. emitBlockChunk strips
+    // this again on the terminal/final delivery, and the coalescer normalizes any
+    // trailing newline run, so it never compounds into 4+ newlines.
+    const endedAtParagraphBoundary =
+      !fenceSplit && /^\n[ \t]*\n/.test(source.slice(absoluteBreakIdx));
+    if (endedAtParagraphBoundary) {
+      const withSeparator = `${rawChunk.replace(/\s+$/, "")}${paragraphSeparator}`;
+      if (withSeparator.length <= maxChars) {
+        rawChunk = withSeparator;
+      }
     }
 
     emit(rawChunk);

@@ -27,6 +27,38 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it("preserves the paragraph separator across separate flushed chunks (issue #42106)", () => {
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 200 });
+
+    chunker.append("# Title\n\nFirst paragraph.");
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    // The heading chunk must carry its trailing paragraph boundary so a
+    // downstream client concatenating successive deliveries reconstructs faithfully.
+    expect(chunks).toEqual(["# Title\n\n", "First paragraph."]);
+    expect(chunks.join("")).toBe("# Title\n\nFirst paragraph.");
+  });
+
+  it("keeps paragraph-boundary chunks within maxChars including the separator (issue #94216)", () => {
+    // Exact-boundary repro from review: a paragraph whose length equals maxChars
+    // must not emit `chunk + "\n\n"` (which would exceed maxChars). With maxChars 10
+    // and "abcdefghij\n\nRest", the paragraph fast path must not emit a 12-char chunk;
+    // it falls through to the size-split path, which respects the delivery bound.
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+    chunker.append("abcdefghij\n\nRest");
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    // No emitted chunk may exceed the delivery bound, separator included.
+    expectChunksWithinLength(chunks, 10);
+    // No content is lost when the over-limit paragraph falls back to size splitting.
+    expect(chunks.join("")).toContain("abcdefghij");
+    expect(chunks.join("")).toContain("Rest");
+  });
+
   it("breaks at paragraph boundary right after fence close", () => {
     // A closed fence is a safe boundary; splitting before it would corrupt
     // markdown rendered by downstream clients.
@@ -52,7 +84,10 @@ describe("EmbeddedBlockChunker", () => {
 
     expect(chunks.length).toBe(1);
     expect(chunks[0]).toContain("console.log");
-    expect(chunks[0]).toMatch(/```\n?$/);
+    // The chunk still ends at the closed fence (never mid-fence), but now carries the
+    // trailing paragraph boundary it ended at so successive deliveries reconstruct the
+    // "\n\n" separator (issue #42106). The fence close is intact immediately before it.
+    expect(chunks[0]).toMatch(/```\n\n$/);
     expect(chunks[0]).not.toContain("After");
     expect(chunker.bufferedText).toMatch(/^After/);
   });
@@ -64,7 +99,9 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph."]);
+    // The first \n\n is below minChars so it is not a break point; the chunk grows
+    // to the second paragraph break and now carries that boundary in-band (#42106).
+    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph.\n\n"]);
     expect(chunker.bufferedText).toBe("Third paragraph.");
   });
 
@@ -138,8 +175,12 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expectChunksWithinLength(chunks, 10);
-    expect(chunks).toEqual(["abcdefghij", "k"]);
+    // "abcdefghij" is a maxChars clamp (no boundary). "k" ends at the paragraph
+    // break, so post-fix (#42106) it carries the consumed "\n\n".
+    expect(chunks).toEqual(["abcdefghij", "k\n\n"]);
+    // The clamped body still respects maxChars; only the boundary chunk gains
+    // the 2-char separator appended after the size decision.
+    expect(chunks[0].length).toBeLessThanOrEqual(10);
     expect(chunker.bufferedText).toBe("Rest");
   });
 
@@ -167,7 +208,9 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```"]);
+    // The blank line INSIDE the fence is preserved unchanged; only the trailing
+    // post-fence paragraph boundary is now carried in-band (#42106).
+    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\n"]);
     expect(chunker.bufferedText).toBe("After fence");
   });
 

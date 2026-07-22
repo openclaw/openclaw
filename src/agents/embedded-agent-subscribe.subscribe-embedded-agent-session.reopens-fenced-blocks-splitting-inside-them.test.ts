@@ -38,6 +38,9 @@ describe("subscribeEmbeddedAgentSession", () => {
     emitAssistantTextDeltaAndEnd({ emit, text });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls.at(1)?.[0].text).toBe("~~~sh\nline1\nline2\n~~~");
+    // #42106: the tilde fence is never split; the middle (non-final) delivery now also
+    // carries the trailing paragraph boundary "\n\n" it ended at so the separate
+    // deliveries reconstruct the inter-paragraph separator.
+    expect(onBlockReply.mock.calls.at(1)?.[0].text).toBe("~~~sh\nline1\nline2\n~~~\n\n");
   });
 });
