@@ -402,7 +402,7 @@ async function projectVerifiedExecutionFingerprint(
   ownerPluginIds: readonly string[],
   deps: SystemAgentVerifiedInferenceDeps,
 ): Promise<SystemAgentVerifiedExecutionFingerprint> {
-  const projection = await projectInferenceRoute(config, route.agentId);
+  const projection = await projectInferenceRoute(config, route.agentId, deps);
   return {
     route: projection.route
       ? (() => {

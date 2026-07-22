@@ -209,6 +209,7 @@ export async function projectDefaultInferenceRoute(
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<DefaultInferenceRouteProjection> {
   const [{ resolveDefaultAgentId }, { resolveProviderIdForAuth }] = await Promise.all([
     import("../agents/agent-scope.js"),
@@ -216,7 +217,7 @@ export async function projectInferenceRoute(
   ]);
   const defaultAgentId = resolveDefaultAgentId(config);
   const routeAgentId = normalizeAgentId(requestedAgentId ?? defaultAgentId);
-  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId);
+  const route = await resolveSystemAgentConfiguredRouteFromConfig(config, routeAgentId, deps);
   const list = config.agents?.list ?? [];
   const agent = list.find((entry) => normalizeAgentId(entry.id) === routeAgentId);
   const executionAgent = route?.runConfig.agents?.list?.find(
