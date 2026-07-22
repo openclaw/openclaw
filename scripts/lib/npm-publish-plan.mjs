@@ -1,4 +1,4 @@
-// Parses OpenClaw monthly patch release versions and npm dist-tag publish plans.
+// Parses OpenClaw monthly release versions, classifies release trains, and plans npm tags.
 const STABLE_VERSION_REGEX = /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)$/;
 const ALPHA_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-alpha\.(?<alpha>[1-9]\d*)$/;
@@ -7,6 +7,7 @@ const BETA_VERSION_REGEX =
 const CORRECTION_VERSION_REGEX =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<patch>[1-9]\d*)-(?<correction>[1-9]\d*)$/;
 const JUNE_2026_PATCH_FLOOR = 5;
+const EXTENDED_STABLE_PATCH_FLOOR = 33;
 
 /**
  * @typedef {object} ParsedReleaseVersion
@@ -19,6 +20,10 @@ const JUNE_2026_PATCH_FLOOR = 5;
  * @property {number | undefined} [alphaNumber]
  * @property {number | undefined} [betaNumber]
  * @property {number | undefined} [correctionNumber]
+ */
+
+/**
+ * @typedef {"alpha" | "beta" | "stable" | "extended-stable" | "unsupported-extended-stable-correction"} ReleaseTrain
  */
 
 /**
@@ -244,6 +249,26 @@ export function parseReleaseVersion(version) {
 }
 
 /**
+ * Classifies a parsed version once for every release publisher. Patch 33 and
+ * later final releases belong to the trailing-month extended-stable line;
+ * correction suffixes are not valid on that line.
+ *
+ * @param {ParsedReleaseVersion} parsedVersion
+ * @returns {ReleaseTrain}
+ */
+export function classifyReleaseTrain(parsedVersion) {
+  if (parsedVersion.channel !== "stable") {
+    return parsedVersion.channel;
+  }
+  if (parsedVersion.patch < EXTENDED_STABLE_PATCH_FLOOR) {
+    return "stable";
+  }
+  return parsedVersion.correctionNumber === undefined
+    ? "extended-stable"
+    : "unsupported-extended-stable-correction";
+}
+
+/**
  * @param {string | ParsedReleaseVersion | null} version
  * @returns {string[]}
  */
@@ -315,6 +340,7 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
   if (parsedVersion === null) {
     throw new Error(`Unsupported release version "${version}".`);
   }
+  const releaseTrain = classifyReleaseTrain(parsedVersion);
 
   const normalizedOverride = publishTagOverride?.trim();
   if (normalizedOverride && normalizedOverride !== "extended-stable") {
@@ -323,11 +349,7 @@ export function resolveNpmPublishPlan(version, currentBetaVersion, publishTagOve
     );
   }
   if (normalizedOverride === "extended-stable") {
-    if (
-      parsedVersion.channel !== "stable" ||
-      parsedVersion.correctionNumber !== undefined ||
-      parsedVersion.patch < 33
-    ) {
+    if (releaseTrain !== "extended-stable") {
       throw new Error(
         `Extended-stable npm publication requires a final YYYY.M.PATCH version with PATCH >= 33; found "${version}".`,
       );

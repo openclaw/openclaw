@@ -1,13 +1,32 @@
 // npm publish plan tests validate package publish planning rules.
 import { describe, expect, it } from "vitest";
 import {
+  classifyReleaseTrain,
   collectReleaseVersionFloorErrors,
   fetchNpmRegistryPackumentWithRetry,
+  parseReleaseVersion,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
   resolvePublishedNpmVersionRoute,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
+
+describe("release train classification", () => {
+  it.each([
+    ["2026.7.2-alpha.1", "alpha"],
+    ["2026.7.2-beta.1", "beta"],
+    ["2026.7.32", "stable"],
+    ["2026.6.33", "extended-stable"],
+    ["2026.6.34", "extended-stable"],
+    ["2026.6.33-1", "unsupported-extended-stable-correction"],
+  ] as const)("classifies %s as %s", (version, expected) => {
+    const parsed = parseReleaseVersion(version);
+    if (!parsed) {
+      throw new Error(`test version did not parse: ${version}`);
+    }
+    expect(classifyReleaseTrain(parsed)).toBe(expected);
+  });
+});
 
 function registryResponse(params: {
   status?: number;

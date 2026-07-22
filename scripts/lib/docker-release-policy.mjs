@@ -1,6 +1,5 @@
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { parseReleaseVersion } from "./npm-publish-plan.mjs";
+import { isDirectRunUrl } from "./direct-run.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./npm-publish-plan.mjs";
 
 const STABLE_ALIASES = Object.freeze({
   default: Object.freeze(["latest", "main"]),
@@ -40,23 +39,24 @@ export function resolveDockerReleasePolicy(version) {
   if (parsed === null) {
     throw new Error(`Unsupported Docker release version "${version}".`);
   }
-  if (parsed.channel === "alpha") {
+  const releaseTrain = classifyReleaseTrain(parsed);
+  if (releaseTrain === "alpha") {
     throw new Error("Docker alpha image publishing is disabled.");
   }
-  if (parsed.channel === "beta") {
+  if (releaseTrain === "beta") {
     return { version: parsed.version, channel: "beta", movingAliases: NO_MOVING_ALIASES };
   }
-  if (parsed.patch >= 33) {
-    if (parsed.correctionNumber !== undefined) {
-      throw new Error(
-        `Extended-stable Docker publication requires a final YYYY.M.PATCH version; found "${version}".`,
-      );
-    }
+  if (releaseTrain === "extended-stable") {
     return {
       version: parsed.version,
       channel: "extended-stable",
       movingAliases: EXTENDED_STABLE_ALIASES,
     };
+  }
+  if (releaseTrain === "unsupported-extended-stable-correction") {
+    throw new Error(
+      `Extended-stable Docker publication requires a final YYYY.M.PATCH version; found "${version}".`,
+    );
   }
   return { version: parsed.version, channel: "stable", movingAliases: STABLE_ALIASES };
 }
@@ -69,7 +69,7 @@ function main() {
   process.stdout.write(`${JSON.stringify(resolveDockerReleasePolicy(version))}\n`);
 }
 
-if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     main();
   } catch (error) {

@@ -30,6 +30,7 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-pa
 import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
+import { classifyReleaseTrain } from "./lib/npm-publish-plan.mjs";
 import { runNpmVerifyCommand } from "./lib/npm-verify-exec.ts";
 import {
   collectRuntimeDependencySpecs,
@@ -297,9 +298,7 @@ function resolveNpmProvenanceVerificationPolicy(
   const expectedReleaseRef = `refs/heads/release/${parsedVersion.baseVersion}`;
   // A month's final patch >=33 releases stay on its canonical .33 maintenance branch.
   const isExpectedExtendedStableRef =
-    parsedVersion.channel === "stable" &&
-    parsedVersion.correctionNumber === undefined &&
-    parsedVersion.patch >= 33 &&
+    classifyReleaseTrain(parsedVersion) === "extended-stable" &&
     workflowRef === `refs/heads/extended-stable/${parsedVersion.year}.${parsedVersion.month}.33`;
   const protectedReleasePublishMatch =
     /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u.exec(workflowRef ?? "");

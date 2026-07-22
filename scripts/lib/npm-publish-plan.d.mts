@@ -9,6 +9,12 @@ export type ParsedReleaseVersion = {
   betaNumber?: number;
   correctionNumber?: number;
 };
+export type ReleaseTrain =
+  | "alpha"
+  | "beta"
+  | "stable"
+  | "extended-stable"
+  | "unsupported-extended-stable-correction";
 export type NpmPublishPlan = {
   channel: "stable" | "alpha" | "beta";
   publishTag: "latest" | "alpha" | "beta" | "extended-stable";
@@ -30,6 +36,7 @@ export function fetchNpmRegistryPackumentWithRetry(params: {
   createSignal?: (timeoutMs: number) => AbortSignal;
 }): Promise<NpmRegistryPackumentResult>;
 export function parseReleaseVersion(version: string): ParsedReleaseVersion | null;
+export function classifyReleaseTrain(parsedVersion: ParsedReleaseVersion): ReleaseTrain;
 export function collectReleaseVersionFloorErrors(
   version: string | ParsedReleaseVersion | null,
 ): string[];
