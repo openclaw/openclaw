@@ -12,6 +12,22 @@ import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probes.js";
+import {
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+  GEMINI_CLI_DEFAULT_MODEL_REF,
+  detectAmbientInferenceBackends,
+  type InferenceBackendCandidate,
+} from "./onboard-inference-ambient.js";
+
+export {
+  ANTHROPIC_API_DEFAULT_MODEL_REF,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
+  CODEX_APP_SERVER_DEFAULT_MODEL_REF,
+  GEMINI_CLI_DEFAULT_MODEL_REF,
+  OPENAI_API_DEFAULT_MODEL_REF,
+  type InferenceBackendKind,
+} from "./onboard-inference-ambient.js";
 
 /**
  * Onboarding treats inference as the one required step: reuse whatever the
@@ -19,33 +35,6 @@ import { probeLocalCommand, type LocalCommandProbe } from "../system-agent/probe
  * asking the user anything. The ladder order is a documented contract
  * (docs/cli/setup.md "Setup bootstrap") — change docs when changing it.
  */
-export const OPENAI_API_DEFAULT_MODEL_REF = "openai/gpt-5.6";
-export const ANTHROPIC_API_DEFAULT_MODEL_REF = "anthropic/claude-opus-4-8";
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = "claude-cli/claude-opus-4-8";
-export const CODEX_APP_SERVER_DEFAULT_MODEL_REF = "openai/gpt-5.6-sol";
-export const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3.1-pro-preview";
-
-export type InferenceBackendKind =
-  | "existing-model"
-  | "openai-api-key"
-  | "anthropic-api-key"
-  | "claude-cli"
-  | "codex-cli"
-  | "gemini-cli";
-
-type InferenceBackendCandidate = {
-  kind: InferenceBackendKind;
-  modelRef: string;
-  /** Short human label, e.g. "Claude Code CLI". */
-  label: string;
-  /** One-line provenance, e.g. "logged in", "ANTHROPIC_API_KEY set". */
-  detail: string;
-  /**
-   * true: credentials verified; false: definitively logged out; undefined:
-   * unknown (e.g. macOS keychain-backed logins we must not prompt for here).
-   */
-  credentials?: boolean;
-};
 
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
@@ -212,24 +201,7 @@ export async function detectInferenceBackends(
       credentials: true,
     });
   }
-  if (env.OPENAI_API_KEY?.trim()) {
-    candidates.push({
-      kind: "openai-api-key",
-      modelRef: OPENAI_API_DEFAULT_MODEL_REF,
-      label: "OpenAI API key",
-      detail: "OPENAI_API_KEY set",
-      credentials: true,
-    });
-  }
-  if (env.ANTHROPIC_API_KEY?.trim()) {
-    candidates.push({
-      kind: "anthropic-api-key",
-      modelRef: ANTHROPIC_API_DEFAULT_MODEL_REF,
-      label: "Anthropic API key",
-      detail: "ANTHROPIC_API_KEY set",
-      credentials: true,
-    });
-  }
+  candidates.push(...detectAmbientInferenceBackends(env));
 
   const [claudeProbe, codexProbe, geminiProbe] = await Promise.all([
     probe("claude"),

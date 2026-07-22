@@ -4,6 +4,10 @@ import { ref } from "lit/directives/ref.js";
 import { styleMap } from "lit/directives/style-map.js";
 import type { TaskSuggestion } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
+  SessionObserverDigest,
+  SessionsObserverAskResult,
+} from "../../../../packages/gateway-protocol/src/schema/sessions.js";
+import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
@@ -91,6 +95,12 @@ export type ChatProps = {
   compactionStatus?: CompactionStatus | null;
   fallbackStatus?: FallbackStatus | null;
   planStatus?: PlanStatus | null;
+  observerDigest?: SessionObserverDigest | null;
+  observerHudReady?: boolean;
+  observerRunId?: string | null;
+  observerStartedAt?: number;
+  observerLastReadAt?: number;
+  onObserverAsk?: (sessionKey: string, question: string) => Promise<SessionsObserverAskResult>;
   gatewayQuestionPrompts?: readonly QuestionPrompt[];
   onGatewayQuestionChange?: () => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
@@ -660,6 +670,22 @@ export function renderChat(props: ChatProps) {
                 onExpand: () => props.onExpandPullRequests?.(),
                 onDismiss: (pullRequest) => props.onDismissPullRequest?.(pullRequest),
               })}
+              ${props.observerHudReady
+                ? html`
+                    <openclaw-chat-observer-hud
+                      .sessionKey=${props.sessionKey}
+                      .digest=${props.observerDigest ?? null}
+                      .running=${Boolean(props.observerRunId)}
+                      .activeRunId=${props.observerRunId ?? null}
+                      .startedAt=${props.observerStartedAt}
+                      .lastReadAt=${props.observerLastReadAt}
+                      .sideChatOpen=${sideChatVisible}
+                      .planStatus=${props.planStatus ?? null}
+                      .pullRequests=${props.pullRequests ?? []}
+                      .onAsk=${props.onObserverAsk}
+                    ></openclaw-chat-observer-hud>
+                  `
+                : nothing}
               ${scrollToBottomButton} ${chatColumnFooter}
               ${renderSideChatPanel({
                 ...sideChatProps,

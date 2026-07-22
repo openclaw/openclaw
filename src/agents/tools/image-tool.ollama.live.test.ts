@@ -75,9 +75,16 @@ describe.skipIf(!LIVE)("image tool Ollama live", () => {
         },
         tools: {
           media: {
+            models: [
+              {
+                provider: "ollama",
+                model: OLLAMA_IMAGE_MODEL,
+                timeoutSeconds: 300,
+                capabilities: ["image"],
+              },
+            ],
             image: {
               timeoutSeconds: 180,
-              models: [{ provider: "ollama", model: OLLAMA_IMAGE_MODEL, timeoutSeconds: 300 }],
             },
           },
         },

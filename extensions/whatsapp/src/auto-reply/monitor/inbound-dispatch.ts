@@ -290,9 +290,10 @@ export function resolveWhatsAppResponsePrefix(params: {
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   return (
     params.pipelineResponsePrefix ??
-    (configuredResponsePrefix === undefined && params.isSelfChat
+    (configuredResponsePrefix === "auto"
       ? resolveIdentityNamePrefix(params.cfg, params.agentId)
-      : undefined)
+      : configuredResponsePrefix) ??
+    (params.isSelfChat ? resolveIdentityNamePrefix(params.cfg, params.agentId) : undefined)
   );
 }
 
@@ -538,7 +539,7 @@ export function createWhatsAppReplyPlan(params: {
   const conversationKind = admission.conversation.kind;
   const statusReactionController = params.statusReactionController ?? null;
   const statusReactionTiming = DEFAULT_TIMING;
-  const removeAckAfterReply = params.cfg.messages?.removeAckAfterReply ?? false;
+  const removeAckAfterReply = false;
   const textLimit = params.maxMediaTextChunkLimit ?? resolveTextChunkLimit(params.cfg, "whatsapp");
   const chunkMode = resolveChunkMode(params.cfg, "whatsapp", params.route.accountId);
   const tableMode = resolveMarkdownTableMode({

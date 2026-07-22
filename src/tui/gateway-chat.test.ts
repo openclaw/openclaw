@@ -591,7 +591,7 @@ describe("resolveGatewayConnection", () => {
     );
   });
 
-  it("marks loopback local connections for insecure operator ui auth when enabled", async () => {
+  it("keeps loopback local connections on device-authenticated operator UI", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -606,10 +606,10 @@ describe("resolveGatewayConnection", () => {
     });
 
     const result = await resolveGatewayConnection({});
-    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.allowInsecureLocalOperatorUi).toBe(false);
   });
 
-  it("preserves insecure local operator ui auth when a loopback url override is provided", async () => {
+  it("keeps a loopback URL override on device-authenticated operator UI", async () => {
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -627,7 +627,7 @@ describe("resolveGatewayConnection", () => {
       url: "ws://127.0.0.1:18791",
       token: "override-token",
     });
-    expect(result.allowInsecureLocalOperatorUi).toBe(true);
+    expect(result.allowInsecureLocalOperatorUi).toBe(false);
     expect(result.token).toBe("override-token");
   });
 });
@@ -714,7 +714,6 @@ describe("GatewayChatClient", () => {
     vi.useFakeTimers();
     const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
     const proxyHandle = await startProxy({
-      enabled: true,
       proxyUrl: "http://127.0.0.1:3128",
       loopbackMode: "block",
     });

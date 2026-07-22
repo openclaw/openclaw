@@ -5,7 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   hasSessionAutoModelFallbackProvenance,
   hasConfiguredModelFallbacks,
-  resolveAgentConfig,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
@@ -2560,7 +2559,7 @@ export async function runReplyAgent(params: {
     const coveredByExistingCron =
       hasReminderCommitment && successfulCronAdds === 0
         ? await hasSessionRelatedCronJobs({
-            cronStorePath: cfg.cron?.store,
+            cronStorePath: undefined,
             sessionKey,
           })
         : false;
@@ -2938,14 +2937,7 @@ export async function runReplyAgent(params: {
         }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
-      const agentId = followupRun.run.agentId;
-      const heartbeatAgentCfg = agentId ? resolveAgentConfig(cfg, agentId)?.heartbeat : undefined;
-      const heartbeatAckMaxChars = Math.max(
-        0,
-        heartbeatAgentCfg?.ackMaxChars ??
-          cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-          DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      );
+      const heartbeatAckMaxChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
       const resolvedPendingText = isHeartbeat
         ? (() => {
             const stripped = stripHeartbeatToken(pendingText, {

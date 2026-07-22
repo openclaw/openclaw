@@ -134,6 +134,31 @@ async function makeTempDir(): Promise<string> {
 
 const deferSuiteTempDirCleanup = async () => {};
 
+function canonicalizeAgentEntriesForTest(config: OpenClawConfig): OpenClawConfig {
+  const next = structuredClone(config);
+  const list = next.agents?.list;
+  if (!list) {
+    return next;
+  }
+  next.agents = {
+    ...next.agents,
+    entries: Object.fromEntries(list.map(({ id, ...entry }) => [id, entry])),
+  };
+  delete next.agents.list;
+  return next;
+}
+
+function materializeRuntimeAgentListForTest(config: OpenClawConfig): OpenClawConfig {
+  const next = canonicalizeAgentEntriesForTest(config);
+  if (!next.agents?.entries) {
+    return next;
+  }
+  next.agents.list = Object.entries(next.agents.entries).map(([id, entry]) =>
+    Object.assign({ id }, entry),
+  );
+  return next;
+}
+
 function withSuiteTempDirs<
   T extends NonNullable<Parameters<typeof activateSetupInferenceImpl>[0]["deps"]>,
 >(input: T | undefined): T {
@@ -172,6 +197,48 @@ async function activateSetupInference(
     deps.resolveCliRuntimeArtifactFingerprint = vi.fn(
       async () => testCliRuntimeArtifactFingerprint,
     );
+  }
+  if (deps.readConfigFileSnapshot) {
+    const readConfigFileSnapshot = deps.readConfigFileSnapshot;
+    deps.readConfigFileSnapshot = (async (...args: Parameters<typeof readConfigFileSnapshot>) => {
+      const snapshot = await readConfigFileSnapshot(...args);
+      const sourceConfig = snapshot.sourceConfig ?? snapshot.config;
+      const runtimeConfig = snapshot.runtimeConfig ?? snapshot.config;
+      return {
+        ...snapshot,
+        ...(snapshot.config ? { config: materializeRuntimeAgentListForTest(snapshot.config) } : {}),
+        ...(sourceConfig ? { sourceConfig: canonicalizeAgentEntriesForTest(sourceConfig) } : {}),
+        ...(runtimeConfig
+          ? { runtimeConfig: materializeRuntimeAgentListForTest(runtimeConfig) }
+          : {}),
+      };
+    }) as typeof deps.readConfigFileSnapshot;
+  }
+  if (deps.transformConfigWithPendingPluginInstalls) {
+    const transformConfigWithPendingPluginInstalls = deps.transformConfigWithPendingPluginInstalls;
+    deps.transformConfigWithPendingPluginInstalls = (async (
+      transformParams: Parameters<typeof transformConfigWithPendingPluginInstalls>[0],
+    ) => {
+      const transform = transformParams.transform;
+      const wrappedTransform: typeof transform = async (config, context) =>
+        await transform(canonicalizeAgentEntriesForTest(config), {
+          ...context,
+          snapshot: {
+            ...context.snapshot,
+            config: materializeRuntimeAgentListForTest(context.snapshot.config),
+            sourceConfig: canonicalizeAgentEntriesForTest(
+              context.snapshot.sourceConfig ?? context.snapshot.config,
+            ),
+            runtimeConfig: materializeRuntimeAgentListForTest(
+              context.snapshot.runtimeConfig ?? context.snapshot.config,
+            ),
+          },
+        });
+      return await transformConfigWithPendingPluginInstalls({
+        ...transformParams,
+        transform: wrappedTransform,
+      } as never);
+    }) as typeof deps.transformConfigWithPendingPluginInstalls;
   }
   return activateSetupInferenceImpl({
     ...params,
@@ -265,8 +332,8 @@ function createConfigTransformHarness(
   runtimeConfig: OpenClawConfig = sourceConfig,
 ) {
   const state = {
-    sourceConfig: structuredClone(sourceConfig),
-    runtimeConfig: structuredClone(runtimeConfig),
+    sourceConfig: canonicalizeAgentEntriesForTest(sourceConfig),
+    runtimeConfig: materializeRuntimeAgentListForTest(runtimeConfig),
   };
   const transform = vi.fn(
     async (params: {
@@ -299,7 +366,7 @@ function createConfigTransformHarness(
         attempt: 0,
       });
       state.sourceConfig = withoutPluginInstallRecords(transformed.nextConfig);
-      state.runtimeConfig = structuredClone(state.sourceConfig);
+      state.runtimeConfig = materializeRuntimeAgentListForTest(state.sourceConfig);
       return { nextConfig: state.sourceConfig };
     },
   );
@@ -325,15 +392,14 @@ describe("applySystemAgentModelSelection", () => {
     const config = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             default: true,
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
             },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
 
@@ -344,11 +410,12 @@ describe("applySystemAgentModelSelection", () => {
     });
 
     expect(result.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-5.5" });
-    expect(result.agents?.list?.[0]).toMatchObject({
-      id: "ops",
+    expect(result.agents?.entries?.ops).toMatchObject({
       models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
     });
-    expect(config.agents.list[0]?.models["openai/gpt-5.5"]?.agentRuntime?.id).toBe("openclaw");
+    expect(config.agents.entries.ops?.models?.["openai/gpt-5.5"]?.agentRuntime?.id).toBe(
+      "openclaw",
+    );
   });
 });
 
@@ -1034,8 +1101,7 @@ describe("activateSetupInference", () => {
       params: { temperature: 0.2 },
       tools: { allow: ["read"], deny: ["exec"] },
     });
-    expect(configHarness.current().agents?.list?.find((agent) => agent.id === "openclaw")).toEqual({
-      id: "openclaw",
+    expect(configHarness.current().agents?.entries?.openclaw).toEqual({
       params: { temperature: 1.7 },
       tools: { allow: ["exec"] },
     });
@@ -1370,16 +1436,15 @@ describe("activateSetupInference", () => {
 
     expect(result.ok).toBe(true);
     const persistedConfig = configHarness.current();
-    expect(persistedConfig.agents?.list).toEqual([
-      {
-        id: "work",
+    expect(persistedConfig.agents?.entries).toEqual({
+      work: {
         default: true,
         model: "claude-cli/claude-opus-4-8",
         name: "edited during probe",
         models: { "claude-cli/claude-opus-4-8": {} },
       },
-      { id: "new-agent", model: "anthropic/claude-opus-4-8" },
-    ]);
+      "new-agent": { model: "anthropic/claude-opus-4-8" },
+    });
   });
 
   it.each([
@@ -1475,7 +1540,7 @@ describe("activateSetupInference", () => {
       }),
     ).rejects.toThrow("route changed during its live test");
 
-    expect(configHarness.current()).toEqual(concurrent);
+    expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(concurrent));
   });
 
   it("rejects a concurrent edit to inactive target-model metadata", async () => {
@@ -1515,7 +1580,7 @@ describe("activateSetupInference", () => {
       }),
     ).rejects.toThrow("target model metadata changed");
 
-    expect(configHarness.current()).toEqual(concurrentConfig);
+    expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(concurrentConfig));
   });
 
   it("preserves authored provider rows and lifts an onboarding-owned lean setting", async () => {
@@ -2012,9 +2077,8 @@ describe("activateSetupInference", () => {
         agentHarnessRuntimeOverride: "openclaw",
         config: expect.objectContaining({
           agents: expect.objectContaining({
-            list: [
-              expect.objectContaining({
-                id: "ops",
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({
                 model: { primary: "anthropic/claude-opus-4-8" },
                 models: {
                   "anthropic/claude-opus-4-8": {
@@ -2022,7 +2086,7 @@ describe("activateSetupInference", () => {
                   },
                 },
               }),
-            ],
+            }),
           }),
         }),
       }),
@@ -2317,6 +2381,7 @@ describe("activateSetupInference", () => {
             authProfileId: activatedProfileId,
             agentDir: expect.stringContaining("setup-inference-test-"),
             authProfileStateMode: "read-only",
+            preparedModelRuntimeMode: "isolated-read-only",
           }),
         );
         expect(configHarness.current()).toMatchObject({
@@ -2549,7 +2614,7 @@ describe("activateSetupInference", () => {
           alias: "selected-groq",
         },
       });
-      expect(probeConfig.agents?.list?.[0]?.models).toMatchObject({
+      expect(probeConfig.agents?.entries?.main?.models).toMatchObject({
         "groq/llama-3.3-70b-versatile": { agentRuntime: { id: "openclaw" } },
       });
       expect(probeConfig.plugins?.entries?.groq).toEqual({
@@ -2656,7 +2721,7 @@ describe("activateSetupInference", () => {
         }),
       ).rejects.toThrow("active route owner");
 
-      expect(configHarness.current()).toEqual(initialConfig);
+      expect(configHarness.current()).toEqual(canonicalizeAgentEntriesForTest(initialConfig));
       expect(
         Object.keys(readAuthProfileStoreForTest(agentDir).profiles).filter((id) =>
           id.startsWith("groq:setup-"),
@@ -3618,9 +3683,7 @@ describe("activateSetupInference", () => {
         ).nextConfig;
         const configuredRuntime =
           transformed.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.agentRuntime?.id ??
-          transformed.agents?.list?.find((agent) => agent.id === "ops")?.models?.[
-            "openai/gpt-5.6-sol"
-          ]?.agentRuntime?.id;
+          transformed.agents?.entries?.ops?.models?.["openai/gpt-5.6-sol"]?.agentRuntime?.id;
         events.push(configuredRuntime === "codex" ? "persist-plugin-config" : "unexpected-write");
         pendingCodexInstalls.push(transformed.plugins?.installs?.codex);
         persistedConfig = withoutPluginInstallRecords(transformed);
@@ -3674,11 +3737,10 @@ describe("activateSetupInference", () => {
     expect(ensureCodex).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg: expect.objectContaining({
-          agents: {
+          agents: expect.objectContaining({
             defaults: { model: { primary: "openai/gpt-5.4" } },
-            list: [
-              expect.objectContaining({
-                id: "ops",
+            entries: expect.objectContaining({
+              ops: expect.objectContaining({
                 model: {
                   primary: "openai/gpt-5.6-sol",
                   fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -3688,8 +3750,8 @@ describe("activateSetupInference", () => {
                   "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
                 },
               }),
-            ],
-          },
+            }),
+          }),
           models: {
             providers: {
               openai: { baseUrl: "https://proxy.example.test/v1", models: [] },
@@ -3736,12 +3798,20 @@ describe("activateSetupInference", () => {
       workspaceDir: "/tmp/openclaw-workspace",
       logger: expect.objectContaining({ warn: expect.any(Function) }),
     });
-    expect(ensureRegistryLoaded).toHaveBeenCalledWith({
-      scope: "all",
-      config: persistedConfig,
-      activationSourceConfig: persistedConfig,
-      workspaceDir: "/tmp/openclaw-workspace",
-    });
+    expect(ensureRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        config: expect.objectContaining({
+          agents: expect.objectContaining({ entries: persistedConfig.agents?.entries }),
+          gateway: { port: 19_000 },
+        }),
+        activationSourceConfig: expect.objectContaining({
+          agents: expect.objectContaining({ entries: persistedConfig.agents?.entries }),
+          gateway: { port: 19_000 },
+        }),
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
     // Harness selection: codex tests run embedded with the codex harness.
     expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
       agentId: "openclaw",
@@ -3749,13 +3819,12 @@ describe("activateSetupInference", () => {
       provider: "openai",
       authProfileStateMode: "read-only",
       config: {
-        agents: {
+        agents: expect.objectContaining({
           defaults: {
             model: { primary: "openai/gpt-5.4" },
           },
-          list: [
-            expect.objectContaining({
-              id: "ops",
+          entries: expect.objectContaining({
+            ops: expect.objectContaining({
               model: {
                 primary: "openai/gpt-5.6-sol",
                 fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -3765,8 +3834,8 @@ describe("activateSetupInference", () => {
                 "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
               },
             }),
-          ],
-        },
+          }),
+        }),
         plugins: {
           entries: {
             codex: {
@@ -3800,9 +3869,8 @@ describe("activateSetupInference", () => {
       },
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4" } },
-        list: [
-          expect.objectContaining({
-            id: "ops",
+        entries: {
+          ops: expect.objectContaining({
             model: {
               primary: "openai/gpt-5.6-sol",
               fallbacks: ["google/gemini-3.1-pro-preview"],
@@ -3812,7 +3880,7 @@ describe("activateSetupInference", () => {
               "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } },
             },
           }),
-        ],
+        },
       },
       plugins: {
         entries: {
@@ -3920,14 +3988,13 @@ describe("activateSetupInference", () => {
             defaults: expect.objectContaining({
               model: "openai/gpt-5.4",
             }),
-            list: expect.arrayContaining([
-              expect.objectContaining({
-                id: "main",
+            entries: expect.objectContaining({
+              main: expect.objectContaining({
                 models: {
                   "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
                 },
               }),
-            ]),
+            }),
           }),
           plugins: expect.objectContaining({
             entries: expect.objectContaining({
@@ -3948,12 +4015,11 @@ describe("activateSetupInference", () => {
     expect(configHarness.current()).toMatchObject({
       agents: expect.objectContaining({
         defaults: expect.objectContaining({ model: "openai/gpt-5.4" }),
-        list: expect.arrayContaining([
-          expect.objectContaining({
-            id: "main",
+        entries: expect.objectContaining({
+          main: expect.objectContaining({
             models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           }),
-        ]),
+        }),
       }),
       plugins: {
         entries: {
@@ -5650,6 +5716,7 @@ describe("verifySetupInference", () => {
         model: "gpt-5.5",
         agentHarnessRuntimeOverride: "codex",
         authProfileStateMode: "read-only",
+        preparedModelRuntimeMode: "isolated-read-only",
       }),
     );
   });

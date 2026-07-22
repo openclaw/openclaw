@@ -293,7 +293,7 @@ export async function processMessage(params: {
 
   // If we have a transcript, replace the agent-facing body so the agent sees the spoken text.
   // mediaPath and mediaType are intentionally preserved so that inboundAudio detection
-  // (used by features such as messages.tts.auto: "inbound") still sees this as an
+  // (used by features such as tts.auto: "inbound") still sees this as an
   // audio message. The transcript and transcribed media index are also stored on
   // context so downstream media understanding does not transcribe it again.
   const msgForAgent: AdmittedWebInboundMessage =
@@ -609,7 +609,7 @@ export async function processMessage(params: {
     ? (finalizeReply?.(turnResult.dispatchResult) ?? false)
     : false;
   removeAckReactionHandleAfterReply({
-    removeAfterReply: Boolean(params.cfg.messages?.removeAckAfterReply && didSendReply),
+    removeAfterReply: false,
     ackReaction,
     onError: (err) => {
       logAckFailure({

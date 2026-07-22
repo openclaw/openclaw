@@ -115,11 +115,13 @@ export function resolveMediaFacts(source: MediaFactSource): MediaFact[] {
         contentType:
           fact?.contentType ??
           normalizeOptionalString(types[index]) ??
-          (count === 1 ? source.MediaType : undefined),
+          (index === 0 ? source.MediaType : undefined),
         kind: fact?.kind,
         transcribed: fact?.transcribed === true || transcribed.has(index),
         messageId: fact?.messageId,
-        workspaceDir: fact?.workspaceDir,
+        workspaceDir:
+          normalizeOptionalString(fact?.workspaceDir) ??
+          normalizeOptionalString(source.MediaWorkspaceDir),
       },
       index,
     );

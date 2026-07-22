@@ -10,6 +10,7 @@ import {
   type SessionCatalogTranscriptItem,
   type SessionDiscussionInfo,
   type SessionDiscussionState,
+  type SessionObserverDigest,
   type SessionsCatalogContinueResult,
   type SessionsCatalogReadResult,
   type SessionsFilesRevealResult,
@@ -51,6 +52,7 @@ import {
   type QuestionPrompt,
 } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
   BROWSER_ANNOTATION_EVENT,
   type BrowserAnnotationDraft,
@@ -92,6 +94,10 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import {
+  pickFreshestObserverDigest,
+  resolveChatPaneObserverRunId,
+} from "../../lib/observer-digest.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
@@ -141,6 +147,7 @@ import {
   switchChatHistoryBranch,
   syncSelectedSessionMessageSubscription,
 } from "./chat-history.ts";
+import { requestSessionObserverAnswer } from "./chat-observer.ts";
 import {
   applySelectedSessionProjection,
   dismissChatError,
@@ -438,6 +445,15 @@ class ChatPane extends OpenClawLightDomElement {
   } | null = null;
   @litState() private boardChatDockSize: BoardChatDockSize = boardChatDockLayout.load();
   @litState() private resetConfirmationOpen = false;
+  @litState() private observerHudReady = customElements.get("openclaw-chat-observer-hud") != null;
+  private observerHudLoad: Promise<void> | null = null;
+  private readonly askSessionObserver = (sessionKey: string, question: string) => {
+    const state = this.state;
+    if (!state?.connected || !state.client) {
+      return Promise.reject(new Error("Gateway is disconnected"));
+    }
+    return requestSessionObserverAnswer(state.client, sessionKey, question);
+  };
   private resetConfirmation:
     | {
         sessionKey: string;
@@ -2376,6 +2392,27 @@ class ChatPane extends OpenClawLightDomElement {
         }
       });
     }
+    const projectedObserverDigest = this.state?.sessionsResult?.sessions.find((row) =>
+      areUiSessionKeysEquivalent(row.key, this.state?.sessionKey ?? ""),
+    )?.observerDigest;
+    if (this.state?.observerDigest || projectedObserverDigest) {
+      this.ensureObserverHud();
+    }
+  }
+
+  private ensureObserverHud() {
+    if (this.observerHudReady || this.observerHudLoad) {
+      return;
+    }
+    this.observerHudLoad = import("./components/chat-observer-hud.ts")
+      .then(() => {
+        if (this.isConnected) {
+          this.observerHudReady = true;
+        }
+      })
+      .finally(() => {
+        this.observerHudLoad = null;
+      });
   }
 
   override disconnectedCallback() {
@@ -3145,6 +3182,25 @@ class ChatPane extends OpenClawLightDomElement {
     const selectedSession = state.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, state.sessionKey),
     );
+    const projectedObserverDigest: SessionObserverDigest | null = selectedSession?.observerDigest
+      ? {
+          sessionKey: selectedSession.key,
+          runId: selectedSession.observerDigest.runId,
+          revision: selectedSession.observerDigest.revision,
+          updatedAt: selectedSession.observerDigest.updatedAt,
+          headline: selectedSession.observerDigest.headline,
+          health: selectedSession.observerDigest.health,
+        }
+      : null;
+    const observerDigest = pickFreshestObserverDigest(
+      state.observerDigest,
+      projectedObserverDigest,
+    );
+    const observerRunId = resolveChatPaneObserverRunId({
+      localRunId: state.chatRunId,
+      session: selectedSession,
+      digest: observerDigest,
+    });
     const workspaceConflict = workspaceResultConflictFromPlacement(selectedSession?.placement);
     const visibleWorkspaceConflict =
       workspaceConflict &&
@@ -3230,6 +3286,12 @@ class ChatPane extends OpenClawLightDomElement {
     // split; bottom strips do not.
     const sideRailCount = (railSideDocked ? 1 : 0) + (tasksSideDocked ? 1 : 0);
     const detailSplitWidth = chatLayoutWidth - sideRailCount * WORKSPACE_RAIL_MAX_WIDTH;
+    const gatewaySnapshot = this.context.gateway.snapshot;
+    const selfUser = resolveCurrentSelfUser({
+      snapshotUser: gatewaySnapshot.selfUser,
+      presenceEntries: readPresenceEntries(gatewaySnapshot.hello?.snapshot),
+      presenceInstanceId: gatewaySnapshot.client?.instanceId,
+    });
     const props: ChatProps = {
       transcript: this.transcript,
       paneId: this.paneId,
@@ -3251,6 +3313,12 @@ class ChatPane extends OpenClawLightDomElement {
       compactionStatus: state.compactionStatus,
       fallbackStatus: state.fallbackStatus,
       planStatus: state.planStatus,
+      observerDigest: catalogKey ? null : observerDigest,
+      observerHudReady: !catalogKey && this.observerHudReady,
+      observerRunId: catalogKey ? null : observerRunId,
+      observerStartedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
+      observerLastReadAt: selectedSession?.lastReadAt,
+      onObserverAsk: catalogKey ? undefined : this.askSessionObserver,
       gatewayQuestionPrompts: catalogKey ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {
         this.questionPrompts = [...this.questionPrompts];
@@ -3532,9 +3600,9 @@ class ChatPane extends OpenClawLightDomElement {
       onSplitRatioChange: state.handleSplitRatioChange,
       assistantName: state.assistantName,
       assistantAvatar: state.assistantAvatar,
-      userId: this.context.gateway.snapshot.selfUser?.id ?? null,
-      userName: this.context.gateway.snapshot.selfUser?.name ?? state.userName,
-      userAvatar: this.context.gateway.snapshot.selfUser?.avatarUrl ?? state.userAvatar,
+      userId: selfUser?.id ?? null,
+      userName: selfUser?.name ?? state.userName,
+      userAvatar: selfUser?.avatarUrl ?? state.userAvatar,
       localMediaPreviewRoots: state.localMediaPreviewRoots,
       embedSandboxMode: state.embedSandboxMode,
       allowExternalEmbedUrls: state.allowExternalEmbedUrls,

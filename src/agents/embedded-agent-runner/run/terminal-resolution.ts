@@ -20,6 +20,7 @@ import {
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import {
   hasAttemptTerminalState,
+  hasYieldContinuationEvidence,
   resolveAttemptReplayMetadata,
   resolveEmptyResponseRetryInstruction,
   resolveIncompleteTurnPayloadText,
@@ -29,6 +30,7 @@ import {
   resolveToolUseTerminalContinuationInstruction,
   shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
+  YIELD_DIAGNOSTIC_TEXT,
 } from "./incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import {
@@ -451,6 +453,8 @@ function completeEmbeddedRun(
     onSuccessfulAuthBinding: input.runParams.onSuccessfulAuthBinding,
   });
   const replayInvalid = input.resolveReplayInvalid(null);
+  const yieldHasContinuation =
+    input.attempt.yieldDetected && hasYieldContinuationEvidence(input.attempt);
   const livenessState = input.attempt.yieldDetected
     ? "paused"
     : resolveRunLivenessState({
@@ -465,9 +469,15 @@ function completeEmbeddedRun(
     : input.attempt.yieldDetected
       ? "end_turn"
       : (input.attemptAssistant?.stopReason as string | undefined);
+  // Existing visible payloads already avoid the silent-park symptom. The diagnostic
+  // fills only an otherwise empty yielded turn and must not duplicate visible output.
   const terminalPayloads = input.emptyAssistantReplyIsSilent
     ? [{ text: SILENT_REPLY_TOKEN }]
-    : input.payloadsForTerminalPath;
+    : input.payloadsForTerminalPath?.length
+      ? input.payloadsForTerminalPath
+      : input.attempt.yieldDetected && !yieldHasContinuation
+        ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
+        : input.payloadsForTerminalPath;
   input.setTerminalLifecycleMeta({
     replayInvalid,
     livenessState,

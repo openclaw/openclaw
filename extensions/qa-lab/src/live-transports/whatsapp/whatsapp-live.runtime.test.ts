@@ -2091,9 +2091,11 @@ describe("WhatsApp QA live runtime", () => {
     });
 
     expect(cfg.plugins?.allow).toContain("whatsapp");
-    expect(cfg.tools?.media?.audio).toEqual({
-      enabled: true,
-      models: [{ provider: "openai", model: "gpt-4o-transcribe" }],
+    expect(cfg.tools?.media?.audio).toEqual({ enabled: true });
+    expect(cfg.tools?.media?.models?.[0]).toEqual({
+      provider: "openai",
+      model: "gpt-4o-transcribe",
+      capabilities: ["audio"],
     });
   });
 

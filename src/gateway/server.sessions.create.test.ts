@@ -5,7 +5,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   findLiveRegistryWorktreeByOwner,
   listRegistryWorktrees,
@@ -36,6 +37,7 @@ import {
 const { createSessionStoreDir, createSelectedGlobalSessionStore, openClient } =
   setupGatewaySessionsTestHarness();
 const execFileAsync = promisify(execFile);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -420,6 +422,21 @@ test("sessions.create persists a Gateway cwd without a managed worktree", async 
   expect((created.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(
     "/tmp/repo",
   );
+});
+
+test("sessions.create uses a non-git Gateway cwd directly but not as a worktree source", async () => {
+  const cwd = tempDirs.make("openclaw-session-direct-cwd-", await fs.realpath(os.tmpdir()));
+  const client = { client: { connect: { scopes: ["operator.admin"] } } as never };
+  const direct = await directSessionReq("sessions.create", { cwd }, client);
+  expect(direct.ok).toBe(true);
+  expect((direct.payload as { entry?: { spawnedCwd?: string } })?.entry?.spawnedCwd).toBe(cwd);
+
+  const isolated = await directSessionReq("sessions.create", { cwd, worktree: true }, client);
+  expect(isolated.ok).toBe(false);
+  expect(isolated.error).toMatchObject({
+    code: "INVALID_REQUEST",
+    message: "agent workspace is not a git checkout",
+  });
 });
 
 test("sessions.create keeps its cwd contract absolute-only", async () => {

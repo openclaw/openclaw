@@ -204,9 +204,10 @@ The bundled Anthropic plugin adds a **Claude Code** group to the normal sessions
 sidebar. Rows open in the normal Chat pane. It discovers non-archived Claude
 Code sessions on the Gateway and on connected node hosts:
 
-- Claude CLI sessions come from valid project-index records and current JSONL
-  files whose bounded metadata prefix identifies a non-sidechain `sdk-cli`
-  session under `~/.claude/projects/`.
+- Claude CLI sessions come from valid project-index records. For unindexed
+  transcripts, a bounded metadata fallback recognizes concurrent non-sidechain
+  interactive (`cli`) and headless Agent SDK CLI (`sdk-cli`) sessions under
+  `~/.claude/projects/`.
 - Claude Desktop sessions use the Desktop title, activity time, and
   archive state when its metadata points to the same Claude Code session ID.
 - A CLI-only session has no archive flag, so it remains visible while its
@@ -427,7 +428,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
 
 <AccordionGroup>
   <Accordion title="Per-agent cache overrides">
-    Use model-level params as your baseline, then override specific agents via `agents.list[].params`:
+    Use model-level params as your baseline, then override specific agents via `agents.entries.*.params`:
 
     ```json5
     {
@@ -451,7 +452,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     Config merge order:
 
     1. `agents.defaults.models["provider/model"].params`
-    2. `agents.list[].params` (matching `id`, overrides by key)
+    2. `agents.entries.*.params` (matching `id`, overrides by key)
 
     This lets one agent keep a long-lived cache while another agent on the same model disables caching for bursty/low-reuse traffic.
 
