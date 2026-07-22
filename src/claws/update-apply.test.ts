@@ -1,7 +1,6 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ClawCronUpdateError } from "./cron-update.js";
 import {
@@ -12,6 +11,8 @@ import {
 import type { ClawAddPlan, ClawManifest, ClawSourceIdentity } from "./types.js";
 import { applyClawUpdatePlan } from "./update-apply.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const source: ClawSourceIdentity = {
   kind: "package",
@@ -266,7 +267,7 @@ describe("applyClawUpdatePlan", () => {
   });
 
   it("preserves cron prerequisites when the gateway mutation outcome is uncertain", async () => {
-    const root = await mkdtemp(join(tmpdir(), "openclaw-claw-update-apply-"));
+    const root = tempDirs.make("openclaw-claw-update-apply-");
     const env = { OPENCLAW_STATE_DIR: join(root, "state") };
     const currentAddPlan: ClawAddPlan = {
       ...addPlan,
@@ -414,7 +415,7 @@ describe("applyClawUpdatePlan", () => {
   });
 
   it("preserves resolved plugin metadata when applying an owned version upgrade", async () => {
-    const packageRoot = await mkdtemp(join(tmpdir(), "openclaw-claw-plugin-update-"));
+    const packageRoot = tempDirs.make("openclaw-claw-plugin-update-");
     const targetSource = {
       ...source,
       packageRoot,
