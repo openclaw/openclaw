@@ -2023,7 +2023,7 @@
     "@types/proper-lockfile": "4.1.4",
     "@types/ws": "8.18.1",
     "@typescript/native-preview": "7.0.0-dev.20260527.2",
-    "@vitest/coverage-v8": "4.1.8",
+    "@vitest/coverage-v8": "4.1.10",
     "esbuild": "0.28.1",
     "jscpd": "4.2.4",
     "jsdom": "29.1.1",
@@ -2037,7 +2037,7 @@
     "tsdown": "0.22.1",
     "tsx": "4.22.3",
     "unrun": "0.3.0",
-    "vitest": "4.1.8"
+    "vitest": "4.1.10"
   },
   "optionalDependencies": {
     "sqlite-vec": "0.1.9"

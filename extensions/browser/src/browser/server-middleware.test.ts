@@ -21,7 +21,7 @@ describe("installBrowserCommonMiddleware", () => {
     installBrowserCommonMiddleware(app);
 
     const nativeController = new AbortController();
-    const req = new EventEmitter() as EventEmitter & Request;
+    const req = new EventEmitter() as EventEmitter & Request & { signal: AbortSignal };
     const requestPrototype = Object.create(Object.getPrototypeOf(req)) as object;
     Object.defineProperty(requestPrototype, "signal", {
       configurable: true,
