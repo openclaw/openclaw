@@ -141,6 +141,17 @@ type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
     context: { existingEntry?: RuntimeSessionEntry },
   ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
 };
+type RuntimeResetSessionEntryLifecycleParams = RuntimeSessionStoreReadParams & {
+  expectedSessionId?: string;
+  expectedUpdatedAt?: number;
+  update: (
+    entry: RuntimeSessionEntry,
+    context: {
+      nextSessionFile: string;
+      nextSessionId: string;
+    },
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+};
 type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
   entry: RuntimeSessionEntry;
 };
@@ -309,6 +320,9 @@ export type PluginRuntimeCore = {
       ) => RuntimeSessionStoreEntrySummary[];
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
+      ) => Promise<RuntimeSessionEntry | null>;
+      resetSessionEntryLifecycle: (
+        params: RuntimeResetSessionEntryLifecycleParams,
       ) => Promise<RuntimeSessionEntry | null>;
       upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       runWithWorkAdmission: <T>(

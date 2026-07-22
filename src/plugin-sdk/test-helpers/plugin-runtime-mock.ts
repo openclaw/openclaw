@@ -578,6 +578,11 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           .mockResolvedValue(
             null,
           ) as unknown as PluginRuntime["agent"]["session"]["patchSessionEntry"],
+        resetSessionEntryLifecycle: vi
+          .fn()
+          .mockResolvedValue(
+            null,
+          ) as unknown as PluginRuntime["agent"]["session"]["resetSessionEntryLifecycle"],
         upsertSessionEntry: vi
           .fn()
           .mockResolvedValue(

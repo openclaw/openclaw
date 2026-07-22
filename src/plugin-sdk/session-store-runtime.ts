@@ -8,8 +8,10 @@ import {
   updateAmbientTranscriptWatermark,
   type AmbientTranscriptWatermarkScope,
 } from "../config/sessions/ambient-transcript-watermark.js";
-import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
-import { resolveSessionFilePath as resolveLegacySessionFilePath } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePath as resolveLegacySessionFilePath,
+  resolveStorePath as resolveSessionStorePath,
+} from "../config/sessions/paths.js";
 import {
   applySessionStoreProjection as applyAccessorSessionStoreProjection,
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -39,6 +41,10 @@ import type {
 } from "../config/sessions/types.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  resetSessionEntryLifecycleImpl,
+  type ResetSessionEntryLifecycleParams,
+} from "./session-store-lifecycle-runtime.js";
 import {
   activeRecoveryFieldsForSameSession,
   clearRecoveryStateForRotatedSessionPatch,
@@ -147,7 +153,6 @@ function preserveCoreRecoveryState(
     ? { ...publicPatch, ...recoveryState }
     : clearRecoveryStateForRotatedSessionPatch(persistedEntry, publicPatch);
 }
-
 function resolveLegacySessionStoreTarget(storePath: string): {
   agentId?: string;
   storePath: string;
@@ -449,6 +454,15 @@ export async function patchSessionEntry(
     },
   );
   return entry ? projectPluginSessionEntry(entry) : null;
+}
+
+/** Rotates one session through the canonical lifecycle owner and active-work fence. */
+export async function resetSessionEntryLifecycle(
+  params: ResetSessionEntryLifecycleParams,
+): Promise<SessionEntry | null> {
+  return await resetSessionEntryLifecycleImpl(params, (sessionId, options) =>
+    resolveSessionFilePath(sessionId, undefined, options),
+  );
 }
 
 /** Reads the last activity timestamp for one session entry. */
