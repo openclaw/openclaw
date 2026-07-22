@@ -23,6 +23,7 @@ const withExtractedArchiveRootMock = vi.fn();
 const installPackageDirMock = vi.fn();
 const evaluateSkillInstallPolicyMock = vi.fn();
 const pathExistsMock = vi.fn();
+const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`);
 const tempDirs = createTrackedTempDirs();
 
 vi.mock("../../infra/clawhub.js", async (importOriginal) => ({
@@ -58,6 +59,10 @@ vi.mock("../../plugins/install-security-scan.js", async (importOriginal) => {
 
 vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: pathExistsMock,
+}));
+
+vi.mock("./skill-tree-digest.js", () => ({
+  digestClawHubSkillTree: digestClawHubSkillTreeMock,
 }));
 
 const {
