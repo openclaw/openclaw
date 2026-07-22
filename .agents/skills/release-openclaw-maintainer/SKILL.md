@@ -280,9 +280,9 @@ on pinned current `main` as the exact command and validation contract.
    exact default, slim, browser, and architecture images in GHCR and Docker
    Hub. It must advance only `extended-stable`, `extended-stable-slim`, and
    `extended-stable-browser`. If immutable images already exist but channel
-   aliases need repair, dispatch `docker-release.yml` from current `main` with
-   the exact tag and `operation=promote-channel`; never rebuild or move the
-   immutable release tag just to repair aliases.
+   aliases need repair, dispatch `docker-channel-promote.yml` from current
+   `main` with the exact tag; never rebuild or move the immutable release tag
+   just to repair aliases. The normal release graph remains build-only.
 10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
    ClawHub, or private dist-tag artifacts from this path.
 

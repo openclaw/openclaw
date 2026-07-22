@@ -9,6 +9,10 @@ const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
 const dockerInstallDocsPath = join(repoRoot, "docs/install/docker.md");
 const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
+const dockerChannelPromoteWorkflowPath = join(
+  repoRoot,
+  ".github/workflows/docker-channel-promote.yml",
+);
 const fullReleaseValidationWorkflowPath = join(
   repoRoot,
   ".github/workflows/full-release-validation.yml",
@@ -506,29 +510,26 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
     expect(
       workflow.split("needs.resolve_release_policy.outputs.default_aliases").length,
-    ).toBeGreaterThanOrEqual(5);
+    ).toBeGreaterThanOrEqual(3);
     expect(
       workflow.split("needs.resolve_release_policy.outputs.slim_aliases").length,
-    ).toBeGreaterThanOrEqual(5);
+    ).toBeGreaterThanOrEqual(3);
     expect(
       workflow.split("needs.resolve_release_policy.outputs.browser_aliases").length,
-    ).toBeGreaterThanOrEqual(5);
+    ).toBeGreaterThanOrEqual(3);
   });
 
   it("promotes existing immutable Docker images without rebuilding them", async () => {
-    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+    const releaseWorkflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+    const promoteWorkflow = await readFile(dockerChannelPromoteWorkflowPath, "utf8");
 
-    expect(workflow).toContain("promote-channel-aliases:");
-    expect(workflow).toContain("inputs.operation == 'promote-channel'");
-    expect(workflow).toContain("Docker channel promotion must be dispatched from main");
-    expect(workflow).toContain("'docker-release-publish'");
-    expect(workflow).toContain('echo "## Docker release policy"');
-    expect(workflow).toContain("name: Approve Docker ${{ inputs.operation }} ${{ inputs.tag }}");
-    expect(workflow).toContain("docker buildx imagetools create --prefer-index=false");
-    expect(workflow).toContain('"${image}@${source_digest}"');
-    expect(workflow).toContain('if [[ "${target_digest}" != "${source_digest}" ]]; then');
-    expect(workflow).toContain('require_group_source "${image}" "-slim" "${SLIM_ALIASES}"');
-    expect(workflow).toContain('require_group_source "${image}" "-browser" "${BROWSER_ALIASES}"');
+    expect(releaseWorkflow).not.toContain("promote-channel");
+    expect(promoteWorkflow).toContain("Docker channel promotion must be dispatched from main");
+    expect(promoteWorkflow).toContain("group: docker-release-publish");
+    expect(promoteWorkflow).toContain("environment: docker-release");
+    expect(promoteWorkflow).toContain("node scripts/docker-channel-promote.mjs");
+    expect(promoteWorkflow).toContain('--image "${GHCR_IMAGE}"');
+    expect(promoteWorkflow).toContain('--image "${DOCKERHUB_IMAGE}"');
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {

@@ -103,6 +103,10 @@ workflow publishes immutable default, slim, browser, and architecture tags to
 GHCR and Docker Hub. It advances only the three extended-stable Docker aliases;
 it must not move `latest`, `main`, or their variants. Require the Docker run and
 its attestation verification to succeed before declaring the release complete.
+If immutable images exist but a moving alias needs repair, dispatch `Docker
+Channel Promotion` from current `main` with the exact release tag. The separate
+workflow requires `docker-release` environment approval, verifies every source
+image before moving any alias, and does not rebuild immutable images.
 
 After both runs succeed, publish every npm-publishable official plugin from the
 same exact branch tip. Patch `P` must be `33` or greater. Pass the full release

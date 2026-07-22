@@ -17,17 +17,9 @@ on:
         description: Existing stable, extended-stable, or beta release tag
         required: true
         type: string
-      operation:
-        description: Build immutable images, or promote an existing immutable version to its moving channel aliases
-        required: true
-        type: choice
-        default: backfill
-        options:
-          - backfill
-          - promote-channel
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.operation == 'backfill' && format('docker-release-manual-{0}', inputs.tag) || 'docker-release-publish' }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('docker-release-manual-{0}', inputs.tag) || 'docker-release-publish' }}
   cancel-in-progress: false
 
 env:
@@ -89,25 +81,15 @@ jobs:
         shell: bash
         env:
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-          RELEASE_OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'release' }}
-          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if [[ "${SOURCE_REF}" != refs/tags/v* ]]; then
             echo "::error::Docker releases require a v-prefixed release tag; got ${SOURCE_REF}."
             exit 1
           fi
-          if [[ "${RELEASE_OPERATION}" == "promote-channel" && "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
-            echo "::error::Docker channel promotion must be dispatched from main; got ${WORKFLOW_REF}."
-            exit 1
-          fi
           version="${SOURCE_REF#refs/tags/v}"
           policy="$(node workflow-source/scripts/lib/docker-release-policy.mjs "${version}")"
           channel="$(jq -r '.channel' <<< "${policy}")"
-          if [[ "${RELEASE_OPERATION}" == "promote-channel" && "${channel}" == "beta" ]]; then
-            echo "::error::Beta releases have no moving Docker channel aliases to promote."
-            exit 1
-          fi
           default_aliases="$(jq -r '.movingAliases.default | join(" ")' <<< "${policy}")"
           slim_aliases="$(jq -r '.movingAliases.slim | join(" ")' <<< "${policy}")"
           browser_aliases="$(jq -r '.movingAliases.browser | join(" ")' <<< "${policy}")"
@@ -121,7 +103,6 @@ jobs:
           {
             echo "## Docker release policy"
             echo "- Version: ${version}"
-            echo "- Operation: ${RELEASE_OPERATION}"
             echo "- Channel: ${channel}"
             echo "- Default aliases: ${default_aliases:-none}"
             echo "- Slim aliases: ${slim_aliases:-none}"
@@ -129,7 +110,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   approve_manual_backfill:
-    name: Approve Docker ${{ inputs.operation }} ${{ inputs.tag }} → ${{ needs.resolve_release_policy.outputs.channel }} (${{ needs.resolve_release_policy.outputs.default_aliases }})
+    name: Approve Docker backfill ${{ inputs.tag }}
     if: github.event_name == 'workflow_dispatch'
     needs: [validate_manual_backfill, resolve_release_policy]
     # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
@@ -137,18 +118,11 @@ jobs:
     environment: docker-release
     permissions: {}
     steps:
-      - name: Approve Docker operation
+      - name: Approve Docker backfill
         env:
           RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_OPERATION: ${{ inputs.operation }}
-          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
-          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
-          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
         run: |
-          echo "Approved Docker ${RELEASE_OPERATION} for ${RELEASE_TAG}"
-          echo "Default aliases: ${DEFAULT_ALIASES:-none}"
-          echo "Slim aliases: ${SLIM_ALIASES:-none}"
-          echo "Browser aliases: ${BROWSER_ALIASES:-none}"
+          echo "Approved immutable Docker image backfill for ${RELEASE_TAG}"
 
   validate_publish_config:
     runs-on: ubuntu-24.04
@@ -170,7 +144,7 @@ jobs:
 
   resolve_build_provenance:
     needs: [approve_manual_backfill, resolve_release_policy, validate_publish_config]
-    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || (needs.approve_manual_backfill.result == 'success' && inputs.operation == 'backfill')) }}
+    if: ${{ always() && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -789,110 +763,6 @@ jobs:
               "${DOCKERHUB_IMAGE}:${version}-browser-arm64" \
               "${dockerhub_browser_tags[@]}"
           fi
-
-  promote-channel-aliases:
-    needs: [approve_manual_backfill, resolve_release_policy, validate_publish_config]
-    if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.operation == 'promote-channel' && needs.approve_manual_backfill.result == 'success' && needs.resolve_release_policy.result == 'success' && needs.validate_publish_config.result == 'success' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      packages: write
-    steps:
-      - *buildkit_prepull_step
-      - name: Set up Docker Builder
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
-
-      - name: Login to GitHub Container Registry
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Login to Docker Hub
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Promote and verify channel aliases
-        shell: bash
-        env:
-          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
-          RELEASE_CHANNEL: ${{ needs.resolve_release_policy.outputs.channel }}
-          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
-          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
-          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
-          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
-        run: |
-          set -euo pipefail
-
-          manifest_digest() {
-            local ref="$1"
-            docker buildx imagetools inspect "${ref}" --format '{{json .Manifest}}' |
-              jq -er '.digest | select(startswith("sha256:"))'
-          }
-
-          require_group_source() {
-            local image="$1"
-            local suffix="$2"
-            local aliases_text="$3"
-            if [[ -n "${aliases_text}" ]]; then
-              manifest_digest "${image}:${VERSION}${suffix}" >/dev/null
-            fi
-          }
-
-          promote_group() {
-            local image="$1"
-            local suffix="$2"
-            local aliases_text="$3"
-            if [[ -z "${aliases_text}" ]]; then
-              return
-            fi
-            local source_ref="${image}:${VERSION}${suffix}"
-            local source_digest
-            source_digest="$(manifest_digest "${source_ref}")"
-            local aliases=()
-            local create_args=()
-            read -r -a aliases <<< "${aliases_text}"
-            for alias in "${aliases[@]}"; do
-              create_args+=(--tag "${image}:${alias}")
-            done
-            docker buildx imagetools create --prefer-index=false \
-              "${create_args[@]}" "${image}@${source_digest}"
-            for alias in "${aliases[@]}"; do
-              local target_ref="${image}:${alias}"
-              local target_digest
-              target_digest="$(manifest_digest "${target_ref}")"
-              if [[ "${target_digest}" != "${source_digest}" ]]; then
-                echo "::error::${target_ref} resolved to ${target_digest}, expected ${source_digest}."
-                exit 1
-              fi
-              echo "Verified ${target_ref} -> ${source_digest}."
-            done
-          }
-
-          # Resolve every immutable source before moving any alias so missing
-          # release images fail without leaving a partially promoted channel.
-          for image in "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"; do
-            require_group_source "${image}" "" "${DEFAULT_ALIASES}"
-            require_group_source "${image}" "-slim" "${SLIM_ALIASES}"
-            require_group_source "${image}" "-browser" "${BROWSER_ALIASES}"
-          done
-
-          for image in "${GHCR_IMAGE}" "${DOCKERHUB_IMAGE}"; do
-            promote_group "${image}" "" "${DEFAULT_ALIASES}"
-            promote_group "${image}" "-slim" "${SLIM_ALIASES}"
-            promote_group "${image}" "-browser" "${BROWSER_ALIASES}"
-          done
-
-          {
-            echo "## Docker channel promotion"
-            echo "- Version: ${VERSION}"
-            echo "- Channel: ${RELEASE_CHANNEL}"
-            echo "- Registries: ${GHCR_IMAGE}, ${DOCKERHUB_IMAGE}"
-          } >> "$GITHUB_STEP_SUMMARY"
 
   verify-attestations:
     needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
