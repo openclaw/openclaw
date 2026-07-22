@@ -229,21 +229,21 @@
   outline-offset: 3px;
 }
 
-.sidebar-markdown a > .markdown-inline-image {
-  margin-top: 0.75em;
-}
-
 .sidebar-markdown .markdown-inline-image {
   display: block;
   width: auto;
   max-width: 100%;
   height: auto;
   max-height: 420px;
-  margin-top: 0;
+  margin-top: 0.75em;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   object-fit: contain;
+}
+
+.sidebar-markdown .markdown-inline-image-button > .markdown-inline-image {
+  margin-top: 0;
 }
 
 .sidebar-markdown :where(details) {

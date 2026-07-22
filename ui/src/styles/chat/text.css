@@ -154,21 +154,21 @@
   outline-offset: 3px;
 }
 
-.chat-text :where(a > .markdown-inline-image) {
-  margin-top: 0.75em;
-}
-
 .chat-text :where(.markdown-inline-image) {
   display: block;
   max-width: min(100%, 420px);
   max-height: 320px;
   width: auto;
   height: auto;
-  margin-top: 0;
+  margin-top: 0.75em;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--secondary) 70%, transparent);
   object-fit: contain;
+}
+
+.chat-text :where(.markdown-inline-image-button > .markdown-inline-image) {
+  margin-top: 0;
 }
 
 .chat-text :where(:not(pre) > code) {
