@@ -199,10 +199,12 @@ async function assertValidCronUpdatePatch(params: {
   // resolveFailureAlert() treats those as active, so re-validating their inherited
   // route would block unrelated edits on a legacy channel that already delivers.
   const globalAlertsEnabled = params.cfg.cron?.failureAlert?.enabled === true;
-  const alertWasOff =
-    params.currentJob.failureAlert === false ||
-    (params.currentJob.failureAlert === undefined && !globalAlertsEnabled);
-  const alertNewlyEnabled = Boolean(failureAlertPatch) && alertWasOff;
+  const currentAlertActive =
+    params.currentJob.failureAlert !== false &&
+    (params.currentJob.failureAlert !== undefined || globalAlertsEnabled);
+  const nextAlertActive =
+    nextJob.failureAlert !== false && (nextJob.failureAlert !== undefined || globalAlertsEnabled);
+  const alertNewlyEnabled = !currentAlertActive && nextAlertActive;
   // A delivery change only affects the alert when the alert inherits the changed
   // delivery field (its own channel/to is unset). Gating on that avoids blocking
   // unrelated delivery edits (bestEffort, failureDestination) on jobs that carry
@@ -211,13 +213,27 @@ async function assertValidCronUpdatePatch(params: {
   // mergeCronDelivery, which can make an inheriting alert ambiguous.
   const deliveryPatch = params.patch.delivery;
   const mergedAlert = nextJob.failureAlert;
+  const alertUsesInheritedChannel = !mergedAlert || mergedAlert.channel === undefined;
+  const alertUsesInheritedTarget = !mergedAlert || mergedAlert.to === undefined;
   const deliveryAffectsInheritedAlert =
     deliveryPatch &&
-    mergedAlert &&
-    (("channel" in deliveryPatch && mergedAlert.channel === undefined) ||
-      ("to" in deliveryPatch && mergedAlert.to === undefined) ||
-      ("mode" in deliveryPatch && mergedAlert.channel === undefined));
-  if (failureAlertRoutingPatched || alertNewlyEnabled || deliveryAffectsInheritedAlert) {
+    nextAlertActive &&
+    (("channel" in deliveryPatch && alertUsesInheritedChannel) ||
+      ("to" in deliveryPatch && alertUsesInheritedTarget) ||
+      ("mode" in deliveryPatch && alertUsesInheritedChannel));
+  const currentAlertRoutingOverride =
+    params.currentJob.failureAlert &&
+    (params.currentJob.failureAlert.channel !== undefined ||
+      params.currentJob.failureAlert.to !== undefined ||
+      params.currentJob.failureAlert.mode !== undefined);
+  const alertResetToGlobal =
+    failureAlertPatch === null && nextAlertActive && currentAlertRoutingOverride;
+  if (
+    failureAlertRoutingPatched ||
+    alertNewlyEnabled ||
+    deliveryAffectsInheritedAlert ||
+    alertResetToGlobal
+  ) {
     await assertValidCronFailureAlert({
       cfg: params.cfg,
       failureAlert: nextJob.failureAlert,

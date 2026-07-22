@@ -131,8 +131,11 @@ export async function assertValidCronFailureAlert(params: {
   delivery?: CronDelivery;
 }) {
   const failureAlert = params.failureAlert;
-  // `false` disables alerts and `undefined` leaves them unset.
-  if (!failureAlert) {
+  const globalFailureAlert = params.cfg.cron?.failureAlert;
+  // `false` disables alerts. An unset job alert still inherits an enabled global
+  // alert, so validate its effective route rather than allowing it to bypass the
+  // same channel checks as an explicit per-job alert.
+  if (failureAlert === false || (!failureAlert && globalFailureAlert?.enabled !== true)) {
     return;
   }
   // Only announce alerts route through a channel type; webhook alerts POST to
@@ -140,7 +143,7 @@ export async function assertValidCronFailureAlert(params: {
   // resolveFailureAlert(): a job that omits `mode` inherits the global cron
   // failure-alert mode, so validating with a hard "announce" default would
   // wrongly reject a channel that a globally webhook-mode alert never uses.
-  const effectiveMode = failureAlert.mode ?? params.cfg.cron?.failureAlert?.mode;
+  const effectiveMode = failureAlert?.mode ?? globalFailureAlert?.mode;
   if (effectiveMode === "webhook") {
     return;
   }
@@ -151,20 +154,13 @@ export async function assertValidCronFailureAlert(params: {
   // routing-changing edit (e.g. flipping mode to announce) that activates a
   // legacy-invalid inherited delivery channel is rejected up front rather than
   // only when the alert fires.
-  const effectiveChannel = failureAlert.channel ?? params.delivery?.channel;
-  const effectiveTo = failureAlert.to ?? params.delivery?.to;
-  const resolvedChannel = resolveAnnounceValidationChannel({
-    channel: effectiveChannel,
-    to: effectiveTo,
-  });
-  // No channel and no target at all: the alert routes through "last"/the routing
-  // channel with no explicit destination, so there is nothing to validate. A
-  // target with no resolvable channel is NOT skipped - it is ambiguous across a
-  // multi-channel config, so assertConfiguredAnnounceChannel rejects it just like
-  // a bare delivery.to.
-  if (resolvedChannel === undefined && effectiveTo === undefined) {
-    return;
-  }
+  const effectiveChannel = failureAlert?.channel ?? params.delivery?.channel;
+  const effectiveTo = failureAlert?.to ?? params.delivery?.to;
+  const resolvedChannel =
+    resolveAnnounceValidationChannel({
+      channel: effectiveChannel,
+      to: effectiveTo,
+    }) ?? "last";
   assertCompatibleAnnounceTarget({
     channel: effectiveChannel,
     to: effectiveTo,

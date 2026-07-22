@@ -2032,10 +2032,9 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("revalidates an inheriting alert when a delivery mode change to webhook clears its inherited channel", async () => {
-    // The alert has its own `to` but no channel, so it inherits delivery.channel.
-    // Switching delivery to webhook clears that channel, leaving the alert's bare
-    // `to` ambiguous across the multi-channel config, so it must be rejected.
+  it("preserves the last-channel fallback when a delivery mode change clears inheritance", async () => {
+    // The alert has its own bare `to` but no channel. Switching delivery to webhook
+    // clears the inherited channel, and runtime then routes through `last`.
     setRuntimeConfig(telegramSlackConfig());
 
     const { context, respond } = await invokeCronUpdate(
@@ -2049,11 +2048,8 @@ describe("cron method validation", () => {
       }),
     );
 
-    expect(context.cron.update).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "failureAlert.channel",
-    });
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
   });
 
   it("rejects a failureAlert.to whose prefix conflicts with the inherited delivery channel", async () => {
@@ -2074,10 +2070,9 @@ describe("cron method validation", () => {
     });
   });
 
-  it("rejects a bare failureAlert.to with no resolvable channel in a multi-channel config", async () => {
-    // No own channel, no delivery channel, and no provider prefix: the target is
-    // ambiguous across configured channels, so require an explicit channel like
-    // delivery.to does rather than failing ambiguously at send.
+  it("accepts a bare failureAlert.to through the runtime last-channel fallback", async () => {
+    // No own channel, no delivery channel, and no provider prefix: runtime uses
+    // its remembered last channel, so gateway validation must preserve that path.
     setRuntimeConfig(telegramSlackConfig());
 
     const { context, respond } = await invokeCronUpdate(
@@ -2085,11 +2080,62 @@ describe("cron method validation", () => {
       createCronJob(),
     );
 
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("validates a null failureAlert reset that reactivates global alert delivery", async () => {
+    setRuntimeConfig({
+      ...telegramSlackConfig(),
+      cron: { failureAlert: { enabled: true } },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: null } },
+      createCronJob({
+        delivery: { mode: "announce", channel: "c0legacyinvalid", to: "123" },
+        failureAlert: { channel: "slack", mode: "announce" },
+      }),
+    );
+
     expect(context.cron.update).not.toHaveBeenCalled();
     expectResponseError(respond, {
       code: "INVALID_REQUEST",
       messageIncludes: "failureAlert.channel",
     });
+  });
+
+  it("does not revalidate a no-op null reset on an inherited global alert", async () => {
+    setRuntimeConfig({
+      ...telegramSlackConfig(),
+      cron: { failureAlert: { enabled: true } },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: null } },
+      createCronJob({ delivery: { mode: "announce", channel: "c0legacyinvalid", to: "123" } }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
+  });
+
+  it("does not revalidate a threshold-only reset on an inherited global alert", async () => {
+    setRuntimeConfig({
+      ...telegramSlackConfig(),
+      cron: { failureAlert: { enabled: true } },
+    } as OpenClawConfig);
+
+    const { context, respond } = await invokeCronUpdate(
+      { id: "cron-1", patch: { failureAlert: null } },
+      createCronJob({
+        delivery: { mode: "announce", channel: "c0legacyinvalid", to: "123" },
+        failureAlert: { after: 2 },
+      }),
+    );
+
+    expect(context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(respond);
   });
 
   it("revalidates an inherited failureAlert when a delivery-only patch changes the channel", async () => {
