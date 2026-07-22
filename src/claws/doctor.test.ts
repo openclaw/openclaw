@@ -379,9 +379,8 @@ describe("collectClawStateHealthFindings", () => {
 
   it("projects agent and workspace drift from lifecycle status", async () => {
     const current = await installFixture({ withFile: true });
-    current.getConfig().agents!.list![0] = {
-      ...current.getConfig().agents!.list![0],
-      id: current.plan.agent.finalId,
+    current.getConfig().agents!.entries![current.plan.agent.finalId] = {
+      ...current.getConfig().agents!.entries![current.plan.agent.finalId],
       name: "Operator edit",
     };
     await writeFile(join(current.plan.agent.workspace, "SOUL.md"), "local edit\n", "utf8");
