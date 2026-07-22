@@ -524,8 +524,10 @@ describe("Dockerfile", () => {
     const promoteWorkflow = await readFile(dockerChannelPromoteWorkflowPath, "utf8");
 
     expect(releaseWorkflow).not.toContain("promote-channel");
+    expect(releaseWorkflow).toContain("queue: max");
     expect(promoteWorkflow).toContain("Docker channel promotion must be dispatched from main");
     expect(promoteWorkflow).toContain("group: docker-release-publish");
+    expect(promoteWorkflow).toContain("queue: max");
     expect(promoteWorkflow).toContain("environment: docker-release");
     expect(promoteWorkflow).toContain("node scripts/docker-channel-promote.mjs");
     expect(promoteWorkflow).toContain('--image "${GHCR_IMAGE}"');
