@@ -584,6 +584,10 @@ export async function spawnAgenticOsSession(
   const idempotencyKey = readString(params, "idempotency_key");
   const gatewayLeaseId = readString(params, "gateway_lease_id");
   const task = readString(params, "task");
+  const runtime = readString(params, "runtime");
+  if (runtime !== "subagent") {
+    return rejectConflict("unsupported sessions_spawn runtime");
+  }
   const metadata = readSessionMetadata(params);
   const metadataClientRequestId = metadata.client_request_id;
   const metadataIdempotencyKey = metadata.idempotency_key;
@@ -611,6 +615,7 @@ export async function spawnAgenticOsSession(
     gateway_lease_id: gatewayLeaseId,
     task,
     taskName,
+    runtime,
     mode,
     cleanup,
     context,

@@ -336,7 +336,7 @@ describe("Agentic OS runtime contract v1", () => {
     expect(payload(await invoke("subagents.allowLease.release", releaseParams))).toEqual(released);
   });
 
-  it("includes mode, cleanup, context, and lightContext in sessions_spawn replay fingerprints", async () => {
+  it("includes launch controls in sessions_spawn replay fingerprints", async () => {
     const gatewayLeaseId = await acquireLease();
     const spawnParams = {
       task: "fingerprint all launch controls",
@@ -364,6 +364,23 @@ describe("Agentic OS runtime contract v1", () => {
         "conflicting sessions_spawn idempotency_key",
       );
     }
+  });
+
+  it("rejects unsupported sessions_spawn runtime before the runner", async () => {
+    const gatewayLeaseId = await acquireLease();
+    expectInvalid(
+      await invoke("sessions_spawn", {
+        task: "unsupported runtime",
+        runtime: "other-runtime",
+        agentId: "ai-engineer",
+        gateway_lease_id: gatewayLeaseId,
+        client_request_id: "spawn-a",
+        idempotency_key: "spawn-idem-a",
+        metadata: sessionMetadata,
+      }),
+      "unsupported sessions_spawn runtime",
+    );
+    expect(spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("rejects unleased legacy sessions_spawn callers before the runner", async () => {
