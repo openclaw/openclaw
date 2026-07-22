@@ -44,6 +44,7 @@ import {
   loadInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
+import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
@@ -195,56 +196,58 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
     });
   }
 
-  const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
-    await createUpdateConfigSnapshot();
-    await doctorCommand(defaultRuntime, {
-      nonInteractive: true,
-      repair: true,
-      yes: opts.yes === true,
-    });
-    configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
-    if (requestedChannel) {
-      configSnapshot = await persistRequestedUpdateChannel({
-        configSnapshot,
-        requestedChannel,
+  const completedPluginUpdate = await withPluginLifecycleLease({}, async () => {
+    const initialPluginUpdate = await withUpdateFinalizationEnv(async () => {
+      await createUpdateConfigSnapshot();
+      await doctorCommand(defaultRuntime, {
+        nonInteractive: true,
+        repair: true,
+        yes: opts.yes === true,
       });
-    }
-    const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
-    configSnapshot = restoredConfig.snapshot;
-    const postDoctorStoredChannel = configSnapshot.valid
-      ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-      : null;
-    const postDoctorChannel =
-      requestedChannel ??
-      postDoctorStoredChannel ??
-      storedChannel ??
-      effectiveChannel ??
-      DEFAULT_PACKAGE_CHANNEL;
-    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
-    return await updatePluginsAfterCoreUpdate({
-      root,
-      channel: postDoctorChannel,
-      configSnapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts: {
-        json: opts.json,
-        timeout: opts.timeout,
-        yes: opts.yes,
-        restart: false,
-        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
-      },
-      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-      pluginInstallRecords,
+      configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+      if (requestedChannel) {
+        configSnapshot = await persistRequestedUpdateChannel({
+          configSnapshot,
+          requestedChannel,
+        });
+      }
+      const restoredConfig = restoreDroppedPreUpdateChannels(configSnapshot, preFinalizeConfig);
+      configSnapshot = restoredConfig.snapshot;
+      const postDoctorStoredChannel = configSnapshot.valid
+        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+        : null;
+      const postDoctorChannel =
+        requestedChannel ??
+        postDoctorStoredChannel ??
+        storedChannel ??
+        effectiveChannel ??
+        DEFAULT_PACKAGE_CHANNEL;
+      const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+      return await updatePluginsAfterCoreUpdate({
+        root,
+        channel: postDoctorChannel,
+        configSnapshot,
+        configChanged: restoredConfig.changed,
+        restoredAuthoredChannels: restoredConfig.authoredChannels,
+        opts: {
+          json: opts.json,
+          timeout: opts.timeout,
+          yes: opts.yes,
+          restart: false,
+          acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+        },
+        timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+        pluginInstallRecords,
+      });
     });
-  });
-  const completedPluginUpdate = await completePostCorePluginUpdate({
-    root,
-    pluginUpdate: initialPluginUpdate,
-    freshDoctorRequired: initialPluginUpdate.changed,
-    yes: opts.yes === true,
-    json: opts.json === true,
-    timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    return await completePostCorePluginUpdate({
+      root,
+      pluginUpdate: initialPluginUpdate,
+      freshDoctorRequired: initialPluginUpdate.changed,
+      yes: opts.yes === true,
+      json: opts.json === true,
+      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+    });
   });
   const pluginUpdate = completedPluginUpdate.pluginUpdate;
   configSnapshot = completedPluginUpdate.configSnapshot;
