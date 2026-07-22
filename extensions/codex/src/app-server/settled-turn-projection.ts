@@ -1,19 +1,20 @@
 import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { JsonValue } from "./protocol.js";
+import { readUpstreamUserText } from "./upstream-prompt-provenance.js";
 
 const MAX_RESPONSE_ITEMS = 200;
 const MAX_PROJECTION_BYTES = 512 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024;
-const TRUNCATION_SUFFIX = "\n\n[Content truncated during settled-turn finalization.]";
 const TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,128}$/u;
+const TOOL_ERROR_STATUS_PREFIX = "[Tool result status: error]\n";
 
+type ProjectedToolReference = { id: string; name: string };
 type ProjectedMessageGroup = {
   items: JsonValue[];
-  callIds: string[];
-  resultIds: string[];
+  calls: ProjectedToolReference[];
+  results: ProjectedToolReference[];
   bytes: number;
-  containsToolResult: boolean;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -24,17 +25,26 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim() || undefined : undefined;
 }
 
-function truncateUtf8(value: string): string {
-  if (Buffer.byteLength(value, "utf8") <= MAX_TEXT_BYTES) {
-    return value;
+function readBoundedText(
+  value: unknown,
+  label: string,
+  maxBytes = MAX_TEXT_BYTES,
+): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
   }
-  const suffixBytes = Buffer.byteLength(TRUNCATION_SUFFIX, "utf8");
-  const source = Buffer.from(value);
-  let end = Math.max(0, MAX_TEXT_BYTES - suffixBytes);
-  while (end > 0 && source[end] !== undefined && (source[end]! & 0xc0) === 0x80) {
-    end -= 1;
+  if (Buffer.byteLength(value, "utf8") > maxBytes) {
+    throw new Error(`Codex settled-turn projection found oversized ${label}`);
   }
-  return `${source.subarray(0, end).toString("utf8")}${TRUNCATION_SUFFIX}`;
+  return value;
+}
+
+function requireBoundedText(value: unknown, label: string, maxBytes = MAX_TEXT_BYTES): string {
+  const text = readBoundedText(value, label, maxBytes);
+  if (!text) {
+    throw new Error(`Codex settled-turn projection found empty ${label}`);
+  }
+  return text;
 }
 
 function responseItemBytes(item: JsonValue): number {
@@ -68,47 +78,56 @@ function serializeToolArguments(value: unknown): string {
     if (!isRecord(parsed)) {
       throw new Error("Codex settled-turn projection requires object tool arguments");
     }
-    return value;
+    return requireBoundedText(value, "tool arguments");
   }
   if (!isRecord(value)) {
     throw new Error("Codex settled-turn projection requires object tool arguments");
   }
-  return JSON.stringify(value);
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    throw new Error("Codex settled-turn projection found unserializable tool arguments");
+  }
+  return requireBoundedText(serialized, "tool arguments");
 }
 
-function projectUserMessage(message: Record<string, unknown>): JsonValue[] {
-  if (typeof message.content === "string") {
-    const text = truncateUtf8(message.content.trim());
-    if (!text) {
-      throw new Error("Codex settled-turn projection found an empty user message");
-    }
-    return [{ type: "message", role: "user", content: [{ type: "input_text", text }] }];
+function projectUserMessage(message: AgentMessage): JsonValue[] {
+  const record = message as unknown as Record<string, unknown>;
+  const upstreamUserText = readUpstreamUserText(message);
+  if (upstreamUserText && typeof record.content === "string") {
+    return [
+      {
+        type: "message",
+        role: "user",
+        content: [
+          { type: "input_text", text: requireBoundedText(upstreamUserText, "upstream user text") },
+        ],
+      },
+    ];
   }
-  if (!Array.isArray(message.content)) {
+  if (typeof record.content === "string") {
+    return [
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: requireBoundedText(record.content, "user message") }],
+      },
+    ];
+  }
+  if (!Array.isArray(record.content)) {
     throw new Error("Codex settled-turn projection found unsupported user content");
   }
   const content: JsonValue[] = [];
-  for (const value of message.content) {
+  for (const value of record.content) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed user content");
     }
     if (value.type === "text") {
-      const text = truncateUtf8(readNonEmptyString(value.text) ?? "");
+      const text = readBoundedText(value.text, "user text");
       if (text) {
         content.push({ type: "input_text", text });
       }
-      continue;
-    }
-    if (value.type === "image") {
-      const data = readNonEmptyString(value.data);
-      const mimeType = readNonEmptyString(value.mimeType) ?? "image/png";
-      if (!data || data.startsWith("http://") || data.startsWith("https://")) {
-        throw new Error("Codex settled-turn projection requires inline user images");
-      }
-      content.push({
-        type: "input_image",
-        image_url: data.startsWith("data:") ? data : `data:${mimeType};base64,${data}`,
-      });
       continue;
     }
     throw new Error(
@@ -123,7 +142,7 @@ function projectUserMessage(message: Record<string, unknown>): JsonValue[] {
 
 function projectAssistantMessage(message: Record<string, unknown>): {
   items: JsonValue[];
-  callIds: string[];
+  calls: ProjectedToolReference[];
 } {
   const values =
     typeof message.content === "string"
@@ -133,13 +152,13 @@ function projectAssistantMessage(message: Record<string, unknown>): {
     throw new Error("Codex settled-turn projection found unsupported assistant content");
   }
   const items: JsonValue[] = [];
-  const callIds: string[] = [];
+  const calls: ProjectedToolReference[] = [];
   for (const value of values) {
     if (!isRecord(value)) {
       throw new Error("Codex settled-turn projection found malformed assistant content");
     }
     if (value.type === "text") {
-      const text = truncateUtf8(readNonEmptyString(value.text) ?? "");
+      const text = readBoundedText(value.text, "assistant text");
       if (text) {
         items.push({
           type: "message",
@@ -150,35 +169,41 @@ function projectAssistantMessage(message: Record<string, unknown>): {
       continue;
     }
     if (value.type === "toolCall") {
-      const callId = requireCallId(value.id ?? value.toolCallId);
+      const id = requireCallId(value.id ?? value.toolCallId);
       const name = requireToolName(value.name ?? value.toolName);
-      callIds.push(callId);
+      calls.push({ id, name });
       items.push({
         type: "function_call",
-        call_id: callId,
+        call_id: id,
         name,
         arguments: serializeToolArguments(value.arguments ?? value.input),
       });
       continue;
     }
     if (value.type === "thinking" || value.type === "reasoning") {
+      // Private/non-visible reasoning is deliberately outside the application transcript.
       continue;
     }
     throw new Error(
       `Codex settled-turn projection does not support assistant content ${String(value.type)}`,
     );
   }
-  return { items, callIds };
+  return { items, calls };
 }
 
 function projectToolResult(message: Record<string, unknown>): {
   item: JsonValue;
-  resultId: string;
+  result: ProjectedToolReference;
 } {
-  const resultId = requireCallId(message.toolCallId);
+  const id = requireCallId(message.toolCallId);
+  const name = requireToolName(message.toolName);
   if (!Array.isArray(message.content)) {
     throw new Error("Codex settled-turn projection found unsupported tool result content");
   }
+  if (message.isError !== undefined && typeof message.isError !== "boolean") {
+    throw new Error("Codex settled-turn projection found invalid tool result status");
+  }
+  const isError = message.isError === true;
   const parts: string[] = [];
   for (const value of message.content) {
     if (!isRecord(value)) {
@@ -186,9 +211,8 @@ function projectToolResult(message: Record<string, unknown>): {
     }
     if (value.type === "image") {
       const mimeType = readNonEmptyString(value.mimeType) ?? "unknown type";
-      // The finalizer selects models by text capability. Preserve valid image
-      // evidence as bounded metadata instead of requiring vision or embedding
-      // large base64 payloads in the disposable child.
+      // The finalizer selects by text capability. Preserve image evidence as
+      // metadata without embedding an executable or oversized multimodal payload.
       parts.push(`[Image tool result: ${mimeType}]`);
       continue;
     }
@@ -197,34 +221,43 @@ function projectToolResult(message: Record<string, unknown>): {
     }
     const text =
       value.type === "text"
-        ? readNonEmptyString(value.text)
-        : (readNonEmptyString(value.content) ?? readNonEmptyString(value.text));
+        ? readBoundedText(value.text, "tool result text")
+        : readBoundedText(value.content ?? value.text, "tool result text");
     if (text) {
       parts.push(text);
     }
   }
-  const output = truncateUtf8(parts.join("\n") || "Tool completed without textual output.");
+  const resultText =
+    parts.join("\n") ||
+    (isError ? "Tool failed without textual output." : "Tool completed without textual output.");
+  // Codex function-call output has no status field. Preserve failure truth in
+  // the text boundary so the final answer cannot reinterpret errors as success.
+  const output = requireBoundedText(
+    isError ? `${TOOL_ERROR_STATUS_PREFIX}${resultText}` : resultText,
+    "tool result output",
+    isError ? MAX_TEXT_BYTES + Buffer.byteLength(TOOL_ERROR_STATUS_PREFIX, "utf8") : MAX_TEXT_BYTES,
+  );
   return {
-    resultId,
-    item: { type: "function_call_output", call_id: resultId, output },
+    result: { id, name },
+    item: { type: "function_call_output", call_id: id, output },
   };
 }
 
 function projectMessage(message: AgentMessage): ProjectedMessageGroup | undefined {
   const record = message as unknown as Record<string, unknown>;
   let items: JsonValue[];
-  let callIds: string[] = [];
-  let resultIds: string[] = [];
+  let calls: ProjectedToolReference[] = [];
+  let results: ProjectedToolReference[] = [];
   if (message.role === "user") {
-    items = projectUserMessage(record);
+    items = projectUserMessage(message);
   } else if (message.role === "assistant") {
     const projected = projectAssistantMessage(record);
     items = projected.items;
-    callIds = projected.callIds;
+    calls = projected.calls;
   } else if (message.role === "toolResult") {
     const projected = projectToolResult(record);
     items = [projected.item];
-    resultIds = [projected.resultId];
+    results = [projected.result];
   } else {
     throw new Error(`Codex settled-turn projection does not support role ${message.role}`);
   }
@@ -233,64 +266,59 @@ function projectMessage(message: AgentMessage): ProjectedMessageGroup | undefine
   }
   return {
     items,
-    callIds,
-    resultIds,
+    calls,
+    results,
     bytes: items.reduce<number>((total, item) => total + responseItemBytes(item), 0),
-    containsToolResult: resultIds.length > 0,
   };
 }
 
-function hasExactlyPairedCalls(groups: readonly ProjectedMessageGroup[]): boolean {
-  const calls = new Set<string>();
+function validateExactlyPairedCalls(groups: readonly ProjectedMessageGroup[]): number {
+  const calls = new Map<string, { name: string; groupIndex: number }>();
   const results = new Set<string>();
-  for (const group of groups) {
-    for (const id of group.callIds) {
-      if (calls.has(id)) {
-        return false;
+  let resultCount = 0;
+  for (const [groupIndex, group] of groups.entries()) {
+    for (const call of group.calls) {
+      if (calls.has(call.id)) {
+        throw new Error("Codex settled-turn projection found a duplicate tool call");
       }
-      calls.add(id);
+      calls.set(call.id, { name: call.name, groupIndex });
     }
-    for (const id of group.resultIds) {
-      if (results.has(id)) {
-        return false;
+    for (const result of group.results) {
+      const call = calls.get(result.id);
+      if (
+        !call ||
+        call.groupIndex >= groupIndex ||
+        call.name !== result.name ||
+        results.has(result.id)
+      ) {
+        throw new Error("Codex settled-turn projection found an ambiguous tool transcript");
       }
-      results.add(id);
+      results.add(result.id);
+      resultCount += 1;
     }
   }
-  return calls.size === results.size && [...calls].every((id) => results.has(id));
+  if (calls.size !== results.size) {
+    throw new Error("Codex settled-turn projection found an incomplete tool transcript");
+  }
+  return resultCount;
 }
 
-/** Projects a bounded transcript tail while keeping every tool call/result pair atomic. */
+/** Projects the complete frozen transcript or rejects it without truncation or tail dropping. */
 export function projectSettledCodexMessages(messages: readonly AgentMessage[]): JsonValue[] {
   const groups = messages.flatMap((message) => {
     const projected = projectMessage(message);
     return projected ? [projected] : [];
   });
-  const lastToolResultIndex = groups.findLastIndex((group) => group.containsToolResult);
-  if (lastToolResultIndex < 0) {
+  if (validateExactlyPairedCalls(groups) === 0) {
     throw new Error("Codex settled-turn projection found no completed tool result");
   }
-  if (!hasExactlyPairedCalls(groups)) {
-    throw new Error("Codex settled-turn projection found an ambiguous tool transcript");
+  const items = groups.flatMap((group) => group.items);
+  if (items.length > MAX_RESPONSE_ITEMS) {
+    throw new Error("Codex settled-turn projection exceeds the item limit");
   }
-
-  let selectedStart = -1;
-  let itemCount = 0;
-  let byteCount = 0;
-  for (let index = groups.length - 1; index >= 0; index -= 1) {
-    const group = groups[index]!;
-    itemCount += group.items.length;
-    byteCount += group.bytes;
-    if (itemCount > MAX_RESPONSE_ITEMS || byteCount > MAX_PROJECTION_BYTES) {
-      break;
-    }
-    const candidate = groups.slice(index);
-    if (index <= lastToolResultIndex && hasExactlyPairedCalls(candidate)) {
-      selectedStart = index;
-    }
+  const bytes = groups.reduce((total, group) => total + group.bytes, 0);
+  if (bytes > MAX_PROJECTION_BYTES) {
+    throw new Error("Codex settled-turn projection exceeds the byte limit");
   }
-  if (selectedStart < 0) {
-    throw new Error("Codex settled-turn projection cannot fit an atomic tool transcript");
-  }
-  return groups.slice(selectedStart).flatMap((group) => group.items);
+  return items;
 }

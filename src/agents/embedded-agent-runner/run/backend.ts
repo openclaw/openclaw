@@ -5,6 +5,10 @@ import {
   runAgentHarnessAttempt,
   runAgentHarnessSettledTurnFinalization,
 } from "../../harness/selection.js";
+import type {
+  AgentHarness,
+  AgentHarnessSettledTurnFinalizationResult,
+} from "../../harness/types.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 /**
@@ -20,6 +24,7 @@ export async function runEmbeddedAttemptWithBackend(
 export async function runEmbeddedSettledTurnFinalizationWithBackend(
   params: EmbeddedRunAttemptParams,
   settledAttempt: EmbeddedRunAttemptResult,
-): Promise<EmbeddedRunAttemptResult> {
-  return runAgentHarnessSettledTurnFinalization(params, settledAttempt);
+  harness: AgentHarness,
+): Promise<AgentHarnessSettledTurnFinalizationResult> {
+  return runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness);
 }

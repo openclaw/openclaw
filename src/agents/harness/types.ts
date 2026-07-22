@@ -59,6 +59,17 @@ type AgentHarnessSettledTurnFinalizationParams = {
   /** Settled result whose completed tool transcript needs a final visible answer. */
   settledAttempt: AgentHarnessAttemptResult;
 };
+export type AgentHarnessSettledTurnFinalizationResult = {
+  /** The single completed assistant answer produced by the isolated operation. */
+  assistant: import("../../llm/types.js").AssistantMessage;
+  /** Normalized usage for the finalization model call only. */
+  usage?: import("../usage.js").NormalizedUsage;
+  /** True when the harness already persisted the assistant into the application transcript. */
+  assistantTranscriptOwned?: boolean;
+  /** Assistant stream generation index used to correlate final reply delivery. */
+  assistantMessageIndex?: number;
+  diagnosticTrace?: import("../../infra/diagnostic-trace-context.js").DiagnosticTraceContext;
+};
 export type AgentHarnessAuthBindingFingerprintParams = {
   authProfileId: string;
   authProfileStore: import("../auth-profiles/types.js").AuthProfileStore;
@@ -214,7 +225,7 @@ type AgentHarnessRunCapability = {
    */
   finalizeSettledTurn?(
     params: AgentHarnessSettledTurnFinalizationParams,
-  ): Promise<AgentHarnessAttemptResult>;
+  ): Promise<AgentHarnessSettledTurnFinalizationResult>;
 };
 
 type AgentHarnessSideQuestionCapability = {

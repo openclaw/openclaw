@@ -4,6 +4,7 @@ import {
   buildAgentHookContextChannelFields,
   compactWithSafetyTimeout,
   getModelProviderRequestTransport,
+  projectSettledTurnFinalizationAttemptResult,
   resolveCompactionTimeoutMs,
   runAgentHarnessAfterCompactionHook,
   runAgentHarnessBeforeCompactionHook,
@@ -717,7 +718,22 @@ export function createCopilotAgentHarness(
       const effectiveParams: AgentHarnessAttemptParams = resumableSessionId
         ? ({
             ...params,
-            ...(operation === "settled-tool-finalization" ? { disableTools: true } : {}),
+            ...(operation === "settled-tool-finalization"
+              ? {
+                  disableTools: true,
+                  onAgentEvent: undefined,
+                  onAgentToolResult: undefined,
+                  onAssistantDelta: undefined,
+                  onAssistantMessageStart: undefined,
+                  onBlockReply: undefined,
+                  onBlockReplyFlush: undefined,
+                  onPartialReply: undefined,
+                  onReasoningEnd: undefined,
+                  onReasoningStream: undefined,
+                  onToolResult: undefined,
+                  onToolStreamBoundary: undefined,
+                }
+              : {}),
             // Finalization is a new, isolated turn over settled state, not a
             // replay of the side-effecting prompt. Ignore replayInvalid while
             // still requiring the exact compatible native session above.
@@ -878,7 +894,10 @@ export function createCopilotAgentHarness(
 
     runAttempt: (params) => runHarnessAttempt(params, "attempt"),
 
-    finalizeSettledTurn: ({ attempt }) => runHarnessAttempt(attempt, "settled-tool-finalization"),
+    finalizeSettledTurn: async ({ attempt }) => {
+      const result = await runHarnessAttempt(attempt, "settled-tool-finalization");
+      return projectSettledTurnFinalizationAttemptResult(result);
+    },
 
     async reset(params: AgentHarnessResetParams): Promise<void> {
       const openclawSessionId = typeof params.sessionId === "string" ? params.sessionId : undefined;

@@ -185,6 +185,26 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
   };
 }
 
+function createFinalAssistant(): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text: "final answer" }],
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-5.5",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 0,
+  };
+}
+
 function createContextEngineRequiringAssembly(): ContextEngine {
   // Selection tests use this to prove fallback cannot cross into a harness
   // that lacks required context-engine host capabilities.
@@ -382,29 +402,34 @@ function registerTestCompactor(
 describe("runAgentHarnessAttempt", () => {
   it("routes settled turns only through an explicit harness finalizer", async () => {
     const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("run"));
+    let hostAuthorityActive = true;
     const finalizeSettledTurn = vi.fn<NonNullable<AgentHarness["finalizeSettledTurn"]>>(
-      async ({ settledAttempt }) => ({
-        ...settledAttempt,
-        assistantTexts: ["final answer"],
-      }),
-    );
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt,
-        finalizeSettledTurn,
+      async ({ attempt, settledAttempt: _settledAttempt }) => {
+        hostAuthorityActive = isHostScopedAgentToolActive("openclaw");
+        expect(attempt.operation).toBe("settled-tool-finalization");
+        return {
+          assistant: createFinalAssistant(),
+        };
       },
-      { ownerPluginId: "codex" },
     );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt,
+      finalizeSettledTurn,
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
     const params = createAttemptParams(providerRuntimeConfig("codex", "codex"));
     const settledAttempt = createAttemptResult("settled");
 
     await expect(
-      runAgentHarnessSettledTurnFinalization(params, settledAttempt),
-    ).resolves.toMatchObject({ assistantTexts: ["final answer"] });
+      runAgentHarnessSettledTurnFinalization(params, settledAttempt, harness),
+    ).resolves.toMatchObject({
+      assistant: { content: [{ type: "text", text: "final answer" }] },
+    });
     expect(runAttempt).not.toHaveBeenCalled();
+    expect(hostAuthorityActive).toBe(false);
     expect(finalizeSettledTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         settledAttempt,
@@ -414,20 +439,19 @@ describe("runAgentHarnessAttempt", () => {
   });
 
   it("fails closed when the selected harness has no settled-turn finalizer", async () => {
-    registerAgentHarness(
-      {
-        id: "codex",
-        label: "Codex",
-        supports: () => ({ supported: true, priority: 100 }),
-        runAttempt: async () => createAttemptResult("run"),
-      },
-      { ownerPluginId: "codex" },
-    );
+    const harness: AgentHarness = {
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: async () => createAttemptResult("run"),
+    };
+    registerAgentHarness(harness, { ownerPluginId: "codex" });
 
     await expect(
       runAgentHarnessSettledTurnFinalization(
         createAttemptParams(providerRuntimeConfig("codex", "codex")),
         createAttemptResult("settled"),
+        harness,
       ),
     ).rejects.toThrow("Agent harness codex cannot safely finalize a settled tool turn");
   });

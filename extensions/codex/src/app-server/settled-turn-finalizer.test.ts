@@ -4,6 +4,10 @@ import type {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  attachCodexMirrorAttestation,
+  fingerprintCodexMirrorSourceMessage,
+} from "./transcript-mirror-attestation.js";
 
 const mocks = vi.hoisted(() => ({
   runBounded: vi.fn(),
@@ -67,6 +71,22 @@ function createSettledAttempt(): EmbeddedRunAttemptResult {
         content: [{ type: "text", text: "Message sent." }],
       } as never,
     ],
+    settledTurnFinalizationContext: {
+      source: "openclaw-transcript",
+      messages: [
+        { role: "user", content: "Send the update to Alice." } as never,
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call-1", name: "message", arguments: {} }],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "message",
+          content: [{ type: "text", text: "Message sent." }],
+        } as never,
+      ],
+    },
     assistantTexts: [],
     toolMetas: [{ toolName: "message", replaySafe: false }],
     lastAssistant: undefined,
@@ -97,10 +117,34 @@ describe("runCodexSettledTurnFinalization", () => {
       usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
     });
     mocks.mirror.mockReset();
-    mocks.mirror.mockResolvedValue({
-      assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
-      userMessagesPresent: [],
-    });
+    mocks.mirror.mockImplementation(
+      async (params: { messages: EmbeddedRunAttemptResult["messagesSnapshot"] }) => {
+        const assistant = params.messages[0]!;
+        return {
+          assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
+          messagesPresent: [
+            attachCodexMirrorAttestation(
+              assistant,
+              fingerprintCodexMirrorSourceMessage(assistant as never),
+            ),
+          ],
+          userMessagesPresent: [],
+        };
+      },
+    );
+  });
+
+  it("binds tool-result failure status into mirror attestations", () => {
+    const toolResult = {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "message",
+      content: [{ type: "text", text: "Message sent." }],
+    };
+
+    expect(fingerprintCodexMirrorSourceMessage(toolResult as never)).not.toBe(
+      fingerprintCodexMirrorSourceMessage({ ...toolResult, isError: true } as never),
+    );
   });
 
   it("runs an isolated history-backed final turn and returns only its visible answer", async () => {
@@ -114,6 +158,7 @@ describe("runCodexSettledTurnFinalization", () => {
         isolation: "private-stdio",
         requireNoExternalCapabilities: true,
         historyItems: [
+          expect.objectContaining({ type: "message", role: "user" }),
           expect.objectContaining({ type: "function_call", call_id: "call-1" }),
           expect.objectContaining({ type: "function_call_output", call_id: "call-1" }),
         ],
@@ -130,28 +175,22 @@ describe("runCodexSettledTurnFinalization", () => {
       expect.objectContaining({
         sessionId: "session-1",
         idempotencyScope: "codex-settled-finalizer:run-1",
+        skipBeforeMessageWriteHooks: true,
         messages: [expect.objectContaining({ role: "assistant" })],
       }),
     );
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
-      assistantTexts: ["The update was sent successfully."],
-      didSendViaMessagingTool: false,
-      toolMediaUrls: undefined,
-      toolAudioAsVoice: undefined,
-      hasToolMediaBlockReply: false,
-      successfulCronAdds: 0,
-      attemptUsage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
-      toolMetas: [],
-      replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+      usage: { input: 5, output: 4, cacheRead: 2, cacheWrite: 1, total: 12 },
+      assistant: {
+        role: "assistant",
+        content: [{ type: "text", text: "The update was sent successfully." }],
+      },
     });
-    expect(result.messagesSnapshot).toHaveLength(3);
-    expect(result.lastAssistant?.content).toEqual([
+    expect(result.assistant.content).toEqual([
       { type: "text", text: "The update was sent successfully." },
     ]);
-    expect(result.lastAssistant?.usage).toMatchObject({
+    expect(result.assistant.usage).toMatchObject({
       input: 5,
       output: 4,
       cacheRead: 2,
@@ -170,5 +209,75 @@ describe("runCodexSettledTurnFinalization", () => {
       ),
     ).rejects.toThrow("completed without a visible answer");
     expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
+  it("rejects an intentionally silent final answer before transcript mutation", async () => {
+    mocks.runBounded.mockResolvedValue({ text: "NO_REPLY", items: [], model: "gpt-5.4" });
+
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+        {},
+      ),
+    ).rejects.toThrow("completed without a visible answer");
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
+  it.each(["commandExecution", "contextCompaction", "mcpToolCall", "futureCapabilityItem"])(
+    "rejects unexpected native %s evidence before transcript mutation",
+    async (type) => {
+      mocks.runBounded.mockResolvedValue({
+        text: "The update was sent successfully.",
+        items: [{ id: "item-1", type }],
+        model: "gpt-5.4",
+      });
+
+      await expect(
+        runCodexSettledTurnFinalization(
+          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+          {},
+        ),
+      ).rejects.toThrow(`unexpected native item: ${type}`);
+      expect(mocks.mirror).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects a missing frozen context before starting the isolated turn", async () => {
+    const settledAttempt = createSettledAttempt();
+    delete settledAttempt.settledTurnFinalizationContext;
+
+    await expect(
+      runCodexSettledTurnFinalization({ attempt: createAttempt(), settledAttempt }, {}),
+    ).rejects.toThrow("finalization context is unavailable");
+    expect(mocks.runBounded).not.toHaveBeenCalled();
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale idempotency hit instead of delivering an unpersisted answer", async () => {
+    mocks.mirror.mockImplementation(
+      async (params: { messages: EmbeddedRunAttemptResult["messagesSnapshot"] }) => {
+        const staleAssistant = {
+          ...params.messages[0]!,
+          content: [{ type: "text", text: "An older final answer." }],
+        } as (typeof params.messages)[number];
+        return {
+          assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
+          messagesPresent: [
+            attachCodexMirrorAttestation(
+              staleAssistant,
+              fingerprintCodexMirrorSourceMessage(staleAssistant as never),
+            ),
+          ],
+          userMessagesPresent: [],
+        };
+      },
+    );
+
+    await expect(
+      runCodexSettledTurnFinalization(
+        { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+        {},
+      ),
+    ).rejects.toThrow("transcript attestation mismatch");
   });
 });

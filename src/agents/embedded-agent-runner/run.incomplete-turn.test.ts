@@ -87,6 +87,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   function runAttemptCall(index: number): {
     prompt?: string;
     disableTools?: boolean;
+    operation?: string;
     suppressNextUserMessagePersistence?: boolean;
     skipPreparedUserTurnMessage?: boolean;
   } {
@@ -99,6 +100,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     return call[0] as {
       prompt?: string;
       disableTools?: boolean;
+      operation?: string;
       suppressNextUserMessagePersistence?: boolean;
       skipPreparedUserTurnMessage?: boolean;
     };
@@ -1118,8 +1120,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: toolUseAssistant,
       });
     });
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Write completed. Here is the final answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["Write completed. Here is the final answer."] }),
+      makeAttemptResult({
+        assistantTexts: ["Write completed. Here is the final answer."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
     );
     mockedBuildEmbeddedRunPayloads
       .mockReturnValueOnce([])
@@ -1137,6 +1151,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
     expect(secondCall.disableTools).toBe(true);
+    expect(secondCall.operation).toBe("settled-tool-finalization");
     expect(secondCall.suppressNextUserMessagePersistence).toBe(false);
     expect(secondCall.skipPreparedUserTurnMessage).toBe(true);
     expectWarnMessageWith("settled post-tool turn lacked a final answer");
@@ -1213,8 +1228,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         currentAttemptAssistant: emptyStopAssistant,
       });
     });
+    const finalAssistant = {
+      role: "assistant",
+      stopReason: "stop",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "text", text: "Write completed. Here is the final answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({ assistantTexts: ["Write completed. Here is the final answer."] }),
+      makeAttemptResult({
+        assistantTexts: ["Write completed. Here is the final answer."],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
+      }),
     );
     mockedBuildEmbeddedRunPayloads
       .mockReturnValueOnce([])
@@ -1325,7 +1352,74 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       "some tool actions may have already been executed",
     );
     expectNoWarnMessageWith("empty response detected");
-    expectWarnMessageWith("settledToolContinuations=1/1");
+    expectWarnMessageWith("settled-turn finalization failed closed");
+  });
+
+  it.each([
+    {
+      label: "provider failure",
+      finalAttempt: {
+        assistantTexts: [],
+        promptError: new Error("finalizer provider failure"),
+        promptErrorSource: "prompt" as const,
+      },
+    },
+    {
+      label: "preflight recovery request",
+      finalAttempt: {
+        assistantTexts: [],
+        preflightRecovery: { route: "compact_only" as const, handled: true as const },
+      },
+    },
+    {
+      label: "compaction continuation request",
+      finalAttempt: { assistantTexts: [], compactionCount: 1 },
+    },
+    {
+      label: "before-finalize revision request",
+      finalAttempt: {
+        assistantTexts: [],
+        beforeAgentFinalizeRevisionReason: "revise this answer",
+      },
+    },
+  ])("does not escape finalization through a $label", async ({ finalAttempt }) => {
+    const toolUseAssistant = {
+      role: "assistant",
+      stopReason: "toolUse",
+      provider: "openai",
+      model: "gpt-5.5",
+      content: [{ type: "toolCall", id: "tool_1", name: "write", arguments: {} }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "write" }],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          messagesSnapshot: [
+            toolUseAssistant,
+            { role: "toolResult", toolCallId: "tool_1", toolName: "write", isError: false },
+          ] as unknown as EmbeddedRunAttemptResult["messagesSnapshot"],
+          lastAssistant: toolUseAssistant,
+          currentAttemptAssistant: toolUseAssistant,
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult(finalAttempt));
+    mockedBuildEmbeddedRunPayloads.mockReturnValue([]);
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-settled-finalizer-sticky-operation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]).toMatchObject({ isError: true });
+    expect(result.payloads?.[0]?.text).toContain(
+      "some tool actions may have already been executed",
+    );
   });
 
   it("surfaces the existing incomplete-turn error after one tool-use continuation", async () => {
@@ -1363,7 +1457,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads?.[0]?.text).toContain(
       "some tool actions may have already been executed",
     );
-    expectWarnMessageWith("settledToolContinuations=1/1");
+    expectWarnMessageWith("settled-turn finalization failed closed");
   });
 
   it("does not claim completion for a toolUse terminal whose tools never started", async () => {
@@ -4473,17 +4567,20 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
         } as unknown as EmbeddedRunAttemptResult["currentAttemptAssistant"],
       }),
     );
+    const finalAssistant = {
+      role: "assistant",
+      api: "openai-completions",
+      stopReason: "stop",
+      provider: "stepfun",
+      model: "step-router-v1",
+      content: [{ type: "text", text: "Visible StepFun answer." }],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: ["Visible StepFun answer."],
-        lastAssistant: {
-          role: "assistant",
-          api: "openai-completions",
-          stopReason: "stop",
-          provider: "stepfun",
-          model: "step-router-v1",
-          content: [{ type: "text", text: "Visible StepFun answer." }],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: finalAssistant,
+        currentAttemptAssistant: finalAssistant,
+        currentAttemptCompletedAssistant: finalAssistant,
       }),
     );
 

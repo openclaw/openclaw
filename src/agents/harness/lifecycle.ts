@@ -26,10 +26,12 @@ import {
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
+import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParams,
   AgentHarnessAttemptResult,
+  AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
 
 type AgentHarnessLifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
@@ -143,6 +145,19 @@ function withFallbackDiagnosticTrace(
   result: AgentHarnessAttemptResult,
   trace: DiagnosticTraceContext | undefined,
 ): AgentHarnessAttemptResult {
+  if (result.diagnosticTrace || !trace) {
+    return result;
+  }
+  return {
+    ...result,
+    diagnosticTrace: freezeDiagnosticTraceContext(trace),
+  };
+}
+
+function withFallbackFinalizationDiagnosticTrace(
+  result: AgentHarnessSettledTurnFinalizationResult,
+  trace: DiagnosticTraceContext | undefined,
+): AgentHarnessSettledTurnFinalizationResult {
   if (result.diagnosticTrace || !trace) {
     return result;
   }
@@ -298,4 +313,78 @@ export async function runAgentHarnessLifecycleAttempt(
     trace: activeHarnessTrace,
   });
   return result;
+}
+
+/** Runs one isolated finalization with diagnostics and its narrow result validator. */
+export async function runAgentHarnessLifecycleFinalization(
+  harness: AgentHarness,
+  params: AgentHarnessAttemptParams,
+  execute: () => Promise<AgentHarnessSettledTurnFinalizationResult>,
+): Promise<AgentHarnessSettledTurnFinalizationResult> {
+  let phase: AgentHarnessLifecyclePhase = "prepare";
+  const startedAt = Date.now();
+  const activeHarnessTrace = getActiveDiagnosticTraceContext();
+  const agentRunTrace =
+    shouldEmitAgentRunDiagnostics(harness) && activeHarnessTrace
+      ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(activeHarnessTrace))
+      : undefined;
+
+  emitAgentHarnessRunStarted(harness, params, activeHarnessTrace);
+  if (agentRunTrace) {
+    emitTrustedDiagnosticEvent({
+      type: "run.started",
+      ...agentRunDiagnosticBase(params, agentRunTrace),
+    });
+  }
+  try {
+    const runAndValidate = async () => {
+      phase = "send";
+      const rawResult = await execute();
+      phase = "resolve";
+      return assertSettledTurnFinalizationResult(rawResult);
+    };
+    const rawResult = agentRunTrace
+      ? await runWithDiagnosticTraceContext(agentRunTrace, runAndValidate)
+      : await runAndValidate();
+    const result = withFallbackFinalizationDiagnosticTrace(rawResult, activeHarnessTrace);
+    if (agentRunTrace) {
+      emitTrustedDiagnosticEvent({
+        type: "run.completed",
+        ...agentRunDiagnosticBase(params, agentRunTrace),
+        durationMs: Date.now() - startedAt,
+        outcome: "completed",
+      });
+    }
+    emitTrustedDiagnosticEvent({
+      type: "harness.run.completed",
+      ...agentHarnessDiagnosticBase(harness, params, result.diagnosticTrace ?? activeHarnessTrace),
+      durationMs: Date.now() - startedAt,
+      outcome: "completed",
+      itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    });
+    return result;
+  } catch (error) {
+    emitAgentHarnessRunError({
+      harness,
+      attemptParams: params,
+      startedAt,
+      phase,
+      error,
+      trace: activeHarnessTrace,
+    });
+    if (agentRunTrace) {
+      const errorMessage = diagnosticErrorMessage(error);
+      emitTrustedDiagnosticEventWithPrivateData(
+        {
+          type: "run.completed",
+          ...agentRunDiagnosticBase(params, agentRunTrace),
+          durationMs: Date.now() - startedAt,
+          outcome: "error",
+          errorCategory: diagnosticErrorCategory(error),
+        },
+        errorMessage ? { errorMessage } : undefined,
+      );
+    }
+    throw error;
+  }
 }

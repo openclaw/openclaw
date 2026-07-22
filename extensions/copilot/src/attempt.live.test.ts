@@ -263,7 +263,10 @@ describeLive("copilot agent runtime live smoke", () => {
       if (!finalResult) {
         throw new Error("Copilot harness did not expose settled tool finalization");
       }
-      const assistantText = finalResult.assistantTexts.join("\n").trim();
+      const assistantText = finalResult.assistant.content
+        .map((block) => (block.type === "text" ? block.text : ""))
+        .join("\n")
+        .trim();
       const finalCapabilityEvents = finalEventTypes.filter((type) =>
         /(tool|permission|user.?input|subagent)/i.test(type),
       );
@@ -280,7 +283,7 @@ describeLive("copilot agent runtime live smoke", () => {
             toolCalls: liveToolState.calls,
             streamedTexts,
             toolMetas: settledResult.toolMetas,
-            usage: finalResult.attemptUsage,
+            usage: finalResult.usage,
             userInputRequests: liveToolState.userInputRequests,
           },
           null,
@@ -288,11 +291,11 @@ describeLive("copilot agent runtime live smoke", () => {
         ),
       );
 
-      expect(finalResult.promptError).toBeUndefined();
-      expect(finalResult.timedOut).toBe(false);
       expect(assistantText).toBe("COPILOT-SETTLED-FINALIZER-OK");
       expect(liveToolState.calls).toEqual([liveToolState.expectedText]);
-      expect(finalResult.toolMetas).toEqual([]);
+      expect(finalResult.assistant.stopReason).not.toBe("toolUse");
+      expect(finalResult.assistant.content.every((block) => block.type !== "toolCall")).toBe(true);
+      expect(finalResult).not.toHaveProperty("toolMetas");
       expect(finalCapabilityEvents).toEqual([]);
       expect(liveToolState.permissionRequests).toBe(0);
       expect(liveToolState.userInputRequests).toBe(0);

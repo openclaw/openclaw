@@ -8,21 +8,14 @@ import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../m
 import type { AgentRuntimePlan } from "../../runtime-plan/types.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
 import type { SystemAgentToolOptions } from "../../tools/system-agent-tool.js";
-import {
-  runEmbeddedAttemptWithBackend,
-  runEmbeddedSettledTurnFinalizationWithBackend,
-} from "./backend.js";
+import { runEmbeddedAttemptWithBackend } from "./backend.js";
 import {
   EMBEDDED_RUN_LANE_HEARTBEAT_MS,
   EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveSkillWorkshopAttemptParams } from "./skill-workshop-attempt-params.js";
-import type {
-  EmbeddedRunAttemptParams,
-  EmbeddedRunAttemptResult,
-  EmbeddedRunAttemptTrajectoryRecorder,
-} from "./types.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptTrajectoryRecorder } from "./types.js";
 
 type InternalRunParams = RunEmbeddedAgentParams & {
   sessionFile: string;
@@ -103,10 +96,10 @@ export async function dispatchEmbeddedRunAttempt(input: {
   suppressNextUserMessagePersistence: boolean;
   beforeAgentFinalizeRevisionAttempts: number;
   maxBeforeAgentFinalizeRevisions: number;
-  settledToolFinalization?: EmbeddedRunAttemptResult | null;
 }): Promise<{
   rawAttempt: Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
   cancellationRequested: boolean;
+  preparedAttempt: EmbeddedRunAttemptParams;
 }> {
   const { params, runtime, control } = input;
   const observeToolTerminal = createToolTerminalObserver(params.runId);
@@ -169,6 +162,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
 
   let cancellationRequested = false;
   const attemptParams: EmbeddedRunAttemptParams = {
+    operation: "attempt",
     sessionId: runtime.sessionId,
     sessionKey: runtime.sessionKey,
     conversationRecall: params.conversationRecall,
@@ -373,11 +367,7 @@ export async function dispatchEmbeddedRunAttempt(input: {
     onUserMessagePersistenceInvalidated: control.onUserMessagePersistenceInvalidated,
     onAssistantErrorMessagePersisted: params.onAssistantErrorMessagePersisted,
   };
-  const rawAttempt = await (
-    input.settledToolFinalization
-      ? runEmbeddedSettledTurnFinalizationWithBackend(attemptParams, input.settledToolFinalization)
-      : runEmbeddedAttemptWithBackend(attemptParams)
-  )
+  const rawAttempt = await runEmbeddedAttemptWithBackend(attemptParams)
     .catch((err: unknown): never => {
       throw control.getPostCompactionAbortError() ?? err;
     })
@@ -392,5 +382,5 @@ export async function dispatchEmbeddedRunAttempt(input: {
   if (postCompactionAbortError) {
     throw postCompactionAbortError;
   }
-  return { rawAttempt, cancellationRequested };
+  return { rawAttempt, cancellationRequested, preparedAttempt: attemptParams };
 }

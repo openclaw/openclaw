@@ -97,7 +97,12 @@ function inProgressTurnResult() {
   };
 }
 
-function createClientFactory(options: { mcpServers?: unknown[] } = {}) {
+function createClientFactory(
+  options: {
+    mcpServers?: unknown[];
+    errorBeforeCompletion?: { message: string; willRetry: boolean };
+  } = {},
+) {
   const methods: string[] = [];
   const notificationHandlers: Array<(notification: CodexServerNotification) => void> = [];
   const request = vi.fn(async (method: string, _params?: unknown) => {
@@ -126,6 +131,17 @@ function createClientFactory(options: { mcpServers?: unknown[] } = {}) {
     if (method === "turn/start") {
       queueMicrotask(() => {
         for (const handler of notificationHandlers) {
+          if (options.errorBeforeCompletion) {
+            handler({
+              method: "error",
+              params: {
+                threadId: "thread-finalizer",
+                turnId: "turn-finalizer",
+                error: { message: options.errorBeforeCompletion.message },
+                willRetry: options.errorBeforeCompletion.willRetry,
+              },
+            });
+          }
           handler({
             method: "rawResponse/completed",
             params: {
@@ -175,6 +191,46 @@ function createClientFactory(options: { mcpServers?: unknown[] } = {}) {
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it("continues after a retryable error notification", async () => {
+    const fake = createClientFactory({
+      errorBeforeCompletion: { message: "temporary upstream disconnect", willRetry: true },
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    ).resolves.toMatchObject({ text: "The message was sent successfully." });
+  });
+
+  it("still fails on a terminal error notification", async () => {
+    const fake = createClientFactory({
+      errorBeforeCompletion: { message: "terminal upstream failure", willRetry: false },
+    });
+
+    await expect(
+      runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "settled-turn finalization",
+        developerInstructions: "Finalize only.",
+        input: [{ type: "text", text: "Produce the final answer.", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "private-stdio",
+        requireNoExternalCapabilities: true,
+      }),
+    ).rejects.toThrow("terminal upstream failure");
+  });
+
   it("attests ring-zero and injects frozen history before starting the final turn", async () => {
     const fake = createClientFactory();
     const historyItems: JsonValue[] = [

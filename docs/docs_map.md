@@ -7457,6 +7457,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Native sessions and transcript mirror
   - H2: Tool and media results
   - H3: Terminal tool outcomes
+  - H3: Settled tool finalization
   - H2: Current limitations
   - H2: Related
 

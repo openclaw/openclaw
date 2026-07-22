@@ -155,8 +155,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
           workspaceDir,
         })
       : undefined;
-  const settledToolFinalization = terminalRetryState.pendingSettledToolFinalization;
-  terminalRetryState.pendingSettledToolFinalization = null;
   let startupStagesEmitted = input.startupStagesEmitted;
   if (!startupStagesEmitted) {
     startupStages.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
@@ -237,7 +235,6 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     suppressNextUserMessagePersistence: sessionPromptState.suppressNextUserMessagePersistence,
     beforeAgentFinalizeRevisionAttempts: terminalRetryState.beforeFinalizeRevisionAttempts,
     maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
-    settledToolFinalization,
   });
   return { dispatchedAttempt, runtimePlan, startupStagesEmitted };
 }

@@ -59,6 +59,31 @@ function asAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptRes
   return value as unknown as AgentHarnessAttemptResult;
 }
 
+function asCompleteAttemptResult(value: Record<string, unknown>): AgentHarnessAttemptResult {
+  return asAttemptResult({
+    aborted: false,
+    externalAbort: false,
+    timedOut: false,
+    idleTimedOut: false,
+    timedOutDuringCompaction: false,
+    promptError: null,
+    promptErrorSource: null,
+    sessionIdUsed: "session-1",
+    messagesSnapshot: [],
+    assistantTexts: [],
+    toolMetas: [],
+    lastAssistant: undefined,
+    didSendViaMessagingTool: false,
+    messagingToolSentTexts: [],
+    messagingToolSentMediaUrls: [],
+    messagingToolSentTargets: [],
+    cloudCodeAssistFormatError: false,
+    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+    ...value,
+  });
+}
+
 const ATTEMPT_PARAMS = asAttemptParams({
   provider: "github-copilot",
   model: "gpt-4.1",
@@ -380,10 +405,21 @@ describe("createCopilotAgentHarness", () => {
     const pool = makePoolMock();
     const client = createMockCopilotClient({ deleteSession: vi.fn() });
     const settledResult = asAttemptResult({ assistantTexts: [] });
-    const finalResult = asAttemptResult({ assistantTexts: ["final answer"] });
+    const finalAssistant = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "final answer" }],
+      stopReason: "stop" as const,
+    };
+    const finalResult = asCompleteAttemptResult({
+      assistantTexts: ["final answer"],
+      currentAttemptCompletedAssistant: finalAssistant,
+    });
     const params = asAttemptParams({
       ...ATTEMPT_PARAMS,
       initialReplayState: { replayInvalid: true },
+      onAgentEvent: vi.fn(),
+      onAssistantDelta: vi.fn(),
+      onPartialReply: vi.fn(),
       sessionId: "openclaw-session-finalize",
     });
     mocks.runCopilotAttempt
@@ -401,7 +437,7 @@ describe("createCopilotAgentHarness", () => {
     await expect(harness.runAttempt(params)).resolves.toBe(settledResult);
     await expect(
       harness.finalizeSettledTurn?.({ attempt: params, settledAttempt: settledResult }),
-    ).resolves.toBe(finalResult);
+    ).resolves.toEqual({ assistant: finalAssistant });
 
     expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({
@@ -412,6 +448,11 @@ describe("createCopilotAgentHarness", () => {
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]?.initialReplayState).not.toHaveProperty(
       "replayInvalid",
     );
+    expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({
+      onAgentEvent: undefined,
+      onAssistantDelta: undefined,
+      onPartialReply: undefined,
+    });
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]).toMatchObject({
       operation: "settled-tool-finalization",
       pool,

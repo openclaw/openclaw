@@ -4,7 +4,10 @@ import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
-import { readCodexNotificationItem } from "./attempt-notifications.js";
+import {
+  isRetryableErrorNotification,
+  readCodexNotificationItem,
+} from "./attempt-notifications.js";
 import type { CodexAppServerClient } from "./client.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { normalizeCodexResponseTokenUsage } from "./event-projector-usage.js";
@@ -471,6 +474,9 @@ function createCodexBoundedTurnCollector(threadId: string, taskLabel: string) {
       return;
     }
     if (notification.method === "error") {
+      if (isRetryableErrorNotification(notification.params)) {
+        return;
+      }
       promptError =
         readCodexErrorNotification(notification.params)?.error.message ??
         `codex app-server ${taskLabel} turn failed`;
