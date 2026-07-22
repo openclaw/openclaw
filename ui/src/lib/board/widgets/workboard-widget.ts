@@ -178,15 +178,14 @@ export abstract class WorkboardWidgetElement extends OpenClawLightDomElement {
     try {
       await refresh;
     } finally {
-      if (this.refreshPromise !== refresh) {
-        return;
-      }
-      this.refreshPromise = null;
-      const shouldRefreshAgain =
-        this.refreshPending && generation === this.refreshGeneration && client === this.client;
-      this.refreshPending = false;
-      if (shouldRefreshAgain) {
-        await this.refresh(true);
+      if (this.refreshPromise === refresh) {
+        this.refreshPromise = null;
+        const shouldRefreshAgain =
+          this.refreshPending && generation === this.refreshGeneration && client === this.client;
+        this.refreshPending = false;
+        if (shouldRefreshAgain) {
+          await this.refresh(true);
+        }
       }
     }
   }
