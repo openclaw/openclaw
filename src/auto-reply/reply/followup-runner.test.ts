@@ -31,6 +31,7 @@ const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveProviderFollowupFallbackRouteMock = vi.fn();
 const resolveProviderThinkingProfileMock = vi.fn();
+const admitReplyTurnMock = vi.fn();
 let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
@@ -428,6 +429,18 @@ async function loadFreshFollowupRunnerModuleForTest() {
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
     resolveQueueSettings: (): QueueSettings => ({ mode: "followup" }),
   }));
+  vi.doMock("./reply-turn-admission.js", async () => {
+    const actual = await vi.importActual<typeof import("./reply-turn-admission.js")>(
+      "./reply-turn-admission.js",
+    );
+    return {
+      ...actual,
+      admitReplyTurn: (...args: Parameters<typeof actual.admitReplyTurn>) =>
+        admitReplyTurnMock.getMockImplementation()
+          ? admitReplyTurnMock(...args)
+          : actual.admitReplyTurn(...args),
+    };
+  });
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
@@ -620,6 +633,7 @@ beforeEach(() => {
   resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
   resolveProviderThinkingProfileMock.mockReset();
   resolveProviderThinkingProfileMock.mockReturnValue(undefined);
+  admitReplyTurnMock.mockReset();
   const resolveQueuedReplyExecutionConfig = resolveQueuedReplyExecutionConfigActual;
   if (!resolveQueuedReplyExecutionConfig) {
     throw new Error("resolveQueuedReplyExecutionConfig mock not initialized");
@@ -717,6 +731,14 @@ describe("createFollowupRunner reply-lane admission", () => {
       goal: { ...activeEntry.goal!, status: "complete", updatedAt: 2 },
     };
     registerFollowupTestSessionStore(storePath, { main: completedEntry });
+    admitReplyTurnMock.mockResolvedValueOnce({
+      status: "admitted",
+      operation: createReplyOperationForTest({
+        sessionKey: "main",
+        sessionId: completedEntry.sessionId,
+        resetTriggered: false,
+      }),
+    });
     const runner = createFollowupRunner({
       typing: createMockTypingController(),
       typingMode: "instant",
