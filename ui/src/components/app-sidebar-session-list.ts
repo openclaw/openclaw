@@ -55,20 +55,20 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
     return {
       data: {
         live: this.sidebarLiveActivity,
-        narration: this.sidebarNarrationLines,
-        digests: this.sidebarObserverDigests,
-        prStates: pullRequestStates,
+        lines: this.sidebarNarrationLines,
+        digest: this.sidebarObserverDigests,
+        prs: pullRequestStates,
         approval: this.approvalBadgeSnapshot(),
-        selected: this.selectedSessionKeys,
+        select: this.selectedSessionKeys,
         drag: this.draggingSessionKey,
-        connected: this.connected,
+        online: this.connected,
         viewers: this.presencePayload,
-        viewerId: this.presenceInstanceId,
+        selfId: this.presenceInstanceId,
         expanded: expandedSessionKeys,
-        fullKeys: this.fullyShownChildSessionKeys,
-        grouping: this.sessionsGrouping,
+        full: this.fullyShownChildSessionKeys,
+        groups: this.sessionsGrouping,
         collapsed: this.collapsedSessionSections,
-        dragGroup: this.draggingSessionGroup,
+        dragG: this.draggingSessionGroup,
         drop: this.sessionDropTarget,
         gDrop: this.sessionGroupDropTarget,
         sort: this.sessionSortMenuPosition !== null,
@@ -79,7 +79,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
         error: this.sessionMutationError,
         owners: this.sessionOwnershipVisible,
       },
-      callbacks: {
+      cb: {
         startDrag: (session) => {
           this.draggingSessionKey = session.key;
           this.draggingSidebarEntry = session.pinned ? `session:${session.key}` : null;
@@ -100,9 +100,9 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           const rect = trigger.getBoundingClientRect();
           this.openSessionMenuForRow(menuSession, rect.right, rect.bottom + 4, trigger);
         },
-        showChildren: this.showAllSessionChildren.bind(this),
-        sectionOver: this.handleSessionSectionDragOver.bind(this),
-        sectionLeave: this.handleSessionSectionDragLeave.bind(this),
+        show: this.showAllSessionChildren.bind(this),
+        over: this.handleSessionSectionDragOver.bind(this),
+        leave: this.handleSessionSectionDragLeave.bind(this),
         sectionDrop: this.handleSessionSectionDrop.bind(this),
         groupStart: (group) => {
           this.draggingSessionGroup = group;
@@ -121,21 +121,21 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
           this.visibleSessionLimit = limit;
         },
         clear: this.clearSessionSelection.bind(this),
-        listDragOver: this.handleSessionListDragOver.bind(this),
-        listDragLeave: this.handleSessionListDragLeave.bind(this),
+        listOver: this.handleSessionListDragOver.bind(this),
+        listLeave: this.handleSessionListDragLeave.bind(this),
         listDrop: this.handleSessionListDrop.bind(this),
-        dismissError: () => {
+        dismiss: () => {
           this.sessionMutationError = null;
         },
-        catalogGroup: () => {
+        catGroup: () => {
           const next = this.catalogProjectGrouping === "project" ? "none" : "project";
           storeSidebarCatalogGrouping(next);
           this.catalogProjectGrouping = next;
         },
         more: this.loadMoreSessionCatalog.bind(this),
-        newTarget: this.onOpenNewSession,
-        navigate: this.onNavigate,
-        catalog: this.catalogMenu.open.bind(this.catalogMenu),
+        target: this.onOpenNewSession,
+        nav: this.onNavigate,
+        cat: this.catalogMenu.open.bind(this.catalogMenu),
       },
     };
   }
@@ -186,7 +186,7 @@ export abstract class AppSidebarSessionListElement extends AppSidebarSessionNarr
       }),
       catalogs: {
         catalogs: this.sessionCatalogs,
-        connected: context.data.connected,
+        online: context.data.online,
         basePath: this.basePath,
         routeSessionKey: this.activeRouteId === "chat" ? this.getRouteSessionKey() : "",
         newSessionAgentId: expandedAgentId,

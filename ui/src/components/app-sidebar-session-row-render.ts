@@ -39,20 +39,20 @@ const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
 export type SessionListRenderContext = {
   data: {
     live: boolean;
-    narration: ReadonlyMap<string, string>;
-    digests: ReadonlyMap<string, SessionObserverDigest>;
-    prStates: ReadonlyMap<string, SessionPullRequestIndicatorState>;
+    lines: ReadonlyMap<string, string>;
+    digest: ReadonlyMap<string, SessionObserverDigest>;
+    prs: ReadonlyMap<string, SessionPullRequestIndicatorState>;
     approval: ApprovalBadgeSnapshot;
-    selected: ReadonlySet<string>;
+    select: ReadonlySet<string>;
     drag: string | null;
-    connected: boolean;
+    online: boolean;
     viewers: unknown;
-    viewerId: string | undefined;
+    selfId: string | undefined;
     expanded: ReadonlySet<string>;
-    fullKeys: ReadonlySet<string>;
-    grouping: SidebarSessionsGrouping;
+    full: ReadonlySet<string>;
+    groups: SidebarSessionsGrouping;
     collapsed: ReadonlySet<string>;
-    dragGroup: string | null;
+    dragG: string | null;
     drop: string | null;
     gDrop: SidebarSessionGroupDropTarget | null;
     sort: boolean;
@@ -63,7 +63,7 @@ export type SessionListRenderContext = {
     error: string | null;
     owners: boolean;
   };
-  callbacks: {
+  cb: {
     startDrag: (session: SidebarRecentSession) => void;
     endDrag: () => void;
     openMenu: (session: SidebarRecentSession, x: number, y: number, trigger?: HTMLElement) => void;
@@ -75,9 +75,9 @@ export type SessionListRenderContext = {
       menuSession: SidebarRecentSession,
       trigger: HTMLElement,
     ) => void;
-    showChildren: (sessionKey: string) => void;
-    sectionOver: (event: DragEvent, sectionId: string, group?: string) => void;
-    sectionLeave: (event: DragEvent, sectionId: string, group?: string) => void;
+    show: (sessionKey: string) => void;
+    over: (event: DragEvent, sectionId: string, group?: string) => void;
+    leave: (event: DragEvent, sectionId: string, group?: string) => void;
     sectionDrop: (event: DragEvent, sectionId: string, group?: string) => void;
     groupStart: (group: string) => void;
     groupEnd: () => void;
@@ -87,20 +87,15 @@ export type SessionListRenderContext = {
     newSession: () => void;
     setLimit: (limit: number) => void;
     clear: () => void;
-    listDragOver: (event: DragEvent) => void;
-    listDragLeave: (event: DragEvent) => void;
+    listOver: (event: DragEvent) => void;
+    listLeave: (event: DragEvent) => void;
     listDrop: (event: DragEvent) => void;
-    dismissError: () => void;
-    catalogGroup: () => void;
+    dismiss: () => void;
+    catGroup: () => void;
     more: (catalogId: string) => Promise<void>;
-    newTarget?: (agentId: string, target?: NewSessionTarget) => void;
-    navigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-    catalog: (
-      request: CatalogSessionMenuRequest,
-      x: number,
-      y: number,
-      trigger?: HTMLElement,
-    ) => void;
+    target?: (agentId: string, target?: NewSessionTarget) => void;
+    nav?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+    cat: (request: CatalogSessionMenuRequest, x: number, y: number, trigger?: HTMLElement) => void;
   };
 };
 
@@ -124,19 +119,19 @@ export function renderRecentSession(params: {
   display?: CatalogBackingSessionDisplay;
 }) {
   const { context, session, display } = params;
-  const { data, callbacks } = context;
+  const { data, cb } = context;
   const label = display?.label ?? session.label;
   const { subtitle, narration } = resolveSidebarSessionSubtitle({
     session,
     hasDisplay: display !== undefined,
     displaySubtitle: display?.subtitle,
     sidebarLiveActivity: data.live,
-    narrationLine: data.narration.get(session.key),
-    observerDigest: data.digests.get(session.key) ?? null,
+    narrationLine: data.lines.get(session.key),
+    observerDigest: data.digest.get(session.key) ?? null,
   });
   const { running, pinnedState, leadingIndicator } = renderSessionLeadingState(
     session,
-    data.prStates.get(session.key) ?? "none",
+    data.prs.get(session.key) ?? "none",
   );
   const meta = display?.meta ?? session.meta;
   const rowMeta = session.pinned ? "" : meta;
@@ -150,7 +145,7 @@ export function renderRecentSession(params: {
     session.isChild ? "sidebar-recent-session--child" : "",
     session.archived ? "sidebar-session--archived" : "",
     session.visuallyActive ? "sidebar-recent-session--active" : "",
-    data.selected.has(session.key) ? "sidebar-recent-session--selected" : "",
+    data.select.has(session.key) ? "sidebar-recent-session--selected" : "",
     session.pinned ? "session-row-host--pinned" : "",
     running ? "session-row-host--running" : "",
     session.attention.kind === "error"
@@ -174,19 +169,19 @@ export function renderRecentSession(params: {
         : (event: DragEvent) => {
             if (event.dataTransfer) {
               writeSessionDragData(event.dataTransfer, session.key);
-              callbacks.startDrag(session);
+              cb.startDrag(session);
             }
           }}
       @dragend=${session.isChild
         ? nothing
         : () => {
-            callbacks.endDrag();
+            cb.endDrag();
           }}
       @contextmenu=${session.isChild
         ? nothing
         : (event: MouseEvent) => {
             event.preventDefault();
-            callbacks.openMenu(menuSession, event.clientX, event.clientY);
+            cb.openMenu(menuSession, event.clientX, event.clientY);
           }}
       @mouseenter=${(event: MouseEvent) => startHoverMarquee(event.currentTarget as HTMLElement)}
       @mouseleave=${(event: MouseEvent) => stopHoverMarquee(event.currentTarget as HTMLElement)}
@@ -198,7 +193,7 @@ export function renderRecentSession(params: {
         title=${title}
         aria-current=${session.visuallyActive ? "page" : nothing}
         aria-describedby=${metaId ?? nothing}
-        @click=${(event: MouseEvent) => callbacks.rowClick(event, session)}
+        @click=${(event: MouseEvent) => cb.rowClick(event, session)}
       >
         <span class="sidebar-session-indicator">${leadingIndicator}</span>${renderSessionOwnerChip(
           data.owners ? session.createdBy : undefined,
@@ -228,7 +223,7 @@ export function renderRecentSession(params: {
           : nothing}
         <openclaw-viewer-facepile
           .presencePayload=${data.viewers}
-          .selfInstanceId=${data.viewerId}
+          .selfInstanceId=${data.selfId}
           .sessionKey=${session.key}
           .maxVisible=${3}
           variant="session"
@@ -256,7 +251,7 @@ export function renderRecentSession(params: {
                 : "sessionsView.showChildSessions",
               { count: String(session.childSessionKeys.length), session: label },
             )}
-            @click=${() => callbacks.children(session)}
+            @click=${() => cb.children(session)}
           >
             <span class="sidebar-child-session-toggle__icon" aria-hidden="true"
               >${childrenExpanded ? icons.chevronDown : icons.chevronRight}</span
@@ -296,8 +291,8 @@ export function renderRecentSession(params: {
                 aria-label=${session.pinned
                   ? t("sessionsView.unpinSession")
                   : t("sessionsView.pinSession")}
-                ?disabled=${!data.connected}
-                @click=${() => callbacks.pin(session)}
+                ?disabled=${!data.online}
+                @click=${() => cb.pin(session)}
               >
                 ${icons.pin}
               </button>
@@ -312,7 +307,7 @@ export function renderRecentSession(params: {
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   const trigger = event.currentTarget as HTMLElement;
-                  callbacks.menuClick(session, menuSession, trigger);
+                  cb.menuClick(session, menuSession, trigger);
                 }}
               >
                 ${icons.moreHorizontal}
@@ -330,11 +325,11 @@ export function renderSessionTree(params: {
   session: SidebarRecentSession;
 }): TemplateResult {
   const { context, session } = params;
-  const { data, callbacks } = context;
+  const { data, cb } = context;
   const expanded = data.expanded.has(session.key);
   const visibleChildren = visibleSessionChildren({
     session,
-    fullyShownChildSessionKeys: data.fullKeys,
+    fullyShownChildSessionKeys: data.full,
   });
   const hiddenChildCount = session.children.length - visibleChildren.length;
   return html`<div class="sidebar-session-tree" data-session-tree=${session.key}>
@@ -353,7 +348,7 @@ export function renderSessionTree(params: {
                 aria-label=${t("sessionsView.showMoreChildren", {
                   count: String(hiddenChildCount),
                 })}
-                @click=${() => callbacks.showChildren(session.key)}
+                @click=${() => cb.show(session.key)}
               >
                 ${t("sessionsView.showMoreChildren", { count: String(hiddenChildCount) })}
               </button>`

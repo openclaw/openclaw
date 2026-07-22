@@ -30,7 +30,7 @@ type RenderableSessionSection = SidebarSessionSection<SidebarRecentSession> & {
 
 type SessionCatalogRenderSnapshot = {
   catalogs: readonly SessionCatalog[];
-  connected: boolean;
+  online: boolean;
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
@@ -51,7 +51,7 @@ function renderSessionSection(params: {
   showDraft?: boolean;
 }) {
   const { context, section } = params;
-  const { data, callbacks } = context;
+  const { data, cb } = context;
   const trailing = params.trailing ?? nothing;
   const showDraft = params.showDraft ?? false;
   const totalRowCount = section.totalRowCount;
@@ -76,12 +76,12 @@ function renderSessionSection(params: {
     collapsed &&
     section.rows.some((row) => rowDemandsVisibility(row, RowVisibilityReason.Attention));
   const acceptsSessions =
-    data.grouping === "category" && (section.id === "ungrouped" || Boolean(group));
+    data.groups === "category" && (section.id === "ungrouped" || Boolean(group));
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
     collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
-    group && data.dragGroup === group ? "sidebar-recent-sessions__group--dragging" : "",
+    group && data.dragG === group ? "sidebar-recent-sessions__group--dragging" : "",
     data.drop === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
     group && data.gDrop?.group === group
       ? `sidebar-recent-sessions__group--group-drop-${data.gDrop.position}`
@@ -94,13 +94,13 @@ function renderSessionSection(params: {
       class=${sectionClass}
       data-session-section=${section.id}
       @dragover=${acceptsSessions || group
-        ? (event: DragEvent) => callbacks.sectionOver(event, section.id, group)
+        ? (event: DragEvent) => cb.over(event, section.id, group)
         : nothing}
       @dragleave=${acceptsSessions || group
-        ? (event: DragEvent) => callbacks.sectionLeave(event, section.id, group)
+        ? (event: DragEvent) => cb.leave(event, section.id, group)
         : nothing}
       @drop=${acceptsSessions || group
-        ? (event: DragEvent) => callbacks.sectionDrop(event, section.id, group)
+        ? (event: DragEvent) => cb.sectionDrop(event, section.id, group)
         : nothing}
     >
       ${html`
@@ -113,19 +113,19 @@ function renderSessionSection(params: {
             ? (event: DragEvent) => {
                 if (event.dataTransfer) {
                   writeSessionGroupDragData(event.dataTransfer, group);
-                  callbacks.groupStart(group);
+                  cb.groupStart(group);
                 }
               }
             : nothing}
           @dragend=${group
             ? () => {
-                callbacks.groupEnd();
+                cb.groupEnd();
               }
             : nothing}
           @contextmenu=${group
             ? (event: MouseEvent) => {
                 event.preventDefault();
-                callbacks.groupMenu(group, event.clientX, event.clientY, null);
+                cb.groupMenu(group, event.clientX, event.clientY, null);
               }
             : nothing}
         >
@@ -137,7 +137,7 @@ function renderSessionSection(params: {
             class="sidebar-session-group-toggle"
             aria-expanded=${String(!collapsed)}
             aria-label=${label}
-            @click=${() => callbacks.section(section.id)}
+            @click=${() => cb.section(section.id)}
           >
             <span class="sidebar-recent-sessions__label-text">${label}</span>
             <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
@@ -174,7 +174,7 @@ function renderSessionSection(params: {
                   aria-expanded=${String(data.sort)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
-                    callbacks.sort(event.currentTarget as HTMLElement);
+                    cb.sort(event.currentTarget as HTMLElement);
                   }}
                 >
                   ${icons.listFilter}
@@ -182,14 +182,14 @@ function renderSessionSection(params: {
                 <button
                   type="button"
                   class="sidebar-session-group-actions sidebar-new-session"
-                  title=${data.connected
+                  title=${data.online
                     ? t("chat.runControls.newSession")
                     : t("chat.runControls.newSessionDisconnected")}
                   aria-label=${t("chat.runControls.newSession")}
-                  ?disabled=${!data.connected}
+                  ?disabled=${!data.online}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
-                    callbacks.newSession();
+                    cb.newSession();
                   }}
                 >
                   ${icons.plus}
@@ -209,7 +209,7 @@ function renderSessionSection(params: {
                     event.stopPropagation();
                     const trigger = event.currentTarget as HTMLElement;
                     const rect = trigger.getBoundingClientRect();
-                    callbacks.groupMenu(group, rect.right, rect.bottom + 4, trigger);
+                    cb.groupMenu(group, rect.right, rect.bottom + 4, trigger);
                   }}
                 >
                   ${icons.moreHorizontal}
@@ -254,7 +254,7 @@ function renderSessionPagination(params: {
   visible: number;
 }) {
   const { context, rows, visible } = params;
-  const { callbacks } = context;
+  const { cb } = context;
   const canShowMore = visible < rows.length;
   const collapsedVisible = limitSidebarSessionRows(rows, SIDEBAR_SESSION_PAGE_SIZE).length;
   const canShowLess = visible > SIDEBAR_SESSION_SEE_LESS_THRESHOLD && visible > collapsedVisible;
@@ -269,7 +269,7 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("chat.selectors.loadMoreSessions")}
             @click=${() => {
-              callbacks.setLimit(visible + SIDEBAR_SESSION_PAGE_SIZE);
+              cb.setLimit(visible + SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("chat.selectors.loadMoreSessions")}
@@ -281,8 +281,8 @@ function renderSessionPagination(params: {
             class="sidebar-session-pagination__button"
             aria-label=${t("usage.details.collapse")}
             @click=${() => {
-              callbacks.clear();
-              callbacks.setLimit(SIDEBAR_SESSION_PAGE_SIZE);
+              cb.clear();
+              cb.setLimit(SIDEBAR_SESSION_PAGE_SIZE);
             }}
           >
             ${t("usage.details.collapse")}
@@ -297,10 +297,10 @@ function renderSessionCatalogs(params: {
   snapshot: SessionCatalogRenderSnapshot;
 }) {
   const { context, snapshot } = params;
-  const { callbacks } = context;
+  const { cb } = context;
   return renderSessionCatalogGroups({
     catalogs: snapshot.catalogs,
-    connected: snapshot.connected,
+    connected: snapshot.online,
     basePath: snapshot.basePath,
     routeSessionKey: snapshot.routeSessionKey,
     newSessionAgentId: snapshot.newSessionAgentId,
@@ -315,15 +315,15 @@ function renderSessionCatalogs(params: {
         session: snapshot.sidebarRowsByKey.get(row.key)!,
         display,
       }),
-    onToggleSection: (sectionId) => callbacks.section(sectionId),
-    onToggleProjectGrouping: () => callbacks.catalogGroup(),
-    onLoadMore: (catalogId) => void callbacks.more(catalogId),
-    onOpenNewSession: callbacks.newTarget,
-    onNavigate: callbacks.navigate,
+    onToggleSection: (sectionId) => cb.section(sectionId),
+    onToggleProjectGrouping: () => cb.catGroup(),
+    onLoadMore: (catalogId) => void cb.more(catalogId),
+    onOpenNewSession: cb.target,
+    onNavigate: cb.nav,
     catalogOpenTarget: snapshot.catalogOpenTarget,
     terminalAvailable: snapshot.terminalAvailable,
     onOpenTerminal: openCatalogSessionInTerminal,
-    onOpenMenu: (request, x, y, trigger) => callbacks.catalog(request, x, y, trigger),
+    onOpenMenu: (request, x, y, trigger) => cb.cat(request, x, y, trigger),
   });
 }
 
@@ -385,13 +385,13 @@ export function renderSessionList(params: {
   catalogs: SessionCatalogRenderSnapshot;
 }) {
   const { context } = params;
-  const { data, callbacks } = context;
+  const { data, cb } = context;
   return html`
     <section
       class="sidebar-sessions ${data.remove ? "sidebar-sessions--removal-drop" : ""}"
-      @dragover=${(event: DragEvent) => callbacks.listDragOver(event)}
-      @dragleave=${(event: DragEvent) => callbacks.listDragLeave(event)}
-      @drop=${(event: DragEvent) => callbacks.listDrop(event)}
+      @dragover=${(event: DragEvent) => cb.listOver(event)}
+      @dragleave=${(event: DragEvent) => cb.listLeave(event)}
+      @drop=${(event: DragEvent) => cb.listDrop(event)}
     >
       ${data.error
         ? html`
@@ -405,7 +405,7 @@ export function renderSessionList(params: {
                 <button
                   class="callout__dismiss"
                   type="button"
-                  @click=${() => callbacks.dismissError()}
+                  @click=${() => cb.dismiss()}
                   aria-label=${t("chat.actions.dismissError")}
                 >
                   ${icons.x}
