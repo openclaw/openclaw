@@ -3958,6 +3958,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
     public let label: String?
+    public let creatorid: String?
     public let spawnedby: String?
     public let agentid: String?
     public let search: String?
@@ -3975,6 +3976,7 @@ public struct SessionsListParams: Codable, Sendable {
         includederivedtitles: Bool? = nil,
         includelastmessage: Bool? = nil,
         label: String? = nil,
+        creatorid: String? = nil,
         spawnedby: String? = nil,
         agentid: String? = nil,
         search: String? = nil,
@@ -3991,6 +3993,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
         self.label = label
+        self.creatorid = creatorid
         self.spawnedby = spawnedby
         self.agentid = agentid
         self.search = search
@@ -4009,6 +4012,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
         case label
+        case creatorid = "creatorId"
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
         case search
