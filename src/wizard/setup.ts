@@ -610,7 +610,6 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
-  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
 
   let liveModelVerified = false;
   // keepExistingModelConfig is latched before auth setup, so this distinguishes
@@ -630,7 +629,6 @@ async function runSetupWizardOnce(
       required: usedImportFlow && keepExistingModelConfig,
     });
     nextConfig = verification.config;
-    onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
     liveModelVerified = verification.verified;
   }
 
@@ -661,7 +659,7 @@ async function runSetupWizardOnce(
   nextConfig = await writeSetupConfigFile(nextConfig, {
     allowConfigSizeDrop: false,
   });
-  onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
+  let onboardingTarget = resolveOnboardingAgentTarget(nextConfig);
   const { logConfigUpdated } = await loadConfigLoggingModule();
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(onboardingTarget, runtime, {
