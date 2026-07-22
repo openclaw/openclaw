@@ -3,23 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { installHealthConfigMock } from "./health.config.test-mocks.js";
 import type { HealthSummary } from "./health.js";
 
 let testConfig: Record<string, unknown> = {};
-let testDiskSourceConfig: Record<string, unknown> | null = null;
-let testDiskSnapshotExists: boolean | null = null;
-let testDiskSnapshotValid: boolean | null = null;
-let testRuntimeSourceConfig: Record<string, unknown> | null = null;
-let testRuntimeConfigSnapshotMetadata: {
-  revision: number;
-  fingerprint: string;
-  sourceFingerprint: string | null;
-  updatedAtMs: number;
-} | null = null;
 let testStore: Record<string, { updatedAt?: number }> = {};
 let listHealthSessionEntriesCalls: Array<{ agentId?: string; storePath?: string }> = [];
 let healthPluginsForTest: HealthTestPlugin[] = [];
@@ -35,20 +25,6 @@ let probeTelegramAccountForTestOverride:
   | undefined;
 
 type HealthTestPlugin = Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config" | "status">;
-
-function stableTestConfigStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableTestConfigStringify(entry)).join(",")}]`;
-  }
-  const record = value as Record<string, unknown>;
-  return `{${Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableTestConfigStringify(record[key])}`)
-    .join(",")}}`;
-}
 
 type TelegramHealthAccount = {
   accountId: string;
@@ -77,71 +53,7 @@ type IMessageHealthAccount = {
 };
 
 async function loadFreshHealthModulesForTest() {
-  vi.doMock("../config/config.js", () => ({
-    getRuntimeConfig: () => testConfig,
-    loadConfig: () => testConfig,
-    readSourceConfigBestEffort: async () =>
-      testDiskSourceConfig ?? testRuntimeSourceConfig ?? testConfig,
-    readSourceConfigSnapshot: async () => {
-      if (testDiskSnapshotExists === false) {
-        return {
-          path: "/tmp/openclaw.json",
-          exists: false,
-          raw: null,
-          parsed: null,
-          sourceConfig: {} as Record<string, unknown>,
-          resolved: {} as Record<string, unknown>,
-          valid: true,
-          runtimeConfig: {} as Record<string, unknown>,
-          config: {} as Record<string, unknown>,
-          issues: [],
-          warnings: [],
-          legacyIssues: [],
-        };
-      }
-      if (testDiskSnapshotValid === false) {
-        return {
-          path: "/tmp/openclaw.json",
-          exists: true,
-          raw: "{invalid",
-          parsed: null,
-          sourceConfig: {} as Record<string, unknown>,
-          resolved: {} as Record<string, unknown>,
-          valid: false,
-          runtimeConfig: {} as Record<string, unknown>,
-          config: {} as Record<string, unknown>,
-          issues: [
-            {
-              path: "",
-              message: "JSON5 parse error: unexpected token",
-              code: "PARSE_ERROR",
-            },
-          ],
-          warnings: [],
-          legacyIssues: [],
-        };
-      }
-      const source = testDiskSourceConfig ?? testRuntimeSourceConfig ?? testConfig;
-      return {
-        path: "/tmp/openclaw.json",
-        exists: true,
-        raw: JSON.stringify(source),
-        parsed: source,
-        sourceConfig: source,
-        resolved: source,
-        valid: true,
-        runtimeConfig: source,
-        config: source,
-        issues: [],
-        warnings: [],
-        legacyIssues: [],
-      };
-    },
-    getRuntimeConfigSourceSnapshot: () => testRuntimeSourceConfig,
-    getRuntimeConfigSnapshotMetadata: () => testRuntimeConfigSnapshotMetadata,
-    hashRuntimeConfigValue: (config: Record<string, unknown>) =>
-      `test:${stableTestConfigStringify(config)}`,
-  }));
+  installHealthConfigMock(() => testConfig);
   vi.doMock("../config/sessions.js", () => ({
     resolveStorePath: () => "/tmp/sessions.json",
     resolveSessionFilePath: vi.fn(() => "/tmp/sessions.json"),
@@ -558,13 +470,6 @@ describe("getHealthSnapshot", () => {
 
   beforeEach(() => {
     setActiveDegradedPlugins([]);
-    testConfig = {};
-    testDiskSourceConfig = null;
-    testDiskSnapshotExists = null;
-    testDiskSnapshotValid = null;
-    testRuntimeSourceConfig = null;
-    testRuntimeConfigSnapshotMetadata = null;
-    testStore = {};
     buildTelegramHealthSummaryForTest = buildTelegramHealthSummary;
     probeTelegramAccountForTestOverride = undefined;
     listHealthSessionEntriesCalls = [];
@@ -718,205 +623,6 @@ describe("getHealthSnapshot", () => {
     });
 
     expect(snap.configReload).toEqual({ hotReloadStatus: "disabled" });
-  });
-
-  it("surfaces model/provider runtime config drift between live gateway and disk in sensitive snapshots", async () => {
-    testConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai-codex/gpt-5.5" } },
-    };
-    testRuntimeSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai-codex/gpt-5.5" } },
-    };
-    testDiskSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeConfigSnapshotMetadata = {
-      revision: 7,
-      fingerprint: "runtime-fingerprint",
-      sourceFingerprint: "live-source-fingerprint",
-      updatedAtMs: 123,
-    };
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false, includeSensitive: true });
-
-    expect(snap.runtimeConfig).toEqual({
-      state: "drift",
-      liveSourceFingerprint: "live-source-fingerprint",
-      diskSourceFingerprint: `test:${stableTestConfigStringify(testDiskSourceConfig)}`,
-      liveDefaultModel: "openai-codex/gpt-5.5",
-      diskDefaultModel: "openai/gpt-5.5",
-      driftPaths: ["agents.defaults.model"],
-      message:
-        "Live gateway runtime config differs from disk for model/provider/auth paths; restart is required or pending.",
-    });
-  });
-
-  it("omits runtime config fingerprints from non-sensitive snapshots used by cache/broadcast paths", async () => {
-    // Regression for the credential-boundary concern raised in #89526 review:
-    // `getHealthSnapshot` derives both the admin (`includeSensitive: true`)
-    // and the cached/broadcast (`includeSensitive: false`) snapshots from the
-    // same builder. The runtime-config fingerprints must stay inside the
-    // gateway-auth boundary, so the non-sensitive snapshot should still report
-    // drift state + paths + default-model labels but must omit
-    // `liveSourceFingerprint` / `diskSourceFingerprint`.
-    testConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai-codex/gpt-5.5" } },
-    };
-    testRuntimeSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai-codex/gpt-5.5" } },
-    };
-    testDiskSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeConfigSnapshotMetadata = {
-      revision: 7,
-      fingerprint: "runtime-fingerprint",
-      sourceFingerprint: "live-source-fingerprint",
-      updatedAtMs: 123,
-    };
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false, includeSensitive: false });
-
-    expect(snap.runtimeConfig?.state).toBe("drift");
-    expect(snap.runtimeConfig?.driftPaths).toEqual(["agents.defaults.model"]);
-    expect(snap.runtimeConfig?.liveDefaultModel).toBe("openai-codex/gpt-5.5");
-    expect(snap.runtimeConfig?.diskDefaultModel).toBe("openai/gpt-5.5");
-    expect(snap.runtimeConfig).not.toHaveProperty("liveSourceFingerprint");
-    expect(snap.runtimeConfig).not.toHaveProperty("diskSourceFingerprint");
-  });
-
-  it("detects drift on top-level auth.profiles when provider-auth rotates on disk", async () => {
-    // Drift coverage for provider-auth repairs that touch `auth.profiles`
-    // (named provider profile config) rather than the gateway access auth
-    // under `gateway.auth.*`. Without this path the drift detector would
-    // silently return state: "ok" while a provider-auth fix sits stale on
-    // disk waiting for restart.
-    testConfig = {
-      session: { store: "/tmp/x" },
-      auth: { profiles: { primary: { provider: "openai", mode: "token" } } },
-    };
-    testRuntimeSourceConfig = {
-      session: { store: "/tmp/x" },
-      auth: { profiles: { primary: { provider: "openai", mode: "token" } } },
-    };
-    testDiskSourceConfig = {
-      session: { store: "/tmp/x" },
-      auth: { profiles: { primary: { provider: "openai", mode: "chatgpt" } } },
-    };
-    testRuntimeConfigSnapshotMetadata = {
-      revision: 8,
-      fingerprint: "runtime-fingerprint-auth",
-      sourceFingerprint: "live-source-fingerprint-auth",
-      updatedAtMs: 234,
-    };
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false, includeSensitive: true });
-
-    expect(snap.runtimeConfig?.state).toBe("drift");
-    expect(snap.runtimeConfig?.driftPaths).toEqual(["auth.profiles"]);
-  });
-
-  it("reports state: unknown with diskReadError when the disk config file is missing", async () => {
-    // Regression for the ClawSweeper P2 finding on #89526: the previous
-    // implementation used `readSourceConfigBestEffort()` which returns `{}`
-    // for missing/invalid/unreadable disk configs, then compared that empty
-    // object against the live runtime config and reported "drift" with
-    // restart-required wording. The new reader uses
-    // `readSourceConfigSnapshot()` and treats `!exists || !valid` as
-    // unknown so operators see the right recovery path.
-    testConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeConfigSnapshotMetadata = {
-      revision: 9,
-      fingerprint: "runtime-fingerprint-missing",
-      sourceFingerprint: "live-source-fingerprint-missing",
-      updatedAtMs: 345,
-    };
-    testDiskSnapshotExists = false;
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false, includeSensitive: true });
-
-    expect(snap.runtimeConfig?.state).toBe("unknown");
-    expect(snap.runtimeConfig?.driftPaths).toBeUndefined();
-    expect(snap.runtimeConfig?.message).toMatch(/not found/i);
-  });
-
-  it("reports state: unknown with diskReadError when the disk config is invalid", async () => {
-    testConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeConfigSnapshotMetadata = {
-      revision: 10,
-      fingerprint: "runtime-fingerprint-invalid",
-      sourceFingerprint: "live-source-fingerprint-invalid",
-      updatedAtMs: 456,
-    };
-    testDiskSnapshotValid = false;
-
-    const snap = await getHealthSnapshot({ timeoutMs: 10, probe: false, includeSensitive: true });
-
-    expect(snap.runtimeConfig?.state).toBe("unknown");
-    expect(snap.runtimeConfig?.driftPaths).toBeUndefined();
-    expect(snap.runtimeConfig?.message).toMatch(/invalid/i);
-  });
-
-  it("redacts disk-read error details from non-sensitive runtime config snapshots", async () => {
-    // ClawSweeper P1 finding on #89526 re-review: the detailed disk-read
-    // error message can include the local config path or a JSON parse-error
-    // excerpt. `openclaw health` is `operator.read` scope; non-admin callers
-    // should not see those details. Detail-bearing message stays gated
-    // behind `includeSensitive`; non-sensitive callers see the generic
-    // "Disk config source snapshot is unavailable." message.
-    testConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeSourceConfig = {
-      session: { store: "/tmp/x" },
-      agents: { defaults: { model: "openai/gpt-5.5" } },
-    };
-    testRuntimeConfigSnapshotMetadata = {
-      revision: 11,
-      fingerprint: "runtime-fingerprint-redact",
-      sourceFingerprint: "live-source-fingerprint-redact",
-      updatedAtMs: 567,
-    };
-    testDiskSnapshotValid = false;
-
-    const nonSensitive = await getHealthSnapshot({
-      timeoutMs: 10,
-      probe: false,
-      includeSensitive: false,
-    });
-    expect(nonSensitive.runtimeConfig?.state).toBe("unknown");
-    expect(nonSensitive.runtimeConfig?.message).toBe("Disk config source snapshot is unavailable.");
-    expect(nonSensitive.runtimeConfig?.liveSourceFingerprint).toBeUndefined();
-
-    const sensitive = await getHealthSnapshot({
-      timeoutMs: 10,
-      probe: false,
-      includeSensitive: true,
-    });
-    expect(sensitive.runtimeConfig?.state).toBe("unknown");
-    expect(sensitive.runtimeConfig?.message).toMatch(/Could not read disk config source snapshot/);
-    expect(sensitive.runtimeConfig?.liveSourceFingerprint).toBeDefined();
   });
 
   it("skips telegram probe when not configured", async () => {
@@ -1373,4 +1079,3 @@ describe("getHealthSnapshot", () => {
     ]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
