@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for damanclaw on 2026-07-22T15:19:57Z
+# fly.toml app configuration file generated for damanclaw on 2026-07-22T15:47:20Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -16,7 +16,7 @@ primary_region = 'ams'
   OPENCLAW_STATE_DIR = '/data'
 
 [processes]
-  app = 'node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan'
+  app = ''
 
 [[mounts]]
   source = 'openclaw_data'
@@ -25,7 +25,7 @@ primary_region = 'ams'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = 'off'
+  auto_stop_machines = false
   auto_start_machines = true
   min_machines_running = 1
   processes = ['app']
