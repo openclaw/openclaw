@@ -75,6 +75,13 @@ import "../../components/resizable-divider.ts";
 
 export { resetChatViewState } from "./chat-view-state.ts";
 
+type ChatReplyTarget = {
+  messageId: string;
+  text: string;
+  senderLabel?: string | null;
+  sourceMessageId?: string | null;
+};
+
 export type ChatProps = {
   transcript: ChatTranscriptController;
   paneId: string;
@@ -229,19 +236,9 @@ export type ChatProps = {
   basePath?: string;
   gatewayUrl?: string;
   composerControls?: TemplateResult | typeof nothing;
-  replyTarget?: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  } | null;
+  replyTarget?: ChatReplyTarget | null;
   onClearReply?: () => void;
-  onSetReply?: (target: {
-    messageId: string;
-    text: string;
-    senderLabel?: string | null;
-    sourceMessageId?: string | null;
-  }) => void;
+  onSetReply?: (target: ChatReplyTarget) => void;
   onRewindMessage?: (entryId: string) => Promise<boolean> | boolean;
   onForkMessage?: (entryId: string) => Promise<void> | void;
   sessionWorkspace?: SessionWorkspaceProps;
