@@ -246,13 +246,14 @@ function createCronPromptExecutor(params: {
   ) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
 }) {
-  const sessionFile =
+  const resolveCurrentSessionFile = () =>
     params.cronSession.sessionEntry.sessionFile?.trim() ||
     formatSqliteSessionFileMarker({
       agentId: params.agentId,
       sessionId: params.cronSession.sessionEntry.sessionId,
       storePath: params.cronSession.storePath,
     });
+  let sessionFile = resolveCurrentSessionFile();
   // Fallback for callers that bypass prepareCronRunContext before persisting retries.
   if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
     params.cronSession.sessionEntry.sessionFile = sessionFile;
@@ -323,6 +324,8 @@ function createCronPromptExecutor(params: {
       commit,
       latestEntry: latest,
     });
+    sessionFile = resolveCurrentSessionFile();
+    pendingUserTurn = undefined;
   };
 
   const runPrompt = async (promptText: string) => {

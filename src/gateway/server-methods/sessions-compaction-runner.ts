@@ -29,6 +29,7 @@ type GatewaySessionCompactionParams = {
   sessionKey: string;
   sessionStoreKey: string;
   storePath: string;
+  deferEmbeddedHookSessionReset?: DeferEmbeddedHookSessionReset;
 };
 
 function usesLegacyOpenClawCompaction(params: GatewaySessionCompactionParams): boolean {

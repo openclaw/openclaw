@@ -7,10 +7,14 @@ import {
   dispatchCronDeliveryMock,
   isHeartbeatOnlyResponseMock,
   listDescendantRunsForRequesterMock,
+  loadSessionEntryMock,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
+  makeCronSessionEntry,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
   resolveCronDeliveryPlanMock,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -19,7 +23,14 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 
 function requireEmbeddedAgentCall(index: number): {
   prompt?: string;
+  sessionFile?: string;
+  sessionKey?: string;
   suppressNextUserMessagePersistence?: boolean;
+  onSessionResetCommitted?: (commit: {
+    key: string;
+    sessionId: string;
+    reason: "reset" | "new";
+  }) => void;
   userTurnTranscriptRecorder?: {
     markRuntimePersisted: (message: { role: "user"; content: string }) => void;
   };
@@ -27,7 +38,14 @@ function requireEmbeddedAgentCall(index: number): {
   const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as
     | {
         prompt?: string;
+        sessionFile?: string;
+        sessionKey?: string;
         suppressNextUserMessagePersistence?: boolean;
+        onSessionResetCommitted?: (commit: {
+          key: string;
+          sessionId: string;
+          reason: "reset" | "new";
+        }) => void;
         userTurnTranscriptRecorder?: {
           markRuntimePersisted: (message: { role: "user"; content: string }) => void;
         };
@@ -118,6 +136,59 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(continuationCall.suppressNextUserMessagePersistence).toBe(false);
   });
 
+  it("retries against the reset transcript after a hook reset commits during the interim turn", async () => {
+    usePayloadTextExtraction();
+    const cronSession = makeCronSession({
+      storePath: "/tmp/store.json",
+      sessionEntry: makeCronSessionEntry({
+        sessionId: "session-before-reset",
+        sessionFile: "/tmp/session-before-reset.jsonl",
+      }),
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    let resetCommitted = false;
+    loadSessionEntryMock.mockImplementation((_storePath: string, key: string) => {
+      if (key !== "agent:default:cron:test:run:session-before-reset" || !resetCommitted) {
+        return undefined;
+      }
+      return makeCronSessionEntry({
+        sessionId: "session-after-reset",
+        sessionFile: "sqlite:default:session-after-reset:/tmp/store.json",
+        compactionCount: 0,
+      });
+    });
+    runEmbeddedAgentMock
+      .mockImplementationOnce(async (request) => {
+        expect(request.sessionFile).toBe("/tmp/session-before-reset.jsonl");
+        request.userTurnTranscriptRecorder?.markRuntimePersisted({
+          role: "user",
+          content: "test",
+        });
+        resetCommitted = true;
+        request.onSessionResetCommitted?.({
+          key: "agent:default:cron:test:run:session-before-reset",
+          sessionId: "session-after-reset",
+          reason: "new",
+        });
+        return {
+          payloads: [{ text: "On it, checking now." }],
+          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        };
+      })
+      .mockResolvedValueOnce({
+        payloads: [{ text: "Completed after reset." }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      });
+
+    mockRunCronFallbackPassthrough();
+    await runTurnAndExpectOk(2, 2);
+
+    expect(requireEmbeddedAgentCall(1).sessionFile).toBe(
+      "sqlite:default:session-after-reset:/tmp/store.json",
+    );
+    expect(cronSession.sessionEntry.sessionId).toBe("session-after-reset");
+  });
+
   it("does not retry when the first turn is already a concrete result", async () => {
     usePayloadTextExtraction();
     runEmbeddedAgentMock.mockResolvedValueOnce({
@@ -194,7 +265,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {
     usePayloadTextExtraction();
     runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "On it, I spawned a subagent and it will auto-announce when done." }],
+      payloads: [
+        {
+          text: "On it, I spawned a subagent and it will auto-announce when done.",
+        },
+      ],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
     listDescendantRunsForRequesterMock.mockReturnValue([

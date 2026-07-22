@@ -366,6 +366,7 @@ describe("overflow compaction in run loop", () => {
           tools: {
             loopDetection: {
               enabled: true,
+              criticalThreshold: 5,
             },
           },
         } as never,

@@ -20,19 +20,19 @@ function callOutcome(params?: {
 }
 
 describe("createLiveToolFailureLoopGuard", () => {
-  it("aborts on the fifth identical failed tool outcome by default", () => {
+  it("uses the documented critical threshold by default", () => {
     const guard = createLiveToolFailureLoopGuard();
 
-    for (let i = 0; i < 4; i += 1) {
+    for (let i = 0; i < 19; i += 1) {
       expect(guard.observe(callOutcome({ isError: true })).shouldAbort).toBe(false);
     }
 
-    const fifth = guard.observe(callOutcome({ isError: true }));
-    expect(fifth.shouldAbort).toBe(true);
-    if (fifth.shouldAbort) {
-      expect(fifth.detector).toBe("live_tool_failure_loop");
-      expect(fifth.count).toBe(5);
-      expect(fifth.toolName).toBe("message");
+    const twentieth = guard.observe(callOutcome({ isError: true }));
+    expect(twentieth.shouldAbort).toBe(true);
+    if (twentieth.shouldAbort) {
+      expect(twentieth.detector).toBe("live_tool_failure_loop");
+      expect(twentieth.count).toBe(20);
+      expect(twentieth.toolName).toBe("message");
     }
   });
 
@@ -51,19 +51,44 @@ describe("createLiveToolFailureLoopGuard", () => {
     }
   });
 
+  it("resets the streak after progress", () => {
+    const guard = createLiveToolFailureLoopGuard({ criticalThreshold: 2 });
+
+    expect(guard.observe(callOutcome({ isError: true }))).toEqual({
+      shouldAbort: false,
+      count: 1,
+    });
+    expect(guard.observe(callOutcome({ isError: false }))).toEqual({
+      shouldAbort: false,
+      count: 0,
+    });
+    expect(guard.observe(callOutcome({ isError: true }))).toEqual({
+      shouldAbort: false,
+      count: 1,
+    });
+  });
+
   it("does not combine different args or results", () => {
     const guard = createLiveToolFailureLoopGuard({ criticalThreshold: 2 });
 
     expect(
-      guard.observe(callOutcome({ argsHash: "a", resultHash: "same", isError: true })).shouldAbort,
-    ).toBe(false);
+      guard.observe(callOutcome({ argsHash: "a", resultHash: "same", isError: true })),
+    ).toEqual({
+      shouldAbort: false,
+      count: 1,
+    });
     expect(
-      guard.observe(callOutcome({ argsHash: "b", resultHash: "same", isError: true })).shouldAbort,
-    ).toBe(false);
+      guard.observe(callOutcome({ argsHash: "b", resultHash: "same", isError: true })),
+    ).toEqual({
+      shouldAbort: false,
+      count: 1,
+    });
     expect(
-      guard.observe(callOutcome({ argsHash: "a", resultHash: "different", isError: true }))
-        .shouldAbort,
-    ).toBe(false);
+      guard.observe(callOutcome({ argsHash: "a", resultHash: "different", isError: true })),
+    ).toEqual({
+      shouldAbort: false,
+      count: 1,
+    });
   });
 
   it("respects disabled loop detection", () => {

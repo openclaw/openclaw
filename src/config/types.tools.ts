@@ -160,6 +160,13 @@ export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
+  /** Critical identical tool-loop threshold before aborting a live run. */
+  criticalThreshold?: number;
+  /** Guard that aborts when compaction does not break an identical tool loop. */
+  postCompactionGuard?: {
+    /** Number of post-compaction tool outcomes to inspect before disarming. */
+    windowSize?: number;
+  };
 };
 
 export type ToolSearchConfig =

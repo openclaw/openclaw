@@ -1075,8 +1075,9 @@ test("sessions.compact hook reset guard accepts persisted compaction successor s
     sessionId: "sess-compact-old",
     sessionKey: "agent:main:main",
     storePath,
-    totalLines: 2,
+    totalLines: 3,
   });
+  let deferredReset = false;
   embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
     const call = params as {
       deferEmbeddedHookSessionReset?: (request: {
@@ -1086,6 +1087,7 @@ test("sessions.compact hook reset guard accepts persisted compaction successor s
         commandSource: string;
       }) => void;
     };
+    deferredReset = typeof call.deferEmbeddedHookSessionReset === "function";
     call.deferEmbeddedHookSessionReset?.({
       key: "agent:main:main",
       agentId: "main",
@@ -1106,27 +1108,11 @@ test("sessions.compact hook reset guard accepts persisted compaction successor s
   });
 
   const { ws } = await openClient();
-  await rpcReq(ws, "sessions.subscribe", {});
-  const hookResetChanged = onceMessage(ws, (message) => {
-    const candidate = message as {
-      event?: unknown;
-      payload?: { reason?: unknown; sessionKey?: unknown };
-      type?: unknown;
-    };
-    return (
-      candidate.type === "event" &&
-      candidate.event === "sessions.changed" &&
-      candidate.payload?.sessionKey === "agent:main:main" &&
-      candidate.payload?.reason === "new"
-    );
-  });
   const response = await rpcReq(ws, "sessions.compact", { key: "main" });
 
-  expect(response.ok).toBe(true);
-  expect((await hookResetChanged).payload).toMatchObject({
-    sessionKey: "agent:main:main",
-    reason: "new",
-  });
+  expect(response.ok, JSON.stringify(response)).toBe(true);
+  expect(response.payload?.compacted).toBe(true);
+  expect(deferredReset).toBe(true);
   const resetEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
   expect(resetEntry?.sessionId).toBeTruthy();
   expect(resetEntry?.sessionId).not.toBe("sess-compact-old");

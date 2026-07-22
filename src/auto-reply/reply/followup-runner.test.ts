@@ -110,6 +110,20 @@ function requireMockCallArg(
   return requireRecord(call[0], `mock call ${index} arg`);
 }
 
+function requireMockCallArgMatching(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+  predicate: (arg: Record<string, unknown>) => boolean,
+): Record<string, unknown> {
+  for (const [index, call] of mock.mock.calls.entries()) {
+    const arg = requireRecord(call[0], `mock call ${index} arg`);
+    if (predicate(arg)) {
+      return arg;
+    }
+  }
+  throw new Error(`expected ${label} mock call`);
+}
+
 function requireLastMockCallArg(
   mock: { mock: { calls: unknown[][] } },
   label: string,
@@ -4629,6 +4643,7 @@ describe("createFollowupRunner compaction", () => {
     });
     const queueSettings: QueueSettings = { mode: "followup" };
     enqueueFollowupRun("main", queuedNext, queueSettings);
+    const persistUsageSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
 
     await runner(
       createQueuedRun({
@@ -4649,6 +4664,7 @@ describe("createFollowupRunner compaction", () => {
     expect(await normalizeComparablePath(queuedNext.run.sessionFile)).toBe(
       await normalizeComparablePath(path.join(path.dirname(storePath), "session-reset.jsonl")),
     );
+    expect(persistUsageSpy).not.toHaveBeenCalled();
     expect(onSessionMetadataChanges).toHaveBeenCalledWith([
       { sessionKey: "main", agentId: "agent-1", reason: "new" },
     ]);
@@ -4840,7 +4856,13 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
-    expect(requireMockCallArg(persistSpy, 0).preserveFreshTotalTokensOnStaleUsage).toBe(true);
+    expect(
+      requireMockCallArgMatching(
+        persistSpy,
+        "fresh-token preserving usage persistence",
+        (arg) => arg.preserveFreshTotalTokensOnStaleUsage === true,
+      ).preserveFreshTotalTokensOnStaleUsage,
+    ).toBe(true);
     persistSpy.mockRestore();
   });
 
@@ -5161,7 +5183,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(onBlockReply).not.toHaveBeenCalled();
-    const persistCall = requireMockCallArg(persistSpy, 0);
+    const persistCall = requireMockCallArgMatching(
+      persistSpy,
+      "suppressed reply usage persistence",
+      (arg) => arg.storePath === storePath && arg.sessionKey === sessionKey,
+    );
     expect(persistCall.storePath).toBe(storePath);
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.modelUsed).toBe("claude-opus-4-6");
@@ -5219,7 +5245,11 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       ),
     ).resolves.toBeUndefined();
 
-    const persistCall = requireMockCallArg(persistSpy, 0);
+    const persistCall = requireMockCallArgMatching(
+      persistSpy,
+      "queued config usage persistence",
+      (arg) => arg.storePath === storePath && arg.sessionKey === sessionKey,
+    );
     expect(persistCall.storePath).toBe(storePath);
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.cfg).toBe(cfg);

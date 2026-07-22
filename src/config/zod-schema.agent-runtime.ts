@@ -577,6 +577,13 @@ const ToolFsSchema = z
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
+    criticalThreshold: z.number().int().positive().optional(),
+    postCompactionGuard: z
+      .object({
+        windowSize: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .optional();

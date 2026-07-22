@@ -373,6 +373,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
               reason,
             });
           let resetGuardSessionId = sessionId;
+          let resetGuardLifecycleRevision = lifecycleRevision;
           const assertCompactionResetCurrent = () => {
             const currentEntry = loadAccessorSessionEntryForGatewayTarget({
               key,
@@ -382,7 +383,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             if (
               !currentEntry ||
               currentEntry.sessionId !== resetGuardSessionId ||
-              currentEntry.lifecycleRevision !== lifecycleRevision ||
+              currentEntry.lifecycleRevision !== resetGuardLifecycleRevision ||
               resolveSessionWorkStartError(target.canonicalKey, currentEntry)
             ) {
               const error = new Error("stale compaction hook reset");
@@ -423,6 +424,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
           }
           if (result.ok && result.compacted) {
             let persisted: boolean;
+            let persistedLifecycleRevision = resetGuardLifecycleRevision;
             try {
               // Guarded terminal persist: skip when session ownership rotated
               // while compaction ran (sessionId/lifecycleRevision/work-start).
@@ -466,6 +468,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                 },
               });
               persisted = persistProjection.ok;
+              if (persistProjection.ok) {
+                persistedLifecycleRevision =
+                  persistProjection.entry.lifecycleRevision ?? persistedLifecycleRevision;
+              }
             } catch (err) {
               emitCompactionEnd(false, formatErrorMessage(err));
               throw err;
@@ -485,6 +491,7 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
             if (result.result?.sessionId) {
               resetGuardSessionId = result.result.sessionId;
             }
+            resetGuardLifecycleRevision = persistedLifecycleRevision;
             recordSessionCompacted({
               sessionKey: target.canonicalKey,
               operationId,

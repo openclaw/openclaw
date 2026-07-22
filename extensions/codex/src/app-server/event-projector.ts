@@ -82,13 +82,6 @@ type CodexAppServerEventProjectorOptions = {
   upstreamUserText?: string;
 };
 
-type CodexAppServerDeferredHookSessionReset = Parameters<
-  typeof runAgentHarnessAfterCompactionHook
->[0]["ctx"]["deferEmbeddedHookSessionReset"];
-type CodexAppServerInternalAttemptParams = EmbeddedRunAttemptParams & {
-  deferEmbeddedHookSessionReset?: CodexAppServerDeferredHookSessionReset;
-};
-
 export class CodexAppServerEventProjector {
   private readonly assistantProjection: CodexAssistantProjection;
   private readonly reasoningProjection: CodexReasoningProjection;
@@ -114,7 +107,7 @@ export class CodexAppServerEventProjector {
   private lastTranscriptTimestamp = 0;
 
   constructor(
-    private readonly params: CodexAppServerInternalAttemptParams,
+    private readonly params: EmbeddedRunAttemptParams,
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},

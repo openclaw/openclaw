@@ -356,6 +356,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":
     "Enable repetitive tool-call loop detection and backoff safety checks (default: false).",
+  "tools.loopDetection.criticalThreshold":
+    "Abort a live run after this many consecutive identical deterministic tool failures when loop detection is enabled.",
+  "tools.loopDetection.postCompactionGuard.windowSize":
+    "Number of post-compaction tool outcomes to inspect before disarming the identical-loop guard.",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":

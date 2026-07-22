@@ -87,7 +87,6 @@ describe("dead config keys", () => {
     "tools.loopDetection.historySize",
     "tools.loopDetection.warningThreshold",
     "tools.loopDetection.detectors",
-    "tools.loopDetection.postCompactionGuard",
     "tools.media.image.models",
     "tools.media.audio.models",
     "tools.media.video.models",
