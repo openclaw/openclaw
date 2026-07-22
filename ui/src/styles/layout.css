@@ -472,6 +472,67 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-brand .s
   color: color-mix(in srgb, var(--muted) 76%, transparent);
 }
 
+/* Collapsible groups: the label becomes a clickable <summary> with a caret that
+   rotates open. Native <details> owns the toggle; open state persists in JS. */
+.settings-sidebar__group--collapsible {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-sidebar__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 9px;
+  margin: 0 0 2px;
+  cursor: default;
+  list-style: none;
+  user-select: none;
+  border-radius: var(--radius-sm);
+}
+
+.settings-sidebar__group-header::-webkit-details-marker {
+  display: none;
+}
+
+.settings-sidebar__group-header .settings-sidebar__group-label {
+  margin: 0;
+  padding: 0;
+}
+
+.settings-sidebar__group-header:hover {
+  background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
+}
+
+.settings-sidebar__group-header:hover .settings-sidebar__group-label {
+  color: var(--muted);
+}
+
+.settings-sidebar__group-caret {
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform var(--duration-fast) ease;
+  color: color-mix(in srgb, var(--muted) 60%, transparent);
+  flex: none;
+  margin-right: 2px;
+}
+
+.settings-sidebar__group--collapsible[open]
+  > .settings-sidebar__group-header
+  .settings-sidebar__group-caret {
+  transform: rotate(45deg);
+}
+
+.settings-sidebar__group-header:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* Settings rail entries are anchors but read as app chrome: default arrow,
    not the UA link pointer. */
 .settings-sidebar__item {
@@ -2830,11 +2891,14 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   opacity: 1;
 }
 
+/* Active nav reads as flat, not boxed: a left accent bar + strong text over a
+   quiet fill, instead of a filled tinted box with a border. */
 .nav-item.active,
 .nav-item--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .nav-item.active .nav-item__icon,
@@ -2878,8 +2942,9 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
 
 .sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
   color: var(--text-strong);
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--bg-hover);
+  border-color: transparent;
+  box-shadow: inset 2px 0 0 var(--accent);
 }
 
 .sidebar-pinned-session__icon {
@@ -3582,7 +3647,9 @@ wa-dropdown.sidebar-session-sort-menu::part(menu) {
   font-weight: 650;
   letter-spacing: -0.03em;
   line-height: 1.2;
-  color: var(--accent);
+  /* Headings stay neutral (near-white); accent is reserved for primary actions,
+     active/selected state, and live status — keeps the UI calm, not loud. */
+  color: var(--text-strong);
 }
 
 .page-meta {

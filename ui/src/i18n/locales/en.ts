@@ -1235,6 +1235,10 @@ export const en: TranslationMap = {
         label: "Dash",
         description: "Chocolate blueprint",
       },
+      nova: {
+        label: "Nova",
+        description: "Coral on slate",
+      },
     },
     textSizes: {
       small: "Small",

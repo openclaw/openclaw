@@ -48,6 +48,44 @@ type SettingsNavigationItemView = {
   blocks: readonly SettingsSearchBlock[];
 };
 
+// Collapsible-group state persists per group label so a user's expand/collapse
+// choices survive re-renders and reloads; default hides the advanced group.
+const SETTINGS_NAV_GROUP_PREF_KEY = "openclaw.control.settingsNavGroups.v1";
+
+function settingsGroupOpenPrefs(): Record<string, boolean> {
+  try {
+    const raw = globalThis.localStorage?.getItem(SETTINGS_NAV_GROUP_PREF_KEY);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, boolean>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function isSettingsGroupOpen(labelKey: string, containsActive: boolean): boolean {
+  const prefs = settingsGroupOpenPrefs();
+  const stored = prefs[labelKey];
+  if (stored !== undefined) {
+    return stored;
+  }
+  if (containsActive) {
+    return true;
+  }
+  // Default: collapse the advanced "System" group so the rail reads calmer on
+  // first open; every other group stays expanded. Toggles above override this.
+  return labelKey !== "nav.settingsGroupSystem";
+}
+
+function setSettingsGroupOpen(labelKey: string, open: boolean): void {
+  try {
+    const prefs = settingsGroupOpenPrefs();
+    prefs[labelKey] = open;
+    globalThis.localStorage?.setItem(SETTINGS_NAV_GROUP_PREF_KEY, JSON.stringify(prefs));
+  } catch {
+    // localStorage unavailable — collapse state is best-effort only.
+  }
+}
+
 function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): boolean {
   const blockLabel = normalizeLowercaseStringOrEmpty(block.label);
   return [settingsNavigationLabelForRoute(routeId), titleForRoute(routeId)].some(
@@ -274,21 +312,48 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           ? html`<p class="settings-sidebar__empty" role="status">
               ${t("nav.settingsSearchNoResults")}
             </p>`
-          : navigationGroups.map(
-              (group) => html`
-                <div class="settings-sidebar__group">
-                  ${group.labelKey
-                    ? html`<div class="settings-sidebar__group-label">${t(group.labelKey)}</div>`
-                    : nothing}
+          : navigationGroups.map((group) => {
+              // Unlabeled groups (the common top block, and flattened search
+              // results) always render open; labeled groups are collapsible.
+              if (!group.labelKey) {
+                return html`
+                  <div class="settings-sidebar__group">
+                    ${group.items.map(
+                      (item) => html`
+                        ${renderItem(props, item.routeId)}
+                        ${item.blocks.map((block) => renderBlockItem(props, block))}
+                      `,
+                    )}
+                  </div>
+                `;
+              }
+              const labelKey = group.labelKey;
+              const containsActive =
+                !props.searchQuery &&
+                group.items.some((item) => item.routeId === props.activeRouteId);
+              return html`
+                <details
+                  class="settings-sidebar__group settings-sidebar__group--collapsible"
+                  ?open=${isSettingsGroupOpen(labelKey, containsActive)}
+                  @toggle=${(event: Event) =>
+                    setSettingsGroupOpen(
+                      labelKey,
+                      (event.currentTarget as HTMLDetailsElement).open,
+                    )}
+                >
+                  <summary class="settings-sidebar__group-header">
+                    <span class="settings-sidebar__group-label">${t(labelKey)}</span>
+                    <span class="settings-sidebar__group-caret" aria-hidden="true"></span>
+                  </summary>
                   ${group.items.map(
                     (item) => html`
                       ${renderItem(props, item.routeId)}
                       ${item.blocks.map((block) => renderBlockItem(props, block))}
                     `,
                   )}
-                </div>
-              `,
-            )}
+                </details>
+              `;
+            })}
       </nav>
       <openclaw-sidebar-update-card
         .updateAvailable=${props.updateAvailable}

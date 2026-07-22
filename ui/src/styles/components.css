@@ -4829,11 +4829,21 @@ td.data-table-key-col {
 .cmd-palette {
   width: 100%;
   overflow: hidden;
-  background: var(--card);
-  border: 1px solid var(--border);
+  /* Glass HUD: a translucent surface + backdrop blur so the palette floats
+     over the app (falls back to the solid popover where blur is unsupported). */
+  background: color-mix(in srgb, var(--popover) 82%, transparent);
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-xl);
   animation: scale-in 0.15s ease-out;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cmd-palette {
+    background: var(--popover);
+  }
 }
 
 .cmd-palette__label {

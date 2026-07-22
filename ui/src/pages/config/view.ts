@@ -884,6 +884,11 @@ const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
     labelKey: "configView.themes.dash.label",
     descriptionKey: "configView.themes.dash.description",
   },
+  {
+    id: "nova",
+    labelKey: "configView.themes.nova.label",
+    descriptionKey: "configView.themes.nova.description",
+  },
 ];
 
 /* Builtin cards preview their real palette (chip colors live in config.css,

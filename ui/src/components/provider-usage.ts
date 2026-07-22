@@ -189,6 +189,9 @@ export function renderProviderUsageDetails(snapshot: ProviderUsageSnapshot) {
             ${snapshot.windows.map((window) => {
               const used = Math.max(0, Math.min(100, window.usedPercent));
               const remaining = Math.max(0, 100 - used);
+              // Bucket by remaining quota so the meter fill can be colored by
+              // level (themes may branch on data-level; default styling ignores it).
+              const usageLevel = remaining <= 10 ? "critical" : remaining <= 30 ? "low" : "ok";
               const reset = formatProviderReset(window.resetAt);
               return html`
                 <div class="provider-usage-window">
@@ -202,6 +205,7 @@ export function renderProviderUsageDetails(snapshot: ProviderUsageSnapshot) {
                   </div>
                   <div
                     class="provider-usage-progress"
+                    data-level=${usageLevel}
                     role="progressbar"
                     aria-label=${window.label}
                     aria-valuemin="0"

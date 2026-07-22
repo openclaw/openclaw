@@ -53,6 +53,16 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+  /* Signature gradient CTA, derived from each theme's own accent so every
+     family gets a same-hue gradient out of the box (Nova overrides with a
+     custom one). Resolved against --accent at use time, so theme blocks that
+     only override --accent inherit a gradient in their own hue. */
+  --accent-grad: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 78%, #fff),
+    var(--accent) 55%,
+    color-mix(in srgb, var(--accent) 82%, #000)
+  );
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
@@ -538,6 +548,204 @@
   --shadow-lg: 0 12px 28px rgba(60, 40, 20, 0.1);
 
   --grid-line: rgba(80, 50, 20, 0.04);
+}
+
+/*
+ * Nova — modern coral on deep slate. Keeps OpenClaw's coral identity but
+ * rebuilds surfaces with Hermes technique: one-ink alpha-ladder text,
+ * whisper hairline borders, and layered soft shadows for borderless
+ * elevation (flat, not boxed). Additive family; other themes untouched.
+ *
+ * WCAG 2.1 AA (bg = #0a0c11): --accent #ff6a5f ≈ 6.0:1 AA text ✓ ;
+ *   --primary-foreground #ffffff on #d13c3c ≈ 4.75:1 AA ✓ ;
+ *   text .74 / strong .95 comfortably above AA.
+ */
+:root[data-theme="nova"] {
+  --ring: #ff6a5f;
+  --accent: #ff6a5f;
+  --accent-hover: #ff8175;
+  --accent-muted: #ff6a5f;
+  --accent-subtle: rgba(255, 106, 95, 0.12);
+  --accent-foreground: #fafafa;
+  --accent-glow: rgba(255, 106, 95, 0.22);
+  /* Signature gradient reserved for hero CTAs (composer send, brand mark). */
+  --accent-grad: linear-gradient(135deg, #ff8a5c 0%, #ff5c6b 55%, #f43f7d 100%);
+  --primary: #d13c3c;
+  --primary-hover: #c22e2e;
+  --primary-foreground: #ffffff;
+  --selection-bg: #2f5ca8;
+  --selection-fg: #ffffff;
+
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+  --destructive-foreground: #fafafa;
+
+  --focus: rgba(255, 106, 95, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 18px var(--accent-glow);
+
+  /* Surfaces — deep cool slate, smooth ramp */
+  --bg: #0a0c11;
+  --bg-accent: #0d1017;
+  --bg-elevated: #161b22;
+  --bg-hover: rgba(236, 238, 245, 0.055);
+  --bg-muted: rgba(236, 238, 245, 0.05);
+
+  --card: #0f131a;
+  --card-foreground: #eceef5;
+  --card-highlight: rgba(255, 255, 255, 0.04);
+  --popover: #161b22;
+  --popover-foreground: #eceef5;
+
+  --panel: #0a0c11;
+  --panel-strong: #161b22;
+  --panel-hover: #1a2029;
+  --chrome: rgba(10, 12, 17, 0.96);
+  --chrome-strong: rgba(10, 12, 17, 0.98);
+
+  /* Text — alpha ladder off one ink (95 / 80 / 74 / 54 / 42) */
+  --text: rgba(236, 238, 245, 0.74);
+  --text-strong: rgba(236, 238, 245, 0.95);
+  --chat-text: rgba(236, 238, 245, 0.8);
+  --muted: rgba(236, 238, 245, 0.54);
+  --muted-strong: rgba(236, 238, 245, 0.42);
+  --muted-foreground: rgba(236, 238, 245, 0.54);
+
+  /* Borders — whisper hairlines (flat, not boxed) */
+  --border: rgba(236, 238, 245, 0.08);
+  --border-strong: rgba(236, 238, 245, 0.14);
+  --border-hover: rgba(236, 238, 245, 0.22);
+  --input: rgba(236, 238, 245, 0.1);
+
+  --secondary: #0f131a;
+  --secondary-foreground: #eceef5;
+  --accent-2: #2dd4bf;
+  --accent-2-muted: rgba(45, 212, 191, 0.7);
+  --accent-2-subtle: rgba(45, 212, 191, 0.12);
+
+  --ok: #34d399;
+  --ok-muted: rgba(52, 211, 153, 0.75);
+  --ok-subtle: rgba(52, 211, 153, 0.1);
+  --warn: #fbbf24;
+  --warn-muted: rgba(251, 191, 36, 0.75);
+  --warn-subtle: rgba(251, 191, 36, 0.1);
+  --danger: #f87171;
+  --danger-muted: rgba(248, 113, 113, 0.75);
+  --danger-subtle: rgba(248, 113, 113, 0.1);
+  --info: #60a5fa;
+
+  /* Softer, modern radii */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius: 12px;
+
+  /* Layered soft shadows — borderless elevation (Hermes shadow-nous, dark-tuned) */
+  --shadow-sm: 0 1px 2px -1px rgba(0, 0, 0, 0.6);
+  --shadow-md:
+    0 2px 4px -2px rgba(0, 0, 0, 0.5), 0 8px 16px -6px rgba(0, 0, 0, 0.5),
+    0 20px 32px -16px rgba(0, 0, 0, 0.55);
+  --shadow-lg:
+    0 4px 8px -4px rgba(0, 0, 0, 0.55), 0 16px 32px -12px rgba(0, 0, 0, 0.6),
+    0 40px 56px -28px rgba(0, 0, 0, 0.65);
+
+  --grid-line: rgba(236, 238, 245, 0.03);
+}
+
+:root[data-theme="nova-light"] {
+  /*
+   * Nova light — coral on clean cool paper.
+   * WCAG 2.1 AA (bg = #f7f8fb): --accent #d13b41 ≈ 4.7:1 AA text ✓ ;
+   *   --primary-foreground #ffffff on #d13b41 ≈ 4.7:1 AA ✓.
+   * Placed after the shared light-mode block so it wins the cascade.
+   */
+  --ring: #d13b41;
+  --accent: #d13b41;
+  --accent-hover: #bb2f37;
+  --accent-muted: #d13b41;
+  --accent-subtle: rgba(209, 59, 65, 0.1);
+  --accent-foreground: #ffffff;
+  --accent-glow: rgba(209, 59, 65, 0.14);
+  --accent-grad: linear-gradient(135deg, #ff7a53 0%, #f0455f 55%, #d6377a 100%);
+  --primary: #d13b41;
+  --primary-hover: #bb2f37;
+  --primary-foreground: #ffffff;
+  --selection-bg: #2f5ca8;
+  --selection-fg: #ffffff;
+
+  --destructive: #dc2626;
+  --destructive-foreground: #fafafa;
+
+  --focus: rgba(209, 59, 65, 0.15);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
+  --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
+
+  --bg: #f7f8fb;
+  --bg-accent: #eef1f6;
+  --bg-elevated: #ffffff;
+  --bg-hover: rgba(16, 19, 26, 0.05);
+  --bg-muted: rgba(16, 19, 26, 0.045);
+  --bg-content: #eef1f6;
+
+  --card: #ffffff;
+  --card-foreground: #10131a;
+  --card-highlight: rgba(16, 19, 26, 0.03);
+  --popover: #ffffff;
+  --popover-foreground: #10131a;
+
+  --panel: #f7f8fb;
+  --panel-strong: #eef1f6;
+  --panel-hover: #e4e8f0;
+  --chrome: rgba(247, 248, 251, 0.96);
+  --chrome-strong: rgba(247, 248, 251, 0.98);
+
+  --text: rgba(16, 19, 26, 0.8);
+  --text-strong: #10131a;
+  --chat-text: rgba(16, 19, 26, 0.82);
+  --muted: rgba(16, 19, 26, 0.56);
+  --muted-strong: rgba(16, 19, 26, 0.68);
+  --muted-foreground: rgba(16, 19, 26, 0.56);
+
+  --border: rgba(16, 19, 26, 0.1);
+  --border-strong: rgba(16, 19, 26, 0.16);
+  --border-hover: rgba(16, 19, 26, 0.26);
+  --input: rgba(16, 19, 26, 0.14);
+
+  --secondary: #eef1f6;
+  --secondary-foreground: rgba(16, 19, 26, 0.8);
+  --accent-2: #0d9488;
+  --accent-2-muted: rgba(13, 148, 136, 0.75);
+  --accent-2-subtle: rgba(13, 148, 136, 0.1);
+
+  --ok: #15803d;
+  --ok-muted: rgba(21, 128, 61, 0.75);
+  --ok-subtle: rgba(21, 128, 61, 0.08);
+  --warn: #b45309;
+  --warn-muted: rgba(180, 83, 9, 0.75);
+  --warn-subtle: rgba(180, 83, 9, 0.08);
+  --danger: #dc2626;
+  --danger-muted: rgba(220, 38, 38, 0.75);
+  --danger-subtle: rgba(220, 38, 38, 0.08);
+  --info: #2563eb;
+
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius: 12px;
+
+  --shadow-sm: 0 1px 2px rgba(16, 19, 26, 0.06);
+  --shadow-md:
+    0 2px 4px -2px rgba(16, 19, 26, 0.06), 0 8px 16px -6px rgba(16, 19, 26, 0.08),
+    0 20px 32px -16px rgba(16, 19, 26, 0.1);
+  --shadow-lg:
+    0 4px 8px -4px rgba(16, 19, 26, 0.08), 0 16px 32px -12px rgba(16, 19, 26, 0.1),
+    0 40px 56px -28px rgba(16, 19, 26, 0.12);
+
+  --grid-line: rgba(16, 19, 26, 0.04);
+
+  color-scheme: light;
 }
 
 * {

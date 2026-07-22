@@ -144,6 +144,25 @@
   );
 }
 
+/* Quota fill shifts green -> amber -> red as a plan depletes, driven by the
+   data-level bucket set in provider-usage.ts. The bar width is the amount
+   consumed, so a near-full red bar reads as "almost out". */
+.provider-usage-progress[data-level="ok"] span {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--ok) 80%, var(--accent-2)), var(--ok));
+}
+
+.provider-usage-progress[data-level="low"] span {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 75%, var(--ok)), var(--warn));
+}
+
+.provider-usage-progress[data-level="critical"] span {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--danger) 78%, var(--warn)),
+    var(--danger)
+  );
+}
+
 .provider-usage-billing {
   padding-top: 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
