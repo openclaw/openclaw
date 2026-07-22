@@ -140,11 +140,33 @@ describe("runPostCorePluginConvergence", () => {
     await runPostCorePluginConvergence({
       cfg,
       env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
+      // Explicit target wins over both the inherited env var and VERSION.
+      compatibilityHostVersion: "2026.6.20",
     });
     expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
       cfg,
       env: {
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.6.20",
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+  });
+
+  it("preserves the inherited fresh-child host version instead of the updater module VERSION", async () => {
+    // On the fresh post-core child route the parent spawns this process with
+    // OPENCLAW_COMPATIBILITY_HOST_VERSION set to the actual installed package
+    // version. Convergence must keep that inherited value rather than
+    // overwriting it with this updater module's own (possibly pre-update)
+    // VERSION, otherwise compatible retained plugins can be skipped.
+    const cfg = { plugins: { entries: {} } } as unknown as OpenClawConfig;
+    await runPostCorePluginConvergence({
+      cfg,
+      env: { OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12" },
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg,
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.12",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
       },
     });

@@ -240,8 +240,8 @@ export async function finishUpdate(params: {
     );
     postUpdateConfigSnapshot = restoredConfig.snapshot;
     // Current-process post-core convergence still reports the pre-update
-    // VERSION. During downgrades, pin compatibility checks to the installed
-    // target so incompatible newer plugins are disabled before restart.
+    // VERSION. Pin compatibility checks to the installed target so plugin
+    // discovery/update policy matches the gateway that will be restarted.
     const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
     const versionComparison =
       postUpdateInstalledVersion && VERSION
@@ -263,6 +263,10 @@ export async function finishUpdate(params: {
         opts: params.opts,
         timeoutMs: params.updateStepTimeoutMs,
         pluginInstallRecords: params.preUpdatePluginInstallRecords,
+        // Always evaluate plugin convergence against the installed core version,
+        // not the updater module's VERSION, so compatible retained plugins are
+        // not skipped on the current-process post-update route either.
+        compatibilityHostVersion: postUpdateInstalledVersion,
       });
     } finally {
       if (compatibilityDowngradeTarget) {
