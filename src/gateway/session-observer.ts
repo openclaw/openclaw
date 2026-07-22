@@ -1,7 +1,9 @@
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { getAgentRunContext, type AgentEventPayload } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createSessionObserverAskRuntime } from "./session-observer-ask.js";
+import type { SessionObserverEvent, SessionObserverService } from "./session-observer-contract.js";
 import {
   buildSessionObserverPrompt,
   createDormantSessionObserverRun,
@@ -49,7 +51,10 @@ const PERSIST_INTERVAL_MS = 60_000;
 // prevents background observer calls from outgrowing the surface consuming them.
 const MAX_CONCURRENT_OBSERVED_SESSIONS = 6;
 
-export function createSessionObserver(deps: SessionObserverDeps) {
+type SessionObserver = SessionObserverService &
+  Pick<ReturnType<typeof createSessionObserverAskRuntime>, "getSnapshot">;
+
+export function createSessionObserver(deps: SessionObserverDeps): SessionObserver {
   const now = deps.now ?? Date.now;
   const setTimeoutFn = deps.setTimeoutFn ?? setTimeout;
   const clearTimeoutFn = deps.clearTimeoutFn ?? clearTimeout;
@@ -64,6 +69,19 @@ export function createSessionObserver(deps: SessionObserverDeps) {
   const supersededRuns = new Map<string, number>();
   const disabledRuns = new Set<string>();
   let disposed = false;
+  const askRuntime = createSessionObserverAskRuntime({
+    getConfig: deps.getConfig,
+    subscribers: deps.subscribers,
+    states,
+    resolveUtilityModelRef,
+    prepareModel,
+    completeModel,
+    readSession,
+    now,
+    setTimeoutFn,
+    clearTimeoutFn,
+    isDisposed: () => disposed,
+  });
 
   // Narrow run-identity guard shared by persist paths: a digest may still land
   // while its session is unwatched, but never after a newer run replaces it.
@@ -73,7 +91,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
   // Terminal paths that cannot run the model must still retire same-run live
   // health, or idle session rows can display a stale in-progress judgment forever.
   async function synthesizeTerminalDigest(source: {
-    event?: AgentEventPayload;
+    event?: SessionObserverEvent;
     state?: SessionObserverState;
   }) {
     const runId = source.event?.runId ?? source.state?.runId;
@@ -452,7 +470,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     })();
   };
 
-  const admitState = (event: AgentEventPayload): SessionObserverState | undefined => {
+  const admitState = (event: SessionObserverEvent): SessionObserverState | undefined => {
     const sessionKey = event.sessionKey?.trim();
     const agentId = event.agentId?.trim();
     // Watching is the intentional cost gate: read-scope subscribers are the
@@ -529,7 +547,7 @@ export function createSessionObserver(deps: SessionObserverDeps) {
     return state;
   };
 
-  const handleEvent = (event: AgentEventPayload) => {
+  const handleEvent = (event: SessionObserverEvent) => {
     if (disposed || getAgentRunContext(event.runId)?.isHeartbeat) {
       return;
     }
@@ -642,9 +660,12 @@ export function createSessionObserver(deps: SessionObserverDeps) {
 
   return {
     handleEvent,
+    getSnapshot: askRuntime.getSnapshot,
+    ask: askRuntime.ask,
     dispose() {
       disposed = true;
       unsubscribeChanges();
+      askRuntime.dispose();
       for (const state of states.values()) {
         dropState(state);
       }

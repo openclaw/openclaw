@@ -53,6 +53,7 @@ const CURRENT_TRAIN_METHODS = [
   "gateway.suspend.resume",
   "ui.command",
   "device.pair.rename",
+  "sessions.observer.ask",
 ] as const;
 
 describe("core gateway method release trains", () => {

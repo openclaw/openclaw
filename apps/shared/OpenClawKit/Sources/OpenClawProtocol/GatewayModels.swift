@@ -4817,6 +4817,42 @@ public struct SessionObserverDigest: Codable, Sendable {
     }
 }
 
+public struct SessionsObserverAskParams: Codable, Sendable {
+    public let sessionkey: String
+    public let question: String
+
+    public init(
+        sessionkey: String,
+        question: String)
+    {
+        self.sessionkey = sessionkey
+        self.question = question
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case question
+    }
+}
+
+public struct SessionsObserverAskResult: Codable, Sendable {
+    public let answer: String
+    public let digestrevision: Int?
+
+    public init(
+        answer: String,
+        digestrevision: Int? = nil)
+    {
+        self.answer = answer
+        self.digestrevision = digestrevision
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case answer
+        case digestrevision = "digestRevision"
+    }
+}
+
 public struct LocalSessionPlacement: Codable, Sendable {
     public let state: String
     public let generation: Int
