@@ -517,7 +517,12 @@ describe("runCliAgent spawn path", () => {
         ],
         forkArg: "--fork-session",
         liveSession: "claude-stdio",
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
         systemPromptWhen: "always",
+      },
+      preparedEnv: {
+        CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+        CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
       },
       resolveExecutionArgs: (execution) => {
         toolAvailability = execution.toolAvailability;
@@ -546,6 +551,11 @@ describe("runCliAgent spawn path", () => {
         stdin: "current turn",
         argv: expect.arrayContaining(["--resume", "source-node-session", "--fork-session"]),
         systemPrompt: "You are a helpful assistant.",
+        env: {
+          CLAUDE_CODE_OAUTH_TOKEN: "selected-node-token",
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "1",
+        },
+        clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
       }),
     );
     const argv = invokeNode.mock.calls[0]?.[0].argv ?? [];

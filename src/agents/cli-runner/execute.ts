@@ -255,6 +255,12 @@ const CLI_ENV_AUTH_LOG_KEYS = [
 ] as const;
 
 const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
+const NODE_CLAUDE_FORWARD_ENV_KEYS = new Set([
+  "ANTHROPIC_API_KEY",
+  "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB",
+]);
 
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
@@ -907,6 +913,15 @@ export async function executePreparedCliRun(
               captureKey: initialGatewayCaptureKey,
             });
         cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
+        const backendEnv = {
+          ...backend.env,
+          ...context.preparedBackend.env,
+        };
+        const nodeEnvEntries = Object.entries(backendEnv).filter(([key]) =>
+          NODE_CLAUDE_FORWARD_ENV_KEYS.has(key),
+        );
+        const nodeEnv =
+          nodeEnvEntries.length > 0 ? Object.fromEntries(nodeEnvEntries) : undefined;
         const env = (() => {
           const next = sanitizeHostExecEnv({
             baseEnv: process.env,
@@ -919,10 +934,6 @@ export async function executePreparedCliRun(
             }
             delete next[key];
           }
-          const backendEnv = {
-            ...backend.env,
-            ...context.preparedBackend.env,
-          };
           if (Object.keys(backendEnv).length > 0) {
             Object.assign(
               next,
@@ -1706,6 +1717,8 @@ export async function executePreparedCliRun(
               executionArgs,
               stdinPayload,
               ...(nodeSystemPrompt !== undefined ? { nodeSystemPrompt } : {}),
+              ...(nodeEnv ? { nodeEnv } : {}),
+              ...(backend.clearEnv ? { nodeClearEnv: backend.clearEnv } : {}),
               noOutputTimeoutMs,
               consumeStdout,
               consumeStderr,
