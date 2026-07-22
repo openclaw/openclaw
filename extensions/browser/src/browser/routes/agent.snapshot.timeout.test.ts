@@ -11,6 +11,7 @@ const cdpMocks = vi.hoisted(() => ({
     stats: { lines: 1, chars: 15, refs: 0, interactive: 0 },
   })),
 }));
+const tabLookup = vi.hoisted(() => vi.fn());
 
 const profileContext = vi.hoisted(() => ({
   profile: {
@@ -28,6 +29,7 @@ const profileContext = vi.hoisted(() => ({
     targetId: "tab-1",
     url: "https://example.com",
     wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+    wsLookup: tabLookup,
   })),
 }));
 
@@ -78,7 +80,7 @@ vi.mock("./agent.shared.js", () => ({
     async (params: {
       run: (ctx: {
         profileCtx: typeof profileContext;
-        tab: { targetId: string; url: string; wsUrl: string };
+        tab: { targetId: string; url: string; wsUrl: string; wsLookup: typeof tabLookup };
         cdpUrl: string;
       }) => Promise<void>;
     }) =>
@@ -88,6 +90,7 @@ vi.mock("./agent.shared.js", () => ({
           targetId: "tab-1",
           url: "https://example.com",
           wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+          wsLookup: tabLookup,
         },
         cdpUrl: "http://127.0.0.1:18800",
       }),
@@ -134,6 +137,7 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdpMocks.snapshotAria).toHaveBeenCalledWith(
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+        lookup: tabLookup,
         timeoutMs: 4321,
       }),
     );
@@ -149,6 +153,7 @@ describe("browser agent snapshot timeout routing", () => {
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({
         wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+        lookup: tabLookup,
         timeoutMs: 9876,
       }),
     );
@@ -167,6 +172,7 @@ describe("browser agent snapshot timeout routing", () => {
     expect(response.statusCode).toBe(200);
     expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
       expect.objectContaining({
+        lookup: tabLookup,
         timeoutMs: 2_147_483_647,
       }),
     );

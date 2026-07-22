@@ -7,7 +7,7 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
+import type { PinnedHostname, SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   prepareCdpPageSession,
   prepareCdpTargetSession,
@@ -75,6 +75,7 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
 /** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
 export async function captureScreenshot(opts: {
   wsUrl: string;
+  lookup?: PinnedHostname["lookup"];
   fullPage?: boolean;
   format?: "png" | "jpeg";
   quality?: number; // jpeg only (0..100)
@@ -185,7 +186,7 @@ export async function captureScreenshot(opts: {
         }
       }
     },
-    { commandTimeoutMs: opts.timeoutMs },
+    { commandTimeoutMs: opts.timeoutMs, lookup: opts.lookup },
   );
 }
 
@@ -412,6 +413,7 @@ export function formatAriaSnapshot(nodes: RawAXNode[], limit: number): AriaSnaps
 /** Capture an accessibility-tree snapshot through CDP. */
 export async function snapshotAria(opts: {
   wsUrl: string;
+  lookup?: PinnedHostname["lookup"];
   limit?: number;
   timeoutMs?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
@@ -426,7 +428,7 @@ export async function snapshotAria(opts: {
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
 
@@ -892,6 +894,7 @@ async function buildCdpRoleSnapshot(params: {
 /** Build a role/name text snapshot with stable refs from CDP DOM and AX data. */
 export async function snapshotRoleViaCdp(opts: {
   wsUrl: string;
+  lookup?: PinnedHostname["lookup"];
   options?: CdpRoleSnapshotOptions;
   urls?: boolean;
   timeoutMs?: number;
@@ -922,7 +925,7 @@ export async function snapshotRoleViaCdp(opts: {
         maxChars: opts.maxChars,
       });
     },
-    { commandTimeoutMs: opts.timeoutMs ?? 5000 },
+    { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

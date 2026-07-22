@@ -6,5 +6,6 @@ export {
   isPrivateNetworkAllowedByPolicy,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
+  type PinnedHostname,
   type SsrFPolicy,
 } from "../../sdk-security-runtime.js";

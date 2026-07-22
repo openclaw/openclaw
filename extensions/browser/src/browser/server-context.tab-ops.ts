@@ -168,10 +168,13 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
         continue;
       }
       if (tab.wsUrl) {
-        await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, {
+        const wsPin = await assertCdpEndpointAllowed(tab.wsUrl, cdpControlPolicy, {
           source: "discovered",
           configuredUrl: profile.cdpUrl,
         });
+        if (wsPin?.lookup) {
+          tab.wsLookup = wsPin.lookup;
+        }
       }
       tabs.push(tab);
     }
@@ -434,6 +437,12 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     }
     await assertBrowserNavigationResultAllowed({ url: resolvedUrl, ...ssrfPolicyOpts });
     const wsUrl = normalizeWsUrl(created.webSocketDebuggerUrl, profile.cdpUrl);
+    const wsPin = wsUrl
+      ? await assertCdpEndpointAllowed(wsUrl, getCdpControlPolicy(), {
+          source: "discovered",
+          configuredUrl: profile.cdpUrl,
+        })
+      : undefined;
     const committedUrl = wsUrl
       ? await waitForCdpCommittedNavigationUrl({
           wsUrl,
@@ -452,6 +461,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           title: created.title ?? "",
           url: resolvedUrl,
           wsUrl,
+          ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
           type: created.type,
         },
         opts,
@@ -465,6 +475,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
           title: created.title ?? "",
           url: committedUrl,
           wsUrl,
+          ...(wsPin?.lookup ? { wsLookup: wsPin.lookup } : {}),
           type: created.type,
         },
         opts,

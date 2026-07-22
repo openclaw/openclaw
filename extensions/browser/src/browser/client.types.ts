@@ -3,6 +3,8 @@
  *
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
+import type { PinnedHostname } from "../infra/net/ssrf.js";
+
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 type BrowserHeadlessSource =
@@ -126,6 +128,8 @@ export type BrowserTab = {
   title: string;
   url: string;
   wsUrl?: string;
+  /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
+  wsLookup?: PinnedHostname["lookup"];
   type?: string;
 };
 
