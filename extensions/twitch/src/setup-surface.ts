@@ -395,6 +395,9 @@ export const twitchSetupAdapter: ChannelSetupAdapter = {
     ),
 };
 
+// Intentionally empty: Twitch setup stores no flag values (the adapter only
+// enables the account; credentials flow through the wizard). Shipped CLIs
+// parsed-and-ignored global channel flags here; rejecting them is by design.
 export const twitchSetupContract = defineChannelSetupContract({
   fields: {},
   legacyAdapter: twitchSetupAdapter,

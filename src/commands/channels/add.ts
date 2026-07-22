@@ -109,6 +109,9 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   return input as ChannelSetupInput;
 }
 
+// Safe to forward every defined key: CLI registration is selection-scoped and
+// resolveChannelsAddOptions drops non-user-authored values (Commander defaults),
+// so no other channel's options or defaults can reach the selected contract.
 function buildChannelOwnedSetupInput(opts: ChannelsAddOptions): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(opts).filter(
