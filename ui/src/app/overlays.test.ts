@@ -1,6 +1,6 @@
 // @vitest-environment node
 // Control UI tests cover application-owned overlay races.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
 import { createApplicationOverlays } from "./overlays.ts";
@@ -9,8 +9,11 @@ vi.mock("../build-info.ts", () => ({
   controlUiVersionDiffersFrom: (gatewayVersion: string | undefined) =>
     Boolean(gatewayVersion?.trim() && gatewayVersion.trim() !== "1.0.0"),
 }));
+const { peekStoredDeviceIdentityIdMock } = vi.hoisted(() => ({
+  peekStoredDeviceIdentityIdMock: vi.fn((): string | null => "browser-1"),
+}));
 vi.mock("../lib/nodes/index.ts", () => ({
-  peekStoredDeviceIdentityId: () => "browser-1",
+  peekStoredDeviceIdentityId: peekStoredDeviceIdentityIdMock,
 }));
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
@@ -118,6 +121,32 @@ function createGatewayHarness(
 }
 
 describe("device-auth upgrade migration", () => {
+  beforeEach(() => {
+    peekStoredDeviceIdentityIdMock.mockReturnValue("browser-1");
+  });
+
+  it("guides a device-less legacy browser to a secure context", async () => {
+    peekStoredDeviceIdentityIdMock.mockReturnValue(null);
+    const request = vi.fn<RequestFn>(() => Promise.resolve({}));
+    const harness = createGatewayHarness(null, false);
+    const overlays = createApplicationOverlays(harness.gateway);
+    harness.update({
+      client: client(request),
+      connected: true,
+      hello: {
+        server: { version: "1.0.0" },
+        deviceAuthMigration: { pending: true },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await vi.waitFor(() => {
+      expect(overlays.snapshot.deviceAuthMigrationError).toContain("HTTPS or localhost");
+    });
+    expect(overlays.snapshot.deviceAuthMigrationRequestId).toBeNull();
+    expect(request).not.toHaveBeenCalledWith("device.pair.list", expect.anything());
+    overlays.dispose();
+  });
+
   it("approves only this browser and reconnects for its device token", async () => {
     const request = vi.fn<RequestFn>((method, params) => {
       if (method === "device.pair.list") {

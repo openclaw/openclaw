@@ -57,11 +57,9 @@ describe("retired runtime config migrations", () => {
 
     expect(raw).not.toHaveProperty("gateway.controlUi.dangerouslyDisableDeviceAuth");
     expect(changes).toEqual([
-      "Preserved the retired Control UI device-auth bypass as a one-time explicit pairing migration. Open the Control UI and click Secure this browser.",
+      "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser.",
     ]);
-    expect(migration?.legacyRules?.[0]?.message).toContain(
-      "prompt you to click Secure this browser",
-    );
+    expect(migration?.legacyRules?.[0]?.message).toContain("reopen the Control UI over HTTPS");
   });
 
   it("removes a disabled retired device-auth bypass without requiring pairing", () => {

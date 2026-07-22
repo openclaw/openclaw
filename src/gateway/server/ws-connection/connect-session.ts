@@ -302,7 +302,10 @@ export async function attachAuthenticatedGatewayConnect(
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
-    isControlUiDeviceAuthMigration: state.controlUiDeviceAuthMigrationPending,
+    // Only identity-bearing migration sessions may use bounded self-pairing.
+    // Device-less legacy sessions retain shared-auth access for remediation.
+    isControlUiDeviceAuthMigration:
+      state.controlUiDeviceAuthMigrationPending && Boolean(connectParams.device),
     pairedClientId: isBrowserCopilotClient(connectParams.client)
       ? connectParams.client.id
       : undefined,

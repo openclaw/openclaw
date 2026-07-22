@@ -37,7 +37,7 @@ const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
 const CONTROL_UI_DEVICE_AUTH_MIGRATION_RULE: LegacyConfigRule = {
   path: ["gateway", "controlUi", "dangerouslyDisableDeviceAuth"],
   message:
-    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve a one-time explicit browser pairing transition, remove the legacy key, and prompt you to click Secure this browser. Run "openclaw doctor --fix".',
+    'gateway.controlUi.dangerouslyDisableDeviceAuth is retired. OpenClaw will preserve shared-auth access for remediation, remove the legacy key, and prompt you to reopen the Control UI over HTTPS or localhost before clicking Secure this browser. Run "openclaw doctor --fix".',
   match: (value) => typeof value === "boolean",
 };
 
@@ -98,7 +98,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       delete controlUi.dangerouslyDisableDeviceAuth;
       changes.push(
         migrationRequired
-          ? "Preserved the retired Control UI device-auth bypass as a one-time explicit pairing migration. Open the Control UI and click Secure this browser."
+          ? "Preserved the retired Control UI device-auth bypass for remediation. Reopen the Control UI over HTTPS or localhost, then click Secure this browser."
           : "Removed disabled gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.",
       );
     },

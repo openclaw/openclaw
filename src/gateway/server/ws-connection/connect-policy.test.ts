@@ -108,7 +108,7 @@ describe("ws connect policy", () => {
     expect(regular.device?.id).toBe("dev-2");
   });
 
-  test("limits upgrade migration to signed shared-auth Control UI operators", () => {
+  test("limits upgrade migration to shared-auth Control UI operators", () => {
     const policy = authPolicy({
       isControlUi: true,
       deviceRaw: deviceRaw("dev-migration"),
@@ -122,19 +122,21 @@ describe("ws connect policy", () => {
         authMethod: "token",
       }),
     ).toBe(true);
-    for (const candidate of [
-      { policy, role: "node" as const, sharedAuthOk: true, authMethod: "token" },
-      { policy, role: "operator" as const, sharedAuthOk: false, authMethod: "token" },
-      { policy, role: "operator" as const, sharedAuthOk: true, authMethod: "device-token" },
-      {
+    expect(
+      shouldAllowControlUiDeviceAuthMigration({
         policy: authPolicy({
           isControlUi: true,
           deviceAuthMigrationPending: true,
         }),
-        role: "operator" as const,
+        role: "operator",
         sharedAuthOk: true,
         authMethod: "password",
-      },
+      }),
+    ).toBe(true);
+    for (const candidate of [
+      { policy, role: "node" as const, sharedAuthOk: true, authMethod: "token" },
+      { policy, role: "operator" as const, sharedAuthOk: false, authMethod: "token" },
+      { policy, role: "operator" as const, sharedAuthOk: true, authMethod: "device-token" },
     ]) {
       expect(shouldAllowControlUiDeviceAuthMigration(candidate)).toBe(false);
     }

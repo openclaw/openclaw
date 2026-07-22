@@ -52,6 +52,50 @@ async function signedDevice(ws: WebSocket, identityPath: string) {
 }
 
 describe("Control UI device-auth upgrade migration", () => {
+  it("keeps a device-less legacy browser online with secure-context remediation", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const headers = {
+      origin: BROWSER_ORIGIN,
+      "x-forwarded-for": "203.0.113.50",
+    };
+    let ws: WebSocket | undefined;
+    try {
+      ws = await harness.openWs(headers);
+      const connected = await connectReq(ws, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: null,
+      });
+      expect(connected.ok).toBe(true);
+      expect(connected.payload).toMatchObject({
+        deviceAuthMigration: { pending: true },
+        auth: { role: "operator", scopes: expect.arrayContaining(SCOPES) },
+      });
+      expect(
+        (connected.payload as { auth?: { deviceToken?: string } } | undefined)?.auth?.deviceToken,
+      ).toBeUndefined();
+
+      const config = await rpcReq(ws, "config.get", {});
+      expect(config.ok).toBe(true);
+    } finally {
+      ws?.close();
+      await harness.close();
+    }
+  });
+
   it("keeps only the signed legacy browser online until it explicitly pairs", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({

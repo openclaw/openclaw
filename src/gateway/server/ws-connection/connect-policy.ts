@@ -33,7 +33,6 @@ export function shouldAllowControlUiDeviceAuthMigration(params: {
     params.policy.deviceAuthMigrationPending &&
     params.policy.isControlUi &&
     params.role === "operator" &&
-    Boolean(params.policy.device) &&
     params.sharedAuthOk &&
     (params.authMethod === "token" || params.authMethod === "password")
   );

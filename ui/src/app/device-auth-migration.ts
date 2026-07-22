@@ -40,8 +40,17 @@ export function createDeviceAuthMigrationController(params: {
     async refresh(client: GatewayBrowserClient, epoch: number) {
       const migrationPending = params.gateway.snapshot.hello?.deviceAuthMigration?.pending === true;
       const deviceId = peekStoredDeviceIdentityId();
-      if (!migrationPending || !deviceId || !params.isCurrent(client, epoch)) {
+      if (!migrationPending || !params.isCurrent(client, epoch)) {
+        generation += 1;
         update(EMPTY_SNAPSHOT);
+        return;
+      }
+      if (!deviceId) {
+        generation += 1;
+        update({
+          ...EMPTY_SNAPSHOT,
+          deviceAuthMigrationError: t("login.deviceAuthMigration.secureContextRequired"),
+        });
         return;
       }
       const refreshGeneration = ++generation;

@@ -122,21 +122,27 @@ export async function authorizeGatewayConnectDevice(
   const browserCopilotOrigin = isBrowserCopilotClient(connectParams.client)
     ? normalizeChromeExtensionOrigin(requestOrigin)
     : undefined;
-  if (device && devicePublicKey) {
-    if (allowControlUiDeviceAuthMigration) {
-      const pairingSnapshot = await listDevicePairing();
-      const existingOperator = pairingSnapshot.paired.find((candidate) =>
-        hasEffectivePairedDeviceRole(candidate, "operator"),
-      );
-      if (existingOperator) {
-        // The transition is only for installs whose retired bypass left them
-        // without any trusted operator. Existing paired operators keep the
-        // normal owner-approval boundary for every other browser.
-        buildRequestContext().completeControlUiDeviceAuthMigration?.(existingOperator.deviceId);
-      } else {
-        allowControlUiDeviceAuthMigrationForUnpairedInstall = true;
-      }
+  if (allowControlUiDeviceAuthMigration) {
+    const pairingSnapshot = await listDevicePairing();
+    const existingOperator = pairingSnapshot.paired.find((candidate) =>
+      hasEffectivePairedDeviceRole(candidate, "operator"),
+    );
+    if (existingOperator) {
+      // The transition is only for installs whose retired bypass left them
+      // without any trusted operator. Existing paired operators keep the
+      // normal owner-approval boundary for every other browser.
+      buildRequestContext().completeControlUiDeviceAuthMigration?.(existingOperator.deviceId);
+    } else {
+      allowControlUiDeviceAuthMigrationForUnpairedInstall = true;
     }
+  }
+  if (!device && allowControlUiDeviceAuthMigrationForUnpairedInstall) {
+    // Plain-HTTP browsers cannot create a device identity. Preserve the exact
+    // legacy shared-auth posture until the operator reopens this UI through a
+    // secure context; never mint or approve a device without a signed key.
+    controlUiDeviceAuthMigrationPending = true;
+  }
+  if (device && devicePublicKey) {
     const formatAuditList = (items: string[] | undefined): string => {
       const normalized = normalizeSortedUniqueTrimmedStringList(items);
       return normalized.length > 0 ? normalized.join(",") : "<none>";
