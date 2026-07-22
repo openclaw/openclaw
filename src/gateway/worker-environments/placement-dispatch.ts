@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   createPlacementFailureActions,
+  isUnavailableEnvironment,
   type WorkerActivationBarrier,
   type WorkerActiveDispatchPlacement,
   type WorkerDispatchEnvironmentService,
@@ -457,14 +458,28 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
 
   return {
     dispatch,
-    forceDestroyEnvironment: (environmentId: string) =>
+    forceDestroyEnvironment: (environmentId: string, onCleanupError?: (error: unknown) => void) =>
       options.workspaceOperations.run(environmentId, async () => {
         await forceAbandonWorkerEnvironment({
           placements,
           environmentId,
           resolveWorkspacePath: options.resolveWorkspacePath,
+          onCleanupError,
         });
-        return await environments.destroy(environmentId);
+        try {
+          return await environments.destroy(environmentId);
+        } catch (error) {
+          const current = environments.get(environmentId);
+          if (!current || !isUnavailableEnvironment(current)) {
+            throw error;
+          }
+          try {
+            onCleanupError?.(error);
+          } catch {
+            // Reporting cannot overturn the durable placement/environment fences.
+          }
+          return current;
+        }
       }),
     reclaim,
     reconcile: recovery.reconcile,

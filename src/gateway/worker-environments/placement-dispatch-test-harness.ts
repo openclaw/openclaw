@@ -16,7 +16,10 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import type { WorkerTunnelHandle } from "./tunnel.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
+import {
+  createWorkerWorkspaceOperationCoordinator,
+  type WorkerWorkspaceOperationCoordinator,
+} from "./workspace-operation-coordinator.js";
 
 export function createHarness(
   placementStore: PlacementStore,
@@ -38,6 +41,8 @@ export function createHarness(
     workspacePath?: string;
     priorWorkspaceResultConflict?: { paths: string[]; stagedResultRef: string };
     reconcileConflictPaths?: string[];
+    workspaceOperations?: WorkerWorkspaceOperationCoordinator;
+    destroyFailureState?: "draining" | "destroying";
   } = {},
 ) {
   const reconciledManifestRef = MANIFEST_REF.replaceAll("b", "c");
@@ -57,7 +62,8 @@ export function createHarness(
     loadWorkspaceReconciliation: (owner) => placementStore.loadWorkspaceReconciliation(owner),
     beginWorkspaceReconciliation: (owner, journal) =>
       placementStore.beginWorkspaceReconciliation(owner, journal),
-    abortWorkspaceReconciliation: (owner) => placementStore.abortWorkspaceReconciliation(owner),
+    abortWorkspaceReconciliation: (owner, abortOptions) =>
+      placementStore.abortWorkspaceReconciliation(owner, abortOptions),
     listWorkspaceReconciliationOwners: () => placementStore.listWorkspaceReconciliationOwners(),
     listPendingWorkspaceResults: () => placementStore.listPendingWorkspaceResults(),
     workspaceResultInstanceId: () => placementStore.workspaceResultInstanceId(),
@@ -266,6 +272,13 @@ export function createHarness(
     destroy: vi.fn(async () => {
       log.push("teardown:destroy");
       if (options.destroyFails) {
+        if (options.destroyFailureState) {
+          currentEnvironment = {
+            ...attached,
+            state: options.destroyFailureState,
+            tunnelStatus: "stopped",
+          };
+        }
         throw new Error("destroy pending");
       }
       const destroyed = destroyedEnvironment((currentEnvironment?.ownerEpoch ?? 1) + 1);
@@ -279,7 +292,7 @@ export function createHarness(
   const service = createWorkerPlacementDispatchService({
     placements,
     environments,
-    workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
+    workspaceOperations: options.workspaceOperations ?? createWorkerWorkspaceOperationCoordinator(),
     runLocalBarrier: async ({ startDispatch }) => {
       log.push("barrier");
       const placement = startDispatch();

@@ -154,10 +154,30 @@ export function createPlacementWorkspaceJournalOps(runtime: PlacementStoreRuntim
       });
     },
 
-    abortWorkspaceReconciliation(owner: WorkerWorkspaceJournalOwner): void {
+    abortWorkspaceReconciliation(
+      owner: WorkerWorkspaceJournalOwner,
+      options: { force?: boolean } = {},
+    ): void {
       write((db) => {
-        assertJournalOwner(db, owner);
-        clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+        if (!options.force) {
+          assertJournalOwner(db, owner);
+          clearWorkerWorkspaceReconciliation(db, owner.sessionId);
+          return;
+        }
+        // Forced teardown owns this exact durable journal even when placement
+        // state advanced after a failed recovery sweep.
+        const result = executeSqliteQuerySync(
+          db,
+          query(db)
+            .deleteFrom("worker_workspace_reconciliations")
+            .where("session_id", "=", owner.sessionId)
+            .where("environment_id", "=", owner.environmentId)
+            .where("owner_epoch", "=", owner.ownerEpoch)
+            .where("placement_generation", "=", owner.placementGeneration),
+        );
+        if (result.numAffectedRows !== 1n) {
+          throw new Error(`Worker workspace journal changed for ${owner.sessionId}`);
+        }
       });
     },
   };
