@@ -2709,6 +2709,10 @@ export function startHeartbeatRunner(opts: {
         // path — including due-commitment sessions — that the broadcast
         // interval owned before cadence moved to cron. Wakes carrying
         // heartbeat overrides fall through to the targeted merge path.
+        // Intentional: interval ticks run on the enrollment snapshot
+        // (agent.heartbeat, refreshed by updateConfig), exactly like the
+        // replaced broadcast timer — not resolveHeartbeatForWake, which only
+        // ever served override-carrying targeted event wakes.
         const outcome = await runOneAgent(targetAgent);
         if (outcome.retryableBusySkip) {
           return outcome.retryableBusySkip;
