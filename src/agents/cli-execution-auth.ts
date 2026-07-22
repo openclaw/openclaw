@@ -15,11 +15,9 @@ type CliExecutionAuthProfileSelection = {
   authProfileIdSource?: "auto" | "user";
 };
 
-export type CliExecutionAuthProfileDeps = {
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-};
-
-export class CliExecutionAuthProfileSelectionError extends Error {}
+export class CliExecutionAuthProfileError extends Error {
+  override name = "CliExecutionAuthProfileError";
+}
 
 export function cliBackendAcceptsAuthProfileForwarding(params: {
   provider: string;
@@ -38,17 +36,15 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
  * Google API key. A user-locked profile must fail closed here because falling
  * through would silently run the request as another user.
  */
-export function resolveCliExecutionAuthProfileId(
-  params: {
-    cliExecutionProvider: string;
-    authProfileProvider: string;
-    config: OpenClawConfig;
-    agentDir: string;
-    selected?: CliExecutionAuthProfileSelection;
-  },
-  deps: CliExecutionAuthProfileDeps = {},
-): string | undefined {
-  const loadStore = deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+export function resolveCliExecutionAuthProfileId(params: {
+  cliExecutionProvider: string;
+  authProfileProvider: string;
+  config: OpenClawConfig;
+  agentDir: string;
+  selected?: CliExecutionAuthProfileSelection;
+  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
+}): string | undefined {
+  const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
   const store = loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
@@ -70,11 +66,11 @@ export function resolveCliExecutionAuthProfileId(
     }
     if (params.selected?.authProfileIdSource !== "auto") {
       if (!credential) {
-        throw new CliExecutionAuthProfileSelectionError(
+        throw new CliExecutionAuthProfileError(
           `No credentials found for profile "${selectedAuthProfileId}".`,
         );
       }
-      throw new CliExecutionAuthProfileSelectionError(
+      throw new CliExecutionAuthProfileError(
         `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${selectedAuthProfileId}" owned by "${credential.provider}".`,
       );
     }

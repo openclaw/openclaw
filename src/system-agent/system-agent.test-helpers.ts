@@ -8,6 +8,8 @@ import {
   fingerprintResolvedProviderAuth,
 } from "../agents/execution-auth-binding.js";
 import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { resolveCliRuntimeExecutionProvider } from "../agents/model-runtime-aliases.js";
+import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -27,30 +29,32 @@ type SystemAgentVerifiedInferenceTestFixture = {
 export async function createSystemAgentVerifiedInferenceTestFixture(
   config: OpenClawConfig,
 ): Promise<SystemAgentVerifiedInferenceTestFixture> {
-  const agentId = resolveDefaultAgentId(config);
-  const selection = resolveSimpleCompletionSelectionForAgent({ cfg: config, agentId });
+  const routeAgentId = resolveDefaultAgentId(config);
+  const selection = resolveSimpleCompletionSelectionForAgent({
+    cfg: config,
+    agentId: routeAgentId,
+  });
   const selectedProfileId = selection?.profileId;
+  const cliExecutionProvider = selection
+    ? resolveCliRuntimeExecutionProvider({
+        provider: selection.provider,
+        cfg: config,
+        agentId: routeAgentId,
+        modelId: selection.modelId,
+        ...(selectedProfileId ? { authProfileId: selectedProfileId } : {}),
+      })
+    : undefined;
   const selectedCredential =
-    selection && selectedProfileId
-      ? {
-          type: "api_key" as const,
-          provider:
-            resolveCliRuntimeExecutionProvider({
-              provider: selection.provider,
-              cfg: config,
-              agentId,
-              modelId: selection.modelId,
-              authProfileId: selectedProfileId,
-            }) ??
-            selection.runtimeProvider ??
-            selection.provider,
+    selectedProfileId && selection
+      ? ({
+          type: "api_key",
+          provider: cliExecutionProvider ?? selection.runtimeProvider ?? selection.provider,
           key: "test-key",
-        }
+        } as const)
       : undefined;
   const loadAuthProfileStoreForRuntime = (() => ({
     version: 1,
-    profiles:
-      selectedProfileId && selectedCredential ? { [selectedProfileId]: selectedCredential } : {},
+    profiles: selectedProfileId ? { [selectedProfileId]: selectedCredential } : {},
   })) as never;
   const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config, undefined, {
     loadAuthProfileStoreForRuntime,

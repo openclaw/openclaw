@@ -27,6 +27,7 @@ export type SystemAgentConfiguredRoute = {
 
 export type SystemAgentConfiguredRouteDeps = CliExecutionAuthProfileDeps & {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
+  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store.js").loadAuthProfileStoreForRuntime;
 };
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -93,7 +94,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentConfiguredRouteDeps = {},
+  deps: Pick<SystemAgentConfiguredRouteDeps, "loadAuthProfileStoreForRuntime"> = {},
 ): Promise<SystemAgentConfiguredRoute | null> {
   const [agentScope, modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] =
     await Promise.all([
@@ -133,23 +134,23 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       agentId: modelOwnerAgentId,
     });
   const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId(
-        {
-          cliExecutionProvider: executionProvider,
-          authProfileProvider: selection.provider,
-          config: runConfig,
-          agentDir: selection.agentDir,
-          ...(selection.profileId
-            ? {
-                selected: {
-                  authProfileId: selection.profileId,
-                  authProfileIdSource: "user",
-                },
-              }
-            : {}),
-        },
-        deps,
-      )
+    ? resolveCliExecutionAuthProfileId({
+        cliExecutionProvider: executionProvider,
+        authProfileProvider: selection.provider,
+        config: runConfig,
+        agentDir: selection.agentDir,
+        ...(selection.profileId
+          ? {
+              selected: {
+                authProfileId: selection.profileId,
+                authProfileIdSource: "user",
+              },
+            }
+          : {}),
+        ...(deps.loadAuthProfileStoreForRuntime
+          ? { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime }
+          : {}),
+      })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(runConfig, modelOwnerAgentId);

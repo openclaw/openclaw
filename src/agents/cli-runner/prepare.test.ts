@@ -187,6 +187,7 @@ function createCliBackendConfig(
 
 function setCliBackendForPrepareTest(
   params: {
+    authEpochMode?: CliBackendPlugin["authEpochMode"];
     autoSelectAuthProfile?: boolean;
     authEpochMode?: CliBackendPlugin["authEpochMode"];
     bundleMcp?: boolean;
@@ -212,6 +213,7 @@ function setCliBackendForPrepareTest(
         pluginId: params.pluginId ?? "anthropic",
         modelProvider: params.modelProvider ?? "anthropic",
         bundleMcp: params.bundleMcp ?? false,
+        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
         ...(params.bundleMcp ? { bundleMcpMode: "claude-config-file" as const } : {}),
         ...(params.autoSelectAuthProfile !== undefined
           ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
