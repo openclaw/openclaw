@@ -14,6 +14,7 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   isConfiguredSessionStoreAgentId,
   isPerAgentSessionStoreConfig,
+  listSessionMembershipKeys,
   resolveExistingAgentSessionStoreTargetsSync,
   runSessionsCleanup,
   serializeSessionCleanupResult,
@@ -30,6 +31,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
   filterDraftSessionsForClient,
+  isGatewayAdmin,
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
   resolveSessionVisibility,
@@ -55,6 +57,7 @@ import {
 } from "../session-utils.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { projectWorkerSessionPlacement } from "../worker-environments/placement-projector.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { resolveVisibleActiveSessionRunState } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -244,18 +247,63 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        const sharingTargets = result.sessions.map((session) =>
+          resolveSessionSharingTarget({
+            cfg,
+            sessionKey: session.key,
+            ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
+          }),
+        );
+        const membershipKeys = new Set<string>();
+        const identityId = gatewayClientSessionCreator(client)?.id;
+        if (identityId && !isGatewayAdmin(client)) {
+          const groups = new Map<
+            string,
+            {
+              agentId: string;
+              sessionKeys: string[];
+              storePath: string;
+            }
+          >();
+          for (const target of sharingTargets) {
+            if (!target) {
+              continue;
+            }
+            const groupKey = `${target.agentId}\0${target.storePath}`;
+            const group = groups.get(groupKey) ?? {
+              agentId: target.agentId,
+              sessionKeys: [],
+              storePath: target.storePath,
+            };
+            group.sessionKeys.push(target.canonicalKey);
+            groups.set(groupKey, group);
+          }
+          for (const group of groups.values()) {
+            const firstSessionKey = group.sessionKeys[0];
+            if (!firstSessionKey) {
+              continue;
+            }
+            for (const sessionKey of listSessionMembershipKeys(
+              {
+                agentId: group.agentId,
+                sessionKey: firstSessionKey,
+                storePath: group.storePath,
+              },
+              group.sessionKeys,
+              identityId,
+            )) {
+              membershipKeys.add(`${group.agentId}\0${group.storePath}\0${sessionKey}`);
+            }
+          }
+        }
         const placementsBySessionId = context.workerSessionPlacementService?.getMany(
           result.sessions.flatMap((session) => (session.sessionId ? [session.sessionId] : [])),
         );
         const sessions = measureDiagnosticsTimelineSpanSync(
           "gateway.sessions.list.active_run_flags",
           () => {
-            return result.sessions.map((session) => {
-              const sharingTarget = resolveSessionSharingTarget({
-                cfg,
-                sessionKey: session.key,
-                ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
-              });
+            return result.sessions.map((session, index) => {
+              const sharingTarget = sharingTargets[index];
               const visibility = sharingTarget
                 ? resolveSessionVisibility(sharingTarget.entry)
                 : "shared";
@@ -277,7 +325,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                       sharingRole: resolveSessionSharingRole({
                         client,
                         target: sharingTarget,
-                        includeMembership: visibility !== "shared",
+                        isMember: membershipKeys.has(
+                          `${sharingTarget.agentId}\0${sharingTarget.storePath}\0${sharingTarget.canonicalKey}`,
+                        ),
                       }),
                     }
                   : {}),

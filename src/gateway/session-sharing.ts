@@ -97,6 +97,7 @@ export function resolveSessionSharingRole(params: {
   client: GatewayClient | null;
   target: SessionSharingTarget;
   includeMembership?: boolean;
+  isMember?: boolean;
 }): SessionSharingRole {
   if (isGatewayAdmin(params.client)) {
     return "admin";
@@ -108,6 +109,9 @@ export function resolveSessionSharingRole(params: {
   }
   if (params.target.entry.createdActor?.id === identity.id) {
     return "owner";
+  }
+  if (params.isMember !== undefined) {
+    return params.isMember ? "member" : "viewer";
   }
   if (params.includeMembership === false) {
     return "viewer";
@@ -310,8 +314,20 @@ export function resolveSessionMutationTargets(params: {
   const directKey = field ? readStringParam(params.requestParams, field) : undefined;
   if (!directKey && (params.method === "board.event" || params.method === "board.action")) {
     const ticket = readStringParam(params.requestParams, "ticket");
-    const sessionKey = ticket ? verifyBoardViewTicket(ticket)?.sessionKey : undefined;
-    return sessionKey ? [{ sessionKey }] : undefined;
+    const claims = ticket ? verifyBoardViewTicket(ticket) : undefined;
+    if (!claims) {
+      return undefined;
+    }
+    const requestedAgentId = readStringParam(params.requestParams, "agentId");
+    if (requestedAgentId && requestedAgentId !== claims.agentId) {
+      return undefined;
+    }
+    return [
+      {
+        sessionKey: claims.sessionKey,
+        ...(claims.agentId ? { agentId: claims.agentId } : {}),
+      },
+    ];
   }
   if (directKey || params.method !== "sessions.abort") {
     const agentId = readStringParam(params.requestParams, "agentId");

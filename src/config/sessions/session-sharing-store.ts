@@ -24,6 +24,7 @@ export type SessionMember = {
 };
 
 const ensuredDatabases = new WeakSet<DatabaseSync>();
+const SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE = 400;
 
 function resolveDatabaseOptions(scope: SessionAccessScope): OpenClawAgentDatabaseOptions {
   return toDatabaseOptions(resolveSqliteScope(scope));
@@ -60,6 +61,40 @@ export function listSessionMembers(scope: SessionAccessScope): SessionMember[] {
     addedBy: row.added_by,
     addedAt: row.added_at,
   }));
+}
+
+export function listSessionMembershipKeys(
+  scope: SessionAccessScope,
+  sessionKeys: readonly string[],
+  identityId: string,
+): Set<string> {
+  const normalizedIdentityId = identityId.trim();
+  const normalizedSessionKeys = [...new Set(sessionKeys.map((key) => key.trim()).filter(Boolean))];
+  if (!normalizedIdentityId || normalizedSessionKeys.length === 0) {
+    return new Set();
+  }
+  const database = ensureSessionSharingSchema(resolveDatabaseOptions(scope));
+  const db = getSessionMemberKysely(database);
+  const memberships = new Set<string>();
+  for (
+    let offset = 0;
+    offset < normalizedSessionKeys.length;
+    offset += SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE
+  ) {
+    const chunk = normalizedSessionKeys.slice(offset, offset + SESSION_MEMBERSHIP_QUERY_CHUNK_SIZE);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_members")
+        .select("session_key")
+        .where("identity_id", "=", normalizedIdentityId)
+        .where("session_key", "in", chunk),
+    ).rows;
+    for (const row of rows) {
+      memberships.add(row.session_key);
+    }
+  }
+  return memberships;
 }
 
 export function isSessionMember(scope: SessionAccessScope, identityId: string): boolean {

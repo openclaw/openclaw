@@ -13,12 +13,14 @@ import {
 } from "../../config/sessions/session-sharing-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createBoardViewTicket } from "../board-view-ticket.js";
 import {
   authorizeSessionMutation,
   canReceiveSessionEvent,
   filterDraftSessionsForClient,
   invalidateSessionSharingSnapshot,
 } from "../session-sharing.js";
+import { sessionReadHandlers } from "./sessions-read.js";
 import { sessionSharingHandlers } from "./sessions-sharing.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -81,6 +83,105 @@ async function call(
 }
 
 describe("session sharing handlers", () => {
+  it("projects a shared session member's truthful role in sessions.list", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const sessionKey = "agent:main:shared-member";
+      const memberIdentity = { id: "member@example.com", label: "Member" };
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-shared-member",
+          updatedAt: 1,
+          createdBy: { id: "owner@example.com" },
+          visibility: "shared",
+        },
+      );
+      expect(
+        addSessionMember(
+          { agentId: "main", sessionKey },
+          { identityId: memberIdentity.id, addedBy: "owner@example.com", addedAt: 1 },
+        ).inserted,
+      ).toBe(true);
+      const responses: Parameters<RespondFn>[] = [];
+      await sessionReadHandlers["sessions.list"]?.({
+        params: { agentId: "main" },
+        client: { ...soloClient(), operatorIdentity: memberIdentity },
+        context: {
+          ...context(vi.fn()),
+          loadGatewayModelCatalog: async () => [],
+        } as unknown as GatewayRequestContext,
+        respond: (...response: Parameters<RespondFn>) => responses.push(response),
+      } as never);
+
+      expect(responses[0]?.[0]).toBe(true);
+      const payload = responses[0]?.[1] as
+        | { sessions?: Array<{ key: string; sharingRole?: string }> }
+        | undefined;
+      expect(payload?.sessions?.find((session) => session.key === sessionKey)?.sharingRole).toBe(
+        "member",
+      );
+    });
+  });
+
+  it("authorizes board tickets against their signed agent-relative session", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await upsertSessionEntry(
+        { agentId: "main", sessionKey: "global" },
+        { sessionId: "session-main-global", updatedAt: 1, visibility: "shared" },
+      );
+      await upsertSessionEntry(
+        { agentId: "work", sessionKey: "global" },
+        {
+          sessionId: "session-work-global",
+          updatedAt: 1,
+          visibility: "read-only",
+          createdBy: { id: "owner@example.com" },
+        },
+      );
+      const { ticket } = createBoardViewTicket({
+        sessionKey: "global",
+        agentId: "work",
+        name: "status",
+        revision: 1,
+        viewGeneration: "a".repeat(32),
+      });
+      const memberClient: GatewayClient = {
+        ...soloClient(),
+        operatorIdentity: { id: "outsider@example.com" },
+      };
+      const requestContext = context(vi.fn());
+      const cfg = {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      } as never;
+
+      expect(
+        authorizeSessionMutation({
+          cfg,
+          client: memberClient,
+          method: "board.action",
+          requestParams: { ticket, agentId: "work" },
+          context: requestContext,
+        }),
+      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
+
+      const { ticket: unscopedTicket } = createBoardViewTicket({
+        sessionKey: "global",
+        name: "status",
+        revision: 1,
+        viewGeneration: "b".repeat(32),
+      });
+      expect(
+        authorizeSessionMutation({
+          cfg,
+          client: memberClient,
+          method: "board.action",
+          requestParams: { ticket: unscopedTicket, agentId: "work" },
+          context: requestContext,
+        }),
+      ).toMatchObject({ details: { code: "SESSION_MUTATION_TARGET_REQUIRED" } });
+    });
+  });
+
   it("revokes all member access while a session is draft and restores it when shared", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:member-transition";

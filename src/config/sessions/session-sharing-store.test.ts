@@ -8,6 +8,7 @@ import { loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
 import {
   addSessionMember,
   isSessionMember,
+  listSessionMembershipKeys,
   listSessionMembers,
   removeSessionMember,
 } from "./session-sharing-store.js";
@@ -45,6 +46,13 @@ describe("session sharing store", () => {
         { identityId: "zoe", addedBy: "owner", addedAt: 2 },
       ]);
       expect(isSessionMember(scope, "alice")).toBe(true);
+      expect(
+        listSessionMembershipKeys(
+          scope,
+          [scope.sessionKey, ...Array.from({ length: 450 }, (_, index) => `session-${index}`)],
+          "zoe",
+        ),
+      ).toEqual(new Set([scope.sessionKey]));
       expect(removeSessionMember(scope, "alice")).toEqual({
         identityId: "alice",
         addedBy: "owner",
