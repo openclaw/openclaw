@@ -38,7 +38,6 @@ import {
   readInstalledVersion,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
-  resolveInstalledGatewayStopArgs,
   runBundledPluginPostinstall,
   runInstalledBrowserOverrideImportSmoke,
   shouldRunWindowsInstalledBrowserOverrideImportSmoke,
@@ -47,6 +46,7 @@ import {
 import {
   ensureDevUpdateGitInstall,
   ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   resolveInstallerTargetVersion,
   runInstalledAgentTurn,
   runInstalledCli,
