@@ -370,15 +370,17 @@ describe("phone-control plugin", () => {
         });
         const text = res?.text ?? "";
         const nodes = (
-          getConfig().gateway as { nodes?: { allowCommands?: string[]; denyCommands?: string[] } }
+          getConfig().gateway as {
+            nodes?: { commands?: { allow?: string[]; deny?: string[] } };
+          }
         ).nodes;
         if (!nodes) {
           throw new Error("phone-control command did not persist gateway node config");
         }
 
         expect(writeConfigFile).toHaveBeenCalledTimes(1);
-        expect(nodes.allowCommands).toEqual([...MOBILE_UI_COMMANDS].toSorted());
-        expect(nodes.denyCommands).toEqual(["computer.act", ...WRITE_COMMANDS].toSorted());
+        expect(nodes.commands?.allow).toEqual([...MOBILE_UI_COMMANDS].toSorted());
+        expect(nodes.commands?.deny).toEqual(["computer.act", ...WRITE_COMMANDS].toSorted());
         expect(text).toContain("mobile.ui.observe");
         expect(text).toContain("mobile.ui.act");
 
@@ -390,8 +392,10 @@ describe("phone-control plugin", () => {
         initialConfig: {
           gateway: {
             nodes: {
-              allowCommands: [],
-              denyCommands: [...FRESH_SETUP_DENY_COMMANDS, ...MOBILE_UI_COMMANDS],
+              commands: {
+                allow: [],
+                deny: [...FRESH_SETUP_DENY_COMMANDS, ...MOBILE_UI_COMMANDS],
+              },
             },
           },
         },

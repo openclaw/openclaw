@@ -377,7 +377,7 @@ describe("createMobileUiTool", () => {
   it("adds the mobile phone-arm hint on a dangerous-command rejection", async () => {
     callGatewayToolMock.mockRejectedValue(
       new Error(
-        'node command not allowed: "mobile.ui.observe" requires explicit gateway.nodes.allowCommands opt-in',
+        'node command not allowed: "mobile.ui.observe" requires explicit gateway.nodes.commands.allow opt-in',
       ),
     );
 

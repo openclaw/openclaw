@@ -527,8 +527,8 @@ function stateChangingConfirmation(
   };
 }
 
-const DANGEROUS_OPT_IN_HINT = "requires explicit gateway.nodes.allowCommands opt-in";
-const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.denyCommands";
+const DANGEROUS_OPT_IN_HINT = "requires explicit gateway.nodes.commands.allow opt-in";
+const DANGEROUS_DENY_HINT = "blocked by gateway.nodes.commands.deny";
 const PHONE_CONTROL_DISARMED_HINT =
   "not covered by an active temporary lease or persistent gateway allow";
 
@@ -543,7 +543,7 @@ function withArmHint(error: unknown): Error {
       `${message} — mobile UI control is disarmed; an operator can arm it with ` +
         `"/phone arm mobile-ui <duration>". Persistent configuration must allow both ` +
         `${MOBILE_UI_OBSERVE_COMMAND} and ${MOBILE_UI_ACT_COMMAND}, and remove both from ` +
-        "gateway.nodes.denyCommands.",
+        "gateway.nodes.commands.deny.",
       { cause: error },
     );
   }
