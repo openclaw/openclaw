@@ -74,7 +74,7 @@ flow:
             catch:
               - set: fallbackDebugRequests
                 value:
-                  expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(-20).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, prompt: String(request.prompt ?? '').slice(0, 280), allInputText: String(request.allInputText ?? '').slice(0, 280), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 280) : null })) : []"
+                  expr: "env.mock ? await (async () => { const cursor = Number((await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor ?? 0); return [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${Math.max(0, cursor - 20)}`))].map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, prompt: String(request.prompt ?? '').slice(0, 280), allInputText: String(request.allInputText ?? '').slice(0, 280), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 280) : null })); })() : []"
               - set: fallbackTasks
                 value:
                   expr: "(await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: String(error?.message ?? error) })))"

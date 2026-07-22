@@ -2053,8 +2053,7 @@ async function sendSubagentAnnounceDirectly(params: {
       shouldDeliverAgentFinal &&
       isSubagentCompletion &&
       !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
-      !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
-      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+      !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse)
     ) {
       const textDelivery = await deliverTextCompletionDirect({
         cfg,
@@ -2079,7 +2078,8 @@ async function sendSubagentAnnounceDirectly(params: {
       params.expectsCompletionMessage &&
       requiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
-      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+      (!hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse) ||
+        subagentDirectMessageCompletionRequiresMessageTool)
     ) {
       if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
         return {

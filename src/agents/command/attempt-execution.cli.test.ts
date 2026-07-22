@@ -2261,6 +2261,7 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       disableTools: true,
+      allowEmptyAssistantReplyAsSilent: true,
     });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });

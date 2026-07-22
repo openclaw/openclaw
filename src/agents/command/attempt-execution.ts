@@ -517,12 +517,11 @@ export function runAgentAttempt(params: {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   // A completion handoff relays frozen child output; letting it act with the
   // requester's tools would turn child text into a new privileged instruction.
-  const disableTools =
-    params.opts.modelRun === true ||
-    isSubagentAnnounceCompletionHandoff({
-      inputProvenance: params.opts.inputProvenance,
-      internalEvents: params.opts.internalEvents,
-    });
+  const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
+    inputProvenance: params.opts.inputProvenance,
+    internalEvents: params.opts.internalEvents,
+  });
+  const disableTools = params.opts.modelRun === true || isSubagentAnnounceHandoff;
   const claudeCliFallbackPrelude =
     !isRawModelRun &&
     params.isFallbackRetry &&
@@ -837,6 +836,7 @@ export function runAgentAttempt(params: {
             userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
             disableTools,
+            allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
             ...(mutableCliSessionStore && !forkCliSessionOnResume
               ? {
                   onBeforeFreshCliSessionRetry: async (retry) => {
@@ -975,6 +975,7 @@ export function runAgentAttempt(params: {
     modelRun: params.opts.modelRun,
     promptMode: params.opts.promptMode,
     disableTools,
+    allowEmptyAssistantReplyAsSilent: isSubagentAnnounceHandoff,
     onAgentEvent: params.onAgentEvent,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
