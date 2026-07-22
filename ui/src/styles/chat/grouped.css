@@ -40,7 +40,8 @@
   justify-content: end;
 }
 
-.chat-group.chat-group--with-footer .chat-avatar {
+.chat-group.chat-group--with-footer > .chat-avatar,
+.chat-group.chat-group--with-footer > .chat-avatar-slot {
   grid-column: var(--chat-group-avatar-column);
   grid-row: 1;
 }
@@ -359,10 +360,21 @@ img.chat-avatar.user {
   object-fit: cover;
 }
 
-/* Sender avatars pair the route image with an initials fallback; the slot
-   swaps them when the canonical route has no avatar (404). */
+/* Keep the image and initials fallback in one stable grid item. display: contents
+   can lose the avatar column when Lit reconciles an attributed message. */
 .chat-avatar-slot {
-  display: contents;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  align-self: flex-end;
+  margin-bottom: 4px;
+}
+
+.chat-avatar-slot > .chat-avatar {
+  grid-area: 1 / 1;
+  align-self: stretch;
+  margin-bottom: 0;
 }
 
 .chat-avatar-slot > .chat-avatar--sender-initials {
@@ -486,7 +498,8 @@ img.chat-avatar {
    the repeated identity icons pure decoration. Group threads (any labeled
    foreign sender) keep avatars as the always-visible identity marker. */
 .chat-thread--direct .chat-avatar,
-.chat-thread--direct img.chat-avatar {
+.chat-thread--direct img.chat-avatar,
+.chat-thread--direct .chat-avatar-slot {
   display: none;
 }
 
@@ -936,7 +949,8 @@ details.msg-meta:not([open]) .msg-meta__details {
   }
 
   .chat-avatar,
-  img.chat-avatar {
+  img.chat-avatar,
+  .chat-avatar-slot {
     display: none;
   }
 

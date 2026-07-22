@@ -502,6 +502,91 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps attributed user avatars beside their bubbles after sending a message", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 860 },
+    });
+    const page = await context.newPage();
+    const senderId = "c3e32452-0467-47e5-aafa-233cd5dae29f";
+    const priorPrompt = "A prior attributed prompt.";
+    const prompt = "A newly sent attributed prompt.";
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          __openclaw: { senderId, senderName: "Collin Johnson" },
+          content: [{ text: priorPrompt, type: "text" }],
+          role: "user",
+          timestamp: Date.now() - 2_000,
+        },
+        {
+          content: [{ text: "Ready for the next message.", type: "text" }],
+          role: "assistant",
+          timestamp: Date.now() - 1_000,
+        },
+      ],
+      presenceUsers: [{ self: true, id: senderId, name: "Collin Johnson" }],
+    });
+
+    const readUserAvatarLayout = async (message: string) => {
+      const bubble = page.locator(".chat-group.user .chat-bubble", { hasText: message });
+      await bubble.waitFor({ timeout: 10_000 });
+      return await bubble.evaluate((bubbleElement) => {
+        const group = bubbleElement.closest<HTMLElement>(".chat-group.user");
+        const avatar = group
+          ? [...group.querySelectorAll<HTMLElement>(".chat-avatar")].find(
+              (candidate) => getComputedStyle(candidate).display !== "none",
+            )
+          : null;
+        if (!group || !avatar) {
+          throw new Error("Expected a visible attributed user avatar");
+        }
+        const bubbleRect = bubbleElement.getBoundingClientRect();
+        const avatarRect = avatar.getBoundingClientRect();
+        return {
+          avatarLeft: avatarRect.left,
+          avatarRight: avatarRect.right,
+          bubbleRight: bubbleRect.right,
+          groupRight: group.getBoundingClientRect().right,
+        };
+      });
+    };
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      const before = await readUserAvatarLayout(priorPrompt);
+
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const afterSend = await readUserAvatarLayout(prompt);
+      const priorAfterSend = await readUserAvatarLayout(priorPrompt);
+
+      const runId = requireString(
+        requireRecord(sendRequest.params).idempotencyKey,
+        "chat send idempotency key",
+      );
+      await gateway.emitChatFinal({ runId, text: "The attributed send completed." });
+      await page
+        .locator(".chat-thread .chat-bubble", { hasText: "The attributed send completed." })
+        .waitFor({ timeout: 10_000 });
+      const afterFinal = await readUserAvatarLayout(prompt);
+
+      for (const [phase, layout] of [
+        ["initial history", before],
+        ["optimistic send", afterSend],
+        ["prior message after send", priorAfterSend],
+        ["final response", afterFinal],
+      ] as const) {
+        expect(layout.avatarLeft, phase).toBeGreaterThanOrEqual(layout.bubbleRight + 9);
+        expect(layout.avatarRight, phase).toBeLessThanOrEqual(layout.groupRight + 1);
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("reconciles authoritative history before a trailing final by run identity", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
