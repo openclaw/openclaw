@@ -1324,8 +1324,8 @@ export async function startGatewayServer(
         client.isControlUiDeviceAuthMigration &&
         client.connect.device?.id.trim() === normalizedDeviceId
       ) {
-        client.isControlUiDeviceAuthMigration = false;
-        client.isControlUiDeviceAuthMigrationSession = false;
+        // Authorization is handshake-bound. Keep the winning socket limited
+        // to its own pairing until it reconnects with the new device token.
         continue;
       }
       client.invalidated = true;

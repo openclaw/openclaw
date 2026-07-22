@@ -407,10 +407,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       },
       { dropIfSlow: true },
     );
-    if (authz.isDeviceAuthMigrationCaller) {
-      client!.isControlUiDeviceAuthMigration = false;
-      client!.isControlUiDeviceAuthMigrationSession = false;
-    }
+    // The completion listener keeps this handshake migration-bound until the
+    // client reconnects with its newly approved device token.
     respond(true, { requestId, device: redactPairedDevice(approved.device) }, undefined);
     if (approved.nodePairingGenerationChanged) {
       queueMicrotask(() => {

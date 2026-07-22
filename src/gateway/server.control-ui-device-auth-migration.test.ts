@@ -516,7 +516,7 @@ describe("Control UI device-auth upgrade migration", () => {
     }
   });
 
-  it("closes an active device-less migration session after signed pairing completes", async () => {
+  it("closes competing migration sessions and keeps the winner self-only until reconnect", async () => {
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       meta: { lastTouchedVersion: "2026.7.1" },
@@ -568,6 +568,19 @@ describe("Control UI device-auth upgrade migration", () => {
         device: signed.device,
       });
       expect(signedConnect.ok).toBe(true);
+      const { requestDevicePairing } = await import("../infra/device-pairing.js");
+      const otherIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(
+          os.tmpdir(),
+          `openclaw-device-auth-migration-other-pending-${randomUUID()}.sqlite`,
+        ),
+      });
+      const otherRequest = await requestDevicePairing({
+        deviceId: otherIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(otherIdentity.publicKeyPem),
+        role: "operator",
+        scopes: SCOPES,
+      });
       const list = await rpcReq<{
         pending: Array<{ requestId: string; deviceId: string }>;
       }>(signedWs, "device.pair.list", {});
@@ -581,6 +594,20 @@ describe("Control UI device-auth upgrade migration", () => {
       expect(approval.ok).toBe(true);
       await expect(deviceLessClosed).resolves.toBe(4001);
       deviceLessWs = undefined;
+
+      const postApprovalList = await rpcReq<{
+        pending: Array<{ requestId: string; deviceId: string }>;
+        paired: Array<{ deviceId: string }>;
+      }>(signedWs, "device.pair.list", {});
+      expect(postApprovalList.ok).toBe(true);
+      expect(postApprovalList.payload?.pending).toEqual([]);
+      expect(postApprovalList.payload?.paired.map((device) => device.deviceId)).toEqual([
+        signed.identity.deviceId,
+      ]);
+      const crossDeviceRejection = await rpcReq(signedWs, "device.pair.reject", {
+        requestId: otherRequest.request.requestId,
+      });
+      expect(crossDeviceRejection.ok).toBe(false);
     } finally {
       deviceLessWs?.close();
       signedWs?.close();
