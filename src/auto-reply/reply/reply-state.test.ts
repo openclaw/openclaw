@@ -417,6 +417,7 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
       hasAlreadyFlushedForCurrentCompaction({
         compactionCount: 3,
         memoryFlushCompactionCount: 3,
+        memoryFlushAt: 1_700_000_000_000,
       }),
     ).toBe(true);
   });
@@ -438,12 +439,37 @@ describe("hasAlreadyFlushedForCurrentCompaction", () => {
     ).toBe(false);
   });
 
-  it("treats missing compactionCount as 0", () => {
+  it("treats missing compactionCount as 0 when memoryFlushAt confirms a real flush", () => {
+    // A session flushed during cycle 0 (before any compaction). Both counters are 0,
+    // but memoryFlushAt confirms a flush actually ran — guard should return true.
     expect(
       hasAlreadyFlushedForCurrentCompaction({
         memoryFlushCompactionCount: 0,
+        memoryFlushAt: 1_700_000_000_000,
       }),
     ).toBe(true);
+  });
+
+  it("returns false for persisted 0/0 rows with no memoryFlushAt (legacy / never-flushed)", () => {
+    // Both counters are 0 but memoryFlushAt is absent — this is the ambiguous legacy
+    // case where the field was written as 0 rather than left undefined. The session
+    // has never actually been flushed, so we must allow the flush to proceed.
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for 0/0 row where memoryFlushAt is explicitly undefined", () => {
+    expect(
+      hasAlreadyFlushedForCurrentCompaction({
+        compactionCount: 0,
+        memoryFlushCompactionCount: 0,
+        memoryFlushAt: undefined,
+      }),
+    ).toBe(false);
   });
 });
 

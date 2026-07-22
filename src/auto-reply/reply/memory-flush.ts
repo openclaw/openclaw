@@ -136,7 +136,11 @@ function resolveMemoryFlushGateState<
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
-    "totalTokens" | "totalTokensFresh" | "compactionCount" | "memoryFlushCompactionCount"
+    | "totalTokens"
+    | "totalTokensFresh"
+    | "compactionCount"
+    | "memoryFlushCompactionCount"
+    | "memoryFlushAt"
   >;
   /**
    * Optional token count override for flush gating. When provided, this value is
@@ -181,11 +185,28 @@ export function shouldRunPreflightCompaction(params: {
  * Returns true when a memory flush has already been performed for the current
  * compaction cycle. This prevents repeated flush runs within the same cycle —
  * important for both the token-based and transcript-size–based trigger paths.
+ *
+ * Edge case: when both `compactionCount` and `memoryFlushCompactionCount` are 0
+ * (or absent), we additionally require `memoryFlushAt` to be set before treating
+ * the session as already flushed. This disambiguates persisted legacy rows that
+ * were serialised with an implicit zero from sessions where a real flush already
+ * ran in cycle 0. Fresh sessions always clear `memoryFlushAt` on creation, so
+ * they correctly see `false` here until the first actual flush.
  */
 export function hasAlreadyFlushedForCurrentCompaction(
-  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount">,
+  entry: Pick<SessionEntry, "compactionCount" | "memoryFlushCompactionCount" | "memoryFlushAt">,
 ): boolean {
   const compactionCount = entry.compactionCount ?? 0;
   const lastFlushAt = entry.memoryFlushCompactionCount;
-  return typeof lastFlushAt === "number" && lastFlushAt === compactionCount;
+  if (typeof lastFlushAt !== "number" || lastFlushAt !== compactionCount) {
+    return false;
+  }
+  // When the compaction counter is 0 on both sides, the match is ambiguous:
+  // it could be a legacy/never-flushed row whose field was written as 0
+  // rather than left undefined. Require an explicit memoryFlushAt timestamp
+  // to confirm that a real flush actually ran in this cycle.
+  if (compactionCount === 0 && !entry.memoryFlushAt) {
+    return false;
+  }
+  return true;
 }
