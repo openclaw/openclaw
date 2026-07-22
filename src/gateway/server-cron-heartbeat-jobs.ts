@@ -59,7 +59,7 @@ export async function reconcileHeartbeatMonitorJobs(params: {
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
         },
-        { enabledExplicit: true },
+        { enabledExplicit: true, systemOwned: true },
       );
     } catch (error) {
       ok = false;

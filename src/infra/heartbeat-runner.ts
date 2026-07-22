@@ -2342,7 +2342,7 @@ export function startHeartbeatRunner(opts: {
   const cronOwnsCadence = (cfg: OpenClawConfig) =>
     process.env.OPENCLAW_SKIP_CRON !== "1" && cfg.cron?.enabled !== false;
 
-  const scheduleFallbackNext = () => {
+  const scheduleFallbackNext = (minDelayMs = 0) => {
     if (state.timer) {
       clearTimeout(state.timer);
       state.timer = null;
@@ -2360,7 +2360,7 @@ export function startHeartbeatRunner(opts: {
     if (!Number.isFinite(nextDue)) {
       return;
     }
-    const delay = resolveSafeTimeoutDelayMs(Math.max(0, nextDue - now), { minMs: 0 });
+    const delay = resolveSafeTimeoutDelayMs(Math.max(minDelayMs, nextDue - now), { minMs: 0 });
     state.timer = setTimeout(() => {
       state.timer = null;
       requestHeartbeat({
@@ -2601,12 +2601,15 @@ export function startHeartbeatRunner(opts: {
     type AgentWakeOutcome = {
       ran: boolean;
       retryableBusySkip?: HeartbeatRunResult;
+      // Terminal per-agent result so targeted callers can report the real
+      // skip reason instead of collapsing everything to not-due.
+      result?: HeartbeatRunResult;
     };
     const runOneAgent = async (agent: HeartbeatAgentState): Promise<AgentWakeOutcome> => {
       const deferral = evaluateWakeDeferral(agent, now, reason, intent);
       if (deferral.defer) {
         advanceStaleScheduleAfterDeferral(agent, now, reason, deferral);
-        return { ran: false };
+        return { ran: false, result: { status: "skipped", reason: deferral.reason } };
       }
 
       let res: HeartbeatRunResult;
@@ -2632,7 +2635,7 @@ export function startHeartbeatRunner(opts: {
         // on the same reason.
         recordRunBookkeeping(agent, now);
         advanceAgentSchedule(agent, now, reason);
-        return { ran: false };
+        return { ran: false, result: { status: "failed", reason: formatErrorMessage(err) } };
       }
       if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
         // Do not advance the schedule or record run bookkeeping for this
@@ -2683,14 +2686,14 @@ export function startHeartbeatRunner(opts: {
           commitmentRes.status === "skipped" &&
           isRetryableHeartbeatBusySkipReason(commitmentRes.reason)
         ) {
-          return { ran: agentRan, retryableBusySkip: commitmentRes };
+          return { ran: agentRan, retryableBusySkip: commitmentRes, result: res };
         }
         if (commitmentRes.status === "ran") {
           agentRan = true;
         }
       }
 
-      return { ran: agentRan };
+      return { ran: agentRan, result: res };
     };
 
     if (requestedSessionKey || requestedAgentId) {
@@ -2701,17 +2704,19 @@ export function startHeartbeatRunner(opts: {
       if (!targetAgent && !allowsUnscheduledTarget) {
         return { status: "skipped", reason: "disabled" };
       }
-      if (isInterval && targetAgent && !requestedSessionKey) {
+      if (isInterval && targetAgent && !requestedSessionKey && !requestedHeartbeat) {
         // Cron monitor tick for one enrolled agent: use the full per-agent
         // path — including due-commitment sessions — that the broadcast
-        // interval owned before cadence moved to cron.
+        // interval owned before cadence moved to cron. Wakes carrying
+        // heartbeat overrides fall through to the targeted merge path.
         const outcome = await runOneAgent(targetAgent);
         if (outcome.retryableBusySkip) {
           return outcome.retryableBusySkip;
         }
-        return outcome.ran
-          ? { status: "ran", durationMs: Date.now() - startedAt }
-          : { status: "skipped", reason: "not-due" };
+        if (outcome.ran) {
+          return { status: "ran", durationMs: Date.now() - startedAt };
+        }
+        return outcome.result ?? { status: "skipped", reason: "not-due" };
       }
       if (targetAgent) {
         const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);

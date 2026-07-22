@@ -30,9 +30,24 @@ describe("heartbeat payload execution", () => {
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
         },
-        { enabledExplicit: true },
+        { enabledExplicit: true, systemOwned: true },
       );
       const job = "job" in added ? added.job : added;
+      // System ownership boundary: no caller may create or patch to the
+      // heartbeat payload without the gateway's opt-in.
+      await expect(
+        cron.add({
+          name: "rogue",
+          enabled: true,
+          schedule: { kind: "every", everyMs: 60_000 },
+          payload: { kind: "heartbeat" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+        }),
+      ).rejects.toThrow(/system-owned/);
+      await expect(cron.update(job.id, { payload: { kind: "heartbeat" } })).rejects.toThrow(
+        /system-owned/,
+      );
       const result = await cron.run(job.id, "force");
       expect(result.ok).toBe(true);
       expect(requestHeartbeat).toHaveBeenCalledWith(

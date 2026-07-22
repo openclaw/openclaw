@@ -728,6 +728,12 @@ function declarativeFields(job: CronJob, includeEnabled: boolean) {
 export async function add(state: CronServiceState, input: CronJobCreate, opts?: CronAddOptions) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
+    // Heartbeat monitors are gateway-converged system jobs; without this
+    // boundary any internal caller could upsert the declaration key and
+    // hijack the monitor despite the transport schemas excluding the kind.
+    if (input.payload?.kind === "heartbeat" && opts?.systemOwned !== true) {
+      throw new Error("heartbeat payloads are system-owned; jobs cannot be created with them");
+    }
     await ensureLoaded(state, { skipRecompute: true });
     const agentId = resolveEffectiveJobAgentId(input, resolveCurrentDefaultAgentId(state));
     if (state.deps.isAgentAvailable?.(agentId) === false) {
@@ -832,6 +838,11 @@ async function updateLoadedJob(params: {
 }) {
   const { state, id, patch, precondition } = params;
   warnIfDisabled(state, "update");
+  // Mirrors the add-time boundary: no caller may patch a job into (or edit)
+  // the system-owned heartbeat payload; the gateway converges via add only.
+  if (patch.payload?.kind === "heartbeat") {
+    throw new Error("heartbeat payloads are system-owned; jobs cannot be patched to them");
+  }
   await ensureLoaded(state, { skipRecompute: true });
   const snapshot = snapshotStoreForRollback(state);
   const job = findJobOrThrow(state, id);
