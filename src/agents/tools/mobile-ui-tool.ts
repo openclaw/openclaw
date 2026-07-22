@@ -14,7 +14,12 @@ import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam, ToolInputError } from "./common.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, type GatewayCallOptions, readGatewayCallOptions } from "./gateway.js";
-import { listNodes, type NodeListNode, resolveNodeIdFromList } from "./nodes-utils.js";
+import {
+  type EligibleNodeMessages,
+  listNodes,
+  type NodeListNode,
+  resolveEligibleNodeFromList,
+} from "./nodes-utils.js";
 
 const MOBILE_UI_OBSERVE_COMMAND = "mobile.ui.observe";
 const MOBILE_UI_ACT_COMMAND = "mobile.ui.act";
@@ -219,14 +224,19 @@ function isEligibleMobileUiNode(node: NodeListNode): boolean {
 const MOBILE_UI_NODE_HINT =
   "pair an Android device, enable its Accessibility service, and arm mobile UI control";
 
-function formatEligibleMobileUiNodeIds(nodes: NodeListNode[]): string {
-  return nodes.length > 0
-    ? nodes
-        .map((node) => node.nodeId)
-        .toSorted()
-        .join(", ")
-    : "none";
-}
+const MOBILE_UI_NODE_MESSAGES: EligibleNodeMessages = {
+  ineligibleExact: (query, eligibleIds) =>
+    `node "${query}" is not a mobile-UI-capable device (${MOBILE_UI_NODE_HINT}; ` +
+    `eligible device ids: ${eligibleIds})`,
+  nameResolveFailed: (reason, eligibleIds) =>
+    `${reason} (eligible mobile-UI device ids: ${eligibleIds})`,
+  noneEligible: () =>
+    `no mobile-UI-capable device paired / not armed (${MOBILE_UI_NODE_HINT}; requires Android capability ${MOBILE_UI_CAPABILITY})`,
+  multipleEligible: (eligible) =>
+    `multiple mobile-UI-capable devices connected; pass node explicitly: ${eligible
+      .map((node) => node.nodeId)
+      .join(", ")}`,
+};
 
 async function resolveMobileUiNode(
   gatewayOpts: GatewayCallOptions,
@@ -234,53 +244,7 @@ async function resolveMobileUiNode(
   signal?: AbortSignal,
 ): Promise<NodeListNode> {
   const nodes = await listNodes(gatewayOpts, signal);
-  const eligible = nodes.filter(isEligibleMobileUiNode);
-  const trimmed = query?.trim();
-  if (trimmed) {
-    // Stable ids outrank human-facing names across the full device set, and the
-    // precedence check matches case-insensitively because display-name resolution
-    // below is case-insensitive: an ineligible id that differs only by case must
-    // never fall through to another eligible device's name. Exact case wins first.
-    const lowerTrimmed = trimmed.toLowerCase();
-    const exactNode =
-      nodes.find((node) => node.nodeId === trimmed) ??
-      nodes.find((node) => node.nodeId.toLowerCase() === lowerTrimmed);
-    if (exactNode) {
-      if (!isEligibleMobileUiNode(exactNode)) {
-        throw new Error(
-          `node "${trimmed}" is not a mobile-UI-capable device (${MOBILE_UI_NODE_HINT}; ` +
-            `eligible device ids: ${formatEligibleMobileUiNodeIds(eligible)})`,
-        );
-      }
-      return exactNode;
-    }
-    try {
-      const nodeId = resolveNodeIdFromList(eligible, trimmed, false);
-      const match = eligible.find((node) => node.nodeId === nodeId);
-      if (match) {
-        return match;
-      }
-    } catch (error) {
-      throw new Error(
-        `${formatErrorMessage(error)} (eligible mobile-UI device ids: ${formatEligibleMobileUiNodeIds(eligible)})`,
-        { cause: error },
-      );
-    }
-    throw new Error(`node not found: ${trimmed}`);
-  }
-  if (eligible.length === 1) {
-    return eligible[0] as NodeListNode;
-  }
-  if (eligible.length === 0) {
-    throw new Error(
-      `no mobile-UI-capable device paired / not armed (${MOBILE_UI_NODE_HINT}; requires Android capability ${MOBILE_UI_CAPABILITY})`,
-    );
-  }
-  throw new Error(
-    `multiple mobile-UI-capable devices connected; pass node explicitly: ${eligible
-      .map((node) => node.nodeId)
-      .join(", ")}`,
-  );
+  return resolveEligibleNodeFromList(nodes, query, isEligibleMobileUiNode, MOBILE_UI_NODE_MESSAGES);
 }
 
 async function invokeNodeCommand(params: {
