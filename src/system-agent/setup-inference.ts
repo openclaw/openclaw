@@ -18,8 +18,7 @@ import {
 } from "../agents/auth-profiles/store.js";
 import { resolveCliBackendConfig } from "../agents/cli-backends.js";
 import {
-  readCodexCliApiKey,
-  readCodexCliCredentialsCached,
+  readCodexCliActiveApiKey,
   type CodexCliApiKeyCredential,
 } from "../agents/cli-credentials.js";
 import { CliExecutionAuthProfileError } from "../agents/cli-execution-auth.js";
@@ -324,8 +323,7 @@ export type ActivateSetupInferenceDeps = {
   resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
   resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
   resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
-  readCodexCliApiKey?: typeof readCodexCliApiKey;
-  readCodexCliCredentialsCached?: typeof readCodexCliCredentialsCached;
+  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
   loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
   fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
@@ -2456,12 +2454,8 @@ function resolveCodexCliSetupApiKey(
   if (params.kind !== "codex-cli") {
     return null;
   }
-  const oauthReader = params.deps?.readCodexCliCredentialsCached ?? readCodexCliCredentialsCached;
-  const oauth = oauthReader({ allowKeychainPrompt: false, ttlMs: 0 });
-  if (oauth) {
-    return null;
-  }
-  return (params.deps?.readCodexCliApiKey ?? readCodexCliApiKey)();
+  const reader = params.deps?.readCodexCliActiveApiKey ?? readCodexCliActiveApiKey;
+  return reader({ allowKeychainPrompt: true });
 }
 
 async function redactSetupInferenceError(

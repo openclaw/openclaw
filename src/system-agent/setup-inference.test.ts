@@ -173,11 +173,8 @@ function withSuiteTempDirs<
   if (deps.createTempDir === makeTempDir && !deps.removeTempDir) {
     deps.removeTempDir = deferSuiteTempDirCleanup;
   }
-  if (!deps.readCodexCliCredentialsCached) {
-    deps.readCodexCliCredentialsCached = () => null;
-  }
-  if (!deps.readCodexCliApiKey) {
-    deps.readCodexCliApiKey = () => null;
+  if (!deps.readCodexCliActiveApiKey) {
+    deps.readCodexCliActiveApiKey = () => null;
   }
   return deps;
 }
@@ -3672,8 +3669,7 @@ describe("activateSetupInference", () => {
             sourceConfig: initialConfig,
             runtimeConfig: initialConfig,
           })) as never,
-          readCodexCliCredentialsCached: () => null,
-          readCodexCliApiKey: () => ({
+          readCodexCliActiveApiKey: () => ({
             type: "api_key",
             provider: "openai",
             key: "codex-api-key",
@@ -3715,11 +3711,7 @@ describe("activateSetupInference", () => {
   });
 
   it("prefers usable Codex OAuth without registering a discovered API key", async () => {
-    const readCodexCliApiKey = vi.fn(() => ({
-      type: "api_key" as const,
-      provider: "openai" as const,
-      key: "unused-codex-api-key",
-    }));
+    const readCodexCliActiveApiKey = vi.fn(() => null);
     const configHarness = createConfigTransformHarness();
     const runEmbeddedAgent = vi.fn(successfulRunner("openai", "gpt-5.6-sol"));
 
@@ -3728,14 +3720,7 @@ describe("activateSetupInference", () => {
       surface: "gateway",
       runtime,
       deps: {
-        readCodexCliCredentialsCached: () => ({
-          type: "oauth",
-          provider: "openai",
-          access: "oauth-access",
-          refresh: "oauth-refresh",
-          expires: Date.now() + 60_000,
-        }),
-        readCodexCliApiKey,
+        readCodexCliActiveApiKey,
         ensureCodexRuntimePlugin: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
           cfg,
           required: true,
@@ -3750,7 +3735,7 @@ describe("activateSetupInference", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(readCodexCliApiKey).not.toHaveBeenCalled();
+    expect(readCodexCliActiveApiKey).toHaveBeenCalledWith({ allowKeychainPrompt: true });
     expect(runEmbeddedAgent.mock.calls[0]?.[0].authProfileId).toBeUndefined();
     expect(configHarness.current().auth).toBeUndefined();
   });
@@ -3777,8 +3762,7 @@ describe("activateSetupInference", () => {
             sourceConfig: initialConfig,
             runtimeConfig: initialConfig,
           })) as never,
-          readCodexCliCredentialsCached: () => null,
-          readCodexCliApiKey: () => ({
+          readCodexCliActiveApiKey: () => ({
             type: "api_key",
             provider: "openai",
             key: "rejected-codex-key",
