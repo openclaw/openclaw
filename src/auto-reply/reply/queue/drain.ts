@@ -288,9 +288,12 @@ function renderCollectItemPrompt(item: FollowupRun, idx: number, prompt: string)
   return `---\nQueued #${idx + 1}${senderSuffix}\n${prompt}`.trim();
 }
 
-function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
+function collectQueuedPromptMedia(
+  items: FollowupRun[],
+): Pick<FollowupRun, "images" | "imageOrder" | "media"> {
   const images: NonNullable<FollowupRun["images"]> = [];
   const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+  const media: NonNullable<FollowupRun["media"]> = [];
   for (const item of items) {
     if (item.images) {
       images.push(...item.images);
@@ -298,10 +301,14 @@ function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" |
     if (item.imageOrder) {
       imageOrder.push(...item.imageOrder);
     }
+    if (item.media) {
+      media.push(...item.media);
+    }
   }
   return {
     ...(images.length > 0 ? { images } : {}),
     ...(imageOrder.length > 0 ? { imageOrder } : {}),
+    ...(media.length > 0 ? { media } : {}),
   };
 }
 
@@ -883,6 +890,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     prompt: source.prompt,
     queueAbortSignal: source.queueAbortSignal,
     transcriptPrompt: source.transcriptPrompt,
+    media: source.media,
     messageId: source.messageId,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
@@ -1291,7 +1299,7 @@ export function scheduleFollowupDrain(
                       },
                     }
                   : {}),
-                ...collectQueuedImages(activeGroupItems),
+                ...collectQueuedPromptMedia(activeGroupItems),
               });
             };
             try {

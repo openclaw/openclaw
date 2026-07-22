@@ -800,6 +800,7 @@ export function runAgentAttempt(params: {
             // accompany every CLI process. Native dedupe requires a runtime receipt.
             images: params.opts.images,
             imageOrder: params.opts.imageOrder,
+            media: params.opts.media,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
             streamParams: params.opts.streamParams,
@@ -922,6 +923,7 @@ export function runAgentAttempt(params: {
     // removes the persisted CLI turn before the embedded prompt is submitted.
     images: shouldForwardImagesToEmbedded ? params.opts.images : undefined,
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
+    media: params.opts.media,
     clientTools: params.opts.clientTools,
     provider: embeddedAgentProvider,
     model: params.modelOverride,

@@ -1415,6 +1415,7 @@ export async function runReplyAgent(params: {
         steeringMode: "all",
         isInboundUserMessage: true,
         ...(followupRun.images?.length ? { images: followupRun.images } : {}),
+        ...(followupRun.media?.length ? { media: followupRun.media } : {}),
         ...(turnAdoptionLifecycle ? { waitForTranscriptCommit: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
         ...(followupRun.run.sourceReplyDeliveryMode

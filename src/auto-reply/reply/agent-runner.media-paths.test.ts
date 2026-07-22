@@ -463,6 +463,10 @@ describe("runReplyAgent media path normalization", () => {
     ];
     const followupRun = createMockFollowupRun({ prompt: "compare these" });
     followupRun.images = images;
+    followupRun.media = [
+      { path: "/tmp/first.jpg", contentType: "image/jpeg" },
+      { path: "/tmp/second.png", contentType: "image/png" },
+    ];
 
     await runReplyAgent(
       makeRunReplyAgentParams({
@@ -481,6 +485,7 @@ describe("runReplyAgent media path normalization", () => {
         steeringMode: "all",
         isInboundUserMessage: true,
         images,
+        media: followupRun.media,
         taskSuggestionDeliveryMode: undefined,
       },
     );

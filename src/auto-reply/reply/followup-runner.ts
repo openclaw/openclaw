@@ -560,6 +560,7 @@ export function createFollowupRunner(params: {
       .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
+    const queuedMedia = queued.media ?? opts?.media;
     let replyOperation: ReplyOperation | undefined;
     let deferred = false;
     let failed = false;
@@ -1297,6 +1298,7 @@ export function createFollowupRunner(params: {
                           ],
                         images: queuedImages,
                         imageOrder: queuedImageOrder,
+                        media: queuedMedia,
                         skillsSnapshot: run.skillsSnapshot,
                         messageChannel: queued.originatingChannel ?? undefined,
                         messageProvider: resolveOriginMessageProvider({
@@ -1449,6 +1451,7 @@ export function createFollowupRunner(params: {
                 },
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
+                media: queuedMedia,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 blockReplyBreak: run.blockReplyBreak,
                 bootstrapPromptWarningSignaturesSeen,
