@@ -461,11 +461,6 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
     expect(workflow).toContain('${GHCR_IMAGE}:${version}-browser"');
     expect(workflow).toContain('${DOCKERHUB_IMAGE}:${version}-browser"');
-    expect(workflow).toContain(
-      "BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}",
-    );
-    expect(workflow).toContain('browser_tags+=("${GHCR_IMAGE}:${alias}")');
-    expect(workflow).toContain('dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${alias}")');
     expect(workflow).not.toContain("main-browser-amd64");
     expect(workflow).not.toContain("main-browser-arm64");
     expect(workflow).toContain("Smoke test amd64 browser image");
@@ -494,7 +489,7 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
-  it("keeps moving Docker aliases behind the release-version policy", async () => {
+  it("validates release tags before immutable Docker publication", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 
     expect(workflow).toContain("Existing stable, extended-stable, or beta release tag");
@@ -504,15 +499,9 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-slim");
     expect(workflow).toContain("${DOCKERHUB_IMAGE}:${version}-browser");
     expect(workflow).toContain("node workflow-source/scripts/lib/docker-release-policy.mjs");
-    expect(
-      workflow.split("needs.resolve_release_policy.outputs.default_aliases").length,
-    ).toBeGreaterThanOrEqual(3);
-    expect(
-      workflow.split("needs.resolve_release_policy.outputs.slim_aliases").length,
-    ).toBeGreaterThanOrEqual(3);
-    expect(
-      workflow.split("needs.resolve_release_policy.outputs.browser_aliases").length,
-    ).toBeGreaterThanOrEqual(3);
+    expect(workflow).not.toContain("needs.resolve_release_policy.outputs.default_aliases");
+    expect(workflow).not.toContain("needs.resolve_release_policy.outputs.slim_aliases");
+    expect(workflow).not.toContain("needs.resolve_release_policy.outputs.browser_aliases");
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {

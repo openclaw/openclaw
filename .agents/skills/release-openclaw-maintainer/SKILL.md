@@ -277,10 +277,11 @@ on pinned current `main` as the exact command and validation contract.
    plugin tag repair; the OIDC source workflow cannot mutate that tag. Never
    republish an immutable version.
 9. Require `Docker Release` to publish and verify the exact default, slim,
-   browser, and architecture images in both registries while moving only the
-   three extended-stable aliases. For alias repair, dispatch
+   browser, and architecture images in both registries before its final step
+   promotes the three extended-stable aliases through the shared promotion
+   script. For alias repair, dispatch
    `docker-channel-promote.yml` from current `main` with the exact tag; never
-   rebuild or move the immutable release tag. The normal graph stays build-only.
+   rebuild or move the immutable release tag.
 10. Do not create a GitHub Release or publish macOS, Windows, mobile, website,
    ClawHub, or private dist-tag artifacts from this path.
 

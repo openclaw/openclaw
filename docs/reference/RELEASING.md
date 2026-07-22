@@ -97,11 +97,12 @@ new patch version and new candidate; final extended-stable tags are never moved
 or deleted.
 
 Pushing the tag starts `Docker Release`, which publishes immutable default,
-slim, browser, and architecture tags to both registries and moves only the
-three extended-stable aliases. Require the run and attestation checks to pass.
-For alias-only repair, dispatch `Docker Channel Promotion` from current `main`
-with the exact tag. It requires `docker-release` approval and verifies source
-manifests, SBOMs, and provenance without rebuilding images.
+slim, browser, and architecture tags to both registries. It verifies their
+attestations before promoting the three extended-stable aliases through the
+shared promotion path. For alias-only repair, dispatch `Docker Channel
+Promotion` from current `main` with the exact tag. It requires `docker-release`
+approval and verifies source manifests, SBOMs, and provenance without
+rebuilding images.
 
 After both runs succeed, publish every npm-publishable official plugin from the
 same exact branch tip. Patch `P` must be `33` or greater. Pass the full release

@@ -66,9 +66,6 @@ jobs:
     outputs:
       version: ${{ steps.policy.outputs.version }}
       channel: ${{ steps.policy.outputs.channel }}
-      default_aliases: ${{ steps.policy.outputs.default_aliases }}
-      slim_aliases: ${{ steps.policy.outputs.slim_aliases }}
-      browser_aliases: ${{ steps.policy.outputs.browser_aliases }}
     steps:
       - name: Checkout trusted workflow helpers
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -91,23 +88,14 @@ jobs:
           version="${SOURCE_REF#refs/tags/v}"
           policy="$(node workflow-source/scripts/lib/docker-release-policy.mjs "${version}")"
           channel="$(jq -r '.channel' <<< "${policy}")"
-          default_aliases="$(jq -r '.movingAliases.default | join(" ")' <<< "${policy}")"
-          slim_aliases="$(jq -r '.movingAliases.slim | join(" ")' <<< "${policy}")"
-          browser_aliases="$(jq -r '.movingAliases.browser | join(" ")' <<< "${policy}")"
           {
             echo "version=${version}"
             echo "channel=${channel}"
-            echo "default_aliases=${default_aliases}"
-            echo "slim_aliases=${slim_aliases}"
-            echo "browser_aliases=${browser_aliases}"
           } >> "$GITHUB_OUTPUT"
           {
             echo "## Docker release policy"
             echo "- Version: ${version}"
             echo "- Channel: ${channel}"
-            echo "- Default aliases: ${default_aliases:-none}"
-            echo "- Slim aliases: ${slim_aliases:-none}"
-            echo "- Browser aliases: ${browser_aliases:-none}"
           } >> "$GITHUB_STEP_SUMMARY"
 
   approve_manual_backfill:
@@ -651,10 +639,6 @@ jobs:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
-          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
-          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
-          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
         run: |
           set -euo pipefail
           tags=()
@@ -676,27 +660,6 @@ jobs:
             if [[ "${browser_supported}" == "1" ]]; then
               browser_tags+=("${GHCR_IMAGE}:${version}-browser")
               dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${version}-browser")
-            fi
-            # Manual backfills publish immutable tags only. Tag pushes advance
-            # only the moving aliases assigned by the release-version policy.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" ]]; then
-              read -r -a default_aliases <<< "${DEFAULT_ALIASES}"
-              read -r -a slim_aliases <<< "${SLIM_ALIASES}"
-              read -r -a browser_aliases <<< "${BROWSER_ALIASES}"
-              for alias in "${default_aliases[@]}"; do
-                tags+=("${GHCR_IMAGE}:${alias}")
-                dockerhub_tags+=("${DOCKERHUB_IMAGE}:${alias}")
-              done
-              for alias in "${slim_aliases[@]}"; do
-                slim_tags+=("${GHCR_IMAGE}:${alias}")
-                dockerhub_slim_tags+=("${DOCKERHUB_IMAGE}:${alias}")
-              done
-              if [[ "${browser_supported}" == "1" ]]; then
-                for alias in "${browser_aliases[@]}"; do
-                  browser_tags+=("${GHCR_IMAGE}:${alias}")
-                  dockerhub_browser_tags+=("${DOCKERHUB_IMAGE}:${alias}")
-                done
-              fi
             fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
@@ -766,12 +729,13 @@ jobs:
           fi
 
   verify-attestations:
+    name: Verify attestations and promote channel
     needs: [resolve_release_policy, resolve_build_provenance, create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      packages: read
+      packages: write
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -804,10 +768,6 @@ jobs:
           GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
           SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-          IS_MANUAL_BACKFILL: ${{ github.event_name == 'workflow_dispatch' && '1' || '0' }}
-          DEFAULT_ALIASES: ${{ needs.resolve_release_policy.outputs.default_aliases }}
-          SLIM_ALIASES: ${{ needs.resolve_release_policy.outputs.slim_aliases }}
-          BROWSER_ALIASES: ${{ needs.resolve_release_policy.outputs.browser_aliases }}
         run: |
           set -euo pipefail
           multi_refs=()
@@ -855,27 +815,6 @@ jobs:
               dockerhub_amd64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-amd64")
               arm64_refs+=("${GHCR_IMAGE}:${version}-browser-arm64")
               dockerhub_arm64_refs+=("${DOCKERHUB_IMAGE}:${version}-browser-arm64")
-            fi
-            # Manual backfills verify immutable tags only. Tag pushes also
-            # verify the moving aliases selected by the release policy.
-            if [[ "${IS_MANUAL_BACKFILL}" != "1" ]]; then
-              read -r -a default_aliases <<< "${DEFAULT_ALIASES}"
-              read -r -a slim_aliases <<< "${SLIM_ALIASES}"
-              read -r -a browser_aliases <<< "${BROWSER_ALIASES}"
-              for alias in "${default_aliases[@]}"; do
-                multi_refs+=("${GHCR_IMAGE}:${alias}")
-                dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${alias}")
-              done
-              for alias in "${slim_aliases[@]}"; do
-                slim_multi_refs+=("${GHCR_IMAGE}:${alias}")
-                dockerhub_slim_multi_refs+=("${DOCKERHUB_IMAGE}:${alias}")
-              done
-              if [[ "${browser_supported}" == "1" ]]; then
-                for alias in "${browser_aliases[@]}"; do
-                  multi_refs+=("${GHCR_IMAGE}:${alias}")
-                  dockerhub_multi_refs+=("${DOCKERHUB_IMAGE}:${alias}")
-                done
-              fi
             fi
           fi
           if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 || ${#dockerhub_multi_refs[@]} -eq 0 || ${#dockerhub_amd64_refs[@]} -eq 0 || ${#dockerhub_arm64_refs[@]} -eq 0 ]]; then
@@ -941,3 +880,15 @@ jobs:
           node scripts/verify-docker-attestations.mjs \
             --platform linux/arm64 \
             "${dockerhub_arm64_refs[@]}"
+
+      - name: Promote and verify channel aliases
+        if: ${{ github.event_name != 'workflow_dispatch' && needs.resolve_release_policy.outputs.channel != 'beta' }}
+        env:
+          VERSION: ${{ needs.resolve_release_policy.outputs.version }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
+        run: |
+          node scripts/docker-channel-promote.mjs \
+            --version "${VERSION}" \
+            --image "${GHCR_IMAGE}" \
+            --image "${DOCKERHUB_IMAGE}"
