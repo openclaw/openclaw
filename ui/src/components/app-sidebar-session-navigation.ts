@@ -5,6 +5,10 @@ import { pathForRoute } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { listSelectableAgents } from "../lib/agents/display.ts";
 import {
+  resolveStoredChatOutboxScope,
+  storedChatOutboxScopeKey,
+} from "../lib/chat/outbox-store.ts";
+import {
   isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -36,10 +40,6 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { reconcileSidebarZone } from "../lib/sidebar-zone.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
-import {
-  resolveStoredChatOutboxScope,
-  storedChatOutboxScopeKey,
-} from "../pages/chat/composer-persistence.ts";
 import {
   adoptedCatalogSessionKeys,
   formatSidebarTimestamp,

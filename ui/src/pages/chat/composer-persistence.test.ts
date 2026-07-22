@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -12,7 +13,6 @@ import {
   removeStoredChatComposerQueueItem,
   resolveStoredChatOutboxScope,
   restoreChatComposerState,
-  subscribeStoredChatOutboxChanges,
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
 

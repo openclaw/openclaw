@@ -61,6 +61,12 @@ export function renderSessionRowBadges(params: {
   const displayedPlacementState = cloudPlacementState ?? conflictPlacementState;
   const hasWorkspaceConflict = workspaceConflictCount > 0;
   const outboxCount = Math.max(0, Math.floor(params.outboxCount ?? 0));
+  const outboxLabel =
+    outboxCount > 0
+      ? t(outboxCount === 1 ? "sessionsView.queuedMessage" : "sessionsView.queuedMessages", {
+          count: String(outboxCount),
+        })
+      : "";
   if (
     !hasAutomation &&
     !pullRequestLabel &&
@@ -124,14 +130,8 @@ export function renderSessionRowBadges(params: {
       ? html`<span
           class="session-row-badge session-row-badge--queued"
           role="img"
-          aria-label=${t(
-            outboxCount === 1 ? "sessionsView.queuedMessage" : "sessionsView.queuedMessages",
-            { count: String(outboxCount) },
-          )}
-          title=${t(
-            outboxCount === 1 ? "sessionsView.queuedMessage" : "sessionsView.queuedMessages",
-            { count: String(outboxCount) },
-          )}
+          aria-label=${outboxLabel}
+          title=${outboxLabel}
           >${icons.clock}<span aria-hidden="true">${outboxCount}</span></span
         >`
       : nothing}
@@ -149,4 +149,28 @@ export function renderSessionRowBadges(params: {
         >`
       : nothing}
   </span>`;
+}
+
+export function renderOfflineSidebarStatus(props: {
+  queuedOutboxCount: number;
+  reconnecting: string;
+  title?: string;
+  onRetry: () => void;
+}) {
+  const offline = t("common.offline");
+  const count = props.queuedOutboxCount;
+  const queued = count ? t("connection.queuedCount", { count: String(count) }) : null;
+  return html`<button
+    type="button"
+    class="sidebar-footer-bar__status"
+    aria-live="polite"
+    aria-label=${`${offline} — ${t("connection.retryNow")}${queued ? ` — ${queued}` : ""}`}
+    title=${props.title ?? nothing}
+    @click=${props.onRetry}
+  >
+    <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${offline}<span
+      class="sidebar-footer-bar__status-detail"
+      >· ${props.reconnecting}</span
+    >${queued ? html`<span class="sidebar-footer-bar__status-detail">· ${queued}</span>` : nothing}
+  </button>`;
 }

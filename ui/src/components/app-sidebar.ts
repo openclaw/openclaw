@@ -46,7 +46,7 @@ import {
   type LobsterLogoVisitDetail,
 } from "./lobster-pet-contract.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
-import { renderSessionRowBadges } from "./session-row-badges.ts";
+import { renderOfflineSidebarStatus, renderSessionRowBadges } from "./session-row-badges.ts";
 
 const PALETTE_SHORTCUT = /Mac|iP(hone|ad|od)/i.test(globalThis.navigator?.platform ?? "")
   ? "⌘K"
@@ -294,10 +294,6 @@ class AppSidebar extends AppSidebarSessionListElement {
   /** Zone 5: product chrome recedes to one slim footer bar. */
   private renderFooterBar() {
     const reconnecting = t("connection.reconnecting");
-    const queuedCount =
-      this.queuedOutboxCount > 0
-        ? t("connection.queuedCount", { count: String(this.queuedOutboxCount) })
-        : null;
     const selfUser = this.connected
       ? resolveCurrentSelfUser({
           snapshotUser: this.context?.gateway.snapshot.selfUser,
@@ -350,22 +346,11 @@ class AppSidebar extends AppSidebarSessionListElement {
           ? html`<openclaw-tooltip
               .content=${this.lastError ? redactLoginFailureError(this.lastError) : reconnecting}
             >
-              <button
-                type="button"
-                class="sidebar-footer-bar__status"
-                aria-live="polite"
-                aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}${
-                  queuedCount ? ` — ${queuedCount}` : ""
-                }`}
-                @click=${() => this.onRetryConnect?.()}
-              >
-                <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-                  "common.offline",
-                )}<span class="sidebar-footer-bar__status-detail">· ${reconnecting}</span
-                >${queuedCount
-                  ? html`<span class="sidebar-footer-bar__status-detail">· ${queuedCount}</span>`
-                  : nothing}
-              </button>
+              ${renderOfflineSidebarStatus({
+                queuedOutboxCount: this.queuedOutboxCount,
+                reconnecting,
+                onRetry: () => this.onRetryConnect?.(),
+              })}
             </openclaw-tooltip>`
           : nothing}
         <openclaw-tooltip .content=${t("nav.settings")}>

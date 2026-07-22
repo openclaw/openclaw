@@ -49,19 +49,18 @@ import {
 import { renderSettingsSidebar } from "../components/settings-sidebar.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import { i18n, isSupportedLocale, t } from "../i18n/index.ts";
+import {
+  summarizeStoredChatOutboxes,
+  subscribeStoredChatOutboxChanges,
+} from "../lib/chat/outbox-store.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { isWorkboardEnabledInConfigSnapshot } from "../lib/plugin-activation.ts";
 import { searchForSession } from "../lib/sessions/index.ts";
-import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import "../lib/toast.ts";
+import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import {
-  listStoredChatOutboxes,
-  storedChatOutboxScopeKey,
-  subscribeStoredChatOutboxChanges,
-} from "../pages/chat/composer-persistence.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { renderDevicePairSetup } from "../pages/nodes/view-pairing.ts";
@@ -128,27 +127,6 @@ type AppSidebarElement = HTMLElement & {
 // on every shell render.
 const ROUTE_IDS_WITHOUT_WORKBOARD = APP_ROUTE_IDS.filter((routeId) => routeId !== "workboard");
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
-
-function summarizeStoredChatOutboxes(scopeHost: Parameters<typeof listStoredChatOutboxes>[0]) {
-  const itemIdsByScope = new Map<string, Set<string>>();
-  for (const outbox of listStoredChatOutboxes(scopeHost)) {
-    const scopeKey = storedChatOutboxScopeKey(outbox);
-    const itemIds = itemIdsByScope.get(scopeKey) ?? new Set<string>();
-    for (const item of outbox.queue) {
-      if (!item.pendingRunId) {
-        itemIds.add(item.id);
-      }
-    }
-    itemIdsByScope.set(scopeKey, itemIds);
-  }
-  const countsByScope = new Map(
-    [...itemIdsByScope].map(([scopeKey, itemIds]) => [scopeKey, itemIds.size]),
-  );
-  return {
-    countsByScope,
-    total: [...countsByScope.values()].reduce((total, count) => total + count, 0),
-  };
-}
 
 function diffAgentRoster(
   previous: readonly GatewayAgentRow[],

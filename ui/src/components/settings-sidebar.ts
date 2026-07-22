@@ -18,6 +18,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { icons } from "./icons.ts";
 import { redactLoginFailureError } from "./login-gate.ts";
+import { renderOfflineSidebarStatus } from "./session-row-badges.ts";
 import "./sidebar-update-card.ts";
 
 type SettingsSidebarProps = {
@@ -213,10 +214,6 @@ function syncSettingsSearchScrollShadow(nav: HTMLElement) {
 
 export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const reconnecting = t("connection.reconnecting");
-  const queuedCount =
-    (props.queuedOutboxCount ?? 0) > 0
-      ? t("connection.queuedCount", { count: String(props.queuedOutboxCount) })
-      : null;
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     props.searchBlockMatches ?? [],
@@ -303,23 +300,12 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
       ></openclaw-sidebar-update-card>
       <footer class="settings-sidebar__footer">
         ${props.offline
-          ? html`<button
-              type="button"
-              class="sidebar-footer-bar__status"
-              aria-live="polite"
-              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}${
-                queuedCount ? ` — ${queuedCount}` : ""
-              }`}
-              title=${props.lastError ? redactLoginFailureError(props.lastError) : reconnecting}
-              @click=${props.onRetryConnect}
-            >
-              <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-                "common.offline",
-              )}<span class="sidebar-footer-bar__status-detail">· ${reconnecting}</span
-              >${queuedCount
-                ? html`<span class="sidebar-footer-bar__status-detail">· ${queuedCount}</span>`
-                : nothing}
-            </button>`
+          ? renderOfflineSidebarStatus({
+              queuedOutboxCount: props.queuedOutboxCount ?? 0,
+              reconnecting,
+              title: props.lastError ? redactLoginFailureError(props.lastError) : reconnecting,
+              onRetry: props.onRetryConnect,
+            })
           : nothing}
         ${props.version
           ? html`<span class="settings-sidebar__footer-version">${props.version}</span>`
