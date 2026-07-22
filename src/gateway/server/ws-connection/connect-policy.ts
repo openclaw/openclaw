@@ -27,14 +27,18 @@ export function shouldAllowControlUiDeviceAuthMigration(params: {
   policy: ControlUiAuthPolicy;
   role: GatewayRole;
   sharedAuthOk: boolean;
+  trustedProxyAuthOk?: boolean;
   authMethod?: string;
 }): boolean {
+  const sharedAuthOk =
+    params.sharedAuthOk && (params.authMethod === "token" || params.authMethod === "password");
+  const trustedProxyAuthOk =
+    params.trustedProxyAuthOk === true && params.authMethod === "trusted-proxy";
   return (
     params.policy.deviceAuthMigrationPending &&
     params.policy.isControlUi &&
     params.role === "operator" &&
-    params.sharedAuthOk &&
-    (params.authMethod === "token" || params.authMethod === "password")
+    (sharedAuthOk || trustedProxyAuthOk)
   );
 }
 

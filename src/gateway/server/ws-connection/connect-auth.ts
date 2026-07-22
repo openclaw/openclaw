@@ -260,6 +260,7 @@ export async function authenticateGatewayConnect(
         policy: controlUiAuthPolicy,
         role,
         sharedAuthOk,
+        trustedProxyAuthOk,
         authMethod,
       });
     const preserveInsecureLocalControlUiScopes = allowDeviceLessControlUiMigration;
@@ -462,6 +463,7 @@ export async function authenticateGatewayConnect(
     policy: controlUiAuthPolicy,
     role,
     sharedAuthOk,
+    trustedProxyAuthOk,
     authMethod,
   });
 

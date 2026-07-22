@@ -2,8 +2,9 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -108,6 +109,127 @@ describe("Control UI device-auth upgrade migration", () => {
       const config = await rpcReq(ws, "config.get", {});
       expect(config.ok).toBe(true);
     } finally {
+      ws?.close();
+      await harness.close();
+    }
+  });
+
+  it("preserves trusted-proxy migration access", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        },
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = undefined;
+    const harness = await createGatewaySuiteHarness();
+    let ws: WebSocket | undefined;
+    try {
+      ws = await harness.openWs({
+        origin: BROWSER_ORIGIN,
+        "x-forwarded-for": "203.0.113.50",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "operator@example.com",
+      });
+      const connected = await connectReq(ws, {
+        skipDefaultAuth: true,
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: null,
+      });
+      expect(connected.ok).toBe(true);
+      expect(connected.payload).toMatchObject({
+        deviceAuthMigration: { pending: true },
+        auth: { role: "operator", scopes: expect.arrayContaining(SCOPES) },
+      });
+    } finally {
+      ws?.close();
+      await harness.close();
+    }
+  });
+
+  it("rejects an in-flight migration handshake completed before registration", async () => {
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      meta: { lastTouchedVersion: "2026.7.1" },
+      gateway: {
+        trustedProxies: ["127.0.0.1"],
+        controlUi: {
+          allowedOrigins: [BROWSER_ORIGIN],
+          dangerouslyDisableDeviceAuth: true,
+        },
+      },
+    });
+    testState.gatewayAuth = { mode: "token", token: "secret" };
+    const harness = await createGatewaySuiteHarness();
+    const connectNodeSession = await import("./server/ws-connection/connect-node-session.js");
+    const originalPrepare = connectNodeSession.prepareGatewayNodeConnect;
+    let releasePrepare: () => void = () => {};
+    const prepareReleased = new Promise<void>((resolve) => {
+      releasePrepare = resolve;
+    });
+    let markPrepareEntered: () => void = () => {};
+    const prepareEntered = new Promise<void>((resolve) => {
+      markPrepareEntered = resolve;
+    });
+    const prepareSpy = vi
+      .spyOn(connectNodeSession, "prepareGatewayNodeConnect")
+      .mockImplementationOnce(async (context, state) => {
+        markPrepareEntered();
+        await prepareReleased;
+        return await originalPrepare(context, state);
+      });
+    let ws: WebSocket | undefined;
+    try {
+      ws = await harness.openWs({
+        origin: BROWSER_ORIGIN,
+        "x-forwarded-for": "203.0.113.50",
+      });
+      const connected = connectReq(ws, {
+        token: "secret",
+        scopes: SCOPES,
+        client: CONTROL_UI_CLIENT,
+        device: null,
+      });
+      await prepareEntered;
+
+      const { approveDevicePairing, requestDevicePairing } =
+        await import("../infra/device-pairing.js");
+      const ownerIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-migration-race-owner-${randomUUID()}.sqlite`),
+      });
+      const ownerRequest = await requestDevicePairing({
+        deviceId: ownerIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(ownerIdentity.publicKeyPem),
+        role: "operator",
+        scopes: SCOPES,
+      });
+      await expect(
+        approveDevicePairing(ownerRequest.request.requestId, { callerScopes: SCOPES }),
+      ).resolves.toMatchObject({ status: "approved" });
+      releasePrepare();
+
+      const result = await connected;
+      expect(result.ok).toBe(false);
+      expect((result.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+      );
+    } finally {
+      releasePrepare();
+      prepareSpy.mockRestore();
       ws?.close();
       await harness.close();
     }

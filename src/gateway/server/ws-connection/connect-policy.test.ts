@@ -133,10 +133,26 @@ describe("ws connect policy", () => {
         authMethod: "password",
       }),
     ).toBe(true);
+    expect(
+      shouldAllowControlUiDeviceAuthMigration({
+        policy,
+        role: "operator",
+        sharedAuthOk: false,
+        trustedProxyAuthOk: true,
+        authMethod: "trusted-proxy",
+      }),
+    ).toBe(true);
     for (const candidate of [
       { policy, role: "node" as const, sharedAuthOk: true, authMethod: "token" },
       { policy, role: "operator" as const, sharedAuthOk: false, authMethod: "token" },
       { policy, role: "operator" as const, sharedAuthOk: true, authMethod: "device-token" },
+      {
+        policy,
+        role: "operator" as const,
+        sharedAuthOk: false,
+        trustedProxyAuthOk: false,
+        authMethod: "trusted-proxy",
+      },
     ]) {
       expect(shouldAllowControlUiDeviceAuthMigration(candidate)).toBe(false);
     }
