@@ -42,22 +42,22 @@ export type SessionListRenderContext = {
     narration: ReadonlyMap<string, string>;
     digests: ReadonlyMap<string, SessionObserverDigest>;
     prStates: ReadonlyMap<string, SessionPullRequestIndicatorState>;
-    approvals: ApprovalBadgeSnapshot;
+    approval: ApprovalBadgeSnapshot;
     selected: ReadonlySet<string>;
     drag: string | null;
     connected: boolean;
-    presence: unknown;
-    presenceId: string | undefined;
+    viewers: unknown;
+    viewerId: string | undefined;
     expanded: ReadonlySet<string>;
     fullKeys: ReadonlySet<string>;
     grouping: SidebarSessionsGrouping;
     collapsed: ReadonlySet<string>;
     dragGroup: string | null;
     drop: string | null;
-    groupDrop: SidebarSessionGroupDropTarget | null;
-    sortOpen: boolean;
-    menuKey: string | null;
-    groupMenu: string | null;
+    gDrop: SidebarSessionGroupDropTarget | null;
+    sort: boolean;
+    menu: string | null;
+    gMenu: string | null;
     status: SidebarSessionStatusFilter;
     remove: boolean;
     error: string | null;
@@ -227,8 +227,8 @@ export function renderRecentSession(params: {
             >`
           : nothing}
         <openclaw-viewer-facepile
-          .presencePayload=${data.presence}
-          .selfInstanceId=${data.presenceId}
+          .presencePayload=${data.viewers}
+          .selfInstanceId=${data.viewerId}
           .sessionKey=${session.key}
           .maxVisible=${3}
           variant="session"
@@ -236,7 +236,7 @@ export function renderRecentSession(params: {
         ${renderSessionRowBadges({
           ...session,
           pullRequest: session.pullRequest ?? display?.pullRequest,
-          hasApproval: sessionHasPendingApproval(data.approvals, session.key),
+          hasApproval: sessionHasPendingApproval(data.approval, session.key),
         })}
         ${pinnedState}
       </a>
@@ -308,7 +308,7 @@ export function renderRecentSession(params: {
                 title=${t("chat.sidebar.openSessionMenu")}
                 aria-label=${t("chat.sidebar.openSessionMenu")}
                 aria-haspopup="menu"
-                aria-expanded=${String(data.menuKey === session.key)}
+                aria-expanded=${String(data.menu === session.key)}
                 @click=${(event: MouseEvent) => {
                   event.stopPropagation();
                   const trigger = event.currentTarget as HTMLElement;

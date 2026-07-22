@@ -83,8 +83,8 @@ function renderSessionSection(params: {
     collapsed ? "sidebar-recent-sessions__group--collapsed" : "",
     group && data.dragGroup === group ? "sidebar-recent-sessions__group--dragging" : "",
     data.drop === section.id ? "sidebar-recent-sessions__group--session-drop" : "",
-    group && data.groupDrop?.group === group
-      ? `sidebar-recent-sessions__group--group-drop-${data.groupDrop.position}`
+    group && data.gDrop?.group === group
+      ? `sidebar-recent-sessions__group--group-drop-${data.gDrop.position}`
       : "",
   ]
     .filter(Boolean)
@@ -171,7 +171,7 @@ function renderSessionSection(params: {
                   title=${t("chat.sidebar.sortSessions")}
                   aria-label=${t("chat.sidebar.sortSessions")}
                   aria-haspopup="menu"
-                  aria-expanded=${String(data.sortOpen)}
+                  aria-expanded=${String(data.sort)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     callbacks.sort(event.currentTarget as HTMLElement);
@@ -204,7 +204,7 @@ function renderSessionSection(params: {
                   title=${t("sessionsView.groupMenu", { group })}
                   aria-label=${t("sessionsView.groupMenu", { group })}
                   aria-haspopup="menu"
-                  aria-expanded=${String(data.groupMenu === group)}
+                  aria-expanded=${String(data.gMenu === group)}
                   @click=${(event: MouseEvent) => {
                     event.stopPropagation();
                     const trigger = event.currentTarget as HTMLElement;
