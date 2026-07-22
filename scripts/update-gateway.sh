@@ -29,11 +29,6 @@ cd "$repo_root"
 
 remote="${OPENCLAW_UPDATE_REMOTE:-origin}"
 
-# `pnpm build` rewrites this tracked bundle, which would make the tree look
-# dirty and block the rebase below. Restoring it loses nothing: the build
-# regenerates it from source every run.
-git checkout -- extensions/browser/chrome-extension/modules/copilot-runtime.js 2>/dev/null || true
-
 # Never update over an in-progress git operation: aborting or rebasing on top
 # of an operator's paused rebase/merge would discard their progress.
 git_dir="$(git rev-parse --git-dir)"
@@ -42,6 +37,11 @@ if [ -d "$git_dir/rebase-merge" ] || [ -d "$git_dir/rebase-apply" ] || \
   log "a git rebase/merge/cherry-pick is in progress; finish or abort it first"
   exit 1
 fi
+
+# `pnpm build` rewrites this tracked bundle, which would make the tree look
+# dirty and block the rebase below. Restoring it loses nothing: the build
+# regenerates it from source every run.
+git checkout -- extensions/browser/chrome-extension/modules/copilot-runtime.js 2>/dev/null || true
 
 # Fail closed on any other local changes: an agent or operator may have
 # uncommitted work in this checkout, and an update must never eat it.
@@ -60,7 +60,7 @@ fi
 # the update; operators own what they leave in the checkout.
 untracked="$(git ls-files --others --exclude-standard)"
 if [ -n "$untracked" ]; then
-  log "note: untracked files present (kept, not deployed):"
+  log "warning: untracked files present; they are kept and a build tool that reads them can affect the deployed output:"
   head -10 <<<"$untracked"
 fi
 
@@ -88,8 +88,14 @@ pnpm install --frozen-lockfile
 # Incremental builds have left stale hashed chunks and config validators from
 # the previous revision in dist; a clean build is the reliable path.
 log "clean building"
-# No trailing slashes: if a path is a symlink, rm removes the link itself and
-# never traverses into the target.
+# These deletes must stay inside the checkout: a symlinked build dir would
+# redirect the recursion into its target, so refuse symlinks outright.
+for build_path in dist dist-runtime .artifacts; do
+  if [ -L "$build_path" ]; then
+    log "$build_path is a symlink; refusing to clean through it"
+    exit 1
+  fi
+done
 rm -rf dist dist-runtime .artifacts/tsgo-cache
 pnpm build
 
