@@ -196,6 +196,21 @@ function resolveConfiguredProvider(params: {
   return providerConfig;
 }
 
+async function isCurrentNodeRuntimePath(targetPath: string): Promise<boolean> {
+  if (targetPath === process.execPath) {
+    return true;
+  }
+  try {
+    const [resolvedTarget, resolvedRuntime] = await Promise.all([
+      fs.realpath(targetPath),
+      fs.realpath(process.execPath),
+    ]);
+    return resolvedTarget === resolvedRuntime;
+  } catch {
+    return false;
+  }
+}
+
 async function assertSecurePath(params: {
   targetPath: string;
   label: string;
@@ -235,7 +250,11 @@ async function assertSecurePath(params: {
       throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
     }
   }
-  if (params.allowInsecurePath) {
+  // Skip POSIX permission checks when the operator opts in, or when the command is the
+  // currently running Node binary. CI toolcache Node installs are often group-writable;
+  // rejecting that binary would break ${node}/process.execPath SecretRef providers even
+  // though OpenClaw is already executing under that same runtime.
+  if (params.allowInsecurePath || (await isCurrentNodeRuntimePath(effectivePath))) {
     return effectivePath;
   }
 
@@ -518,6 +537,7 @@ async function resolveExecRefs(params: {
       targetPath: commandPath,
       label: `secrets.providers.${params.providerName}.command`,
       trustedDirs: params.providerConfig.trustedDirs,
+      allowInsecurePath: params.providerConfig.allowInsecurePath === true,
       allowReadableByOthers: true,
       allowSymlinkPath: false,
     });

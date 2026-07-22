@@ -142,6 +142,7 @@ const SecretsManualExecProviderSchema = z
       )
       .max(64)
       .optional(),
+    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
