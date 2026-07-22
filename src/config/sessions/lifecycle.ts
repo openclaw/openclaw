@@ -8,7 +8,7 @@ import {
   resolveSessionFilePathOptions,
   type SessionFilePathOptions,
 } from "./paths.js";
-import { readSqliteTranscriptStatsSync as readTranscriptStatsSync } from "./session-accessor.sqlite-read.js";
+import { readTranscriptStatsSync } from "./session-accessor.js";
 import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
