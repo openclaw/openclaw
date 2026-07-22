@@ -105,6 +105,7 @@ describe("session accessor seam", () => {
     };
 
     await upsertSessionEntry(scope, {
+      createdBy: { id: "profile-ada", label: "Ada Lovelace" },
       model: "gpt-5.5",
       sessionId: "session-1",
       updatedAt: 10,
@@ -112,10 +113,20 @@ describe("session accessor seam", () => {
 
     expect(loadSessionEntry(scope)).toMatchObject({
       model: "gpt-5.5",
+      createdBy: { id: "profile-ada", label: "Ada Lovelace" },
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
     expect(readSessionUpdatedAt(scope)).toEqual(expect.any(Number));
+    const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, {
+      agentId: "main",
+    }).path;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    expect(
+      database.db
+        .prepare("SELECT created_by_json FROM session_entries WHERE session_key = ?")
+        .get(scope.sessionKey),
+    ).toEqual({ created_by_json: '{"id":"profile-ada","label":"Ada Lovelace"}' });
     expect(listSessionEntries({ storePath })).toEqual([
       {
         sessionKey: "agent:main:main",
@@ -127,6 +138,17 @@ describe("session accessor seam", () => {
       },
     ]);
 
+    // A downgraded writer knows only entry_json and can leave the additive
+    // projection untouched. Re-upgrade must not resurrect that stale creator.
+    database.db
+      .prepare("UPDATE session_entries SET entry_json = ?, updated_at = ? WHERE session_key = ?")
+      .run(
+        JSON.stringify({ model: "legacy-reset", sessionId: "session-1", updatedAt: 15 }),
+        15,
+        scope.sessionKey,
+      );
+    expect(loadSessionEntry(scope)).not.toHaveProperty("createdBy");
+
     await upsertSessionEntry(scope, { model: "sonnet-4.6", updatedAt: 20 });
 
     expect(loadSessionEntry(scope)).toMatchObject({
@@ -134,6 +156,7 @@ describe("session accessor seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+    expect(loadSessionEntry(scope)).not.toHaveProperty("createdBy");
   });
 
   it("lists retained transcript instances across same-key session rotation", async () => {

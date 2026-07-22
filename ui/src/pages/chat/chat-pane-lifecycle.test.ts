@@ -114,31 +114,32 @@ describe("chat pane presentation teardown", () => {
     window.localStorage.removeItem(SKIP_REWIND_CONFIRM_PREFERENCE);
     const owner = createConfirmationOwner();
 
-    for (const callback of frameCallbacks.splice(0)) {
-      callback(0);
-    }
-    const captureClickListener = addDocumentListener.mock.calls.find(
-      ([type, listener, options]) => type === "click" && options === true && listener,
-    )?.[1];
-    const captureKeydownListener = addWindowListener.mock.calls.find(
-      ([type, listener, options]) => type === "keydown" && options === true && listener,
-    )?.[1];
-    expect(captureClickListener).toBeDefined();
-    expect(captureKeydownListener).toBeDefined();
-    pane.appendChild(owner);
+    try {
+      for (const callback of frameCallbacks.splice(0)) {
+        callback(0);
+      }
+      const captureClickListener = addDocumentListener.mock.calls.find(
+        ([type, listener, options]) => type === "click" && options === true && listener,
+      )?.[1];
+      const captureKeydownListener = addWindowListener.mock.calls.find(
+        ([type, listener, options]) => type === "keydown" && options === true && listener,
+      )?.[1];
+      expect(captureClickListener).toBeDefined();
+      expect(captureKeydownListener).toBeDefined();
+      pane.appendChild(owner);
 
-    const resetPresentation = chatThread.resetChatThreadPresentationState;
-    const stopAfterReset = new Error("stop after thread presentation reset");
-    vi.spyOn(chatThread, "resetChatThreadPresentationState").mockImplementation(
-      (paneId, presentationOwner) => {
-        resetPresentation(paneId, presentationOwner);
+      const stopAfterReset = new Error("stop after thread presentation reset");
+      vi.spyOn(pane, "cancelHeaderRename").mockImplementation(() => {
         throw stopAfterReset;
-      },
-    );
+      });
 
-    expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
-    expect(owner.querySelector(".chat-delete-confirm")).toBeNull();
-    expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListener, true);
-    expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListener, true);
+      expect(() => pane.switchPaneSession("agent:main:next")).toThrow(stopAfterReset);
+      expect(owner.querySelector(".chat-delete-confirm")).toBeNull();
+      expect(removeDocumentListener).toHaveBeenCalledWith("click", captureClickListener, true);
+      expect(removeWindowListener).toHaveBeenCalledWith("keydown", captureKeydownListener, true);
+    } finally {
+      dismissConfirmedActionPopovers(owner);
+      owner.remove();
+    }
   });
 });

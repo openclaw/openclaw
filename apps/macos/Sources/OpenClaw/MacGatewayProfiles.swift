@@ -37,13 +37,14 @@ enum MacGatewayProfileError: LocalizedError, Equatable {
 actor MacGatewayProfileStore {
     static let shared = MacGatewayProfileStore()
 
-    private struct StoredProfile: Codable {
+    struct StoredProfile: Codable, Equatable {
         var profile: MacGatewayProfile
         var credentials: Credentials
     }
 
-    private struct Registry: Codable {
+    struct Registry: Codable, Equatable {
         var version = 1
+        var legacyPrimaryMigrationVersion: Int?
         var profiles: [StoredProfile] = []
     }
 
@@ -54,6 +55,37 @@ actor MacGatewayProfileStore {
 
     private static let service = "ai.openclaw.gateway-profiles"
     private static let registryAccount = "registry-v1"
+    private static let currentLegacyPrimaryMigrationVersion = 1
+
+    static func migratingLegacyPrimaryConnection(
+        root: [String: Any],
+        registry: Registry) -> Registry
+    {
+        guard (registry.legacyPrimaryMigrationVersion ?? 0) < self.currentLegacyPrimaryMigrationVersion else {
+            return registry
+        }
+        var migrated = registry
+        migrated.legacyPrimaryMigrationVersion = self.currentLegacyPrimaryMigrationVersion
+
+        let mode = ConnectionModeResolver.resolve(root: root)
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        guard mode.mode == .remote,
+              mode.source == .configMode || mode.source == .configRemoteURL,
+              resolution.transport == .direct,
+              let directURL = resolution.directURL,
+              let profile = try? self.makeProfile(name: "", url: directURL),
+              !migrated.profiles.contains(where: { $0.profile.id == profile.id })
+        else {
+            return migrated
+        }
+
+        migrated.profiles.append(StoredProfile(
+            profile: profile,
+            credentials: Credentials(
+                token: GatewayRemoteConfig.resolveTokenString(root: root),
+                password: GatewayRemoteConfig.resolvePasswordString(root: root))))
+        return migrated
+    }
 
     func upsert(
         name: String,
@@ -61,14 +93,9 @@ actor MacGatewayProfileStore {
         token: String?,
         password: String?) throws -> MacGatewayProfile
     {
-        let canonicalURL = try Self.canonicalURL(url)
-        let id = Self.profileID(url: canonicalURL)
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let profile = MacGatewayProfile(
-            id: id,
-            name: trimmedName.isEmpty ? (canonicalURL.host ?? canonicalURL.absoluteString) : trimmedName,
-            url: canonicalURL)
+        let profile = try Self.makeProfile(name: name, url: url)
         var registry = try self.loadRegistry()
+        let id = profile.id
         let savedCredentials = registry.profiles.first { $0.profile.id == id }?.credentials
         let credentials = Self.resolvedCredentials(
             saved: savedCredentials,
@@ -78,12 +105,12 @@ actor MacGatewayProfileStore {
         registry.profiles.append(StoredProfile(profile: profile, credentials: credentials))
         // Metadata and secrets share one Keychain value, so the profile becomes
         // reachable only when the complete record commits.
-        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+        try self.saveRegistry(registry)
         return profile
     }
 
     func profiles() throws -> [MacGatewayProfile] {
-        try Self.sortedProfiles(self.loadRegistry().profiles.map(\.profile))
+        try Self.sortedProfiles(self.loadRegistryMigratingLegacyPrimary().profiles.map(\.profile))
     }
 
     func remove(profileID: String) throws {
@@ -92,7 +119,7 @@ actor MacGatewayProfileStore {
             throw MacGatewayProfileError.profileNotFound
         }
         registry.profiles.removeAll { $0.profile.id == profileID }
-        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+        try self.saveRegistry(registry)
     }
 
     func endpoint(profileID: String) throws -> GatewayConnection.EndpointSnapshot {
@@ -116,6 +143,25 @@ actor MacGatewayProfileStore {
         return try Self.decodeRegistry(data)
     }
 
+    private func loadRegistryMigratingLegacyPrimary() throws -> Registry {
+        let registry = try self.loadRegistry()
+        // Keep the receipt in the registry so removing the imported profile is durable.
+        // A failed Keychain commit leaves both changes unapplied and retries on the next read.
+        guard (registry.legacyPrimaryMigrationVersion ?? 0) < Self.currentLegacyPrimaryMigrationVersion else {
+            return registry
+        }
+        let migrated = Self.migratingLegacyPrimaryConnection(
+            root: OpenClawConfigFile.loadDict(),
+            registry: registry)
+        guard migrated != registry else { return registry }
+        try self.saveRegistry(migrated)
+        return migrated
+    }
+
+    private func saveRegistry(_ registry: Registry) throws {
+        try Self.save(JSONEncoder().encode(registry), account: Self.registryAccount)
+    }
+
     private static func decodeRegistry(_ data: Data) throws -> Registry {
         let registry = try JSONDecoder().decode(Registry.self, from: data)
         guard registry.version == 1 else {
@@ -136,6 +182,15 @@ actor MacGatewayProfileStore {
             }
             return lhs.url.absoluteString.localizedCaseInsensitiveCompare(rhs.url.absoluteString) == .orderedAscending
         }
+    }
+
+    private static func makeProfile(name: String, url: URL) throws -> MacGatewayProfile {
+        let canonicalURL = try self.canonicalURL(url)
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return MacGatewayProfile(
+            id: self.profileID(url: canonicalURL),
+            name: trimmedName.isEmpty ? (canonicalURL.host ?? canonicalURL.absoluteString) : trimmedName,
+            url: canonicalURL)
     }
 
     static func canonicalURL(_ url: URL) throws -> URL {

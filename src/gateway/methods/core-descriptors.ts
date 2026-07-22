@@ -340,6 +340,11 @@ const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "terminal.input", scope: "operator.admin", since: "2026.7" },
   { name: "terminal.resize", scope: "operator.admin", since: "2026.7" },
   { name: "terminal.close", scope: "operator.admin", since: "2026.7" },
+  // DM pairing is additive to the advertised method list. Keep it appended so
+  // older clients retain every pre-existing advertised method index.
+  { name: "channels.pairing.list", scope: "operator.pairing", since: "2026.7" },
+  { name: "channels.pairing.approve", scope: "dynamic", since: "2026.7" },
+  { name: "channels.pairing.dismiss", scope: "operator.pairing", since: "2026.7" },
   { name: "assistant.media.get", scope: "operator.read", since: "<=2026.7", advertise: false },
   { name: "sessions.get", scope: "operator.read", since: "<=2026.7", advertise: false },
   { name: "sessions.resolve", scope: "operator.read", since: "<=2026.7", advertise: false },

@@ -311,19 +311,20 @@ class AppSidebar extends AppSidebarSessionListElement {
           <openclaw-lobster-logo-standin .visit=${this.logoVisit}></openclaw-lobster-logo-standin>
         </span>
         ${selfUser && selfLabel
-          ? html`<button
-              type="button"
-              class="sidebar-footer-bar__identity"
-              title=${selfLabel}
-              aria-label=${t("profilePage.identity.openSettings", { name: selfLabel })}
-              @click=${() => this.onNavigate?.("profile", { hash: "#settings-profile-identity" })}
-            >
-              <openclaw-viewer-avatar
-                .user=${{ ...selfUser, watchedSessions: [] }}
-                variant="footer"
-              ></openclaw-viewer-avatar>
-              <span class="sidebar-footer-bar__identity-name">${selfLabel}</span>
-            </button>`
+          ? html`<openclaw-tooltip .content=${selfLabel}>
+              <button
+                type="button"
+                class="sidebar-footer-bar__identity"
+                aria-label=${t("profilePage.identity.openSettings", { name: selfLabel })}
+                @click=${() => this.onNavigate?.("profile", { hash: "#settings-profile-identity" })}
+              >
+                <openclaw-viewer-avatar
+                  .user=${{ ...selfUser, watchedSessions: [] }}
+                  variant="footer"
+                ></openclaw-viewer-avatar>
+                <span class="sidebar-footer-bar__identity-name">${selfLabel}</span>
+              </button>
+            </openclaw-tooltip>`
           : nothing}
         <openclaw-viewer-facepile
           .presencePayload=${this.presencePayload}
@@ -339,18 +340,21 @@ class AppSidebar extends AppSidebarSessionListElement {
           .onNavigate=${(routeId: "about") => this.onNavigate?.(routeId)}
         ></openclaw-sidebar-build-chip>
         ${this.offline
-          ? html`<button
-              type="button"
-              class="sidebar-footer-bar__status"
-              aria-live="polite"
-              aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
-              title=${this.lastError ? redactLoginFailureError(this.lastError) : reconnecting}
-              @click=${() => this.onRetryConnect?.()}
+          ? html`<openclaw-tooltip
+              .content=${this.lastError ? redactLoginFailureError(this.lastError) : reconnecting}
             >
-              <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
-                "common.offline",
-              )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
-            </button>`
+              <button
+                type="button"
+                class="sidebar-footer-bar__status"
+                aria-live="polite"
+                aria-label=${`${t("common.offline")} — ${t("connection.retryNow")}`}
+                @click=${() => this.onRetryConnect?.()}
+              >
+                <span class="sidebar-footer-bar__status-dot" aria-hidden="true"></span>${t(
+                  "common.offline",
+                )}<span class="sidebar-footer-bar__status-detail">${reconnecting}</span>
+              </button>
+            </openclaw-tooltip>`
           : nothing}
         <openclaw-tooltip .content=${t("nav.settings")}>
           <button
@@ -509,12 +513,14 @@ class AppSidebar extends AppSidebarSessionListElement {
               .gatewayVersion=${this.gatewayVersion}
             ></openclaw-lobster-pet>
             ${this.devGitBranch
-              ? html`<div class="sidebar-footer-branch" title=${this.devGitBranch}>
-                  <span class="sidebar-footer-branch__icon" aria-hidden="true"
-                    >${icons.gitBranch}</span
-                  >
-                  <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
-                </div>`
+              ? html`<openclaw-tooltip .content=${this.devGitBranch}>
+                  <div class="sidebar-footer-branch">
+                    <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                      >${icons.gitBranch}</span
+                    >
+                    <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                  </div>
+                </openclaw-tooltip>`
               : nothing}
             ${this.renderFooterBar()}
           </div>

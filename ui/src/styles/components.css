@@ -15,6 +15,56 @@
   animation: fade-in 0.3s var(--ease-out) 0.2s forwards;
 }
 
+openclaw-session-owner-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.session-owner-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid hsl(var(--owner-hue) 52% 18% / 0.9);
+  border-radius: 999px;
+  background: hsl(var(--owner-hue) 58% 26%);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.24);
+  color: white;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.session-owner-chip--row {
+  width: 16px;
+  height: 16px;
+  font-size: 8px;
+}
+
+.session-owner-chip--header {
+  width: 20px;
+  height: 20px;
+  font-size: 10px;
+}
+
+.sidebar-session-creator-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 8px 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.sidebar-session-creator-filter select {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  padding: 3px 22px 3px 6px;
+}
+
 .connect-splash__logo {
   width: 44px;
   height: 44px;
