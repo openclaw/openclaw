@@ -259,4 +259,45 @@ describe("createDraftStreamLoop", () => {
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(1, "hello");
     expect(sendOrEditStreamMessage).toHaveBeenNthCalledWith(2, "hello");
   });
+
+  it("bounds consecutive sends per flush and preserves pending text instead of looping unbounded (#106644)", async () => {
+    // A producer that keeps appending new text between iterations would spin the
+    // flush() while-loop forever. flush() must instead terminate after a bounded
+    // number of sends, keep the pending text, and hand the remainder back to the
+    // throttle timer rather than discarding it.
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      let sends = 0;
+      const loop = createDraftStreamLoop({
+        throttleMs: 100,
+        isStopped: () => false,
+        sendOrEditStreamMessage: async () => {
+          sends += 1;
+          // Replenish pending text as a microtask so it lands while flush() is
+          // awaiting this send (inFlightPromise is set) — mirroring a real
+          // streaming producer appending text between iterations.
+          void Promise.resolve().then(() => loop.update(`text-${sends + 1}`));
+          return true;
+        },
+      });
+
+      loop.update("text-1");
+      // Must terminate (not hang) even though pending text is always replenished.
+      await loop.flush();
+
+      // flush() yielded after the batch cap instead of looping forever...
+      expect(sends).toBe(20);
+      // ...armed a follow-up flush through the throttle timer...
+      expect(vi.getTimerCount()).toBe(1);
+      // ...and preserved the pending text rather than dropping it (no data loss).
+      expect(loop.takePending()).toBe("text-21");
+
+      loop.stop();
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
 });

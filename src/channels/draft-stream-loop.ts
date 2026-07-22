@@ -21,6 +21,14 @@ type CreatedDraftStreamLoop = DraftStreamLoop & {
   takePending: () => string;
 };
 
+/**
+ * Upper bound on consecutive sends performed by a single flush() invocation.
+ * When a producer keeps replenishing pendingText between iterations, flush()
+ * yields after this many sends and reschedules the remaining text through the
+ * throttle timer instead of looping unbounded (issue #106644).
+ */
+const MAX_FLUSH_SENDS_PER_INVOCATION = 20;
+
 /** Creates a single-flight draft stream loop that preserves the newest pending text. */
 export function createDraftStreamLoop(params: {
   throttleMs: number;
@@ -39,6 +47,7 @@ export function createDraftStreamLoop(params: {
       clearTimeout(timer);
       timer = undefined;
     }
+    let sendCount = 0;
     while (!params.isStopped()) {
       if (inFlightPromise) {
         await inFlightPromise;
@@ -75,6 +84,15 @@ export function createDraftStreamLoop(params: {
       }
       lastSentAt = Date.now();
       if (!pendingText) {
+        return;
+      }
+      // Bound the number of consecutive sends per flush() invocation. When a
+      // producer keeps replenishing pendingText between iterations, yield back
+      // to the event loop and reschedule the remaining text through the throttle
+      // timer instead of looping unbounded (issue #106644). pendingText is
+      // preserved here so no draft text is dropped.
+      if (++sendCount >= MAX_FLUSH_SENDS_PER_INVOCATION) {
+        schedule();
         return;
       }
     }
