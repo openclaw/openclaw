@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+# Updates a self-hosted OpenClaw gateway that runs from this source checkout.
+#
+# Reference workflow for team-operated servers (see docs/install/updating.md).
+# Simple installs should prefer `openclaw update` / `openclaw update --channel
+# dev`; this script exists for checkouts that additionally need to:
+#   - preserve a local branch by rebasing it onto origin/main,
+#   - tolerate tracked build outputs that `pnpm build` rewrites,
+#   - build clean (incremental builds have shipped stale hashed chunks),
+#   - restart a custom service unit.
+#
+# Environment:
+#   OPENCLAW_UPDATE_RESTART_CMD  restart command (default: openclaw gateway restart)
+#                                set to "" to skip the restart step
+#   OPENCLAW_UPDATE_REMOTE       git remote to update from (default: origin)
+set -euo pipefail
+
+log() { echo "[update-gateway] $*"; }
+on_exit() {
+  local code=$?
+  if [ "$code" -ne 0 ]; then
+    echo "[update-gateway] FAILED (exit $code)" >&2
+  fi
+}
+trap on_exit EXIT
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+remote="${OPENCLAW_UPDATE_REMOTE:-origin}"
+
+# `pnpm build` rewrites this tracked bundle, which would make the tree look
+# dirty and block the rebase below. Restoring it loses nothing: the build
+# regenerates it from source every run.
+git checkout -- extensions/browser/chrome-extension/modules/copilot-runtime.js 2>/dev/null || true
+
+# Fail closed on any other local changes: an agent or operator may have
+# uncommitted work in this checkout, and an update must never eat it.
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  log "working tree has local changes; commit, stash, or restore them first:"
+  git status --short | head -20
+  exit 1
+fi
+
+log "fetching ${remote}/main"
+git fetch "$remote" main
+
+branch="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$branch" = "main" ]; then
+  log "fast-forwarding main"
+  git merge --ff-only "${remote}/main"
+else
+  # A server may carry a local branch (e.g. an agent's in-progress fix) on top
+  # of main. Rebase preserves that work while still deploying latest main.
+  log "rebasing local branch '$branch' onto ${remote}/main"
+  if ! git rebase "${remote}/main"; then
+    git rebase --abort
+    log "rebase of '$branch' conflicts with ${remote}/main; resolve manually"
+    exit 1
+  fi
+fi
+
+log "installing dependencies"
+pnpm install --frozen-lockfile
+
+# Incremental builds have left stale hashed chunks and config validators from
+# the previous revision in dist; a clean build is the reliable path.
+log "clean building"
+rm -rf dist dist-runtime .artifacts/tsgo-cache
+pnpm build
+
+restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
+if [ -n "$restart_cmd" ]; then
+  log "restarting gateway: $restart_cmd"
+  bash -c "$restart_cmd"
+else
+  log "restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
+fi
+
+log "OK $(git rev-parse --short HEAD) ($branch)"
