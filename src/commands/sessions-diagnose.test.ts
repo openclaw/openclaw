@@ -139,6 +139,26 @@ describe("sessionsDiagnoseCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining('"outcome": "diagnosed"'));
   });
 
+  it("renders abandoned embedded timeout evidence", async () => {
+    const result = diagnoseResult();
+    result.live.embeddedRun = {
+      active: false,
+      sessionId: "session-1",
+      abandoned: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        abandonedAtMs: 1,
+        reason: "timeout",
+      },
+    };
+    callGatewayMock.mockResolvedValue(result);
+
+    await sessionsDiagnoseCommand({ sessionKey: "agent:main:main" }, runtime);
+
+    const output = runtime.log.mock.calls.map((call) => stripAnsi(String(call[0]))).join("\n");
+    expect(output).toContain("Embedded run: none abandoned=timeout");
+  });
+
   it("rejects invalid tail before calling the Gateway", async () => {
     await sessionsDiagnoseCommand({ tail: "201" }, runtime);
 

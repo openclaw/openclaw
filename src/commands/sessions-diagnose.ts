@@ -166,7 +166,9 @@ function renderText(result: SessionsDiagnoseResult, runtime: RuntimeEnv): void {
   runtime.log(
     `Embedded run: ${embedded?.active ? "active" : "none"}${
       embedded?.streaming ? " streaming" : ""
-    }${embedded?.compacting ? " compacting" : ""}`,
+    }${embedded?.compacting ? " compacting" : ""}${
+      embedded?.abandoned ? ` abandoned=${embedded.abandoned.reason}` : ""
+    }`,
   );
   const diagnostic = result.live.diagnostic;
   runtime.log(

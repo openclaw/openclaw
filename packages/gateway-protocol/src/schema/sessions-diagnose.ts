@@ -43,6 +43,7 @@ const SessionDiagnoseFindingCodeSchema = Type.Union([
   Type.Literal("last_progress_stale"),
   Type.Literal("queued_without_active_run"),
   Type.Literal("stale_diagnostic_tool"),
+  Type.Literal("embedded_run_abandoned_timeout"),
   Type.Literal("store_terminal_but_live_processing"),
   Type.Literal("lane_blocked"),
   Type.Literal("transcript_unresolved"),

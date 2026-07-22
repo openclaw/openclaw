@@ -112,6 +112,18 @@ function buildDiagnoseFindings(params: {
       evidence: [`activeWorkKind=${params.diagnostic.activeWorkKind}`],
     });
   }
+  if (!activeVisible && params.embeddedRun.abandoned?.reason === "timeout") {
+    addFinding(findings, {
+      code: "embedded_run_abandoned_timeout",
+      severity: "warn",
+      message: "The embedded run was abandoned after timing out.",
+      evidence: [
+        `embeddedSessionId=${params.embeddedRun.abandoned.sessionId}`,
+        `abandonedAtMs=${params.embeddedRun.abandoned.abandonedAtMs}`,
+        `reason=${params.embeddedRun.abandoned.reason}`,
+      ],
+    });
+  }
   if (terminalStore && (activeVisible || params.diagnostic.state === "processing")) {
     addFinding(findings, {
       code: "store_terminal_but_live_processing",
@@ -230,6 +242,7 @@ function isDiagnoseStallFindingCode(code: DiagnoseFinding["code"]): boolean {
   return (
     code === "last_progress_stale" ||
     code === "stale_diagnostic_tool" ||
+    code === "embedded_run_abandoned_timeout" ||
     code === "store_terminal_but_live_processing" ||
     code === "lane_blocked"
   );
