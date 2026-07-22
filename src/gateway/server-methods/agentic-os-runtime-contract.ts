@@ -11,13 +11,15 @@ import {
 } from "../agentic-os-runtime-contract.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
 
-function respondWithContract(
+async function respondWithContract(
   params: Record<string, unknown>,
   respond: RespondFn,
-  implementation: (params: Record<string, unknown>) => Record<string, unknown>,
+  implementation: (
+    params: Record<string, unknown>,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>,
 ) {
   try {
-    respond(true, implementation(params), undefined);
+    respond(true, await implementation(params), undefined);
   } catch (error) {
     const message =
       error instanceof ContractInputError ? error.message : "Agentic OS runtime contract failure";
@@ -26,15 +28,17 @@ function respondWithContract(
 }
 
 function contractHandler(
-  implementation: (params: Record<string, unknown>) => Record<string, unknown>,
+  implementation: (
+    params: Record<string, unknown>,
+  ) => Record<string, unknown> | Promise<Record<string, unknown>>,
 ): GatewayRequestHandler {
-  return ({ params, respond }) => {
-    respondWithContract(params, respond, implementation);
+  return async ({ params, respond }) => {
+    await respondWithContract(params, respond, implementation);
   };
 }
 
 export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
-  "subagents.allowLease.acquire": ({ params, respond }) => {
+  "subagents.allowLease.acquire": async ({ params, respond }) => {
     void [
       params?.client_lease_id,
       params?.idempotency_key,
@@ -45,13 +49,13 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       params?.requester_agent_id,
       params?.ttl_ms,
     ];
-    respondWithContract(params, respond, acquireAgenticOsAllowLease);
+    await respondWithContract(params, respond, acquireAgenticOsAllowLease);
   },
-  "subagents.allowLease.status": ({ params, respond }) => {
+  "subagents.allowLease.status": async ({ params, respond }) => {
     void params;
-    respondWithContract(params, respond, () => listAgenticOsAllowLeases());
+    await respondWithContract(params, respond, () => listAgenticOsAllowLeases());
   },
-  "subagents.allowLease.release": ({ params, respond }) => {
+  "subagents.allowLease.release": async ({ params, respond }) => {
     void [
       params?.client_lease_id,
       params?.idempotency_key,
@@ -62,7 +66,7 @@ export const agenticOsRuntimeContractHandlers: GatewayRequestHandlers = {
       params?.requester_agent_id,
       params?.gateway_lease_id,
     ];
-    respondWithContract(params, respond, releaseAgenticOsAllowLease);
+    await respondWithContract(params, respond, releaseAgenticOsAllowLease);
   },
   sessions_spawn: contractHandler(spawnAgenticOsSession),
   sessions_list: contractHandler(() => listAgenticOsSessions()),
