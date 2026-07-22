@@ -1,5 +1,5 @@
 /** Validates and streams one approval-gated Claude CLI turn on a headless node. */
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -95,7 +95,7 @@ export async function runClaudeCliNodeCommand(params: {
         ...(process.platform !== "win32" ? { detached: true } : {}),
         windowsHide: invocation.windowsHide,
         windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-      });
+      }) as ChildProcessWithoutNullStreams;
 
       const kill = () => {
         const pid = child.pid;
