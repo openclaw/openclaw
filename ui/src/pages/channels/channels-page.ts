@@ -558,6 +558,9 @@ class ChannelsPage extends OpenClawLightDomElement {
   }
 
   private openPairingPrompt(kind: ChannelPairingPrompt["kind"], request: ChannelsPairingRequest) {
+    if (this.context.channels.state.pairingBusyRequestId) {
+      return;
+    }
     this.pairingNotice = null;
     this.pairingPrompt = {
       kind,
@@ -587,7 +590,7 @@ class ChannelsPage extends OpenClawLightDomElement {
         accountId: prompt.request.accountId,
         requestId: prompt.request.requestId,
       });
-      if (dismissed) {
+      if (dismissed && this.pairingPrompt === prompt) {
         this.pairingPrompt = null;
         this.pairingNotice = t("channels.pairing.dismissedNotice");
       }
@@ -601,7 +604,7 @@ class ChannelsPage extends OpenClawLightDomElement {
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
     });
-    if (!result) {
+    if (!result || this.pairingPrompt !== prompt) {
       return;
     }
     this.pairingPrompt = null;

@@ -138,6 +138,28 @@ describe("channel DM access request views", () => {
     expect(container.textContent).not.toContain("Alice");
   });
 
+  it("disables every request action while one mutation is active", () => {
+    const secondRequest = {
+      ...request,
+      requestId: "other-request",
+      senderId: "987654321",
+    };
+    const props = createProps({
+      pairingBusyRequestId: request.requestId,
+      pairingSnapshot: {
+        ...createProps().pairingSnapshot!,
+        requests: [request, secondRequest],
+      },
+    });
+    const container = renderInto(renderChannelPairingQueue(props));
+    const actionButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>("button"),
+    ).filter((button) => /^(Approve|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""));
+
+    expect(actionButtons).toHaveLength(4);
+    expect(actionButtons.every((button) => button.disabled)).toBe(true);
+  });
+
   it("shows explicit notification and first-owner choices for an admin", () => {
     const container = renderInto(
       renderChannelPairingPrompt(

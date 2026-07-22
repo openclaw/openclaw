@@ -232,6 +232,21 @@ async function loadChannelPairing(
   }
 }
 
+type PairingMutation = {
+  client: ChannelGatewayClient;
+  gatewayEpoch: number;
+  requestId: string;
+};
+
+function isCurrentPairingMutation(state: ChannelsState, mutation: PairingMutation): boolean {
+  return (
+    state.connected &&
+    state.client === mutation.client &&
+    getChannelsLifecycle(state).gatewayEpoch === mutation.gatewayEpoch &&
+    state.pairingBusyRequestId === mutation.requestId
+  );
+}
+
 function removePairingRequestFromSnapshot(state: ChannelsState, requestId: string): void {
   const snapshot = state.pairingSnapshot;
   if (!snapshot || !snapshot.requests.some((request) => request.requestId === requestId)) {
@@ -257,6 +272,11 @@ async function approveChannelPairing(
   if (!client || !state.connected || state.pairingBusyRequestId) {
     return null;
   }
+  const mutation: PairingMutation = {
+    client,
+    gatewayEpoch: getChannelsLifecycle(state).gatewayEpoch,
+    requestId: params.requestId,
+  };
   invalidatePairingRefresh(state);
   state.pairingBusyRequestId = params.requestId;
   state.pairingError = null;
@@ -265,20 +285,20 @@ async function approveChannelPairing(
       "channels.pairing.approve",
       params,
     );
-    if (!state.connected || state.client !== client) {
+    if (!isCurrentPairingMutation(state, mutation)) {
       return null;
     }
     removePairingRequestFromSnapshot(state, params.requestId);
     invalidatePairingRefresh(state);
     await loadChannelPairing(state, { duringMutation: true });
-    return result;
+    return isCurrentPairingMutation(state, mutation) ? result : null;
   } catch (error) {
-    if (state.connected && state.client === client) {
+    if (isCurrentPairingMutation(state, mutation)) {
       state.pairingError = String(error);
     }
     return null;
   } finally {
-    if (state.client === client && state.pairingBusyRequestId === params.requestId) {
+    if (isCurrentPairingMutation(state, mutation)) {
       state.pairingBusyRequestId = null;
     }
   }
@@ -292,25 +312,30 @@ async function dismissChannelPairing(
   if (!client || !state.connected || state.pairingBusyRequestId) {
     return false;
   }
+  const mutation: PairingMutation = {
+    client,
+    gatewayEpoch: getChannelsLifecycle(state).gatewayEpoch,
+    requestId: params.requestId,
+  };
   invalidatePairingRefresh(state);
   state.pairingBusyRequestId = params.requestId;
   state.pairingError = null;
   try {
     await client.request("channels.pairing.dismiss", params);
-    if (!state.connected || state.client !== client) {
+    if (!isCurrentPairingMutation(state, mutation)) {
       return false;
     }
     removePairingRequestFromSnapshot(state, params.requestId);
     invalidatePairingRefresh(state);
     await loadChannelPairing(state, { duringMutation: true });
-    return true;
+    return isCurrentPairingMutation(state, mutation);
   } catch (error) {
-    if (state.connected && state.client === client) {
+    if (isCurrentPairingMutation(state, mutation)) {
       state.pairingError = String(error);
     }
     return false;
   } finally {
-    if (state.client === client && state.pairingBusyRequestId === params.requestId) {
+    if (isCurrentPairingMutation(state, mutation)) {
       state.pairingBusyRequestId = null;
     }
   }

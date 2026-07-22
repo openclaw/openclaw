@@ -85,7 +85,8 @@ function renderFilters(props: ChannelsProps) {
 }
 
 function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
-  const busy = props.pairingBusyRequestId === request.requestId;
+  const busy = Boolean(props.pairingBusyRequestId);
+  const thisRequestBusy = props.pairingBusyRequestId === request.requestId;
   const metadata = Object.entries(request.metadata ?? {});
   return html`
     <div class="settings-row settings-row--stacked channels-pairing-request">
@@ -113,7 +114,7 @@ function renderRequest(request: ChannelsPairingRequest, props: ChannelsProps) {
             })}
             @click=${() => props.onPairingApprove(request)}
           >
-            ${busy ? t("common.loading") : t("channels.pairing.approve")}
+            ${thisRequestBusy ? t("common.loading") : t("channels.pairing.approve")}
           </button>
           <button
             type="button"

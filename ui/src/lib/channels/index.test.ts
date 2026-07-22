@@ -414,6 +414,67 @@ describe("channels controller DM pairing", () => {
     channels.dispose();
   });
 
+  it("ignores a pairing mutation result from an earlier authorization epoch", async () => {
+    const approval = createDeferred<{
+      requestId: string;
+      senderId: string;
+      notification: "not-requested";
+      commandOwnerBootstrap: "not-requested";
+    }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "channels.pairing.approve") {
+        return approval.promise;
+      }
+      return emptyPairing;
+    });
+    const client = { request };
+    let snapshot = {
+      client,
+      connected: true,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing"] } },
+    };
+    const listeners = new Set<(next: typeof snapshot) => void>();
+    const channels = createChannelCapability({
+      get snapshot() {
+        return snapshot;
+      },
+      subscribe(listener: (next: typeof snapshot) => void) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    } as never);
+    channels.state.pairingSnapshot = pendingPairing;
+
+    const pendingApproval = channels.approvePairing({
+      channel: "whatsapp",
+      accountId: "personal",
+      requestId: "request-1",
+      notify: false,
+      bootstrapCommandOwner: false,
+    });
+    await vi.waitFor(() => expect(channels.state.pairingBusyRequestId).toBe("request-1"));
+    snapshot = {
+      ...snapshot,
+      hello: { auth: { role: "operator", scopes: ["operator.pairing", "operator.read"] } },
+    };
+    for (const listener of listeners) {
+      listener(snapshot);
+    }
+    channels.state.pairingSnapshot = pendingPairing;
+
+    approval.resolve({
+      requestId: "request-1",
+      senderId: "+1555",
+      notification: "not-requested",
+      commandOwnerBootstrap: "not-requested",
+    });
+
+    await expect(pendingApproval).resolves.toBeNull();
+    expect(channels.state.pairingSnapshot).toBe(pendingPairing);
+    expect(request.mock.calls.filter(([method]) => method === "channels.pairing.list")).toEqual([]);
+    channels.dispose();
+  });
+
   it("keeps the last request snapshot visible when refresh fails", async () => {
     const request = vi.fn(async () => {
       throw new Error("gateway unavailable");
