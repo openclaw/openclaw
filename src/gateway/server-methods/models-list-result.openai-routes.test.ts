@@ -152,6 +152,47 @@ describe("models.list OpenAI routes", () => {
     expect(evaluateEntry).not.toHaveBeenCalled();
   });
 
+  it("uses the published fallback owner's agent identity for projection", async () => {
+    const config = {
+      agents: {
+        defaults: {},
+        list: [
+          { id: "main", default: true, models: { "openai/gpt-owner": {} } },
+          { id: "worker", models: { "openai/gpt-worker": {} } },
+        ],
+      },
+    } as OpenClawConfig;
+    const ownerEntry = catalogEntry("gpt-owner", "openai-responses");
+    const context = {
+      getRuntimeConfig: () => config,
+      loadGatewayModelCatalogSnapshot: vi.fn(() =>
+        Promise.resolve({
+          agentId: "main",
+          agentDir: "/tmp/models-list-openai-agent",
+          config,
+          entries: [ownerEntry],
+          routeVariants: [ownerEntry],
+        }),
+      ),
+      logGateway: { debug: vi.fn() },
+    } as unknown as GatewayRequestContext;
+
+    const routeResolverFactory = vi.fn(() => () => null);
+    const result = await buildModelsListResult({
+      context,
+      agentId: "worker",
+      params: { view: "configured" },
+      routeResolverFactory,
+    });
+
+    expect(result).toEqual({ models: [] });
+    expect(routeResolverFactory).toHaveBeenCalledWith(expect.objectContaining({ agentId: "main" }));
+    expect(context.loadGatewayModelCatalogSnapshot).toHaveBeenCalledWith({
+      agentId: "worker",
+      readOnly: true,
+    });
+  });
+
   it("keeps route-aware default browse indeterminate without the provider artifact", async () => {
     const resolveRoutes = vi.fn(() => null);
     const createResolver = vi.fn(() => resolveRoutes);

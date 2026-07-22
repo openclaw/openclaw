@@ -510,11 +510,12 @@ async function handleChatHistoryRequest({
     logDebug: (message) => context.logGateway.debug(message),
   });
   const modelCatalogSnapshot = await modelCatalogPromise;
-  const catalogConfig = modelCatalogSnapshot?.config ?? cfg;
-  const modelCatalog = modelCatalogSnapshot?.entries;
+  const catalogOwnedBySessionAgent = modelCatalogSnapshot?.agentId === sessionAgentId;
+  const catalogConfig = catalogOwnedBySessionAgent ? modelCatalogSnapshot.config : cfg;
+  const modelCatalog = catalogOwnedBySessionAgent ? modelCatalogSnapshot.entries : undefined;
   const defaultAgentId = resolveDefaultAgentId(catalogConfig);
   const startupCatalogProjection =
-    method === "chat.startup" && modelCatalogSnapshot
+    method === "chat.startup" && catalogOwnedBySessionAgent
       ? await buildChatStartupModelCatalogProjection({
           cfg: catalogConfig,
           snapshot: modelCatalogSnapshot,

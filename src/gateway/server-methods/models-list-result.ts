@@ -529,7 +529,7 @@ export async function buildModelsListResult(
     }
   }
   const cfg = loadedSnapshot?.config ?? initialConfig;
-  const agentId = params.agentId ?? loadedSnapshot?.agentId ?? resolveDefaultAgentId(cfg);
+  const agentId = loadedSnapshot?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir =
     loadedSnapshot?.workspaceDir ??
     resolveAgentWorkspaceDir(cfg, agentId) ??
