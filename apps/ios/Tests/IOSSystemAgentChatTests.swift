@@ -97,6 +97,29 @@ struct IOSSystemAgentChatTests {
         #expect(request.params["delegation"] == nil)
     }
 
+    @Test func `missing advertised system-agent method blocks the chat`() {
+        #expect(
+            IOSSystemAgentChatModel.accessState(
+                connected: true,
+                hasAdminScope: true,
+                supportsSystemAgent: false) == .missingSystemAgentMethod)
+    }
+
+    @Test func `pending method support check blocks the chat`() async {
+        let recorder = RequestRecorder(responses: [.success(Self.reply("Ready"))])
+        let model = self.makeModel(recorder: recorder)
+
+        model.updateAccess(
+            connected: true,
+            hasAdminScope: true,
+            supportsSystemAgent: nil,
+            routeIdentity: "gateway-a")
+        await Self.start(model)
+
+        #expect(model.accessState == .checkingSystemAgentMethod)
+        #expect(await recorder.allRequests().isEmpty)
+    }
+
     @Test func `route change invalidates suspended generation and ignores its reply`() async {
         let suspended = SuspendedRequest()
         let model = IOSSystemAgentChatModel(
@@ -358,8 +381,18 @@ struct IOSSystemAgentChatTests {
         #expect(source.contains(".font(OpenClawType.caption)"))
         #expect(source.contains("SecureField(\"\", text: self.$model.input)"))
         #expect(source.contains(".onChange(of: self.scenePhase)"))
-        #expect(source.contains("guard phase != .active else { return }"))
+        #expect(source.contains("guard phase == .active else"))
+        #expect(source.contains("self.cancelSystemAgentSupportRetry()"))
         #expect(source.contains(".accessibilityLabel(\"Enter secret\")"))
+        #expect(source.contains("supportsServerMethod(\n            \"openclaw.chat\""))
+        #expect(source.contains("isCurrentSystemAgentSupportCheck(checkID, gatewayID: gatewayID)"))
+        #expect(source.contains("currentRoute == route"))
+        #expect(source.contains("retrySystemAgentSupportCheck(checkID, gatewayID: gatewayID)"))
+        #expect(source.contains("cancelSystemAgentSupportRetry()"))
+        #expect(source.contains("enterCheckingSystemAgentSupport(gatewayID: gatewayID)"))
+        #expect(source.contains("self.isScreenActive"))
+        #expect(source.contains("guard let support else"))
+        #expect(source.contains("String(localized: \"Gateway Update Required\")"))
         #expect(!source.contains("SecureField(\"Enter secret"))
     }
 
