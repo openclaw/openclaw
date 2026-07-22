@@ -233,11 +233,11 @@ artifacts flush because Matrix crypto native handles can outlive cleanup; set
 needs the command to return instead.
 
 Each run writes the normal QA Lab artifacts under the selected output
-directory: `qa-suite-report.md`, `qa-suite-summary.json`, `qa-evidence.json`,
-and a redacted `matrix-harness-*/matrix-qa-harness.json` manifest. If cleanup
-fails, run the printed `docker compose ... down --remove-orphans` recovery
-command. On slow runners, increase the no-reply window; on fast CI, a smaller
-window can shorten negative assertions.
+directory: `qa-suite-report.md`, `qa-suite-summary.json`, and
+`qa-evidence.json`. If cleanup fails, run the printed
+`docker compose ... down --remove-orphans` recovery command. On slow runners,
+increase the no-reply window; on fast CI, a smaller window can shorten negative
+assertions.
 
 The scenarios cover transport behavior that unit tests cannot prove end to
 end: mention gating, allow-bot policies, allowlists, top-level and threaded

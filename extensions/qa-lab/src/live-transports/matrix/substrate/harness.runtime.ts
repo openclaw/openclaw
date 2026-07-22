@@ -16,7 +16,6 @@ import {
   MATRIX_QA_SERVICE,
   buildVersionsUrl,
   isMatrixVersionsReachable,
-  recordMatrixQaHarnessPort,
   waitForReachableMatrixBaseUrl,
   withMatrixQaHarnessTimeout,
   writeMatrixQaHarnessFiles,
@@ -91,9 +90,6 @@ export async function startMatrixQaHarness(
         ).stdout;
     const homeserverPort =
       requestedHomeserverPort || parseMatrixQaPublishedPort(publishedPortOutput);
-    if (requestedHomeserverPort === 0) {
-      await recordMatrixQaHarnessPort(files, homeserverPort);
-    }
     await sleepImpl(1_000);
     await waitForDockerServiceHealth(
       MATRIX_QA_SERVICE,

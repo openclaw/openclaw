@@ -87,7 +87,7 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean):
 }
 
 describe("matrix harness runtime", () => {
-  it("writes a pinned Tuwunel compose file and redacted manifest", async () => {
+  it("writes a pinned Tuwunel compose file", async () => {
     const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-harness-"));
 
     try {
@@ -99,26 +99,12 @@ describe("matrix harness runtime", () => {
       });
 
       const compose = await readFile(result.composeFile, "utf8");
-      const manifest = JSON.parse(await readFile(result.manifestPath, "utf8")) as {
-        image: string;
-        serverName: string;
-        homeserverPort: number;
-        composeFile: string;
-      };
-
       expect(compose).toContain("image: ghcr.io/matrix-construct/tuwunel:v1.5.1");
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
       expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
-      expect(manifest).toEqual({
-        image: "ghcr.io/matrix-construct/tuwunel:v1.5.1",
-        serverName: "matrix-qa.test",
-        homeserverPort: 28008,
-        composeFile: path.join(outputDir, "docker-compose.matrix-qa.yml"),
-        dataDir: path.join(outputDir, "data"),
-      });
       expect(result.registrationToken).toBe("secret-token");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
@@ -192,10 +178,6 @@ describe("matrix harness runtime", () => {
         );
         const compose = await readFile(result.composeFile, "utf8");
         expect(compose).toContain("      - target: 8008\n        host_ip: 127.0.0.1");
-        const manifest = JSON.parse(await readFile(result.manifestPath, "utf8")) as {
-          homeserverPort: number;
-        };
-        expect(manifest.homeserverPort).toBe(49152);
       },
       { dynamicPort: true },
     );

@@ -10,18 +10,9 @@ export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
-type MatrixQaHarnessManifest = {
-  image: string;
-  serverName: string;
-  homeserverPort: number;
-  composeFile: string;
-  dataDir: string;
-};
-
 export type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
-  manifestPath: string;
   image: string;
   serverName: string;
   homeserverPort: number;
@@ -197,7 +188,6 @@ export async function writeMatrixQaHarnessFiles(params: {
   const serverName = params.serverName?.trim() || MATRIX_QA_DEFAULT_SERVER_NAME;
   const composeFile = path.join(params.outputDir, "docker-compose.matrix-qa.yml");
   const dataDir = path.join(params.outputDir, "data");
-  const manifestPath = path.join(params.outputDir, "matrix-qa-harness.json");
 
   await fs.mkdir(dataDir, { recursive: true });
   await fs.writeFile(
@@ -210,42 +200,12 @@ export async function writeMatrixQaHarnessFiles(params: {
     })}\n`,
     { encoding: "utf8", mode: 0o600 },
   );
-  const manifest: MatrixQaHarnessManifest = {
-    image,
-    serverName,
-    homeserverPort: params.homeserverPort,
-    composeFile,
-    dataDir,
-  };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
-
   return {
     outputDir: params.outputDir,
     composeFile,
-    manifestPath,
     image,
     serverName,
     homeserverPort: params.homeserverPort,
     registrationToken,
   };
-}
-
-export async function recordMatrixQaHarnessPort(
-  files: MatrixQaHarnessFiles,
-  homeserverPort: number,
-): Promise<void> {
-  const manifest: MatrixQaHarnessManifest = {
-    image: files.image,
-    serverName: files.serverName,
-    homeserverPort,
-    composeFile: files.composeFile,
-    dataDir: path.join(files.outputDir, "data"),
-  };
-  await fs.writeFile(files.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-  });
 }
