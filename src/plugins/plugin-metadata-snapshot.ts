@@ -1,4 +1,3 @@
-// Builds plugin metadata snapshots for gateway and diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -24,6 +23,7 @@ import {
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -540,6 +540,7 @@ function buildPluginMetadataOwnerMaps(
     setupProviders: freezeOwnerMap(setupProviders),
     commandAliases: freezeOwnerMap(commandAliases),
     contracts: freezeOwnerMap(contracts),
+    ...buildPluginMetadataProviderFacts(plugins),
   };
 }
 

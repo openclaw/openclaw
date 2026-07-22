@@ -121,6 +121,10 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
     return this.sessionKey.trim() || this.context?.gateway.snapshot.sessionKey.trim() || "";
   }
 
+  protected outboxCountForSessionKey(sessionKey: string): number {
+    return this.outboxCountForSession(sessionKey);
+  }
+
   protected getSessionNavigationState() {
     const context = this.context;
     const routeSessionKey = this.getRouteSessionKey();
@@ -183,6 +187,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarSessi
         cloudWorkerActive: isStoppableCloudWorkerPlacement(row.placement),
         hasAutomation: row.hasAutomation === true,
         pullRequest: context?.sessions.pullRequestSummary(row.key),
+        outboxCount: this.outboxCountForSessionKey(row.key),
         unread: row.archived !== true && row.unread === true,
         lastReadAt: row.lastReadAt,
         attention:
