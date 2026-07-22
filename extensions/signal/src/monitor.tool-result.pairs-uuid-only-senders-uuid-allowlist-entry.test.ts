@@ -206,7 +206,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(sendMock).toHaveBeenCalledWith("+15550001111", "accepted reply", expect.anything());
   });
 
-  it("does not dispatch a buffered inbound message after the monitor stops", async () => {
+  it("drains a buffered inbound message accepted before the monitor stops", async () => {
     vi.useFakeTimers();
     const abortController = new AbortController();
     setSignalToolResultTestConfig({
@@ -215,7 +215,7 @@ describe("monitorSignalProvider tool results", () => {
     });
     replyMock.mockResolvedValue({ text: "late reply" });
     streamMock.mockImplementation(async ({ onEvent }) => {
-      onEvent({
+      await onEvent({
         event: "receive",
         data: JSON.stringify({
           envelope: {
@@ -235,10 +235,9 @@ describe("monitorSignalProvider tool results", () => {
         baseUrl: "http://127.0.0.1:8080",
         abortSignal: abortController.signal,
       });
-      await vi.advanceTimersByTimeAsync(10);
 
-      expect(replyMock).not.toHaveBeenCalled();
-      expect(sendMock).not.toHaveBeenCalled();
+      expect(replyMock).toHaveBeenCalledTimes(1);
+      expect(sendMock).toHaveBeenCalledWith("+15550001111", "late reply", expect.anything());
     } finally {
       vi.useRealTimers();
     }

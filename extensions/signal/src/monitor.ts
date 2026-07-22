@@ -721,10 +721,10 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
-    await ingressMonitor?.stop();
-    // Daemon attachment finishes before monitor tasks start. Keep teardown open until both the
-    // child has exited and already-started reply work has drained.
+    // Abort can force accepted debounced ingress work to run its first flush.
+    // Keep the drain alive until already-started reply tasks settle.
     await Promise.all([daemonLifecycle.stop(), monitorTaskRunner.waitForIdle()]);
+    await ingressMonitor?.stop();
     opts.abortSignal?.removeEventListener("abort", onAbort);
   }
 }
