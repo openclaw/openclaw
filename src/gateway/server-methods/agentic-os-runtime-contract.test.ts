@@ -332,7 +332,7 @@ describe("Agentic OS runtime contract v1", () => {
 
     releasePending();
     const completed = await Promise.all(pending);
-    expect(completed.every((call) => call[0] === true)).toBe(true);
+    expect(completed.every(([ok]) => ok)).toBe(true);
   });
 
   it("rejects released, expired, and wrong-owner leases before spawning", async () => {
