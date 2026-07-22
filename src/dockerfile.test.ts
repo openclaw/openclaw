@@ -493,6 +493,62 @@ describe("Dockerfile", () => {
     expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
   });
 
+  it("publishes Docker release SBOMs and records Trivy scan results without high-severity release blocking", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("security-events: write");
+    expect(workflow).toContain("Set up Trivy");
+    expect(workflow).toContain("Run Trivy Docker release scan");
+    expect(workflow).toContain("timeout-minutes: 60");
+    expect(workflow).toContain("DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}");
+    expect(workflow).toContain("aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567");
+    expect(workflow).toContain("version: v0.72.0");
+    expect(workflow).toContain("--severity HIGH,CRITICAL");
+    expect(workflow).toContain("--severity CRITICAL");
+    expect(workflow).toContain("--exit-code 1");
+    expect(workflow).toContain("critical_status=0");
+    expect(workflow).toContain('exit "$critical_status"');
+    expect(workflow).toContain('scan_labels+=("${label_prefix}runtime-${arch_label}")');
+    expect(workflow).toContain('scan_labels+=("${label_prefix}slim-${arch_label}")');
+    expect(workflow).toContain('scan_labels+=("${label_prefix}browser-${arch_label}")');
+    expect(workflow).toContain('append_scan_refs "ghcr" "amd64" "linux/amd64" "${multi_refs[@]}"');
+    expect(workflow).toContain('append_scan_refs "ghcr" "arm64" "linux/arm64" "${multi_refs[@]}"');
+    expect(workflow).toContain(
+      'append_scan_refs "dockerhub" "amd64" "linux/amd64" "${dockerhub_multi_refs[@]}"',
+    );
+    expect(workflow).toContain(
+      'append_scan_refs "dockerhub" "arm64" "linux/arm64" "${dockerhub_multi_refs[@]}"',
+    );
+    expect(workflow).toContain('trivy image --platform "$platform" --format spdx-json');
+    expect(workflow).toContain('trivy image --platform "$platform" --format cyclonedx');
+    expect(workflow).toContain('trivy image --platform "$platform" --format sarif');
+    expect(workflow).toContain('trivy image --platform "$platform" --severity CRITICAL');
+    expect(workflow).toContain('source_sha="$(git rev-list -n 1 "${SOURCE_REF}")"');
+    expect(workflow).toContain("ref: ${{ steps.refs.outputs.source_ref }}");
+    expect(workflow).toContain("sha: ${{ steps.refs.outputs.source_sha }}");
+    expect(workflow).toContain("Upload Trivy runtime amd64 SARIF to GitHub Code Scanning");
+    expect(workflow).toContain("category: trivy-docker-release-runtime-amd64");
+    expect(workflow).toContain("Upload Trivy runtime arm64 SARIF to GitHub Code Scanning");
+    expect(workflow).toContain("category: trivy-docker-release-runtime-arm64");
+    expect(workflow).toContain(
+      "Upload Trivy Docker Hub runtime amd64 SARIF to GitHub Code Scanning",
+    );
+    expect(workflow).toContain("category: trivy-docker-release-dockerhub-runtime-amd64");
+    expect(workflow).toContain(
+      "Upload Trivy Docker Hub runtime arm64 SARIF to GitHub Code Scanning",
+    );
+    expect(workflow).toContain("category: trivy-docker-release-dockerhub-runtime-arm64");
+    expect(workflow).toContain("Upload Trivy Docker release artifacts");
+    expect(workflow).toContain("trivy-docker-release-security");
+    expect(workflow).toContain("path: trivy-out/");
+    expect(workflow).not.toContain("--severity HIGH,CRITICAL --exit-code 1");
+    expect(workflow).not.toContain(".trivy-out");
+    expect(workflow).not.toContain(
+      'trivy image --format sarif --severity HIGH,CRITICAL --ignore-unfixed --output "trivy-out/${label}.sarif" "$image_ref"\n            trivy image --severity CRITICAL',
+    );
+    expect(workflow).not.toContain("break\n            fi");
+  });
+
   it("publishes beta Docker tags without advancing latest aliases", async () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
 

@@ -703,6 +703,8 @@ jobs:
     permissions:
       contents: read
       packages: read
+      security-events: write
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -801,7 +803,10 @@ jobs:
             echo "::error::No Docker image refs resolved for ref ${SOURCE_REF}"
             exit 1
           fi
+          source_sha="$(git rev-list -n 1 "${SOURCE_REF}")"
           {
+            echo "source_ref=${SOURCE_REF}"
+            echo "source_sha=${source_sha}"
             echo "multi<<EOF"
             printf "%s\n" "${multi_refs[@]}" "${slim_multi_refs[@]}"
             echo "EOF"
@@ -860,3 +865,213 @@ jobs:
           node scripts/verify-docker-attestations.mjs \
             --platform linux/arm64 \
             "${dockerhub_arm64_refs[@]}"
+
+      - name: Set up Trivy
+        uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.72.0
+          cache: true
+
+      - name: Run Trivy Docker release scan
+        timeout-minutes: 60
+        shell: bash
+        env:
+          MULTI_REFS: ${{ steps.refs.outputs.multi }}
+          DOCKERHUB_MULTI_REFS: ${{ steps.refs.outputs.dockerhub_multi }}
+        run: |
+          set -euo pipefail
+          mkdir -p trivy-out
+          mapfile -t multi_refs <<< "${MULTI_REFS}"
+          mapfile -t dockerhub_multi_refs <<< "${DOCKERHUB_MULTI_REFS}"
+          scan_labels=()
+          scan_refs=()
+          scan_platforms=()
+          append_scan_refs() {
+            local registry_label="$1"
+            local arch_label="$2"
+            local platform="$3"
+            shift 3
+            local label_prefix=""
+            local seen_runtime=0
+            local seen_slim=0
+            local seen_browser=0
+            if [[ "$registry_label" != "ghcr" ]]; then
+              label_prefix="${registry_label}-"
+            fi
+            for ref in "$@"; do
+              [ -n "$ref" ] || continue
+              tag="${ref##*:}"
+              case "$tag" in
+                latest|main|slim|main-slim|latest-browser|main-browser)
+                  continue
+                  ;;
+                *-browser)
+                  if [[ "$seen_browser" == "0" ]]; then
+                    scan_labels+=("${label_prefix}browser-${arch_label}")
+                    scan_refs+=("$ref")
+                    scan_platforms+=("$platform")
+                    seen_browser=1
+                  fi
+                  ;;
+                *-slim)
+                  if [[ "$seen_slim" == "0" ]]; then
+                    scan_labels+=("${label_prefix}slim-${arch_label}")
+                    scan_refs+=("$ref")
+                    scan_platforms+=("$platform")
+                    seen_slim=1
+                  fi
+                  ;;
+                *)
+                  if [[ "$seen_runtime" == "0" ]]; then
+                    scan_labels+=("${label_prefix}runtime-${arch_label}")
+                    scan_refs+=("$ref")
+                    scan_platforms+=("$platform")
+                    seen_runtime=1
+                  fi
+                  ;;
+              esac
+            done
+          }
+          append_scan_refs "ghcr" "amd64" "linux/amd64" "${multi_refs[@]}"
+          append_scan_refs "ghcr" "arm64" "linux/arm64" "${multi_refs[@]}"
+          append_scan_refs "dockerhub" "amd64" "linux/amd64" "${dockerhub_multi_refs[@]}"
+          append_scan_refs "dockerhub" "arm64" "linux/arm64" "${dockerhub_multi_refs[@]}"
+          if [[ ${#scan_refs[@]} -eq 0 ]]; then
+            echo "::error::No Docker image refs resolved for Trivy scan"
+            exit 1
+          fi
+          for index in "${!scan_refs[@]}"; do
+            label="${scan_labels[$index]}"
+            image_ref="${scan_refs[$index]}"
+            platform="${scan_platforms[$index]}"
+            echo "Scanning ${label} Docker release image (${platform}): ${image_ref}"
+            trivy image --platform "$platform" --format spdx-json --output "trivy-out/${label}.spdx.json" "$image_ref"
+            trivy image --platform "$platform" --format cyclonedx --output "trivy-out/${label}.cyclonedx.json" "$image_ref"
+            trivy image --platform "$platform" --format sarif --severity HIGH,CRITICAL --ignore-unfixed --output "trivy-out/${label}.sarif" "$image_ref"
+          done
+          critical_status=0
+          for index in "${!scan_refs[@]}"; do
+            label="${scan_labels[$index]}"
+            image_ref="${scan_refs[$index]}"
+            platform="${scan_platforms[$index]}"
+            echo "Checking ${label} Docker release image (${platform}) for critical vulnerabilities: ${image_ref}"
+            trivy image --platform "$platform" --severity CRITICAL --ignore-unfixed --exit-code 1 "$image_ref" || critical_status=1
+          done
+          exit "$critical_status"
+
+      - name: Upload Trivy runtime amd64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/runtime-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/runtime-amd64.sarif
+          category: trivy-docker-release-runtime-amd64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy runtime arm64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/runtime-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/runtime-arm64.sarif
+          category: trivy-docker-release-runtime-arm64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy slim amd64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/slim-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/slim-amd64.sarif
+          category: trivy-docker-release-slim-amd64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy slim arm64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/slim-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/slim-arm64.sarif
+          category: trivy-docker-release-slim-arm64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy browser amd64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/browser-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/browser-amd64.sarif
+          category: trivy-docker-release-browser-amd64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy browser arm64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/browser-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/browser-arm64.sarif
+          category: trivy-docker-release-browser-arm64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker Hub runtime amd64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/dockerhub-runtime-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/dockerhub-runtime-amd64.sarif
+          category: trivy-docker-release-dockerhub-runtime-amd64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker Hub runtime arm64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/dockerhub-runtime-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/dockerhub-runtime-arm64.sarif
+          category: trivy-docker-release-dockerhub-runtime-arm64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker Hub slim amd64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/dockerhub-slim-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/dockerhub-slim-amd64.sarif
+          category: trivy-docker-release-dockerhub-slim-amd64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker Hub slim arm64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/dockerhub-slim-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/dockerhub-slim-arm64.sarif
+          category: trivy-docker-release-dockerhub-slim-arm64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker Hub browser amd64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/dockerhub-browser-amd64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/dockerhub-browser-amd64.sarif
+          category: trivy-docker-release-dockerhub-browser-amd64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker Hub browser arm64 SARIF to GitHub Code Scanning
+        if: always() && hashFiles('trivy-out/dockerhub-browser-arm64.sarif') != ''
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        with:
+          sarif_file: trivy-out/dockerhub-browser-arm64.sarif
+          category: trivy-docker-release-dockerhub-browser-arm64
+          ref: ${{ steps.refs.outputs.source_ref }}
+          sha: ${{ steps.refs.outputs.source_sha }}
+
+      - name: Upload Trivy Docker release artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: trivy-docker-release-security
+          path: trivy-out/
+          if-no-files-found: error
+          retention-days: 90
